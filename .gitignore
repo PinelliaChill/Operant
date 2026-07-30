@@ -1,0 +1,36 @@
+# Local planning and learning material (not part of the public project)
+/.reference-repos/
+/memory/
+/docs/learning/
+/AGENTS.md
+/MEMORY.md
+/Coding_Agent项目计划书.md
+/Operant_学习计划.md
+/Operant_工程实施计划.md
+/codex_agent_project_summary.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Local runtime state and secrets
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+.operant/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
