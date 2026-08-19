@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from operant.domain.messages import ToolDefinition
-from operant.domain.models import ToolPolicy
+from operant.domain.models import CommandRunnerType, ToolPolicy
+from operant.tools.execution import (
+    PROTECTED_WORKSPACE_NAMES,
+    CommandRunner,
+    CommandRunnerError,
+    DockerCommandRunner,
+    HostCommandRunner,
+)
 
 
 class ToolError(RuntimeError):
@@ -30,11 +37,15 @@ class WorkspaceTools:
         root: str | Path,
         *,
         policy: ToolPolicy | None = None,
-        output_limit: int = 100_000,
+        output_limit: int = 20_000,
+        runner: CommandRunner | None = None,
     ) -> None:
+        if output_limit < 1:
+            raise ValueError("output_limit must be positive")
         self.root = Path(root).resolve()
         self.policy = policy or ToolPolicy()
         self.output_limit = output_limit
+        self.runner = runner or self._runner_for_policy()
 
     def definitions(self) -> tuple[ToolDefinition, ...]:
         definitions = (
@@ -168,11 +179,15 @@ class WorkspaceTools:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await process.communicate()
+        diff, diff_truncated = self._truncate_output(stdout)
+        stderr_text, stderr_truncated = self._truncate_output(stderr)
         return {
             "staged": staged,
             "exit_code": process.returncode,
-            "diff": stdout.decode("utf-8", errors="replace")[: self.output_limit],
-            "stderr": stderr.decode("utf-8", errors="replace")[: self.output_limit],
+            "diff": diff,
+            "diff_truncated": diff_truncated,
+            "stderr": stderr_text,
+            "stderr_truncated": stderr_truncated,
         }
 
     def read_file(self, path: str) -> dict[str, Any]:
@@ -224,6 +239,9 @@ class WorkspaceTools:
             target.write_text(new_text, encoding="utf-8")
             return {"path": str(target.relative_to(self.root)), "created": True}
 
+        if old_text == new_text:
+            raise ToolError("patch would not change the file")
+
         if not target.is_file():
             raise ToolError(f"file does not exist: {path}")
         content = target.read_text(encoding="utf-8")
@@ -254,23 +272,25 @@ class WorkspaceTools:
         command_cwd = self._resolve(cwd, allow_directory=True)
         if not command_cwd.is_dir():
             raise ToolError(f"command cwd is not a directory: {cwd}")
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=command_cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-        except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
-            raise ToolError(f"command timed out after {timeout_seconds}s") from exc
+            result = await self.runner.run(
+                argv=argv,
+                workspace=self.root,
+                cwd=command_cwd,
+                timeout_seconds=timeout_seconds,
+                workspace_write=self.policy.workspace_write,
+                output_limit=self.output_limit,
+            )
+        except CommandRunnerError as exc:
+            raise ToolError(str(exc)) from exc
         return {
-            "argv": list(argv),
-            "exit_code": process.returncode,
-            "stdout": stdout.decode("utf-8", errors="replace")[: self.output_limit],
-            "stderr": stderr.decode("utf-8", errors="replace")[: self.output_limit],
+            "argv": list(result.argv),
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stdout_truncated": result.stdout_truncated,
+            "stderr": result.stderr,
+            "stderr_truncated": result.stderr_truncated,
+            "runner": self.policy.command_execution_policy.runner.value,
         }
 
     def _resolve(
@@ -298,15 +318,32 @@ class WorkspaceTools:
             relative = path.relative_to(self.root)
         except ValueError:
             return True
-        protected_names = {".git", ".env", ".env.local", "secrets.json"}
-        return any(part in protected_names for part in relative.parts)
+        return any(part in PROTECTED_WORKSPACE_NAMES for part in relative.parts)
+
+    def _runner_for_policy(self) -> CommandRunner:
+        execution_policy = self.policy.command_execution_policy
+        if execution_policy.runner is CommandRunnerType.DOCKER:
+            return DockerCommandRunner(execution_policy)
+        return HostCommandRunner()
+
+    def _truncate_output(self, content: bytes) -> tuple[str, bool]:
+        text = content.decode("utf-8", errors="replace")
+        return text[: self.output_limit], len(text) > self.output_limit
 
     @staticmethod
     def _approval_category(argv: Sequence[str]) -> str | None:
         executable = Path(argv[0]).name
         if executable in {"sudo", "doas"}:
             return "privileged"
+        if executable in {"bash", "dash", "fish", "ksh", "pwsh", "sh", "zsh"}:
+            return "shell"
         if executable in {"rm", "rmdir", "shred"}:
+            return "destructive"
+        if executable in {"mysql", "psql", "sqlite3"} and any(
+            keyword in argument.lower()
+            for argument in argv[1:]
+            for keyword in ("drop ", "delete ", "truncate ")
+        ):
             return "destructive"
         if executable in {"curl", "wget", "ssh", "scp", "nc"}:
             return "network"

@@ -31,10 +31,15 @@ class ImmediateProvider:
         tools: Sequence[ToolDefinition],
     ) -> AsyncIterator[ProviderEvent]:
         del messages, tools
+        content = (
+            "VERDICT: APPROVED"
+            if snapshot.role_name == "Reviewer"
+            else f"{snapshot.role_name} completed"
+        )
         yield ProviderEvent(
             event_type="model.completed",
             response=ModelResponse(
-                content=f"{snapshot.role_name} completed",
+                content=content,
                 finish_reason="stop",
             ),
         )
@@ -90,6 +95,42 @@ class ApprovalProvider(ImmediateProvider):
             )
 
 
+class ReworkProvider(ImmediateProvider):
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        del messages, tools
+        content = (
+            "需要补充测试。\nVERDICT: REWORK"
+            if snapshot.role_name == "Reviewer"
+            else f"{snapshot.role_name} completed"
+        )
+        yield ProviderEvent(
+            event_type="model.completed",
+            response=ModelResponse(content=content, finish_reason="stop"),
+        )
+
+
+class MissingVerdictProvider(ImmediateProvider):
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        del messages, tools
+        content = "请补充测试。" if snapshot.role_name == "Reviewer" else "completed"
+        yield ProviderEvent(
+            event_type="model.completed",
+            response=ModelResponse(content=content, finish_reason="stop"),
+        )
+
+
 def service_with_roles(
     tmp_path: Path,
     provider: ImmediateProvider,
@@ -142,6 +183,54 @@ async def test_sequential_workflow_streams_three_isolated_sessions(tmp_path: Pat
     completed = [event for event in events if event.event_type == "agent.completed"]
     assert [event.role for event in completed] == ["planner", "coder", "reviewer"]
     assert len({event.session_id for event in completed}) == 3
+
+
+@pytest.mark.asyncio
+async def test_rework_is_explicit_and_bounded(tmp_path: Path) -> None:
+    service = service_with_roles(tmp_path, ReworkProvider())
+    events = [
+        event
+        async for event in SequentialCodingWorkflow(service).run(
+            task="Fix calculator",
+            workspace=tmp_path,
+            planner_role_id="role_planner",
+            coder_role_id="role_coder",
+            reviewer_role_id="role_reviewer",
+            max_rework_rounds=1,
+        )
+    ]
+
+    completed = [event for event in events if event.event_type == "agent.completed"]
+    assert [event.role for event in completed] == [
+        "planner",
+        "coder",
+        "reviewer",
+        "coder",
+        "reviewer",
+    ]
+    assert [event.event_type for event in events].count("workflow.rework_started") == 1
+    assert [event.event_type for event in events].count("workflow.rework_limit_reached") == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_reviewer_verdict_is_reported_when_rework_is_disabled(
+    tmp_path: Path,
+) -> None:
+    service = service_with_roles(tmp_path, MissingVerdictProvider())
+    events = [
+        event
+        async for event in SequentialCodingWorkflow(service).run(
+            task="Fix calculator",
+            workspace=tmp_path,
+            planner_role_id="role_planner",
+            coder_role_id="role_coder",
+            reviewer_role_id="role_reviewer",
+            max_rework_rounds=0,
+        )
+    ]
+
+    assert [event.event_type for event in events].count("workflow.review_verdict_missing") == 1
+    assert all(event.event_type != "workflow.rework_started" for event in events)
 
 
 @pytest.mark.asyncio

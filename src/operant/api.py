@@ -159,6 +159,7 @@ class WorkflowRunRequest(BaseModel):
     planner_role_id: str = "role_planner"
     coder_role_id: str = "role_coder"
     reviewer_role_id: str = "role_reviewer"
+    max_rework_rounds: int = Field(default=1, ge=0, le=3)
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -426,6 +427,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 planner_role_id=request.planner_role_id,
                 coder_role_id=request.coder_role_id,
                 reviewer_role_id=request.reviewer_role_id,
+                max_rework_rounds=request.max_rework_rounds,
             ):
                 yield (f"event: {event.event_type}\ndata: {event.model_dump_json()}\n\n")
 

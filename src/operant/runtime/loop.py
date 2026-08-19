@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from operant.domain.messages import Message, MessageRole, ModelResponse
 from operant.domain.models import RoleSnapshot
 from operant.providers.base import ModelProvider
+from operant.runtime.feedback import NoProgressDetector, test_failure_feedback
 from operant.tools.workspace import (
     ApprovalCallback,
     ApprovalRequired,
@@ -49,8 +50,11 @@ class AgentLoop:
                 "role_version": snapshot.role_version,
                 "model_profile_id": snapshot.model_profile_id,
                 "model_id": snapshot.model_id,
+                "provider": snapshot.provider,
+                "effort": snapshot.effort.value,
             },
         )
+        no_progress = NoProgressDetector(snapshot.budget.max_consecutive_test_failures)
 
         for turn in range(1, snapshot.budget.max_turns + 1):
             completed: ModelResponse | None = None
@@ -163,6 +167,9 @@ class AgentLoop:
                     result = json.dumps({"error": type(exc).__name__, "message": str(exc)})
                     event_type = "tool.failed"
                     is_error = True
+                feedback: dict[str, Any] | None = None
+                if not is_error and call.name == "run_command":
+                    result, feedback = self._attach_test_failure_feedback(result)
                 messages.append(
                     Message(
                         role=MessageRole.TOOL,
@@ -181,9 +188,43 @@ class AgentLoop:
                         "is_error": is_error,
                     },
                 )
+                if feedback is not None:
+                    yield RuntimeEvent(
+                        event_type="test.failure_feedback",
+                        turn=turn,
+                        payload=feedback,
+                    )
+                    if no_progress.observe(feedback):
+                        yield RuntimeEvent(
+                            event_type="agent.no_progress",
+                            turn=turn,
+                            payload={
+                                "reason": "repeated_test_failure",
+                                "signature": feedback["signature"],
+                                "consecutive_failures": no_progress.count,
+                                "max_consecutive_test_failures": (
+                                    snapshot.budget.max_consecutive_test_failures
+                                ),
+                            },
+                        )
+                        return
 
         yield RuntimeEvent(
             event_type="agent.max_turns",
             turn=snapshot.budget.max_turns,
             payload={"max_turns": snapshot.budget.max_turns},
         )
+
+    @staticmethod
+    def _attach_test_failure_feedback(result: str) -> tuple[str, dict[str, Any] | None]:
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return result, None
+        if not isinstance(payload, dict):
+            return result, None
+        feedback = test_failure_feedback(payload)
+        if feedback is None:
+            return result, None
+        payload["test_failure"] = feedback
+        return json.dumps(payload, ensure_ascii=False), feedback
