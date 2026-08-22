@@ -729,8 +729,9 @@ git diff --check
 4. Memory Scope 只是字段，Memory 子系统尚未实现；
 5. 当前没有数据库迁移框架；
 6. SSE 断线后的跨进程任务恢复与回放尚未实现；
-7. Docker Runner 已有参数、快照和条件集成测试；当前机器没有 Docker CLI，尚未完成真实
-   容器及项目镜像的端到端验收。
+7. Docker Runner 已有参数、快照和条件集成测试；本机已安装 Docker Desktop 4.87.0，并使用
+   `python:3.13-slim` 跑通真实隔离 Runner 集成用例。尚未构建专用 Operant 镜像或执行含真实模型的
+   完整 Workflow 端到端验收，不能把该用例通过表述为完整业务流验收。
 
 ## 19. 文档维护规则
 
@@ -771,7 +772,10 @@ git diff --check
 - 扩展 Tool Policy 的 Shell 与数据库删除审批，并让输出截断显式可见；
 - 修复所有 `max_rework_rounds` 取值下缺失 Reviewer verdict 的事件一致性；
 - 新增 `SECURITY.md`，并增加 Docker 边界、超时、结构化修复与无进展的自动化测试；
-- 当前环境无 Docker CLI，真实容器集成测试按条件跳过，未将静态检查表述为运行态验收。
+- 该工程切片完成时本机尚无 Docker CLI，真实容器集成测试按条件跳过；这是当时的环境状态。
+- 随后按官方默认方式安装 Docker Desktop 4.87.0，以 `python:3.13-slim` 跑通真实 Docker Runner
+  集成用例；完整测试为 32 通过、1 个上游 Starlette 弃用警告。尚未运行含真实模型的完整 Workflow
+  端到端验收。
 
 ### 2026-07-30
 
