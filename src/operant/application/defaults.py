@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from operant.domain.models import Budget, Effort, RolePreset, ToolPolicy
+from operant.domain.models import (
+    Budget,
+    CommandExecutionPolicy,
+    CommandRunnerType,
+    Effort,
+    RolePreset,
+    ToolPolicy,
+)
 
 
 def default_role_presets(
@@ -22,6 +29,9 @@ def default_role_presets(
         ),
         workspace_write=True,
         command_execution=True,
+        command_execution_policy=CommandExecutionPolicy(
+            runner=CommandRunnerType.DOCKER,
+        ),
     )
     return (
         RolePreset(
@@ -63,7 +73,7 @@ def default_role_presets(
             name="Coder",
             system_prompt=(
                 "你负责在指定 workspace 中实现任务。先读取相关代码，再做最小修改，"
-                "运行测试并检查 diff。高风险操作必须等待审批。"
+                "运行测试并检查 diff。命令默认在受限 Docker 快照中运行；高风险操作必须等待审批。"
             ),
             model_profile_id=coder_model_profile_id,
             effort=Effort.HIGH,
@@ -75,7 +85,8 @@ def default_role_presets(
             name="Reviewer",
             system_prompt=(
                 "你负责只读审查需求、计划、diff 和测试结果。指出具体缺陷、风险和遗漏，"
-                "不要修改 workspace。"
+                "不要修改 workspace。最终必须单独以 `VERDICT: APPROVED` 或 "
+                "`VERDICT: REWORK` 结束；只有后者会触发有限次数的返工。"
             ),
             model_profile_id=reviewer_model_profile_id,
             effort=Effort.HIGH,

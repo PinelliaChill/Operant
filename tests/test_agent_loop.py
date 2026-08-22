@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
@@ -59,6 +60,94 @@ class ScriptedProvider(ModelProvider):
                 event_type="model.completed",
                 response=ModelResponse(content="Found it.", finish_reason="stop"),
             )
+
+
+class RepairingTestProvider(ModelProvider):
+    def __init__(self) -> None:
+        self.turn = 0
+        self.received_messages: list[list[Message]] = []
+
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        del snapshot, tools
+        self.turn += 1
+        self.received_messages.append(list(messages))
+        test_command = [sys.executable, "-m", "pytest", "-q", "test_target.py"]
+        if self.turn == 1:
+            response = ModelResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="first_test",
+                        name="run_command",
+                        arguments_json=json.dumps({"argv": test_command}),
+                    ),
+                ),
+                finish_reason="tool_calls",
+            )
+        elif self.turn == 2:
+            tool_result = json.loads(messages[-1].content or "{}")
+            assert tool_result["test_failure"]["exit_code"] != 0
+            response = ModelResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="fix",
+                        name="apply_patch",
+                        arguments_json=json.dumps(
+                            {
+                                "path": "target.py",
+                                "old_text": "return 100",
+                                "new_text": "return 2",
+                            }
+                        ),
+                    ),
+                ),
+                finish_reason="tool_calls",
+            )
+        elif self.turn == 3:
+            response = ModelResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="second_test",
+                        name="run_command",
+                        arguments_json=json.dumps({"argv": test_command}),
+                    ),
+                ),
+                finish_reason="tool_calls",
+            )
+        else:
+            response = ModelResponse(content="Tests pass after the repair.", finish_reason="stop")
+        yield ProviderEvent(event_type="model.completed", response=response)
+
+
+class RepeatingTestFailureProvider(RepairingTestProvider):
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        del snapshot, messages, tools
+        self.turn += 1
+        test_command = [sys.executable, "-m", "pytest", "-q", "test_target.py"]
+        yield ProviderEvent(
+            event_type="model.completed",
+            response=ModelResponse(
+                tool_calls=(
+                    ToolCall(
+                        id=f"test_{self.turn}",
+                        name="run_command",
+                        arguments_json=json.dumps({"argv": test_command}),
+                    ),
+                ),
+                finish_reason="tool_calls",
+            ),
+        )
 
 
 def snapshot() -> RoleSnapshot:
@@ -153,6 +242,73 @@ async def test_workspace_path_escape_is_returned_as_tool_error(tmp_path: Path) -
     ]
 
     assert any(event.event_type == "tool.failed" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_failed_test_feedback_drives_a_second_patch_and_verification(tmp_path: Path) -> None:
+    (tmp_path / "target.py").write_text(
+        "def answer() -> int:\n    return 100\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_target.py").write_text(
+        "from target import answer\n\n\ndef test_answer() -> None:\n    assert answer() == 2\n",
+        encoding="utf-8",
+    )
+    writable_snapshot = snapshot().model_copy(
+        update={
+            "budget": Budget(max_turns=4),
+            "tool_policy": ToolPolicy(
+                allowed_tools=("apply_patch", "run_command"),
+                workspace_write=True,
+                command_execution=True,
+            ),
+        }
+    )
+    provider = RepairingTestProvider()
+
+    events = [
+        event
+        async for event in AgentLoop(
+            provider,
+            WorkspaceTools(tmp_path, policy=writable_snapshot.tool_policy),
+        ).run(snapshot=writable_snapshot, user_message="Fix the failing test")
+    ]
+
+    assert events[-1].event_type == "agent.completed"
+    assert any(event.event_type == "test.failure_feedback" for event in events)
+    assert "return 2" in (tmp_path / "target.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_repeated_test_failure_stops_the_agent_without_another_model_turn(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "test_target.py").write_text(
+        "def test_failure() -> None:\n    assert False\n",
+        encoding="utf-8",
+    )
+    writable_snapshot = snapshot().model_copy(
+        update={
+            "budget": Budget(max_turns=4, max_consecutive_test_failures=2),
+            "tool_policy": ToolPolicy(
+                allowed_tools=("run_command",),
+                command_execution=True,
+            ),
+        }
+    )
+    provider = RepeatingTestFailureProvider()
+
+    events = [
+        event
+        async for event in AgentLoop(
+            provider,
+            WorkspaceTools(tmp_path, policy=writable_snapshot.tool_policy),
+        ).run(snapshot=writable_snapshot, user_message="Keep trying")
+    ]
+
+    assert provider.turn == 2
+    assert events[-1].event_type == "agent.no_progress"
+    assert events[-1].payload["consecutive_failures"] == 2
 
 
 @pytest.mark.asyncio

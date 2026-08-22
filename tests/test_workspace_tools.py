@@ -46,3 +46,12 @@ async def test_coder_can_modify_real_workspace_file(tmp_path: Path) -> None:
     )
 
     assert target.read_text(encoding="utf-8") == "answer = 42\n"
+
+
+def test_patch_with_identical_text_is_rejected_as_no_progress(tmp_path: Path) -> None:
+    target = tmp_path / "module.py"
+    target.write_text("answer = 1\n", encoding="utf-8")
+    tools = WorkspaceTools(tmp_path)
+
+    with pytest.raises(ToolError, match="would not change"):
+        tools.apply_patch("module.py", "answer = 1", "answer = 1")

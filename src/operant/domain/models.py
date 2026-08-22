@@ -37,6 +37,23 @@ class AgentStatus(str, Enum):
     TIMED_OUT = "timed_out"
 
 
+class CommandRunnerType(str, Enum):
+    HOST = "host"
+    DOCKER = "docker"
+
+
+class CommandExecutionPolicy(BaseModel):
+    """Immutable limits for the process that backs ``run_command``."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    runner: CommandRunnerType = CommandRunnerType.HOST
+    docker_image: str = Field(default="python:3.13-slim", min_length=1, max_length=300)
+    cpu_limit: float = Field(default=1.0, gt=0, le=64)
+    memory_limit_mb: int = Field(default=512, ge=64, le=262_144)
+    pids_limit: int = Field(default=256, ge=16, le=65_536)
+
+
 class ToolPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -48,7 +65,9 @@ class ToolPolicy(BaseModel):
         "destructive",
         "network",
         "privileged",
+        "shell",
     )
+    command_execution_policy: CommandExecutionPolicy = Field(default_factory=CommandExecutionPolicy)
 
     @field_validator("allowed_tools")
     @classmethod
@@ -72,6 +91,7 @@ class Budget(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     max_turns: int = Field(default=12, ge=1, le=100)
+    max_consecutive_test_failures: int = Field(default=2, ge=2, le=10)
     timeout_seconds: int = Field(default=300, ge=1, le=3600)
     max_output_tokens: int | None = Field(default=None, ge=1)
     max_cost_usd: float | None = Field(default=None, gt=0)

@@ -15,6 +15,8 @@ from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow
 from operant.domain.models import (
     Budget,
+    CommandExecutionPolicy,
+    CommandRunnerType,
     Effort,
     ModelProfile,
     RolePreset,
@@ -57,7 +59,15 @@ def _json_event(event: BaseModel) -> str:
     return json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
 
 
-def _tool_policy(writable: bool) -> ToolPolicy:
+def _tool_policy(
+    writable: bool,
+    *,
+    command_runner: CommandRunnerType = CommandRunnerType.DOCKER,
+    docker_image: str = "python:3.13-slim",
+    cpu_limit: float = 1.0,
+    memory_limit_mb: int = 512,
+    pids_limit: int = 256,
+) -> ToolPolicy:
     tools = (
         ("read_file", "search_files", "apply_patch", "run_command", "git_diff")
         if writable
@@ -67,6 +77,13 @@ def _tool_policy(writable: bool) -> ToolPolicy:
         allowed_tools=tools,
         workspace_write=writable,
         command_execution=writable,
+        command_execution_policy=CommandExecutionPolicy(
+            runner=command_runner,
+            docker_image=docker_image,
+            cpu_limit=cpu_limit,
+            memory_limit_mb=memory_limit_mb,
+            pids_limit=pids_limit,
+        ),
     )
 
 
@@ -175,6 +192,14 @@ def add_role(
     system_prompt: str = typer.Option(..., help="角色的 System Prompt。"),
     effort: Effort = typer.Option(Effort.MEDIUM, help="reasoning effort。"),
     writable: bool = typer.Option(False, help="是否允许修改 workspace。"),
+    command_runner: CommandRunnerType = typer.Option(
+        CommandRunnerType.DOCKER,
+        help="可写角色的命令 Runner；host 只适用于可信 workspace。",
+    ),
+    docker_image: str = typer.Option("python:3.13-slim", help="Docker Runner 使用的镜像。"),
+    cpu_limit: float = typer.Option(1.0, min=0.1, max=64),
+    memory_limit_mb: int = typer.Option(512, min=64, max=262_144),
+    pids_limit: int = typer.Option(256, min=16, max=65_536),
     timeout_seconds: int = typer.Option(300, min=1, max=3600),
 ) -> None:
     role = _service().create_role(
@@ -183,7 +208,14 @@ def add_role(
             model_profile_id=model_profile_id,
             system_prompt=system_prompt,
             effort=effort,
-            tool_policy=_tool_policy(writable),
+            tool_policy=_tool_policy(
+                writable,
+                command_runner=command_runner,
+                docker_image=docker_image,
+                cpu_limit=cpu_limit,
+                memory_limit_mb=memory_limit_mb,
+                pids_limit=pids_limit,
+            ),
             budget=Budget(timeout_seconds=timeout_seconds),
         )
     )
@@ -279,6 +311,14 @@ def create_session(
     effort: Effort | None = typer.Option(None, help="会话级 effort 覆盖。"),
     timeout_seconds: int | None = typer.Option(None, min=1, max=3600),
     writable: bool = typer.Option(False, help="即时角色是否可修改 workspace。"),
+    command_runner: CommandRunnerType = typer.Option(
+        CommandRunnerType.DOCKER,
+        help="即时可写角色的命令 Runner；host 只适用于可信 workspace。",
+    ),
+    docker_image: str = typer.Option("python:3.13-slim", help="Docker Runner 使用的镜像。"),
+    cpu_limit: float = typer.Option(1.0, min=0.1, max=64),
+    memory_limit_mb: int = typer.Option(512, min=64, max=262_144),
+    pids_limit: int = typer.Option(256, min=16, max=65_536),
 ) -> None:
     new_role: RolePreset | None = None
     if new_role_name is not None:
@@ -290,7 +330,14 @@ def create_session(
             name=new_role_name,
             system_prompt=system_prompt,
             model_profile_id=role_model_profile_id,
-            tool_policy=_tool_policy(writable),
+            tool_policy=_tool_policy(
+                writable,
+                command_runner=command_runner,
+                docker_image=docker_image,
+                cpu_limit=cpu_limit,
+                memory_limit_mb=memory_limit_mb,
+                pids_limit=pids_limit,
+            ),
         )
     overrides = None if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
     session = _service().create_session(
@@ -348,7 +395,7 @@ def run_session(
     asyncio.run(run())
 
 
-@workflow_app.command("run", help="运行 Planner → Coder → Reviewer 顺序工作流。")
+@workflow_app.command("run", help="运行含有限返工的 Planner → Coder → Reviewer 工作流。")
 def run_workflow(
     task: str = typer.Option(..., help="编码任务。"),
     workspace: Path = typer.Option(
@@ -360,6 +407,12 @@ def run_workflow(
     planner_role_id: str = typer.Option("role_planner"),
     coder_role_id: str = typer.Option("role_coder"),
     reviewer_role_id: str = typer.Option("role_reviewer"),
+    max_rework_rounds: int = typer.Option(
+        1,
+        min=0,
+        max=3,
+        help="Reviewer 返回 VERDICT: REWORK 时，最多允许 Coder 返工的轮数。",
+    ),
 ) -> None:
     service = _service()
     workflow = SequentialCodingWorkflow(service)
@@ -371,6 +424,7 @@ def run_workflow(
             planner_role_id=planner_role_id,
             coder_role_id=coder_role_id,
             reviewer_role_id=reviewer_role_id,
+            max_rework_rounds=max_rework_rounds,
         ):
             console.print(_json_event(event))
             if event.event_type == "tool.approval_required":
