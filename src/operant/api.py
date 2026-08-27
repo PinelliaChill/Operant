@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from urllib.parse import parse_qsl, quote
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from starlette.background import BackgroundTask
+from starlette.middleware.base import RequestResponseEndpoint
 
 from operant.application.evaluation import EvaluationRunner
 from operant.application.service import ApplicationService
-from operant.application.workflow import SequentialCodingWorkflow
-from operant.domain.evaluation import EvaluationResult, EvaluationSuite
+from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
+from operant.domain.actions import CommandExecution, CommandExecutionStatus
+from operant.domain.evaluation import EvaluationResult, EvaluationRunEvent, EvaluationSuite
 from operant.domain.memory import MemoryKind
 from operant.domain.models import (
     Budget,
@@ -23,11 +29,20 @@ from operant.domain.models import (
     RolePreset,
     RoleStatus,
     ToolPolicy,
+    new_id,
 )
 from operant.persistence.sqlite import (
     ConflictError,
+    IdempotencyConflictError,
     NotFoundError,
     SQLiteStore,
+)
+from operant.protocol import (
+    RecoveryAction,
+    canonical_action_hash,
+    error_payload,
+    redact_public_data,
+    redact_public_text,
 )
 from operant.providers.openai_compatible import (
     OpenAICompatibleProvider,
@@ -231,8 +246,349 @@ def _safe_evaluation_error_type(exc: Exception) -> str:
     return "runner_error"
 
 
-def _sse_event(event_type: str, payload: dict[str, Any]) -> str:
-    return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+def _sse_event(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    cursor: int | None = None,
+) -> str:
+    event_id = "" if cursor is None else f"id: {cursor}\n"
+    return f"{event_id}event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+MAX_EVENT_CURSOR = 2**63 - 1
+
+
+def _parse_event_cursor(value: str | None, *, field_name: str) -> int | None:
+    if value is None:
+        return None
+    try:
+        cursor = int(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name} must be an integer between 0 and {MAX_EVENT_CURSOR}"
+        ) from exc
+    if not 0 <= cursor <= MAX_EVENT_CURSOR:
+        raise ValueError(f"{field_name} must be an integer between 0 and {MAX_EVENT_CURSOR}")
+    return cursor
+
+
+def _parse_last_event_id(value: str | None) -> int | None:
+    return _parse_event_cursor(value, field_name="Last-Event-ID")
+
+
+def _stored_command_payload(payload: Any, *, status_code: int) -> Any:
+    """Bound and redact every durable Command response before persistence/replay."""
+
+    safe = redact_public_data(payload)
+    if status_code < 400:
+        return safe
+    if isinstance(safe, dict) and "detail" in safe:
+        error = safe.get("error")
+        if isinstance(error, dict) and {
+            "code",
+            "message",
+            "retryable",
+            "recovery",
+        }.issubset(error):
+            return safe
+    return error_payload(
+        code=f"http_{status_code}",
+        message="command request failed",
+        recovery=(
+            RecoveryAction.RETRY_LATER
+            if status_code in {408, 425, 429, 502, 503, 504}
+            else RecoveryAction.NONE
+        ),
+        retryable=status_code in {408, 425, 429, 502, 503, 504},
+    )
+
+
+def _command_scope(method: str, path: str) -> str | None:
+    """Return a stable, versioned Command type without persisting path values."""
+
+    if method not in {"POST", "PATCH", "DELETE", "PUT"}:
+        return None
+    if path in {"/v1/models/discover"} or (
+        path.startswith("/v1/models/") and path.endswith("/health")
+    ):
+        return None
+    if not path.startswith("/v1/"):
+        return None
+    return f"rest-command.v2:{method}"
+
+
+def _canonical_command_resource(path: str) -> str:
+    """Preserve the one historical REST alias without collapsing other paths."""
+
+    if path in {"/v1/tasks", "/v1/workflows/coding/runs"}:
+        return "/v1/tasks"
+    return path
+
+
+def _command_request_hash(
+    *,
+    scope: str,
+    path: str,
+    query: str,
+    body: bytes,
+) -> str:
+    try:
+        parsed_body: Any = None if not body else json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed_body = {"invalid_json_sha256": canonical_action_hash({"raw": body.hex()})}
+    return canonical_action_hash(
+        {
+            "kind": "rest_command",
+            "scope": scope,
+            "resource_path_hash": canonical_action_hash(
+                {
+                    "kind": "rest_resource_path",
+                    "path": _canonical_command_resource(path),
+                }
+            ),
+            "query": sorted(parse_qsl(query, keep_blank_values=True)),
+            "body": parsed_body,
+        }
+    )
+
+
+def _is_sse_replay_route(method: str, path: str) -> bool:
+    if method == "POST" and path.startswith("/v1/sessions/") and path.endswith("/runs"):
+        return True
+    if method == "POST" and path.startswith("/v1/tasks/") and path.endswith("/resume"):
+        return True
+    return (
+        method == "GET"
+        and path.startswith("/v1/evaluations/runs/")
+        and path.endswith("/events/stream")
+    )
+
+
+def _is_event_cursor_query_route(method: str, path: str) -> bool:
+    if method != "GET":
+        return False
+    return (
+        (path.startswith("/v1/sessions/") and path.endswith("/events"))
+        or (path.startswith("/v1/tasks/") and path.endswith("/events"))
+        or (
+            path.startswith("/v1/evaluations/runs/")
+            and (path.endswith("/events") or path.endswith("/events/stream"))
+        )
+    )
+
+
+_FAILED_FIRST_STREAM_EVENTS = frozenset(
+    {
+        "evaluation.error",
+        "workflow.resume_rejected",
+    }
+)
+_UNKNOWN_FIRST_STREAM_EVENTS = frozenset(
+    {
+        "agent.stream_error",
+        "workflow.resume_failed",
+        "workflow.stream_error",
+    }
+)
+MAX_FIRST_SSE_FRAME_BYTES = 256_000
+
+
+def _first_sse_frame_end(buffer: bytes) -> int | None:
+    boundaries = tuple(
+        index + len(marker)
+        for marker in (b"\n\n", b"\r\n\r\n")
+        if (index := buffer.find(marker)) >= 0
+    )
+    return min(boundaries, default=None)
+
+
+def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any]] | None:
+    event_type = "message"
+    data_lines: list[str] = []
+    text = frame.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    for line in text.splitlines():
+        if line.startswith("event:"):
+            event_type = line[6:].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    if not event_type or not data_lines:
+        return None
+    try:
+        payload = json.loads("\n".join(data_lines))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return event_type, payload
+
+
+def _stream_resource(
+    *,
+    store: SQLiteStore,
+    path: str,
+    event_type: str,
+    payload: dict[str, Any],
+) -> tuple[str | None, str | None, str | None, int | None]:
+    cursor = payload.get("cursor")
+    durable_cursor = cursor if isinstance(cursor, int) and cursor >= 1 else None
+    candidates = (
+        ("workflow", "workflow_run_id", "/v1/tasks/{}/events"),
+        ("evaluation", "evaluation_run_id", "/v1/evaluations/runs/{}/events"),
+        ("session", "session_id", "/v1/sessions/{}/events"),
+    )
+
+    def is_committed(resource_type: str, resource_id: str, cursor: int | None) -> bool:
+        if cursor is None:
+            return False
+        try:
+            if resource_type == "session":
+                events = store.list_events(resource_id, after_cursor=cursor - 1, limit=1)
+                return bool(events and events[0].cursor == cursor)
+            elif resource_type == "workflow":
+                workflow_events = store.list_workflow_events(
+                    resource_id,
+                    after_cursor=cursor - 1,
+                    limit=1,
+                )
+                return bool(workflow_events and workflow_events[0].cursor == cursor)
+            else:
+                evaluation_events = store.list_evaluation_events(
+                    resource_id,
+                    after_cursor=cursor - 1,
+                    limit=1,
+                )
+                return bool(evaluation_events and evaluation_events[0].cursor == cursor)
+        except (NotFoundError, ValueError):
+            return False
+
+    for resource_type, key, replay_template in candidates:
+        resource_id = payload.get(key)
+        if isinstance(resource_id, str) and 0 < len(resource_id) <= 300:
+            return (
+                resource_type,
+                resource_id,
+                replay_template.format(quote(resource_id, safe="")),
+                durable_cursor
+                if is_committed(resource_type, resource_id, durable_cursor)
+                else None,
+            )
+    if event_type.startswith("agent.") and path.startswith("/v1/sessions/"):
+        suffix = "/runs"
+        encoded_id = path[len("/v1/sessions/") : -len(suffix)] if path.endswith(suffix) else ""
+        if encoded_id and "/" not in encoded_id and len(encoded_id) <= 300:
+            return (
+                "session",
+                encoded_id,
+                f"/v1/sessions/{quote(encoded_id, safe='')}/events",
+                durable_cursor if is_committed("session", encoded_id, durable_cursor) else None,
+            )
+    return None, None, None, durable_cursor
+
+
+def _first_stream_summary(
+    *,
+    store: SQLiteStore,
+    command_id: str,
+    path: str,
+    frame: bytes,
+) -> tuple[
+    CommandExecutionStatus,
+    dict[str, Any] | None,
+    str,
+    int,
+    str | None,
+    str | None,
+]:
+    parsed = _parse_sse_frame(frame)
+    if parsed is None:
+        return (
+            CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
+            None,
+            "stream_first_frame_invalid",
+            409,
+            None,
+            None,
+        )
+    event_type, payload = parsed
+    resource_type, resource_id, replay_url, cursor = _stream_resource(
+        store=store,
+        path=path,
+        event_type=event_type,
+        payload=payload,
+    )
+    is_failed = event_type in _FAILED_FIRST_STREAM_EVENTS
+    is_unknown = event_type in _UNKNOWN_FIRST_STREAM_EVENTS
+    replay_available = (
+        resource_id is not None and cursor is not None and not (is_failed or is_unknown)
+    )
+    summary: dict[str, Any] = {
+        "command_kind": "stream",
+        "accepted": not (is_failed or is_unknown),
+        "stream_replay_available": replay_available,
+        "command_id": command_id,
+        "first_event_type": event_type,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "replay_url": replay_url if replay_available else None,
+        "replay_after_cursor": 0 if replay_available else None,
+        "recovery": "replay_events" if replay_available else "not_available",
+    }
+    if resource_type is not None and resource_id is not None:
+        summary[f"{resource_type}_id"] = resource_id
+        summary["resource"] = {"type": resource_type, "id": resource_id}
+    if is_unknown:
+        return (
+            CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
+            None,
+            event_type[:200],
+            409,
+            resource_type,
+            resource_id,
+        )
+    if is_failed:
+        failure_code = (
+            "workflow_resume_rejected"
+            if event_type == "workflow.resume_rejected"
+            else "evaluation_stream_failed"
+        )
+        failure_message = (
+            "workflow resume request was rejected"
+            if event_type == "workflow.resume_rejected"
+            else "evaluation stream failed before it was accepted"
+        )
+        failure_envelope = error_payload(
+            code=failure_code,
+            message=failure_message,
+            recovery=RecoveryAction.MANUAL_RECONCILE,
+        )
+        failure_envelope.update(summary)
+        failure_envelope["recovery"] = "manual_reconcile"
+        return (
+            CommandExecutionStatus.FAILED,
+            failure_envelope,
+            event_type[:200],
+            409 if event_type == "workflow.resume_rejected" else 500,
+            resource_type,
+            resource_id,
+        )
+    if not replay_available:
+        return (
+            CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
+            None,
+            "stream_acceptance_unverified",
+            409,
+            resource_type,
+            resource_id,
+        )
+    return (
+        CommandExecutionStatus.COMPLETED,
+        summary,
+        "",
+        202,
+        resource_type or "stream",
+        resource_id,
+    )
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -246,6 +602,387 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         description="由角色预设驱动的多模型 Coding Agent Runtime。",
         version="0.1.0",
     )
+
+    @app.exception_handler(HTTPException)
+    async def http_error_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+        detail = redact_public_data(exc.detail)
+        message = (
+            redact_public_text(str(exc.detail)) if isinstance(exc.detail, str) else "request failed"
+        )
+        code = f"http_{exc.status_code}"
+        recovery = RecoveryAction.NONE
+        if exc.status_code == 400 and message.startswith("Last-Event-ID requires"):
+            code = "invalid_event_cursor"
+            recovery = RecoveryAction.REFRESH_AND_RETRY
+        if exc.status_code >= 500:
+            message = "upstream or internal service request failed"
+            detail = message
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_payload(
+                code=code,
+                message=message,
+                retryable=exc.status_code in {408, 425, 429, 502, 503, 504},
+                recovery=(
+                    RecoveryAction.RETRY_LATER
+                    if exc.status_code in {408, 425, 429, 502, 503, 504}
+                    else recovery
+                ),
+                legacy_detail=detail,
+            ),
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        _request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        detail = [
+            {
+                "type": str(item.get("type", "validation_error")),
+                "loc": [
+                    str(part) if not isinstance(part, int) else part for part in item.get("loc", ())
+                ],
+                "msg": redact_public_text(str(item.get("msg", "invalid value"))),
+            }
+            for item in exc.errors()
+        ]
+        return JSONResponse(
+            status_code=422,
+            content=error_payload(
+                code="request_validation_failed",
+                message="request validation failed",
+                legacy_detail=detail,
+            ),
+        )
+
+    @app.exception_handler(Exception)
+    async def unexpected_error_handler(_request: Request, _exc: Exception) -> JSONResponse:
+        message = "internal service error"
+        return JSONResponse(
+            status_code=500,
+            content=error_payload(
+                code="internal_error",
+                message=message,
+                recovery=RecoveryAction.MANUAL_RECONCILE,
+                legacy_detail=message,
+            ),
+        )
+
+    def protocol_response(
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+        recovery: RecoveryAction = RecoveryAction.NONE,
+        retryable: bool = False,
+        idempotency_key: str | None = None,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status_code,
+            content=error_payload(
+                code=code,
+                message=message,
+                retryable=retryable,
+                recovery=recovery,
+            ),
+            headers=(None if idempotency_key is None else {"Idempotency-Key": idempotency_key}),
+        )
+
+    @app.middleware("http")
+    async def command_idempotency_middleware(
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        raw_after_cursor = request.query_params.get("after_cursor")
+        if raw_after_cursor is not None and _is_event_cursor_query_route(
+            request.method, request.url.path
+        ):
+            try:
+                _parse_event_cursor(raw_after_cursor, field_name="after_cursor")
+            except ValueError:
+                return protocol_response(
+                    status_code=400,
+                    code="invalid_event_cursor",
+                    message=(f"after_cursor must be an integer between 0 and {MAX_EVENT_CURSOR}"),
+                    recovery=RecoveryAction.REFRESH_AND_RETRY,
+                )
+
+        last_event_id = request.headers.get("Last-Event-ID")
+        if _is_sse_replay_route(request.method, request.url.path):
+            try:
+                parsed_last_event_id = _parse_last_event_id(last_event_id)
+            except ValueError:
+                return protocol_response(
+                    status_code=400,
+                    code="invalid_event_cursor",
+                    message=(f"Last-Event-ID must be an integer between 0 and {MAX_EVENT_CURSOR}"),
+                    recovery=RecoveryAction.REFRESH_AND_RETRY,
+                )
+            if parsed_last_event_id is not None:
+                return await call_next(request)
+
+        idempotency_key = request.headers.get("Idempotency-Key")
+        scope = _command_scope(request.method, request.url.path)
+        if scope is None:
+            return await call_next(request)
+        # No current mutating API route has a canonical trailing slash. Let
+        # Starlette issue its 307 before reserving the key; the redirected
+        # canonical request is the command that owns the durable receipt.
+        if request.url.path.endswith("/"):
+            return await call_next(request)
+        if idempotency_key is None:
+            idempotency_key = new_id("idem")
+        if not idempotency_key or len(idempotency_key) > 300:
+            return protocol_response(
+                status_code=400,
+                code="invalid_idempotency_key",
+                message="Idempotency-Key must contain between 1 and 300 characters",
+            )
+
+        body = await request.body()
+        try:
+            action_hash = _command_request_hash(
+                scope=scope,
+                path=request.url.path,
+                query=request.url.query,
+                body=body,
+            )
+        except (TypeError, ValueError):
+            return protocol_response(
+                status_code=400,
+                code="invalid_command_payload",
+                message="command payload cannot be canonicalized",
+                idempotency_key=idempotency_key,
+            )
+        command = CommandExecution(
+            command_type=scope,
+            idempotency_key=idempotency_key,
+            action_hash=action_hash,
+        )
+        try:
+            execution, created = store.reserve_command_execution(command)
+        except IdempotencyConflictError:
+            return protocol_response(
+                status_code=409,
+                code="idempotency_key_conflict",
+                message="Idempotency-Key was already used for a different command",
+                recovery=RecoveryAction.USE_NEW_IDEMPOTENCY_KEY,
+                idempotency_key=idempotency_key,
+            )
+        if not created:
+            if (
+                execution.status
+                in {CommandExecutionStatus.COMPLETED, CommandExecutionStatus.FAILED}
+                and execution.response_json is not None
+                and execution.http_status is not None
+            ):
+                try:
+                    replay_payload = json.loads(execution.response_json)
+                except json.JSONDecodeError:
+                    replay_payload = error_payload(
+                        code="stored_command_response_invalid",
+                        message="stored command response is unavailable",
+                        recovery=RecoveryAction.MANUAL_RECONCILE,
+                    )
+                    return JSONResponse(
+                        status_code=500,
+                        content=replay_payload,
+                        headers={"Idempotency-Key": idempotency_key},
+                    )
+                if (
+                    execution.status is CommandExecutionStatus.COMPLETED
+                    and isinstance(replay_payload, dict)
+                    and replay_payload.get("command_kind") == "stream"
+                ):
+                    return JSONResponse(
+                        status_code=202,
+                        content=replay_payload,
+                        headers={
+                            "Idempotency-Key": idempotency_key,
+                            "Idempotency-Replayed": "true",
+                        },
+                    )
+                return JSONResponse(
+                    status_code=execution.http_status,
+                    content=replay_payload,
+                    headers={
+                        "Idempotency-Key": idempotency_key,
+                        "Idempotency-Replayed": "true",
+                    },
+                )
+            if execution.status is CommandExecutionStatus.IN_PROGRESS:
+                return protocol_response(
+                    status_code=409,
+                    code="command_in_progress",
+                    message="command with this Idempotency-Key is still in progress",
+                    retryable=True,
+                    recovery=RecoveryAction.RETRY_SAME_IDEMPOTENCY_KEY,
+                    idempotency_key=idempotency_key,
+                )
+            return protocol_response(
+                status_code=409,
+                code="command_outcome_unknown",
+                message="command outcome is unknown and requires manual reconciliation",
+                recovery=RecoveryAction.MANUAL_RECONCILE,
+                idempotency_key=idempotency_key,
+            )
+
+        try:
+            response = await call_next(request)
+        except BaseException:
+            store.mark_command_manual_reconcile(
+                execution.id,
+                error_code="response_not_started",
+            )
+            raise
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("text/event-stream"):
+            original_iterator = cast(Any, response).body_iterator
+
+            async def receipt_stream() -> AsyncIterator[bytes | str]:
+                receipt_closed = False
+                first_frame_buffer = bytearray()
+                try:
+                    async for chunk in original_iterator:
+                        if receipt_closed:
+                            yield chunk
+                            continue
+                        first_frame_buffer.extend(
+                            chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
+                        )
+                        frame_end = _first_sse_frame_end(bytes(first_frame_buffer))
+                        if (
+                            frame_end is None
+                            and len(first_frame_buffer) > MAX_FIRST_SSE_FRAME_BYTES
+                        ) or (frame_end is not None and frame_end > MAX_FIRST_SSE_FRAME_BYTES):
+                            store.mark_command_manual_reconcile(
+                                execution.id,
+                                error_code="stream_first_frame_too_large",
+                            )
+                            receipt_closed = True
+                            bounded_error = error_payload(
+                                code="stream_first_frame_too_large",
+                                message="stream ended because its first event exceeded the limit",
+                                recovery=RecoveryAction.MANUAL_RECONCILE,
+                            )
+                            yield _sse_event("command.stream_error", bounded_error)
+                            await original_iterator.aclose()
+                            return
+                        if frame_end is None:
+                            continue
+                        first_frame = bytes(first_frame_buffer[:frame_end])
+                        (
+                            terminal_status,
+                            summary,
+                            error_code,
+                            stored_http_status,
+                            resource_type,
+                            resource_id,
+                        ) = _first_stream_summary(
+                            store=store,
+                            command_id=execution.id,
+                            path=request.url.path,
+                            frame=first_frame,
+                        )
+                        if terminal_status is CommandExecutionStatus.COMPLETED:
+                            assert summary is not None
+                            store.complete_command_execution(
+                                execution.id,
+                                response_json=json.dumps(summary, ensure_ascii=False),
+                                http_status=stored_http_status,
+                                resource_type=resource_type,
+                                resource_id=resource_id,
+                            )
+                        elif terminal_status is CommandExecutionStatus.FAILED:
+                            assert summary is not None
+                            store.fail_command_execution(
+                                execution.id,
+                                error_code=error_code,
+                                http_status=stored_http_status,
+                                response_json=json.dumps(summary, ensure_ascii=False),
+                            )
+                        else:
+                            store.mark_command_manual_reconcile(
+                                execution.id,
+                                error_code=error_code,
+                            )
+                        receipt_closed = True
+                        yield bytes(first_frame_buffer)
+                        first_frame_buffer.clear()
+                except BaseException:
+                    if not receipt_closed:
+                        store.mark_command_manual_reconcile(
+                            execution.id,
+                            error_code="stream_not_started",
+                        )
+                    raise
+                if not receipt_closed:
+                    store.mark_command_manual_reconcile(
+                        execution.id,
+                        error_code="stream_ended_before_first_event",
+                    )
+
+            headers = {
+                key: value
+                for key, value in response.headers.items()
+                if key.lower() not in {"content-length", "content-type"}
+            }
+            headers["Idempotency-Key"] = idempotency_key
+            return StreamingResponse(
+                receipt_stream(),
+                status_code=response.status_code,
+                media_type="text/event-stream",
+                headers=headers,
+                background=response.background,
+            )
+
+        chunks: list[bytes] = []
+        try:
+            async for chunk in cast(Any, response).body_iterator:
+                chunks.append(chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8"))
+        except BaseException:
+            store.mark_command_manual_reconcile(
+                execution.id,
+                error_code="response_body_incomplete",
+            )
+            raise
+        response_body = b"".join(chunks)
+        try:
+            stored_payload = json.loads(response_body) if response_body else None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            stored_payload = response_body.decode("utf-8", errors="replace")
+        stored_payload = _stored_command_payload(
+            stored_payload,
+            status_code=response.status_code,
+        )
+        stored_json = json.dumps(stored_payload, ensure_ascii=False)
+        if response.status_code >= 400:
+            store.fail_command_execution(
+                execution.id,
+                error_code=f"http_{response.status_code}",
+                http_status=response.status_code,
+                response_json=stored_json,
+            )
+        else:
+            store.complete_command_execution(
+                execution.id,
+                response_json=stored_json,
+                http_status=response.status_code,
+            )
+        safe_headers = {
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in {"content-length", "content-type"}
+        }
+        safe_headers["Idempotency-Key"] = idempotency_key
+        return JSONResponse(
+            content=stored_payload,
+            status_code=response.status_code,
+            headers=safe_headers,
+            background=response.background,
+        )
+
     web_root = Path(__file__).with_name("web")
     app.mount(
         "/web/static",
@@ -428,29 +1165,109 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/v1/sessions/{session_id}/events")
     async def list_events(
         session_id: str,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=1000, ge=1, le=1000),
     ) -> list[dict[str, object]]:
         try:
-            events = service.list_events(session_id)
+            events = service.list_events(
+                session_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [event.model_dump(mode="json") for event in events]
 
     @app.post("/v1/sessions/{session_id}/runs")
-    async def run_session(session_id: str, request: RunSessionRequest) -> StreamingResponse:
+    async def run_session(
+        session_id: str,
+        request: RunSessionRequest,
+        raw_request: Request,
+    ) -> Response:
         try:
             service.get_session(session_id)
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        async def stream_events() -> AsyncIterator[str]:
-            async for event in service.run_session(
+        after_cursor = _parse_last_event_id(raw_request.headers.get("Last-Event-ID"))
+        if after_cursor is not None:
+            committed = service.list_events(
                 session_id,
-                user_message=request.message,
-                workspace=request.workspace,
-            ):
-                yield (f"event: {event.event_type}\ndata: {event.model_dump_json()}\n\n")
+                after_cursor=after_cursor,
+                limit=1000,
+            )
 
-        return StreamingResponse(stream_events(), media_type="text/event-stream")
+            async def replay_events() -> AsyncIterator[str]:
+                for event in committed:
+                    turn = event.payload.get("turn", 0)
+                    payload = {key: value for key, value in event.payload.items() if key != "turn"}
+                    data = {
+                        "event_type": event.event_type,
+                        "turn": turn if isinstance(turn, int) and turn >= 0 else 0,
+                        "cursor": event.cursor,
+                        "payload": payload,
+                    }
+                    yield _sse_event(event.event_type, data, cursor=event.cursor)
+
+            return StreamingResponse(replay_events(), media_type="text/event-stream")
+
+        try:
+            admitted = service.admit_session_run(session_id)
+        except ConflictError:
+            return protocol_response(
+                status_code=409,
+                code="session_pending_approval",
+                message=(
+                    "session has a pending durable approval; decide or reconcile it "
+                    "before starting another run"
+                ),
+                recovery=RecoveryAction.MANUAL_RECONCILE,
+            )
+        if not admitted:
+            return protocol_response(
+                status_code=409,
+                code="session_run_conflict",
+                message="session already has an active run",
+                retryable=True,
+                recovery=RecoveryAction.RETRY_LATER,
+            )
+
+        async def stream_events() -> AsyncIterator[str]:
+            try:
+                async for event in service.run_session(
+                    session_id,
+                    user_message=request.message,
+                    workspace=request.workspace,
+                    _admission_granted=True,
+                ):
+                    yield _sse_event(
+                        event.event_type,
+                        event.model_dump(mode="json"),
+                        cursor=event.cursor,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                payload = error_payload(
+                    code="session_stream_failed",
+                    message="session stream stopped before completion",
+                    recovery=RecoveryAction.MANUAL_RECONCILE,
+                )
+                payload.update(
+                    {
+                        "error_type": "stream_error",
+                        "message": "session stream stopped before completion",
+                    }
+                )
+                yield _sse_event("agent.stream_error", payload)
+            finally:
+                service.release_session_run(session_id)
+
+        return StreamingResponse(
+            stream_events(),
+            media_type="text/event-stream",
+            background=BackgroundTask(service.release_session_run, session_id),
+        )
 
     @app.post("/v1/sessions/{session_id}/cancel")
     async def cancel_session(session_id: str) -> dict[str, bool]:
@@ -463,7 +1280,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/v1/sessions/{session_id}/approvals")
     async def list_approvals(
         session_id: str,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         try:
             return service.list_pending_approvals(session_id)
         except NotFoundError as exc:
@@ -474,27 +1291,31 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         session_id: str,
         tool_call_id: str,
         request: ApprovalDecisionRequest,
-    ) -> dict[str, bool]:
+    ) -> dict[str, object]:
         try:
-            accepted = service.submit_approval(
+            return service.decide_approval(
                 session_id,
                 tool_call_id,
                 approved=request.approved,
             )
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if not accepted:
-            raise HTTPException(
-                status_code=409,
-                detail="approval is not pending",
-            )
-        return {"accepted": True}
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/v1/workflows/coding/runs")
     @app.post("/v1/tasks")
     async def run_coding_workflow(
         request: WorkflowRunRequest,
+        raw_request: Request,
     ) -> StreamingResponse:
+        if raw_request.headers.get("Last-Event-ID") is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Last-Event-ID requires an existing workflow run; use the task event query"
+                ),
+            )
         try:
             workflow.validate_configuration(
                 planner_role_id=request.planner_role_id,
@@ -508,18 +1329,38 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         async def stream_events() -> AsyncIterator[str]:
-            async for event in workflow.run(
-                task=request.task,
-                workspace=request.workspace,
-                main_role_id=request.main_role_id,
-                planner_role_id=request.planner_role_id,
-                explorer_role_ids=request.explorer_role_ids,
-                coder_role_id=request.coder_role_id,
-                reviewer_role_id=request.reviewer_role_id,
-                max_parallel_explorers=request.max_parallel_explorers,
-                max_rework_rounds=request.max_rework_rounds,
-            ):
-                yield (f"event: {event.event_type}\ndata: {event.model_dump_json()}\n\n")
+            try:
+                async for event in workflow.run(
+                    task=request.task,
+                    workspace=request.workspace,
+                    main_role_id=request.main_role_id,
+                    planner_role_id=request.planner_role_id,
+                    explorer_role_ids=request.explorer_role_ids,
+                    coder_role_id=request.coder_role_id,
+                    reviewer_role_id=request.reviewer_role_id,
+                    max_parallel_explorers=request.max_parallel_explorers,
+                    max_rework_rounds=request.max_rework_rounds,
+                ):
+                    yield _sse_event(
+                        event.event_type,
+                        event.model_dump(mode="json"),
+                        cursor=event.cursor,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                payload = error_payload(
+                    code="workflow_stream_failed",
+                    message="workflow stream stopped before completion",
+                    recovery=RecoveryAction.MANUAL_RECONCILE,
+                )
+                payload.update(
+                    {
+                        "error_type": "stream_error",
+                        "message": "workflow stream stopped before completion",
+                    }
+                )
+                yield _sse_event("workflow.stream_error", payload)
 
         return StreamingResponse(stream_events(), media_type="text/event-stream")
 
@@ -538,9 +1379,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/v1/tasks/{workflow_run_id}/events")
     async def list_workflow_run_events(
         workflow_run_id: str,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=1000, ge=1, le=1000),
     ) -> list[dict[str, object]]:
         try:
-            events = service.list_workflow_events(workflow_run_id)
+            events = service.list_workflow_events(
+                workflow_run_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [event.model_dump(mode="json") for event in events]
@@ -576,11 +1423,34 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     async def resume_workflow_run(
         workflow_run_id: str,
         request: WorkflowResumeRequest,
+        raw_request: Request,
     ) -> StreamingResponse:
         try:
             service.get_workflow_run(workflow_run_id)
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        after_cursor = _parse_last_event_id(raw_request.headers.get("Last-Event-ID"))
+        if after_cursor is not None:
+            committed = service.list_workflow_events(
+                workflow_run_id,
+                after_cursor=after_cursor,
+                limit=1000,
+            )
+
+            async def replay_events() -> AsyncIterator[str]:
+                for event in committed:
+                    data = WorkflowEvent(
+                        workflow_run_id=event.workflow_run_id,
+                        cursor=event.cursor,
+                        role=event.role,
+                        session_id=event.session_id or "",
+                        event_type=event.event_type,
+                        payload=event.payload,
+                    ).model_dump(mode="json")
+                    yield _sse_event(event.event_type, data, cursor=event.cursor)
+
+            return StreamingResponse(replay_events(), media_type="text/event-stream")
 
         async def stream_events() -> AsyncIterator[str]:
             try:
@@ -588,13 +1458,39 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                     workflow_run_id,
                     allow_coder_replay=request.allow_coder_replay,
                 ):
-                    yield f"event: {event.event_type}\ndata: {event.model_dump_json()}\n\n"
-            except ValueError as exc:
-                error = json.dumps(
-                    {"error_type": type(exc).__name__, "message": str(exc)},
-                    ensure_ascii=False,
+                    yield _sse_event(
+                        event.event_type,
+                        event.model_dump(mode="json"),
+                        cursor=event.cursor,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except ValueError:
+                error = error_payload(
+                    code="workflow_resume_rejected",
+                    message="workflow resume request was rejected",
+                    recovery=RecoveryAction.MANUAL_RECONCILE,
                 )
-                yield f"event: workflow.resume_rejected\ndata: {error}\n\n"
+                error.update(
+                    {
+                        "error_type": "ValueError",
+                        "message": "workflow resume request was rejected",
+                    }
+                )
+                yield _sse_event("workflow.resume_rejected", error)
+            except Exception:
+                error = error_payload(
+                    code="workflow_resume_failed",
+                    message="workflow resume stream stopped before completion",
+                    recovery=RecoveryAction.MANUAL_RECONCILE,
+                )
+                error.update(
+                    {
+                        "error_type": "stream_error",
+                        "message": "workflow resume stream stopped before completion",
+                    }
+                )
+                yield _sse_event("workflow.resume_failed", error)
 
         return StreamingResponse(stream_events(), media_type="text/event-stream")
 
@@ -667,19 +1563,53 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         evaluation_runner = EvaluationRunner(service)
 
         async def stream_events() -> AsyncIterator[str]:
+            evaluation_run_id: str | None = None
             try:
                 async for event in evaluation_runner.run_suite(
                     request.suite_id,
                     artifact_root=request.artifact_root,
                 ):
-                    yield _sse_event(event.event_type, event.model_dump(mode="json"))
+                    evaluation_run_id = event.evaluation_run_id
+                    yield _sse_event(
+                        event.event_type,
+                        event.model_dump(mode="json"),
+                        cursor=event.cursor,
+                    )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
+                safe_error_type = _safe_evaluation_error_type(exc)
+                payload = error_payload(
+                    code=f"evaluation_{safe_error_type}",
+                    message="evaluation runner stopped before completion",
+                    recovery=RecoveryAction.MANUAL_RECONCILE,
+                )
+                payload.update(
+                    {
+                        "evaluation_run_id": evaluation_run_id,
+                        "error_type": safe_error_type,
+                        "message": "evaluation runner stopped before completion",
+                    }
+                )
+                cursor: int | None = None
+                if evaluation_run_id is not None:
+                    try:
+                        persisted_error = service.append_evaluation_event(
+                            EvaluationRunEvent(
+                                evaluation_run_id=evaluation_run_id,
+                                event_type="evaluation.error",
+                                payload=payload,
+                            )
+                        )
+                    except (ConflictError, NotFoundError):
+                        pass
+                    else:
+                        cursor = persisted_error.cursor
+                        payload = persisted_error.model_dump(mode="json")
                 yield _sse_event(
                     "evaluation.error",
-                    {
-                        "error_type": _safe_evaluation_error_type(exc),
-                        "message": "evaluation runner stopped before completion",
-                    },
+                    payload,
+                    cursor=cursor,
                 )
 
         return StreamingResponse(stream_events(), media_type="text/event-stream")
@@ -691,6 +1621,50 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail="evaluation run not found") from exc
         return run.model_dump(mode="json")
+
+    @app.get("/v1/evaluations/runs/{evaluation_run_id}/events")
+    async def list_evaluation_events(
+        evaluation_run_id: str,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=1000, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        try:
+            events = service.list_evaluation_events(
+                evaluation_run_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="evaluation run not found") from exc
+        return [event.model_dump(mode="json") for event in events]
+
+    @app.get("/v1/evaluations/runs/{evaluation_run_id}/events/stream")
+    async def stream_evaluation_events(
+        evaluation_run_id: str,
+        raw_request: Request,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=1000, ge=1, le=1000),
+    ) -> StreamingResponse:
+        header_cursor = _parse_last_event_id(raw_request.headers.get("Last-Event-ID"))
+        replay_cursor = header_cursor if header_cursor is not None else after_cursor
+        try:
+            events = service.list_evaluation_events(
+                evaluation_run_id,
+                after_cursor=replay_cursor,
+                limit=limit,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="evaluation run not found") from exc
+
+        async def replay_events() -> AsyncIterator[str]:
+            for event in events:
+                yield _sse_event(
+                    event.event_type,
+                    event.model_dump(mode="json"),
+                    cursor=event.cursor,
+                )
+
+        return StreamingResponse(replay_events(), media_type="text/event-stream")
 
     @app.get("/v1/evaluations/runs/{evaluation_run_id}/results")
     async def list_evaluation_results(evaluation_run_id: str) -> list[dict[str, Any]]:

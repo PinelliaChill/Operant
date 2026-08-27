@@ -26,6 +26,7 @@ class WorkflowEvent(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     workflow_run_id: str = ""
+    cursor: int | None = Field(default=None, ge=1)
     role: str
     session_id: str
     event_type: str
@@ -233,10 +234,12 @@ class SequentialCodingWorkflow:
                         persisted_memory_event = memory_event.model_copy(
                             update={"workflow_run_id": run.id}
                         )
-                        self._persist_workflow_event(run.id, persisted_memory_event)
+                        persisted_memory_event = self._persist_workflow_event(
+                            run.id, persisted_memory_event
+                        )
                         yield persisted_memory_event
                 event = raw_event.model_copy(update={"workflow_run_id": run.id})
-                self._persist_workflow_event(run.id, event)
+                event = self._persist_workflow_event(run.id, event)
                 terminal = self._advance_workflow_run(run.id, event) or terminal
                 yield event
         finally:
@@ -769,8 +772,8 @@ class SequentialCodingWorkflow:
             },
         )
 
-    def _persist_workflow_event(self, workflow_run_id: str, event: WorkflowEvent) -> None:
-        self.service.append_workflow_event(
+    def _persist_workflow_event(self, workflow_run_id: str, event: WorkflowEvent) -> WorkflowEvent:
+        persisted = self.service.append_workflow_event(
             WorkflowRunEvent(
                 workflow_run_id=workflow_run_id,
                 role=event.role,
@@ -779,6 +782,7 @@ class SequentialCodingWorkflow:
                 payload=event.payload,
             )
         )
+        return event.model_copy(update={"cursor": persisted.cursor})
 
     def _advance_workflow_run(self, workflow_run_id: str, event: WorkflowEvent) -> bool:
         if event.event_type == "workflow.completed":

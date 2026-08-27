@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import AsyncGenerator
-from typing import Any
+from collections.abc import AsyncGenerator, Mapping
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from operant.domain.messages import Message, MessageRole, ModelResponse
 from operant.domain.models import RoleSnapshot
+from operant.protocol import redact_public_text
 from operant.providers.base import ModelProvider
 from operant.runtime.feedback import NoProgressDetector, test_failure_feedback
 from operant.tools.workspace import (
@@ -24,13 +26,69 @@ class RuntimeEvent(BaseModel):
 
     event_type: str
     turn: int = Field(ge=0)
+    cursor: int | None = Field(default=None, ge=1)
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ToolActionClaim:
+    receipt_id: str
+    action_hash: str
+    replay_result: str | None = None
+    replay_is_error: bool = False
+
+
+class ActionGateway(Protocol):
+    """Persistence-neutral contract used by the runtime around side effects."""
+
+    def reserve_tool_action(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> ToolActionClaim: ...
+
+    def complete_tool_action(self, claim: ToolActionClaim, result: str) -> None: ...
+
+    def fail_tool_action(
+        self,
+        claim: ToolActionClaim,
+        *,
+        error_code: str,
+        result: str,
+    ) -> None: ...
+
+    def request_approval(
+        self,
+        claim: ToolActionClaim,
+        *,
+        tool_call_id: str,
+        category: str,
+        detail: str,
+    ) -> Mapping[str, Any]: ...
+
+    def verify_approval(
+        self,
+        claim: ToolActionClaim,
+        *,
+        tool_call_id: str,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> None: ...
+
+
 class AgentLoop:
-    def __init__(self, provider: ModelProvider, tools: WorkspaceTools) -> None:
+    def __init__(
+        self,
+        provider: ModelProvider,
+        tools: WorkspaceTools,
+        *,
+        action_gateway: ActionGateway | None = None,
+    ) -> None:
         self.provider = provider
         self.tools = tools
+        self.action_gateway = action_gateway
 
     async def run(
         self,
@@ -111,16 +169,46 @@ class AgentLoop:
 
             for call in completed.tool_calls:
                 tool_started = time.monotonic()
+                arguments: dict[str, Any] = {}
+                claim: ToolActionClaim | None = None
+                action_gateway = self.action_gateway
                 yield RuntimeEvent(
                     event_type="tool.started",
                     turn=turn,
                     payload={"tool_call_id": call.id, "name": call.name},
                 )
                 try:
-                    result = await self.tools.execute(call.name, call.arguments())
-                    event_type = "tool.completed"
-                    is_error = False
+                    arguments = call.arguments()
+                    if action_gateway is not None and self.tools.is_side_effecting(call.name):
+                        claim = action_gateway.reserve_tool_action(
+                            tool_call_id=call.id,
+                            name=call.name,
+                            arguments=arguments,
+                        )
+                    if claim is not None and claim.replay_result is not None:
+                        result = self._safe_tool_result(claim.replay_result)
+                        is_error = claim.replay_is_error
+                        event_type = "tool.failed" if is_error else "tool.completed"
+                    else:
+                        result = self._safe_tool_result(
+                            await self.tools.execute(call.name, arguments)
+                        )
+                        event_type = "tool.completed"
+                        is_error = False
+                        if claim is not None:
+                            assert action_gateway is not None
+                            action_gateway.complete_tool_action(claim, result)
                 except ApprovalRequired as exc:
+                    safe_approval_detail = redact_public_text(exc.detail, max_chars=500)
+                    approval_payload: Mapping[str, Any] = {}
+                    if claim is not None:
+                        assert action_gateway is not None
+                        approval_payload = action_gateway.request_approval(
+                            claim,
+                            tool_call_id=call.id,
+                            category=exc.category,
+                            detail=safe_approval_detail,
+                        )
                     yield RuntimeEvent(
                         event_type="tool.approval_required",
                         turn=turn,
@@ -128,13 +216,14 @@ class AgentLoop:
                             "tool_call_id": call.id,
                             "name": call.name,
                             "category": exc.category,
-                            "detail": exc.detail,
+                            "detail": safe_approval_detail,
+                            **approval_payload,
                         },
                     )
                     approved = (
                         False
                         if approval_callback is None
-                        else await approval_callback(call.id, exc.category, exc.detail)
+                        else await approval_callback(call.id, exc.category, safe_approval_detail)
                     )
                     yield RuntimeEvent(
                         event_type="tool.approval_decided",
@@ -148,39 +237,78 @@ class AgentLoop:
                     )
                     if approved:
                         try:
-                            result = await self.tools.execute(
-                                call.name,
-                                call.arguments(),
-                                approved_categories=frozenset({exc.category}),
+                            if claim is not None:
+                                assert action_gateway is not None
+                                action_gateway.verify_approval(
+                                    claim,
+                                    tool_call_id=call.id,
+                                    name=call.name,
+                                    arguments=arguments,
+                                )
+                            result = self._safe_tool_result(
+                                await self.tools.execute(
+                                    call.name,
+                                    arguments,
+                                    approved_categories=frozenset({exc.category}),
+                                )
                             )
                             event_type = "tool.completed"
                             is_error = False
+                            if claim is not None:
+                                assert action_gateway is not None
+                                action_gateway.complete_tool_action(claim, result)
                         except (ToolError, ValueError, json.JSONDecodeError) as retry_exc:
-                            result = json.dumps(
-                                {
-                                    "error": type(retry_exc).__name__,
-                                    "message": str(retry_exc),
-                                }
-                            )
+                            result = self._safe_failure_result(retry_exc)
                             event_type = "tool.failed"
                             is_error = True
+                            if claim is not None:
+                                assert action_gateway is not None
+                                action_gateway.fail_tool_action(
+                                    claim,
+                                    error_code=type(retry_exc).__name__,
+                                    result=result,
+                                )
                     else:
                         result = json.dumps(
                             {
                                 "error": "approval_denied",
                                 "category": exc.category,
-                                "detail": exc.detail,
+                                "detail": safe_approval_detail,
                             }
                         )
                         event_type = "tool.failed"
                         is_error = True
+                        if claim is not None:
+                            assert action_gateway is not None
+                            action_gateway.fail_tool_action(
+                                claim,
+                                error_code="approval_denied",
+                                result=result,
+                            )
                 except (ToolError, ValueError, json.JSONDecodeError) as exc:
-                    result = json.dumps({"error": type(exc).__name__, "message": str(exc)})
+                    result = self._safe_failure_result(exc)
                     event_type = "tool.failed"
                     is_error = True
+                    if claim is not None:
+                        assert action_gateway is not None
+                        action_gateway.fail_tool_action(
+                            claim,
+                            error_code=type(exc).__name__,
+                            result=result,
+                        )
                 feedback: dict[str, Any] | None = None
+                result = self._safe_tool_result(result)
                 if not is_error and call.name == "run_command":
-                    result, feedback = self._attach_test_failure_feedback(result)
+                    raw_argv = arguments.get("argv")
+                    result, feedback = self._attach_test_failure_feedback(
+                        result,
+                        argv=(
+                            raw_argv
+                            if isinstance(raw_argv, list)
+                            and all(isinstance(item, str) for item in raw_argv)
+                            else None
+                        ),
+                    )
                 messages.append(
                     Message(
                         role=MessageRole.TOOL,
@@ -236,14 +364,32 @@ class AgentLoop:
         return max(0, round((time.monotonic() - started) * 1000))
 
     @staticmethod
-    def _attach_test_failure_feedback(result: str) -> tuple[str, dict[str, Any] | None]:
+    def _safe_tool_result(result: str) -> str:
+        return redact_public_text(result)
+
+    @staticmethod
+    def _safe_failure_result(exc: Exception) -> str:
+        return json.dumps(
+            {
+                "error": type(exc).__name__,
+                "message": redact_public_text(str(exc)),
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _attach_test_failure_feedback(
+        result: str,
+        *,
+        argv: list[str] | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
         try:
             payload = json.loads(result)
         except json.JSONDecodeError:
             return result, None
         if not isinstance(payload, dict):
             return result, None
-        feedback = test_failure_feedback(payload)
+        feedback = test_failure_feedback(payload, argv=argv)
         if feedback is None:
             return result, None
         payload["test_failure"] = feedback

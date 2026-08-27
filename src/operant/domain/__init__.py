@@ -1,5 +1,15 @@
 """Pure domain models and rules."""
 
+from operant.domain.actions import (
+    ApprovalAuditEvent,
+    ApprovalDecision,
+    ApprovalRequest,
+    ApprovalStatus,
+    CommandExecution,
+    CommandExecutionStatus,
+    ToolActionReceipt,
+    ToolActionReceiptStatus,
+)
 from operant.domain.evaluation import (
     MAX_EVALUATION_CASES,
     MAX_EVALUATION_EXPANDED_RESULTS,
@@ -61,6 +71,12 @@ from operant.domain.workflow import (
 )
 
 __all__ = [
+    "ApprovalAuditEvent",
+    "ApprovalDecision",
+    "ApprovalRequest",
+    "ApprovalStatus",
+    "CommandExecution",
+    "CommandExecutionStatus",
     "MAX_EVALUATION_CASES",
     "MAX_EVALUATION_EXPANDED_RESULTS",
     "MAX_EVALUATION_REPETITIONS",
@@ -114,4 +130,6 @@ __all__ = [
     "WorkflowRunEvent",
     "WorkflowRunStatus",
     "WorkflowStage",
+    "ToolActionReceipt",
+    "ToolActionReceiptStatus",
 ]

@@ -12,10 +12,42 @@ from typing import Protocol
 
 from operant.domain.models import CommandExecutionPolicy
 
-PROTECTED_WORKSPACE_NAMES = frozenset({".git", ".env", ".env.local", "secrets.json"})
+PROTECTED_WORKSPACE_NAMES = frozenset(
+    {
+        ".git",
+        ".env",
+        ".env.local",
+        ".operant",
+        ".credentials",
+        ".git-credentials",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        "credentials.json",
+        "service-account.json",
+        "service_account.json",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "id_rsa",
+        "secrets.json",
+        "secrets.yaml",
+        "secrets.yml",
+    }
+)
+PROTECTED_WORKSPACE_SUFFIXES = (".key", ".p12", ".pfx", ".pem")
 SNAPSHOT_EXCLUDED_NAMES = PROTECTED_WORKSPACE_NAMES | frozenset(
     {".operant", ".pytest_cache", ".venv", "__pycache__", "node_modules"}
 )
+
+
+def is_protected_workspace_name(name: str) -> bool:
+    lowered = name.lower()
+    return (
+        lowered in PROTECTED_WORKSPACE_NAMES
+        or lowered.startswith(".env.")
+        or lowered.endswith(PROTECTED_WORKSPACE_SUFFIXES)
+    )
 
 
 class CommandRunnerError(RuntimeError):
@@ -195,7 +227,11 @@ class DockerCommandRunner:
     @staticmethod
     def _copy_workspace_snapshot(source: Path, destination: Path) -> None:
         def ignore(_directory: str, names: list[str]) -> set[str]:
-            return set(names).intersection(SNAPSHOT_EXCLUDED_NAMES)
+            return {
+                name
+                for name in names
+                if name.lower() in SNAPSHOT_EXCLUDED_NAMES or is_protected_workspace_name(name)
+            }
 
         shutil.copytree(source, destination, symlinks=True, ignore=ignore)
 

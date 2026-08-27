@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-08-25
+> 最后更新：2026-08-27
 >
-> 对应版本：第四周工程收尾（Evaluation Runner v1）
+> 对应版本：Operant 2.0 M0 后端协议基线
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -43,6 +43,8 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 会话级模型、effort 和 budget 覆盖；
 - Session、Agent 和 Event 的 SQLite 持久化；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
+- v1/v2/v3 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+  真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
 - Agent Loop 和 Tool Result 回写；
@@ -50,10 +52,14 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - workspace 文件工具、命令工具和 Git diff；
 - Docker 快照 Runner、CPU/内存/PID 限制、无网络命令执行和进程清理；
 - Role Tool Policy 双层校验；
-- 高风险命令审批后的暂停、决定和继续执行；
+- 持久化 Action Gateway：副作用 Tool Call 的规范化 Action Hash、Receipt、结果重放和未知结果保护；
+- 高风险命令的持久化审批请求、单次决定、过期、审计，以及同进程暂停后继续执行；
 - 总超时和运行中取消；
+- Session 级 single-flight：同一 Session 同时只允许一个 Agent run，持久 Pending Approval 也会阻止
+  重启后误开新 run；不同 Session 仍可并发；
 - 完整的 Typer CLI；
-- Model、Role、Session、审批和 Workflow 的 FastAPI/SSE；
+- Model、Role、Session、审批和 Workflow 的 FastAPI/SSE；REST Command 提供持久化
+  `Idempotency-Key` Receipt、Action Hash、结果重放和统一错误信封；
 - Planner → 只读 Explorer → Coder → Reviewer 编排，以及由明确 verdict 驱动的有限返工；
 - 最多 4 个只读 Explorer 的有限并行、自定义角色替换和并行槽位权限校验；
 - 每个子任务的结构化成功/失败结果，以及必需角色失败时的安全停止；
@@ -71,7 +77,8 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 顺序执行 Case × Variant × repetition 的 Evaluation Runner v1，支持单 Session/完整 Workflow、
   模型/Prompt/effort/Memory 对照，以及 Exp 19—24 的 Suite 表达；
 - 每个 Evaluation Result 的隔离 artifact workspace、变更路径、外部安全验证、Trace 证据和五类根因分析；
-- Evaluation Suite/Run/Result 的 SQLite 持久化、CLI 和 FastAPI/SSE；
+- Session、Workflow、Evaluation 事件的 SQLite Cursor、开区间 Query 和已提交 SSE 回放；
+- Evaluation Suite/Run/Result/Event 的 SQLite 持久化、CLI 和 FastAPI/SSE；
 - `.env` 安全解析，不执行 shell 内容；
 - Kimi K2.6、Gemini 3.7 Flash 的六角色真实多模型端到端验收；
 - `SECURITY.md` 安全边界；
@@ -84,7 +91,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 审批 Future 的跨进程恢复；
 - 使用真实 Provider 完成 Exp 19—24、形成统计性实验结论和用户学习验收；
 - 自动模型价格发现、预算强制执行、显著性分析，以及中断 Evaluation Run 的逐 Result 自动续跑；
-- 数据库迁移框架、Web 身份认证、设备配对和远程访问控制；
+- Web 身份认证、设备配对和远程访问控制；
 - 通用 Graph Runtime、Definition Compiler、Team/Mailbox 和智能创建；
 - 类型化 TypeScript/Python Client SDK、React GUI/PWA、Textual TUI 和 Tauri 桌面壳；
 - Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
@@ -160,6 +167,7 @@ operant/
 │   │   ├── trace.py              # Session / Workflow Trace 与脱敏 JSONL
 │   │   └── workflow.py           # 编排、持久化检查点、恢复和 Memory 接入
 │   ├── domain/
+│   │   ├── actions.py            # Tool/REST Receipt、Approval 与审计领域模型
 │   │   ├── evaluation.py         # Suite/Case/Variant/Run/Result、快照、指标和失败分类
 │   │   ├── memory.py             # 三类 Memory、作用域和激活规则
 │   │   ├── models.py             # Model、Role、Snapshot、Session、Agent、Event
@@ -176,6 +184,7 @@ operant/
 │   ├── tools/
 │   │   ├── execution.py          # Host / Docker 命令 Runner
 │   │   └── workspace.py          # workspace 工具与权限检查
+│   ├── protocol.py               # Action Hash、公开错误契约和统一脱敏
 │   └── web/                      # 无 CDN 的 HTML/CSS/JS 工作台
 ├── tests/                        # 单元测试与协议测试
 ├── examples/buggy_calculator/    # 真实模型验收 fixture
@@ -210,7 +219,8 @@ Application Service 负责用例编排：
 - 构造带 Role Tool Policy 的 WorkspaceTools；
 - 启动 AgentLoop；
 - 管理总超时、取消信号和待审批 Future；
-- 将 RuntimeEvent 写入 SQLite；
+- 将 RuntimeEvent 写入 SQLite 并回填持久 Cursor；
+- 为副作用 Tool Call 注入持久化 Action Gateway，管理 Receipt、精确 Action Hash 与审批记录；
 - 根据最终事件更新 Agent 状态；
 - 持久化 Workflow 事件、推进任务状态并支持阶段边界恢复；
 - 执行 Memory 作用域、FTS 检索、候选确认和版本管理；
@@ -224,8 +234,8 @@ Application Service 负责用例编排：
 
 ### Runtime
 
-Runtime 只依赖抽象的 `ModelProvider` 和工具注册表。它不读取环境变量，也不直接连接
-SQLite。
+Runtime 只依赖抽象的 `ModelProvider`、工具注册表和持久化无关的 `ActionGateway` 协议。它不读取
+环境变量，也不直接连接 SQLite；Application Service 注入具体持久化 Gateway。
 
 ### Infrastructure
 
@@ -238,8 +248,9 @@ Infrastructure 包含：
 
 ### Interface
 
-CLI、FastAPI 和内置 Web 工作台是外部入口。Web 只调用 FastAPI；CLI/API 只调用 Application
-Service，不直接操作 SQLite，也不自行实现 Agent 循环。
+CLI、FastAPI 和内置 Web 工作台是外部入口。Web 只调用 FastAPI；CLI/API 的业务用例调用
+Application Service，不自行实现 Agent 循环。FastAPI 的协议中间件会直接使用 SQLiteStore 保存
+REST Command Receipt；CLI 是本地进程内入口，不经过该 REST 中间件。
 
 依赖方向保持为：
 
@@ -387,15 +398,46 @@ Session 表示一次具有固定执行配置的会话。AgentInstance 表示该 
 CREATED → RUNNING → COMPLETED / FAILED / CANCELLED / TIMED_OUT
 ```
 
+一个服务进程内，同一 Session 同时只允许一个 run。FastAPI 在建立 SSE 响应前先完成 admission；第二个
+同 Session 请求直接返回 JSON 409，不会先返回 SSE 头，也不会创建多余 AgentInstance。直接调用
+Application Service 时同样执行该保护，但以结构化 `agent.stream_error` 返回冲突。不同 Session 拥有
+独立 run slot，可以并发；取消、生成器关闭或终态都会释放 slot。该 single-flight 是单服务进程内的
+`Lock + set`，SQLite Session lease 尚未实现；当前部署仍假设只有一个 Operant Service 进程，多进程
+不能依赖这项保护互斥同一 Session。
+
+### Action Receipt、Command Receipt 与 Approval
+
+`ToolActionReceipt` 是 Agent 副作用工具的持久化防重记录。当前覆盖 `apply_patch` 与
+`run_command`，以 Agent attempt scope、模型 `tool_call_id` 和规范化 `action_hash` 唯一标识一次
+动作；数据库不保存原始工具参数。只有 scope、幂等键、Action Hash、Session、Agent 和命令名全部
+一致且已有终态时，才会重放已保存的成功或失败结果，不再执行工具；任一绑定不同都会冲突，不能跨
+上下文复用结果。新 Receipt 必须以无结果的 `in_progress` 状态创建，并在同一事务内确认 Agent 存在
+且属于指定 Session。进程重启时仍为 `in_progress` 的动作会变为 `outcome_unknown`，必须人工核对，
+不能盲目重放。
+
+`CommandExecution` 是 REST 修改命令的独立 Receipt。它以规范化路由 scope、query 和 JSON body
+计算 Action Hash，并保存 HTTP 状态与安全响应；它不能替代 Tool Action Receipt，两者作用域不同。
+进程重启时遗留的 `in_progress` Command 会进入 `manual_reconcile_required`。
+
+`ApprovalRequest` 绑定 Session、Agent、Tool Receipt、Tool Call ID 和精确 Action Hash，只保存不含
+参数值的有限摘要；`ApprovalDecision` 保证一个请求只有一个方向的决定，重复提交同一决定幂等，反向
+决定冲突。Store 只接受初始 `pending` 的请求，并在同一事务内验证关联 Receipt 存在、仍为
+`in_progress`，且 Session、Agent、Tool Call ID 与 Action Hash 全部精确一致。执行前 Gateway 不只检查
+Request 的 `approved` 状态，还必须读到同 approval ID 的持久 `ApprovalDecision(approved=true)`，并
+再次核对 Receipt 上下文和 Action Hash。请求、决定和过期都写入只追加的 `ApprovalAuditEvent`。请求与决定可以跨进程查询，但让
+原 Agent Loop 继续运行的 `asyncio.Future` 仍只存在于原服务进程；重启后的待审批记录会明确返回
+`continuation_available=false`。只要该 Session 仍有未过期、未决定的持久 Pending Approval，API 和
+Application Service 都拒绝启动新 run；必须先决定该审批或等待其过期，不能用新 Agent 绕过旧审批。
+
 ### WorkflowRun 与 WorkflowRunEvent
 
 `WorkflowRun` 是完整编码任务的持久化身份，保存绝对 workspace、任务、各角色 ID、Explorer
 并行上限、返工上限、当前阶段、状态、恢复来源和最终 verdict。状态包括 `created`、`running`、
 `interrupted`、`manual_reconcile_required`、`completed`、`failed` 和 `cancelled`。
 
-`WorkflowRunEvent` 使用 SQLite 单调递增序号保存 Workflow 和角色运行事件。事件在 SSE 发出前先
-提交 SQLite，因此客户端断线后仍能查询已完成阶段和对应 Session。SQLite 是恢复权威；JSONL
-只用于脱敏导出，不参与状态判断。
+`WorkflowRunEvent` 使用 SQLite 单调递增序号作为 Cursor 保存 Workflow 和角色运行事件。事件在 SSE
+发出前先提交 SQLite，Query 和 SSE 回放都使用 `sequence > after_cursor` 的开区间语义。客户端断线后
+可以查询已提交阶段和对应 Session；SQLite 是恢复权威，JSONL 只用于脱敏导出，不参与状态判断。
 
 ### Memory
 
@@ -426,6 +468,9 @@ Pending 原地标记为 Interrupted，保留身份/artifact 引用但不伪造�
 指标和失败分析。声明角色与注册表实际角色不一致时，
 运行在模型调用前停止，并将实际快照作为 `orchestration.role_snapshot_drift` 证据保存，不能用声明值
 覆盖实际值。
+
+`EvaluationRunEvent` 与 Session `Event`、`WorkflowRunEvent` 一样使用 SQLite 自增 Cursor，并提供
+`after_cursor` 开区间查询。Evaluation SSE 只回放已提交的事件，不从内存流位置恢复。
 
 未知 usage、价格或遥测保持 `None`；聚合时只对布尔指标报告已知样本率，费用、Token 和延迟等完整值
 只有在所有相关 Result 都有事实时才给出总和/均值，避免把缺失值当成零。
@@ -466,6 +511,7 @@ sequenceDiagram
     participant User as 用户
     participant Loop as AgentLoop
     participant Model as ModelProvider
+    participant Gateway as ActionGateway
     participant Tools as WorkspaceTools
 
     User->>Loop: user message
@@ -475,8 +521,14 @@ sequenceDiagram
     alt 没有 Tool Call
         Loop-->>User: agent.completed
     else 有 Tool Call
-        Loop->>Tools: execute(name, arguments)
-        Tools-->>Loop: Tool Result
+        Loop->>Gateway: reserve(tool_call_id, action_hash)
+        alt 已有相同 Receipt 结果
+            Gateway-->>Loop: replay_result
+        else 新动作
+            Loop->>Tools: execute(name, arguments)
+            Tools-->>Loop: Tool Result
+            Loop->>Gateway: complete / fail Receipt
+        end
         alt 失败的测试命令
             Loop->>Loop: 提取有限的结构化失败反馈
         end
@@ -490,14 +542,16 @@ Loop 的关键规则：
 1. 先加入 System Message 和 User Message；
 2. 将 Snapshot 允许的工具 schema 发送给模型；
 3. 收集流式文本和 Tool Call；
-4. 执行工具；
-5. 测试命令返回非零退出码时，提取失败摘要和稳定错误签名，写回 Tool Result；
-6. 把 Tool Result 追加为 `tool` 消息；
-7. 连续达到 `max_consecutive_test_failures` 次相同测试失败时，产生 `agent.no_progress` 并停止；
-8. 继续调用模型；
-9. 没有 Tool Call 时结束；
-10. 高风险命令先产生审批事件，等待批准或拒绝后继续；
-11. 达到 `max_turns` 时强制停止。
+4. 对 `apply_patch`、`run_command` 先通过 Action Gateway 规范化并预留 Receipt；相同 Tool Call 与
+   Action Hash 直接重放已知结果，只执行一次副作用；
+5. 新动作才实际执行工具，并在结果返回模型前把成功或失败原子写入 Receipt；
+6. 测试命令返回非零退出码时，提取失败摘要和稳定错误签名，写回 Tool Result；
+7. 把 Tool Result 追加为 `tool` 消息；
+8. 连续达到 `max_consecutive_test_failures` 次相同测试失败时，产生 `agent.no_progress` 并停止；
+9. 继续调用模型；
+10. 没有 Tool Call 时结束；
+11. 高风险命令先持久化审批请求；批准后再次校验精确 Action Hash，再执行原动作；
+12. 达到 `max_turns` 时强制停止。
 
 `ApplicationService` 以 Snapshot 的 `timeout_seconds` 为整次运行设置绝对截止时间，并可通过
 取消信号中止正在等待的模型流。`max_output_tokens` 和 `max_cost_usd` 仍只建模，尚未计量。
@@ -528,6 +582,11 @@ Application Service 会把 RuntimeEvent 转换为持久化 Event，关联 Sessio
 `agent.started` 的 Event payload 还包含角色版本、模型、Provider 和 effort，使审计可区分每次
 模型调用来源。Provider 返回 usage 时，`model.completed` 保存 Token 统计；模型、工具和 Agent
 终态事件保存单调时钟耗时。上游不返回 usage 时字段保持未知，不伪装为 0。
+
+每条持久化 Session Event 的 SQLite `sequence` 同时作为公开 `cursor` 返回；查询使用严格大于
+`after_cursor` 的开区间语义。事件 payload、Tool Result、测试反馈、命令输出和 Receipt Result 使用
+同一公开脱敏规则，覆盖常见 Key/Token/私钥形态并限制文本和集合大小；真实凭据不能进入持久记录或
+模型 Tool Result。
 
 Workflow 还会在 SSE/CLI 流中产生应用层事件，并在对外发送前写入
 `workflow_run_events`。角色 RuntimeEvent 同时保留在各自 Session 的 `events` 中：
@@ -613,12 +672,18 @@ Coder
 
 ### 路径保护
 
-文件路径解析后必须仍位于用户指定的 workspace 中。文件工具拒绝访问：
+文件路径解析后必须仍位于用户指定的 workspace 中。敏感文件名与后缀按不区分大小写的规则匹配，
+文件工具和 Docker 快照共同拒绝访问/复制：
 
-- `.git`
-- `.env`
-- `.env.local`
-- `secrets.json`
+- `.git`；
+- `.operant` 本地权威运行数据；
+- `.env` 和 `.env.*`；
+- `.npmrc`、`.pypirc`、`.netrc`；
+- 常见私钥和证书名/后缀，例如 `id_rsa`、`id_ecdsa`、`*.pem`、`*.key`、`*.p12`、`*.pfx`；
+- `secrets.json`、`credentials.json` 等常见凭据文件。
+
+以上文件工具路径保护按名称精确、不区分大小写匹配；`.venv`、`node_modules` 和普通缓存只从
+Docker/Evaluation 隔离副本排除，不作为文件工具的通用禁读目录。
 
 ### 审批分类
 
@@ -630,17 +695,24 @@ Coder
 - `privileged`
 - `shell`
 
-高风险操作产生 `tool.approval_required` 后暂停。CLI 交互确认；API 客户端读取 SSE 中的
-`tool_call_id`，再向审批决定端点提交批准或拒绝。批准后 Runtime 重试原命令，拒绝后把明确的
-拒绝结果作为 Tool Result 写回模型上下文。
+高风险操作先预留 Tool Action Receipt，再持久化 Approval Request 和 `approval.requested` 审计事件，
+之后产生 `tool.approval_required` 并暂停。CLI 交互确认；API 客户端读取 SSE 中的 `tool_call_id`、
+`approval_id`、Action Hash 和过期时间，再向审批决定端点提交批准或拒绝。批准后 Runtime 在执行前
+重新计算 Action Hash，并同时核对 Agent、Receipt 和审批状态；拒绝后把明确的拒绝结果作为 Tool Result
+写回模型上下文。审批摘要只暴露可执行文件名、参数个数、分类等有限信息，不保存命令参数值。
+
+审批记录与决定可跨进程读取，但正在等待决定的 Future 和原模型流不能跨进程恢复。原服务进程仍在且
+对应 Future 可用时，已落库决定会唤醒运行；如果决定恰好发生在请求提交后、Future 创建前，Service 会
+在处理已持久化 `tool.approval_required` 时重新读取审批状态，避免丢失决定。进程重启后只能查询或决定
+持久请求，`continuation_available=false`，不能声称原 Agent 会继续。
 
 Shell 解释器、删除命令、网络命令、特权命令、Git 写操作和可识别的数据库删除语句都会被分类。
 因此 `curl | sh` 一类绕过无 Shell 接口的调用会在 Shell 进程启动前进入人工审批。
 
 ### Docker Runner
 
-Docker Runner 会把 workspace 复制为过滤快照，排除 `.git`、环境文件、凭据文件、`.operant`、
-虚拟环境和常见缓存后才挂载到容器。它固定使用：
+Docker Runner 会把 workspace 复制为过滤快照，并按不区分大小写的精确名称排除 `.git`、环境文件、
+凭据文件、`.operant`、虚拟环境和常见缓存后才挂载到容器。它固定使用：
 
 - `--network none`；
 - Role Policy 中的 CPU、内存和 PID 上限；
@@ -666,6 +738,7 @@ SQLiteStore 当前创建以下表：
 
 | 表 | 用途 |
 |---|---|
+| `schema_migrations` | 保存严格连续的版本、名称、校验和和应用时间 |
 | `model_profiles` | 保存 Model Profile |
 | `role_heads` | 保存角色当前版本号 |
 | `role_versions` | 保存所有角色版本 |
@@ -679,15 +752,44 @@ SQLiteStore 当前创建以下表：
 | `evaluation_variants` | 按 Suite 内顺序保存 Variant |
 | `evaluation_runs` | 保存 Run 状态、顺序执行策略和聚合结果 |
 | `evaluation_results` | 保存唯一 Case × Variant × repetition 的 Pending、Interrupted 或已知终态事实 |
+| `evaluation_run_events` | 按 SQLite Cursor 保存 Evaluation 事件和可选 Result 关联 |
 | `memories` | 保存 Memory ID 与当前版本号 |
 | `memory_versions` | 保存所有不可变 Memory 版本、来源、作用域和状态 |
 | `memory_fts` | FTS5 全文索引，普通检索只连接当前有效版本 |
+| `tool_action_receipts` | 保存副作用 Tool Call 的 scope、幂等键、Action Hash 和安全结果 |
+| `command_executions` | 保存 REST Command Receipt、Action Hash、HTTP 结果和核对状态 |
+| `approval_requests` | 保存绑定精确 Tool Receipt/Action Hash 的审批请求与过期时间 |
+| `approval_decisions` | 保存审批的唯一决定 |
+| `approval_audit_events` | 保存请求、决定和过期的只追加审计事件 |
 
 当前使用 Python 标准库 `sqlite3`，每个 Store 操作创建独立连接，并启用外键约束。写操作使用
-事务；异常时回滚。Store 初始化时会在同一事务内把遗留的 `running` Workflow 和 Evaluation Run
+事务；异常时回滚。Migration 使用 `BEGIN IMMEDIATE`，当前版本为：
+
+1. v1：Week 1 Model/Role/Session/Agent/Event 基线；
+2. v2：Week 3—4 Workflow、Memory、FTS5 和 Evaluation 表；
+3. v3：M0 Tool/REST Receipt、持久 Approval/Audit、Evaluation Event 和 Cursor 索引。
+
+每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
+启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
+全部受管 table/index/view/trigger/FTS shadow object、规范化 DDL、列名/类型/NOT NULL、主键顺序、
+UNIQUE、CHECK、外键声明、普通索引属性与列顺序、FTS5 类型/列/完整性、AUTOINCREMENT 语义和
+`PRAGMA foreign_key_check`；任何多余、缺失或漂移都明确失败。
+
+无版本的真实 Week 1 数据库和完整 Week 1—4 数据库可在保留数据的前提下识别并升级；历史识别、
+preview 收编、逐步升级、每步 manifest 复验和历史写入全部位于同一个 `BEGIN IMMEDIATE` 事务中，失败
+不会留下半套表，并发初始化会串行到同一目标版本。已知的未提交 M0 preview 只能在精确历史名称、
+checksum 和 schema 形状全部匹配时收编；最终 v3 还能把该 preview 精确升级到 Evaluation Event 完整
+契约，未知或漂移的 preview 一律拒绝。
+
+v3 只提供一个刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(2, isolated=True)`，且
+`tool_action_receipts`、`command_executions`、审批/审计和 Evaluation Event 等全部 M0 表都为空；否则
+拒绝回滚。v1、v2 不可 downgrade，生产数据迁移不是通用双向回滚机制。
+
+Store 初始化时还会在同一事务内把遗留的 `running` Workflow 和 Evaluation Run
 安全标记为 `interrupted`，并把对应 Pending Evaluation Result 原地转为 Interrupted、重算完整 Suite
-计划分母，避免重启后显示虚假运行态或丢失已调度组合。这个实现假设 v1 由单个 Operant 服务进程拥有 SQLite；多进程
-租约和数据库迁移仍未实现。
+计划分母；遗留 REST Command 变为 `manual_reconcile_required`，遗留 Tool Action 变为
+`outcome_unknown`，待审批记录按时间过期。这个实现仍假设单个 Operant 服务进程拥有 SQLite；多进程
+Scheduler 租约尚未实现。
 
 ## 13. CLI
 
@@ -744,6 +846,11 @@ operant evaluation result list <evaluation-run-id>
 CLI 统一通过 Application Service 执行完整的 Model/Role 注册表用例。Session 可以从已有
 Role 创建，也可以即时创建新 Role，并覆盖模型、effort 和超时。单 Session 与多 Agent Workflow
 均可调用真实 Provider；CLI 遇到高风险命令时交互确认。
+
+CLI 是可信本机进程内接口，直接调用 Application Service，不经过 FastAPI 的 REST Command
+Idempotency 中间件，因此 CLI 命令不会生成 `command_executions` Receipt，也没有 REST
+`Idempotency-Key` 重放语义。Agent 内部的 `apply_patch`/`run_command` 仍经过同一个持久化 Tool Action
+Gateway；这两层不能混为一谈。
 
 `operant workflow run` 默认加入 `role_explorer`。`--explorer-role-id` 可重复提供最多 4 个自定义
 只读角色，`--max-parallel-explorers` 控制并发数，`--main-role-id` 可替换最终汇总角色。Main、
@@ -802,10 +909,78 @@ workspace 绝对路径。
 | `GET` | `/v1/evaluations/suites/{id}` | 查询完整 Suite |
 | `GET/POST` | `/v1/evaluations/runs` | 查询 Run，或顺序运行 Suite 并返回 SSE |
 | `GET` | `/v1/evaluations/runs/{id}` | 查询 Run 状态与聚合结果 |
+| `GET` | `/v1/evaluations/runs/{id}/events` | 按 Cursor 查询已提交 Evaluation 事件 |
+| `GET` | `/v1/evaluations/runs/{id}/events/stream` | 以 SSE 回放已提交 Evaluation 事件 |
 | `GET` | `/v1/evaluations/runs/{id}/results` | 查询脱敏后的 Result 列表 |
 
 SSE 的 `event` 字段使用 RuntimeEvent 或 Workflow 事件类型，`data` 是完整事件 JSON。Workflow
 事件额外包含角色槽位和 Session ID，使客户端可以区分并行 Explorer，并针对当前角色提交审批。
+
+### REST Command Receipt 与统一错误
+
+除模型发现/健康检查等明确非 Command 的入口外，修改型 `/v1/*` 请求由协议中间件保存
+`CommandExecution`。客户端提供的 `Idempotency-Key` 最长 300 字符；缺省时服务器会生成并在响应头
+返回一个 key。服务器生成 key 只方便审计当前响应：如果客户端遇到超时或丢失响应，要跨请求去重，
+必须保存并复用自己原先发送的同一个 key，不能在重试时省略 header。
+
+同一 Command scope 和 key：
+
+- Action Hash 相同且已有完整成功/失败结果时，返回原 HTTP 状态和 JSON，并带
+  `Idempotency-Replayed: true`；
+- 正在执行时返回 409，恢复建议为 `retry_same_idempotency_key`；
+- key 绑定了不同 Action Hash 时返回 409，要求换新 key；
+- 进程重启、Handler 崩溃、响应体不完整或 SSE 在首帧前失败时进入
+  `manual_reconcile_required`，后续同 key 返回 409，不再调用 Handler 或猜测副作用结果。
+
+非流式 Command 的首次响应也使用将要持久化的同一份 bounded-redacted payload：JSON 成功与失败、
+非 JSON 文本和空 body 都规范化为安全 JSON，保留 HTTP status 与安全 headers；相同 key 的 replay
+返回相同语义，不会出现“首次泄密、重放安全”的分裂。当前 `/v1/*` 没有合法的修改型 trailing-slash
+路由，因此尾斜杠候选先由 Starlette 返回 307，不预留 Receipt；跳转后的规范 URL 才唯一 reserve、执行
+和重放，307 不会吞掉显式 `Idempotency-Key` 或丢失 `Location`。
+
+SSE Command 只有在完整首帧可解析，并且首帧包含可验证的资源 ID 与已提交 SQLite Cursor 时，才把
+HTTP Command 记为 accepted；检查范围是完整首帧，硬上限为 256,000 bytes。失败首帧会写入 FAILED；
+无效、无法验证、首帧前异常/结束或超限会进入 `manual_reconcile_required`，不能仅因读到任意字节就
+假定副作用已接受。
+
+已 accepted 的 SSE Command 不保存或重放完整流，只保存 typed Receipt 摘要。相同 key 的普通重试
+固定返回 `202 application/json`、`Idempotency-Replayed: true`、资源类型/ID、`replay_url` 和 Cursor
+回放提示；它不是 `200 text/event-stream` 的假 SSE，也不会重新执行或重新接入原生成器。
+
+公开失败统一保留兼容 `detail`，并提供：
+
+```json
+{
+  "error": {
+    "code": "stable_machine_code",
+    "message": "safe public message",
+    "retryable": false,
+    "recovery": "none"
+  }
+}
+```
+
+`recovery` 可表达原 key 重试、新 key 重试、刷新 Cursor 或人工核对。请求校验错误不回显原始 input，
+未知异常只返回固定安全消息；首次非流 Command 响应、REST 4xx/5xx、持久 Command Receipt、
+Tool Action Receipt、Tool Result 和事件 payload 都使用同一套 bounded redaction，既移除凭据形态，
+也限制文本、递归深度、集合项数和最终 JSON 序列化字节数；超限时返回可再次序列化的结构化截断标记，
+不会直接截断 JSON 字节。文本规则覆盖任意完整/不完整 PEM `PRIVATE KEY` 块、短 Bearer token、
+Basic auth、URL userinfo 和常见 secret key；`secret_ref` 环境变量名保留。
+
+### Cursor 与 SSE 回放边界
+
+Session、Workflow、Evaluation 三类事件都使用实际 SQLite 自增序号作为 Cursor。Query 和回放采用
+`cursor > after_cursor` 开区间，因此 SSE `id`、JSON `cursor` 与 SQLite 事实一致。Cursor 只允许在
+产生它的同一资源和事件流 scope 内复用；每张事件表的全表 `AUTOINCREMENT` 会因其他 Session/Run 的
+写入产生正常 gap，客户端不能拿另一 Session、Workflow Run 或 Evaluation Run 的 Cursor 跳过当前
+资源事件。公开 Cursor 只接受 SQLite 有符号整数范围 `0..2^63-1`。Session run 和
+Workflow resume 支持 `Last-Event-ID`；Evaluation 提供独立的事件 Query 与 replay-only SSE。带
+`Last-Event-ID` 的现有资源回放只读取已提交事件，会绕过修改 Command Receipt，即使同时传入
+`Idempotency-Key` 也不会启动或登记新的执行。新建 Workflow 不能用 `Last-Event-ID`，会在启动前失败。
+
+SSE 只承诺回放已经提交 SQLite 的事件，不承诺从任意模型字节、未提交事件或进程内生成器位置续传。
+客户端断开 SSE 也不保证后台任务继续；断开可能取消当前生成器。客户端必须重新查询资源状态与已提交
+事件，再按 Workflow 的阶段恢复规则决定是否显式 resume，不能把网络断线等同于后台继续执行。
 
 `/web` 提供本地静态工作台，不依赖 CDN。页面可管理模型和角色、从已有或即时角色创建 Session、
 选择 Main/Planner/Explorer/Coder/Reviewer 运行 Workflow、处理审批、观察按角色分栏的 SSE，并查询、
@@ -946,6 +1121,24 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 - artifact 隔离复制、越界软链接排除、外部验证超时/进程组终止和变更路径检查；
 - Session/Workflow Variant、Memory 开关与禁用回写、实际角色漂移、指标/费用聚合和五类 Trace RCA；
 - Evaluation CLI/API/SSE、错误清洗和本地 artifact 路径脱敏。
+- v1/v2/v3 Migration 的旧库保留数据升级、原子失败、并发初始化、校验和/版本损坏拒绝，以及只有显式
+  isolated 且 M0 表为空时才允许的 v3 rollback；逐版本冻结 manifest/checksum、完整受管对象/DDL/列/
+  PK/UNIQUE/CHECK/FK/index/trigger/FTS integrity/AUTOINCREMENT/`foreign_key_check` 漂移拒绝，以及
+  真实 Week 1/完整 Week 1—4/精确 preview 的兼容升级；
+- REST `Idempotency-Key` 自动生成、相同 Action Hash 结果重放、不同 Hash 冲突、Handler/首帧前流失败
+  后人工核对、同 key 不重复调用 Handler、首次/replay 同体脱敏，以及 trailing-slash 307 不占 Receipt；
+- SSE Command 只在首帧资源与持久 Cursor 可验证时 accepted、完整首帧 256,000 bytes 上限、
+  FAILED/manual-reconcile 分流，以及同 key 重试返回 202 JSON typed Receipt 和 `replay_url`；
+- Tool Action Hash 的规范化与精确副作用绑定、重复 Tool Call 只执行一次、进程重启未知结果保护；
+- Approval 初始 pending、Receipt 上下文/状态精确绑定、持久正向 Decision 执行校验、决定/过期/CAS/
+  审计/重启查询，以及决定落库早于 Future 创建的竞态恢复；
+- Session single-flight、API 建立 SSE 前 JSON 409、Service 层兜底、Pending Approval 重启阻断，
+  以及不同 Session 并发；
+- Session、Workflow、Evaluation 的真实 SQLite Cursor、开区间 Query、SSE `id` 一致性和
+  `Last-Event-ID` 已提交事件回放；
+- 统一错误信封、校验输入与未知异常不泄密，以及首次非流 Command、REST 4xx/5xx、命令输出、
+  Receipt、事件、模型 Tool Result 共用 bounded redaction；短 Bearer、任意/不完整 PEM 私钥块和
+  大小写敏感文件名回归。
 
 本地验证命令：
 
@@ -957,10 +1150,11 @@ uv run pytest
 git diff --check
 ```
 
-2026-08-25 的第四周工程收尾门禁使用确定性 Provider、隔离 fixture 和 Fake API Runner：pytest 为
-92 通过、1 个条件性 Docker 测试跳过，并保留 1 个上游 Starlette TestClient 弃用警告；Ruff
+2026-08-27 的 M0 后端协议基线最终门禁使用确定性 Provider、隔离 fixture、临时
+`OPERANT_DB_PATH` 和 FastAPI TestClient：完整 pytest 为 161 通过、1 个条件性 Docker 测试跳过，
+并保留 1 个上游 Starlette TestClient 弃用警告；Ruff
 format/check、mypy 和 `git diff --check` 通过。未设置真实 Provider，也不把 Docker skip 视为容器
-验收。2026-08-22 的门禁曾在
+验收。2026-08-25 的第四周工程收尾门禁为 92 通过、1 跳过。2026-08-22 的门禁曾在
 显式设置 `OPERANT_DOCKER_TEST_IMAGE=python:3.13-slim` 后执行
 Docker Runner 真实集成路径：pytest 为 57 通过；Ruff format/check、mypy、JavaScript 语法和
 `git diff --check` 均通过。仅保留 1 个来自上游 Starlette TestClient 的弃用警告。
@@ -1020,11 +1214,15 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 2. SQLite 使用同步 API，运行规模扩大后需要评估异步边界；
 3. Workflow 仍是固定状态机和有限次数返工；恢复只发生在已持久化的阶段边界，不支持从任意模型
    流位置继续。Coder 写入结果未知时必须人工核对，不能无人值守恢复；
-4. 待审批工具调用的 `Future` 仍只存在于进程内，尚不能跨进程恢复审批；
+4. Approval Request、Decision 和 Audit 已持久化，但待审批工具调用的 `Future` 与任意模型流位置仍只
+   存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 5. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-6. 当前没有数据库迁移框架；现阶段只适合由当前版本初始化或兼容追加表结构；
-7. SSE 客户端重连需要通过任务事件查询接口主动回放，尚未实现 `Last-Event-ID` 自动续传；
+6. 已有 v1/v2/v3 原子 Migration 和旧库识别升级，但 v3 rollback 仅用于显式 isolated 且 M0 审计表
+   全空的数据库；没有通用生产 downgrade、多进程 migration lease、Session run lease 或多 Writer
+   协调；
+7. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，但不支持任意模型流位置续传；SSE 断线
+   不保证后台继续，客户端仍需查询持久状态并按安全恢复规则操作；
 8. Web 工作台和 API 没有身份认证、CSRF 防护、设备配对或 Remote Gateway，只能绑定受信任本机地址；
 9. Evaluation Runner v1 已有可复现 Suite、隔离 artifact、外部验证、指标和五类 Trace RCA，但模型
    价格必须由 Suite 固定提供，尚无自动价格发现、预算强制执行、统计显著性、真实模型 Exp 19—24
@@ -1032,7 +1230,12 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    重新执行；
 10. Docker Runner 已跑通真实隔离集成用例，第三周六角色 Workflow 也已在可信临时 Host fixture 上
     完成真实模型验收；两者仍是不同证据，尚未完成“真实模型 + Docker Coder”的同一次端到端验收，
-    也尚未构建专用 Operant 镜像。
+    也尚未构建专用 Operant 镜像；
+11. 通用 Graph Runtime、Definition/Revision、Team/Mailbox、React GUI/PWA、TUI、Tauri、Remote
+    Control、Host Connector、自托管 Relay、Remote Gateway 和 Remote Execution Target 均未实现；
+    当前 `/web` 与 `/v1/*` 不能作为这些目标能力的实现证据，也不得直接暴露到公网。
+12. Session/Workflow/Evaluation 事件、Tool/Command Receipt 和 Approval Audit 当前没有 retention、归档或
+    清理策略，会随运行持续增长；M0 尚未实现安全删除与对象级保留策略，不能把容量治理写成已解决。
 
 ## 19. 文档维护规则
 
@@ -1063,6 +1266,33 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-08-27
+
+- 建立 checksummed v1/v2/v3 SQLite Migration：逐版本冻结 manifest/checksum，完整核验受管对象、DDL、
+  列/约束/索引/trigger/FTS integrity/AUTOINCREMENT/外键数据，识别并保留升级真实 Week 1 与完整
+  Week 1—4 数据库，只精确收编已知 preview；全部步骤单事务完成，并限制 v3 rollback 只能用于显式
+  isolated 且 M0 表为空的数据库；
+- 新增 REST Command Receipt：修改请求持久化 `Idempotency-Key`、规范化 Action Hash、HTTP 结果和
+  恢复状态；支持相同命令结果重放、不同命令冲突、执行中重试提示和未知结果人工核对；
+- 新增持久化 Tool Action Gateway：`apply_patch`/`run_command` 在副作用前预留 Receipt，重复
+  Tool Call 重放安全结果，进程重启后的不确定动作拒绝自动重放；
+- 将审批请求、唯一决定、过期和只追加审计落入 SQLite；创建时强制 pending 并事务核对 Receipt 上下文/
+  状态，执行时同时要求持久正向 Decision、精确 Agent/Receipt/Tool Call/Action Hash；修复决定落库早于
+  Future 创建时的竞态，但进程内 Future 和模型流仍不支持跨进程恢复；
+- Session、Workflow、Evaluation 事件统一使用真实 SQLite Cursor，增加开区间 Query、SSE `id` 和
+  `Last-Event-ID` 已提交事件回放；SSE Command 只在 256,000 bytes 内的完整首帧能验证已持久资源与
+  Cursor 后 accepted，同 key 重试返回 202 JSON Receipt 与 `replay_url`；明确 SSE 断线不保证后台继续；
+- 为修改型 REST Command 增加统一安全错误信封与恢复建议；首次非流响应与 replay 使用同一安全
+  payload，JSON/文本/空 body、REST 4xx/5xx、Tool/命令输出、Receipt、事件和模型反馈统一 bounded
+  redaction；尾斜杠 307 不预留 Receipt；服务器生成 key 仅界定当前响应，客户端跨请求去重仍必须保存
+  并复用原 key；
+- 扩展短 Bearer 与任意/不完整 PEM 私钥块脱敏，修复 `.ENV`、`.NPMRC`、`ID_RSA`、
+  `CREDENTIALS.JSON` 等大小写变体在 Linux 上绕过文件工具/Docker 快照过滤的问题；
+- 增加 Session single-flight：API 在 SSE 头前返回同 Session JSON 409，Service 层同样守卫；重启后的
+  Pending Approval 在决定或过期前阻止新 run，不同 Session 仍可并发；
+- 新增 M0 persistence/API/protocol 自动化测试；未实现 Graph、Remote Control、Relay、GUI/PWA、TUI、
+  Tauri 或 Client SDK，也未把现有本地 Web/API 暴露到公网。
 
 ### 2026-08-25
 
