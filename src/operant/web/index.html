@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
+    <meta name="referrer" content="no-referrer">
+    <title>Operant 工作台</title>
+    <link rel="stylesheet" href="/web/static/styles.css">
+    <script src="/web/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">OPERANT / CODING AGENT RUNTIME</p>
+        <h1>角色驱动的 Coding 工作台</h1>
+        <p class="subtitle">在一个页面里配置模型与角色，观察 Session 或 Coding Workflow 的实时执行。</p>
+      </div>
+      <button id="refreshButton" class="button button-secondary" type="button">刷新注册表</button>
+    </header>
+
+    <main class="page-shell">
+      <p id="globalNotice" class="notice" role="status" aria-live="polite"></p>
+
+      <section class="section-grid registry-section" aria-labelledby="registryHeading">
+        <div class="section-heading full-width">
+          <div>
+            <p class="eyebrow">REGISTRY</p>
+            <h2 id="registryHeading">模型与角色</h2>
+          </div>
+          <p class="muted">凭据只以环境变量名（secret_ref）保存，页面不会读取或展示密钥值。</p>
+        </div>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <h3>Model Profile</h3>
+              <p class="muted">已配置的模型连接与 effort 映射</p>
+            </div>
+            <span id="modelCount" class="count-badge">0</span>
+          </div>
+          <div id="modelsList" class="registry-list empty-state">还没有 Model Profile。</div>
+
+          <details class="form-details">
+            <summary>创建 Model Profile</summary>
+            <form id="modelForm" class="form-grid">
+              <label>名称<input id="modelName" name="name" required maxlength="100" placeholder="例如：本地 Relay"></label>
+              <label>模型 ID<input id="modelId" name="model_id" required maxlength="200" placeholder="例如：model-name"></label>
+              <label class="span-2">Base URL<input id="modelBaseUrl" name="base_url" type="url" required placeholder="https://relay.example.com/v1"></label>
+              <label>Secret Ref<input id="modelSecretRef" name="secret_ref" value="OPERANT_API_KEY" required maxlength="200"></label>
+              <label>默认 effort<select id="modelDefaultEffort" name="default_effort"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></label>
+              <label>Context Window<input id="modelContextWindow" name="context_window" type="number" min="1" placeholder="可选"></label>
+              <label>默认 Token Budget<input id="modelTokenBudget" name="default_token_budget" type="number" min="1" placeholder="可选"></label>
+              <button class="button button-primary span-2" type="submit">保存 Model Profile</button>
+            </form>
+          </details>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <h3>Role Preset</h3>
+              <p class="muted">提示词、模型、权限、预算与 Memory scope</p>
+            </div>
+            <span id="roleCount" class="count-badge">0</span>
+          </div>
+          <div id="rolesList" class="registry-list empty-state">还没有 Role Preset。</div>
+        </article>
+      </section>
+
+      <section class="panel session-section" aria-labelledby="sessionHeading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">SESSION</p>
+            <h2 id="sessionHeading">新建 Session</h2>
+          </div>
+          <span class="status-pill status-created">先选择角色并预览快照</span>
+        </div>
+
+        <form id="sessionForm" class="form-grid">
+          <label>角色来源<select id="sessionRoleSource"><option value="existing" selected>选择已有 Role Preset</option><option value="instant">打开即时角色表单</option></select></label>
+          <label id="sessionRoleSelectLabel">Role Preset<select id="sessionRoleSelect"></select></label>
+          <label>模型覆盖（可选）<select id="sessionModelOverride"><option value="">使用角色默认模型</option></select></label>
+          <label>effort 覆盖（可选）<select id="sessionEffortOverride"><option value="">使用角色默认 effort</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+          <label>timeout 覆盖（秒，可选）<input id="sessionTimeoutOverride" type="number" min="1" placeholder="使用角色预算"></label>
+          <label>max turns 覆盖（可选）<input id="sessionTurnsOverride" type="number" min="1" placeholder="使用角色预算"></label>
+          <div id="instantRoleEditor" class="instant-editor span-2" hidden>
+            <div class="subheading">
+              <h3>即时角色表单</h3>
+              <p class="muted">即时角色会先作为本次 Session 的角色快照；也可以单独保存为 Role Preset。</p>
+            </div>
+            <div class="form-grid">
+              <label>名称<input id="roleName" maxlength="100" placeholder="例如：临时审查员"></label>
+              <label>模型 Profile<select id="roleModelProfile"></select></label>
+              <label class="span-2">System Prompt<textarea id="rolePrompt" rows="5" placeholder="写清楚角色职责、输出要求和边界"></textarea></label>
+              <label>effort<select id="roleEffort"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></label>
+              <label>Memory scope<input id="roleMemoryScope" value="session" maxlength="100"></label>
+              <fieldset class="span-2">
+                <legend>允许的工具</legend>
+                <div class="check-grid">
+                  <label><input type="checkbox" name="allowed-tool" value="read_file" checked> read_file</label>
+                  <label><input type="checkbox" name="allowed-tool" value="search_files" checked> search_files</label>
+                  <label><input type="checkbox" name="allowed-tool" value="git_diff"> git_diff</label>
+                  <label><input type="checkbox" name="allowed-tool" value="apply_patch"> apply_patch</label>
+                  <label><input type="checkbox" name="allowed-tool" value="run_command"> run_command</label>
+                </div>
+              </fieldset>
+              <label class="check-label"><input id="roleWorkspaceWrite" type="checkbox"> 允许 workspace 写入</label>
+              <label class="check-label"><input id="roleCommandExecution" type="checkbox"> 允许命令执行</label>
+              <label class="span-2">需要审批的命令类别<input id="roleApprovalRequired" value="git_write, destructive, network, privileged, shell" placeholder="逗号分隔"></label>
+              <label>最大 turns<input id="roleMaxTurns" type="number" min="1" value="12"></label>
+              <label>连续测试失败上限<input id="roleMaxFailures" type="number" min="2" value="2"></label>
+              <label>超时（秒）<input id="roleTimeout" type="number" min="1" value="300"></label>
+              <label>最大输出 tokens<input id="roleMaxOutputTokens" type="number" min="1" placeholder="可选"></label>
+              <label>最大成本 USD<input id="roleMaxCostUsd" type="number" min="0.01" step="0.01" placeholder="可选"></label>
+              <div class="button-row span-2">
+                <button id="saveRoleButton" class="button button-secondary" type="button">保存为 Role Preset</button>
+                <button id="useInstantRoleButton" class="button button-primary" type="button">用即时角色创建 Session</button>
+              </div>
+            </div>
+          </div>
+          <div id="rolePreview" class="role-preview span-2" aria-live="polite"></div>
+          <button id="createSessionButton" class="button button-primary span-2" type="submit">创建 Session</button>
+        </form>
+      </section>
+
+      <section class="panel task-section" aria-labelledby="taskHeading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">TASKS / RECOVERY</p>
+            <h2 id="taskHeading">已有任务与恢复</h2>
+          </div>
+          <button id="refreshTasksButton" class="button button-secondary" type="button">刷新任务</button>
+        </div>
+        <div class="task-toolbar">
+          <label class="task-select-label">选择任务<select id="taskSelect"><option value="">暂无任务</option></select></label>
+          <label class="check-label replay-option"><input id="allowCoderReplay" type="checkbox"> 允许 Coder replay（仅在已人工核对工作区后使用）</label>
+        </div>
+        <div class="task-layout">
+          <div>
+            <h3 class="subsection-title">任务列表</h3>
+            <div id="tasksList" class="tasks-list empty-state">还没有持久化任务。</div>
+          </div>
+          <div>
+            <h3 class="subsection-title">任务详情</h3>
+            <div id="taskDetail" class="task-detail empty-state">选择任务后显示状态、阶段、工作区和恢复信息。</div>
+            <div class="button-row task-actions">
+              <button id="resumeTaskButton" class="button button-primary" type="button" disabled>恢复任务</button>
+              <button id="cancelTaskButton" class="button button-danger" type="button" disabled>取消任务</button>
+              <button id="refreshTraceButton" class="button button-secondary" type="button" disabled>刷新 Trace</button>
+            </div>
+            <div id="taskTrace" class="task-trace empty-state">选择任务后显示任务级 Trace。</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-grid run-section" aria-labelledby="runHeading">
+        <div class="section-heading full-width">
+          <div>
+            <p class="eyebrow">RUN</p>
+            <h2 id="runHeading">启动任务</h2>
+          </div>
+          <p class="muted">先创建 Session，再选择单 Session 或 coding Workflow。流式事件会实时进入下方观察面板。</p>
+        </div>
+
+        <article class="panel">
+          <div class="panel-heading"><h3>单 Session</h3><span id="currentSessionStatus" class="status-pill status-created">未创建</span></div>
+          <div id="currentSession" class="snapshot empty-state">当前没有 Session。</div>
+          <form id="sessionRunForm" class="form-grid compact-form">
+            <label class="span-2">消息<input id="sessionMessage" required placeholder="例如：检查当前工作区的测试状态"></label>
+            <label class="span-2">Workspace 绝对路径<input id="sessionWorkspace" required placeholder="/absolute/path/to/workspace"></label>
+            <div class="button-row span-2">
+              <button id="runSessionButton" class="button button-primary" type="submit" disabled>运行 Session</button>
+              <button id="cancelSessionButton" class="button button-danger" type="button" disabled>取消当前会话</button>
+            </div>
+          </form>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading"><h3>coding Workflow</h3><span class="status-pill status-created">Planner → Explorer → Coder → Reviewer → Main</span></div>
+          <form id="workflowForm" class="form-grid compact-form">
+            <label class="span-2">任务<textarea id="workflowTask" rows="3" required placeholder="描述要完成的编码任务、验证要求和限制"></textarea></label>
+            <label class="span-2">Workspace 绝对路径<input id="workflowWorkspace" required placeholder="/absolute/path/to/workspace"></label>
+            <label>Main<select id="workflowMainRole"></select></label>
+            <label>Planner<select id="workflowPlannerRole"></select></label>
+            <label>Coder<select id="workflowCoderRole"></select></label>
+            <label>Reviewer<select id="workflowReviewerRole"></select></label>
+            <label class="span-2">Explorer（可多选）<select id="workflowExplorerRoles" multiple size="4"></select></label>
+            <label>Explorer 并行数<input id="workflowMaxParallel" type="number" min="1" max="4" value="2"></label>
+            <label>最大返工轮数<input id="workflowMaxRework" type="number" min="0" max="3" value="1"></label>
+            <div class="button-row span-2">
+              <button id="runWorkflowButton" class="button button-primary" type="submit">运行 coding Workflow</button>
+              <button id="cancelWorkflowButton" class="button button-danger" type="button" disabled>取消当前角色会话</button>
+            </div>
+          </form>
+        </article>
+      </section>
+
+      <section class="panel observation-section" aria-labelledby="observationHeading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">OBSERVABILITY</p>
+            <h2 id="observationHeading">实时观察</h2>
+          </div>
+          <div class="legend" aria-label="事件类型图例">
+            <span>工具调用</span><span>测试</span><span>diff / 结果</span><span>审批请求</span>
+          </div>
+        </div>
+        <div id="eventBoard" class="event-board">
+          <div class="empty-state">运行任务后，Main / Planner / Explorer / Coder / Reviewer 的事件会按角色显示在这里。</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">Operant 内置工作台 · 事件内容使用安全 DOM API 渲染，不执行模型输出中的 HTML。</footer>
+  </body>
+</html>

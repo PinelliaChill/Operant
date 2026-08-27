@@ -1,19 +1,43 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import Any
 
 from operant.application.defaults import default_role_presets
 from operant.application.factory import AgentFactory
+from operant.application.trace import (
+    WorkflowTraceSummary,
+    summarize_session_trace,
+    summarize_workflow_trace,
+    workflow_trace_jsonl,
+)
+from operant.domain.evaluation import (
+    EvaluationResult,
+    EvaluationRun,
+    EvaluationRunStatus,
+    EvaluationSuite,
+    EvaluationSuiteStatus,
+)
+from operant.domain.memory import (
+    Memory,
+    MemoryKind,
+    MemorySource,
+    MemoryStatus,
+    default_memory_status,
+    parse_memory_scope,
+    passes_conservative_activation,
+)
 from operant.domain.models import (
     AgentStatus,
     Event,
     ModelProfile,
     RolePreset,
+    RoleSnapshot,
     Session,
 )
+from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
 from operant.persistence.sqlite import NotFoundError, SQLiteStore
 from operant.providers.base import ModelProvider
 from operant.runtime.loop import AgentLoop, RuntimeEvent
@@ -148,6 +172,603 @@ class ApplicationService:
         self.get_session(session_id)
         return self.store.list_events(session_id)
 
+    # Workflow persistence
+
+    def create_workflow_run(self, workflow_run: WorkflowRun) -> WorkflowRun:
+        return self.store.create_workflow_run(workflow_run)
+
+    def get_workflow_run(self, workflow_run_id: str) -> WorkflowRun:
+        return self.store.get_workflow_run(workflow_run_id)
+
+    def list_workflow_runs(
+        self,
+        *,
+        status: WorkflowRunStatus | str | None = None,
+        limit: int | None = None,
+    ) -> list[WorkflowRun]:
+        return self.store.list_workflow_runs(status=status, limit=limit)
+
+    def update_workflow_run(self, workflow_run_id: str, **changes: Any) -> WorkflowRun:
+        return self.store.update_workflow_run(workflow_run_id, **changes)
+
+    def append_workflow_event(self, event: WorkflowRunEvent) -> WorkflowRunEvent:
+        return self.store.append_workflow_event(event)
+
+    def list_workflow_events(self, workflow_run_id: str) -> list[WorkflowRunEvent]:
+        return self.store.list_workflow_events(workflow_run_id)
+
+    def cancel_workflow_run(self, workflow_run_id: str) -> bool:
+        run = self.get_workflow_run(workflow_run_id)
+        if run.status in {
+            WorkflowRunStatus.COMPLETED,
+            WorkflowRunStatus.FAILED,
+            WorkflowRunStatus.CANCELLED,
+        }:
+            return False
+        for event in reversed(self.list_workflow_events(workflow_run_id)):
+            if event.session_id and self.cancel_session(event.session_id):
+                break
+        self.update_workflow_run(
+            workflow_run_id,
+            status=WorkflowRunStatus.CANCELLED,
+            last_error_type="cancelled",
+        )
+        return True
+
+    def get_workflow_trace(self, workflow_run_id: str) -> WorkflowTraceSummary:
+        run = self.get_workflow_run(workflow_run_id)
+        workflow_events = self.list_workflow_events(workflow_run_id)
+        sessions = self._workflow_trace_sessions(workflow_events)
+        summaries = [summarize_session_trace(session, events) for session, events in sessions]
+        return summarize_workflow_trace(run, workflow_events, summaries)
+
+    def export_workflow_trace_jsonl(self, workflow_run_id: str) -> list[str]:
+        run = self.get_workflow_run(workflow_run_id)
+        workflow_events = self.list_workflow_events(workflow_run_id)
+        return list(
+            workflow_trace_jsonl(
+                run,
+                workflow_events,
+                self._workflow_trace_sessions(workflow_events),
+            )
+        )
+
+    def _workflow_trace_sessions(
+        self,
+        workflow_events: list[WorkflowRunEvent],
+    ) -> list[tuple[Session, list[Event]]]:
+        session_ids = tuple(
+            dict.fromkeys(event.session_id for event in workflow_events if event.session_id)
+        )
+        return [
+            (self.get_session(session_id), self.list_events(session_id))
+            for session_id in session_ids
+        ]
+
+    def create_workflow(self, workflow_run: WorkflowRun) -> WorkflowRun:
+        return self.create_workflow_run(workflow_run)
+
+    def get_workflow(self, workflow_run_id: str) -> WorkflowRun:
+        return self.get_workflow_run(workflow_run_id)
+
+    def list_workflows(
+        self,
+        *,
+        status: WorkflowRunStatus | str | None = None,
+        limit: int | None = None,
+    ) -> list[WorkflowRun]:
+        return self.list_workflow_runs(status=status, limit=limit)
+
+    def update_workflow(self, workflow_run_id: str, **changes: Any) -> WorkflowRun:
+        return self.update_workflow_run(workflow_run_id, **changes)
+
+    def append_workflow_run_event(self, event: WorkflowRunEvent) -> WorkflowRunEvent:
+        return self.append_workflow_event(event)
+
+    def list_workflow_run_events(self, workflow_run_id: str) -> list[WorkflowRunEvent]:
+        return self.list_workflow_events(workflow_run_id)
+
+    # Evaluation persistence
+
+    def create_evaluation_suite(self, suite: EvaluationSuite) -> EvaluationSuite:
+        return self.store.create_evaluation_suite(suite)
+
+    def get_evaluation_suite(self, suite_id: str) -> EvaluationSuite:
+        return self.store.get_evaluation_suite(suite_id)
+
+    def list_evaluation_suites(
+        self,
+        *,
+        status: EvaluationSuiteStatus | str | None = None,
+        limit: int | None = None,
+    ) -> list[EvaluationSuite]:
+        return self.store.list_evaluation_suites(status=status, limit=limit)
+
+    def create_evaluation_run(self, evaluation_run: EvaluationRun) -> EvaluationRun:
+        return self.store.create_evaluation_run(evaluation_run)
+
+    def get_evaluation_run(self, evaluation_run_id: str) -> EvaluationRun:
+        return self.store.get_evaluation_run(evaluation_run_id)
+
+    def list_evaluation_runs(
+        self,
+        *,
+        suite_id: str | None = None,
+        status: EvaluationRunStatus | str | None = None,
+        limit: int | None = None,
+    ) -> list[EvaluationRun]:
+        return self.store.list_evaluation_runs(
+            suite_id=suite_id,
+            status=status,
+            limit=limit,
+        )
+
+    def update_evaluation_run(self, evaluation_run_id: str, **changes: Any) -> EvaluationRun:
+        return self.store.update_evaluation_run(evaluation_run_id, **changes)
+
+    def append_evaluation_result(self, result: EvaluationResult) -> EvaluationResult:
+        return self.store.append_evaluation_result(result)
+
+    def get_evaluation_result(self, result_id: str) -> EvaluationResult:
+        return self.store.get_evaluation_result(result_id)
+
+    def update_evaluation_result(self, result_id: str, **changes: Any) -> EvaluationResult:
+        return self.store.update_evaluation_result(result_id, **changes)
+
+    def list_evaluation_results(self, evaluation_run_id: str) -> list[EvaluationResult]:
+        return self.store.list_evaluation_results(evaluation_run_id)
+
+    # Memory use cases
+
+    def save_memory(
+        self,
+        memory: Memory | RoleSnapshot | None = None,
+        *,
+        snapshot: RoleSnapshot | None = None,
+        session_id: str | None = None,
+        kind: MemoryKind | str | None = None,
+        content: str | None = None,
+        project_scope: str | None = None,
+        role_scope: Collection[str] | str | None = None,
+        source_session_id: str | None = None,
+        source_task: str | None = None,
+        confidence: float = 0.5,
+        status: MemoryStatus | str | None = None,
+        confirmed: bool = False,
+        confirm: bool | None = None,
+        allow_conservative_activation: bool = False,
+    ) -> Memory:
+        """Save a Memory after applying the RoleSnapshot's write scope.
+
+        The method accepts either an already-created ``Memory`` or the fields
+        needed to create one.  For convenience a RoleSnapshot may be the first
+        positional argument; the normal explicit form is
+        ``save_memory(memory, snapshot=snapshot)``.
+
+        Durable episodic/project items start as candidates.  They become active
+        only with explicit confirmation or when the caller opts into the narrow
+        provenance-and-verification rule implemented by the domain layer.
+        """
+
+        if isinstance(memory, RoleSnapshot):
+            if snapshot is not None:
+                raise ValueError("provide the RoleSnapshot only once")
+            snapshot = memory
+            memory = None
+        if snapshot is None:
+            raise ValueError("snapshot is required for memory writes")
+        if confirm is not None:
+            confirmed = confirm
+
+        if memory is None:
+            if kind is None or content is None:
+                raise ValueError("kind and content are required when memory is not provided")
+            normalized_kind = self._coerce_memory_kind(kind)
+            effective_session_id = source_session_id or session_id
+            requested_status = (
+                MemoryStatus(status)
+                if status is not None
+                else default_memory_status(normalized_kind)
+            )
+            memory = Memory(
+                kind=normalized_kind,
+                content=content,
+                project_scope=project_scope,
+                role_scope=self._normalize_role_scope(role_scope),
+                source_session_id=effective_session_id,
+                source_task=source_task,
+                confidence=confidence,
+                status=requested_status,
+            )
+        else:
+            if any(
+                value is not None
+                for value in (
+                    kind,
+                    content,
+                    project_scope,
+                    role_scope,
+                    source_session_id,
+                    source_task,
+                )
+            ):
+                raise ValueError("memory fields cannot be mixed with an existing Memory")
+            if status is not None:
+                memory = memory.model_copy(update={"status": MemoryStatus(status)})
+
+        if memory.kind is MemoryKind.WORKING and memory.source_session_id is None and session_id:
+            memory = memory.model_copy(update={"source_session_id": session_id})
+        self._authorize_memory(
+            snapshot,
+            memory.kind,
+            operation="write",
+            memory=memory,
+            session_id=session_id,
+            project_scope=memory.project_scope,
+        )
+        memory = self._prepare_activation(
+            memory,
+            confirmed=confirmed,
+            allow_conservative_activation=allow_conservative_activation,
+        )
+        return self.store.create_memory(memory)
+
+    def create_memory(
+        self,
+        memory: Memory | RoleSnapshot | None = None,
+        *,
+        snapshot: RoleSnapshot | None = None,
+        session_id: str | None = None,
+        kind: MemoryKind | str | None = None,
+        content: str | None = None,
+        project_scope: str | None = None,
+        role_scope: Collection[str] | str | None = None,
+        source_session_id: str | None = None,
+        source_task: str | None = None,
+        confidence: float = 0.5,
+        status: MemoryStatus | str | None = None,
+        confirmed: bool = False,
+        confirm: bool | None = None,
+        allow_conservative_activation: bool = False,
+    ) -> Memory:
+        """Alias for :meth:`save_memory` used by CRUD-oriented callers."""
+
+        return self.save_memory(
+            memory,
+            snapshot=snapshot,
+            session_id=session_id,
+            kind=kind,
+            content=content,
+            project_scope=project_scope,
+            role_scope=role_scope,
+            source_session_id=source_session_id,
+            source_task=source_task,
+            confidence=confidence,
+            status=status,
+            confirmed=confirmed,
+            confirm=confirm,
+            allow_conservative_activation=allow_conservative_activation,
+        )
+
+    def get_memory(
+        self,
+        memory_id: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+        version: int | None = None,
+    ) -> Memory:
+        memory = self.store.get_memory(memory_id, version)
+        self._authorize_memory(
+            snapshot,
+            memory.kind,
+            operation="read",
+            memory=memory,
+            session_id=session_id,
+            project_scope=project_scope or memory.project_scope,
+        )
+        return memory
+
+    def query_memories(
+        self,
+        query: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+        kinds: Collection[MemoryKind | str] | None = None,
+        include_candidates: bool = False,
+        limit: int = 20,
+    ) -> list[Memory]:
+        scope = parse_memory_scope(snapshot.memory_scope)
+        requested_kinds: tuple[MemoryKind, ...]
+        if kinds is None:
+            requested_kinds = tuple(scope.read)
+        else:
+            requested_kinds = tuple(self._coerce_memory_kind(kind) for kind in kinds)
+            denied = [kind.value for kind in requested_kinds if not scope.can_read(kind)]
+            if denied:
+                raise PermissionError(f"memory read scope does not allow: {sorted(set(denied))}")
+        if not requested_kinds:
+            return []
+        for kind in requested_kinds:
+            self._authorize_memory(
+                snapshot,
+                kind,
+                operation="read",
+                session_id=session_id,
+                project_scope=project_scope,
+            )
+        return self.store.search_memories(
+            query,
+            project_scope=project_scope,
+            source_session_id=session_id,
+            kinds=requested_kinds,
+            role_id=snapshot.role_id,
+            role_name=snapshot.role_name,
+            include_candidates=include_candidates,
+            limit=limit,
+        )
+
+    def search_memories(
+        self,
+        query: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+        kinds: Collection[MemoryKind | str] | None = None,
+        include_candidates: bool = False,
+        limit: int = 20,
+    ) -> list[Memory]:
+        """Readable alias for :meth:`query_memories`."""
+
+        return self.query_memories(
+            query,
+            snapshot=snapshot,
+            session_id=session_id,
+            project_scope=project_scope,
+            kinds=kinds,
+            include_candidates=include_candidates,
+            limit=limit,
+        )
+
+    def update_memory(
+        self,
+        memory_id: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+        confirmed: bool = False,
+        confirm: bool | None = None,
+        allow_conservative_activation: bool = False,
+        **changes: Any,
+    ) -> Memory:
+        current = self.store.get_memory(memory_id)
+        self._authorize_memory(
+            snapshot,
+            current.kind,
+            operation="write",
+            memory=current,
+            session_id=session_id,
+            project_scope=project_scope or current.project_scope,
+        )
+        if confirm is not None:
+            confirmed = confirm
+        if "kind" in changes:
+            next_kind = self._coerce_memory_kind(changes["kind"])
+            changes["kind"] = next_kind
+            self._authorize_memory(
+                snapshot,
+                next_kind,
+                operation="write",
+                memory=None,
+                session_id=session_id,
+                project_scope=changes.get("project_scope", project_scope or current.project_scope),
+            )
+        requested_status = changes.get("status")
+        if requested_status is not None:
+            changes["status"] = MemoryStatus(requested_status)
+        if current.status is MemoryStatus.ACTIVE and "status" not in changes:
+            changes["status"] = current.status
+        else:
+            preview = Memory.model_validate(
+                {
+                    **current.model_dump(),
+                    **changes,
+                    "version": current.version + 1,
+                }
+            )
+            preview = self._prepare_activation(
+                preview,
+                confirmed=confirmed,
+                allow_conservative_activation=allow_conservative_activation,
+            )
+            changes["status"] = preview.status
+        return self.store.update_memory(memory_id, **changes)
+
+    def confirm_memory(
+        self,
+        memory_id: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+    ) -> Memory:
+        """Explicitly activate a candidate after a human or trusted caller confirms it."""
+
+        current = self.store.get_memory(memory_id)
+        self._authorize_memory(
+            snapshot,
+            current.kind,
+            operation="write",
+            memory=current,
+            session_id=session_id,
+            project_scope=project_scope or current.project_scope,
+        )
+        return self.store.update_memory(memory_id, status=MemoryStatus.ACTIVE)
+
+    def activate_memory(
+        self,
+        memory_id: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+        confirmed: bool = False,
+        allow_conservative_activation: bool = False,
+    ) -> Memory:
+        """Activate a candidate through explicit confirmation or the safe rule."""
+
+        current = self.store.get_memory(memory_id)
+        self._authorize_memory(
+            snapshot,
+            current.kind,
+            operation="write",
+            memory=current,
+            session_id=session_id,
+            project_scope=project_scope or current.project_scope,
+        )
+        self._prepare_activation(
+            current,
+            confirmed=confirmed,
+            allow_conservative_activation=allow_conservative_activation,
+            require_active=True,
+        )
+        return self.store.update_memory(memory_id, status=MemoryStatus.ACTIVE)
+
+    def deactivate_memory(
+        self,
+        memory_id: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+    ) -> Memory:
+        current = self.store.get_memory(memory_id)
+        self._authorize_memory(
+            snapshot,
+            current.kind,
+            operation="write",
+            memory=current,
+            session_id=session_id,
+            project_scope=project_scope or current.project_scope,
+        )
+        return self.store.deactivate_memory(memory_id)
+
+    def list_memory_versions(
+        self,
+        memory_id: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+    ) -> list[Memory]:
+        versions = self.store.list_memory_versions(memory_id)
+        if not versions:
+            return []
+        self._authorize_memory(
+            snapshot,
+            versions[-1].kind,
+            operation="read",
+            memory=versions[-1],
+            session_id=session_id,
+            project_scope=project_scope or versions[-1].project_scope,
+        )
+        return versions
+
+    def trace_memory_source(
+        self,
+        memory_id: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+        version: int | None = None,
+    ) -> MemorySource:
+        memory = self.get_memory(
+            memory_id,
+            snapshot=snapshot,
+            session_id=session_id,
+            project_scope=project_scope,
+            version=version,
+        )
+        return memory.source
+
+    @staticmethod
+    def _coerce_memory_kind(kind: MemoryKind | str) -> MemoryKind:
+        return kind if isinstance(kind, MemoryKind) else MemoryKind(kind)
+
+    @staticmethod
+    def _normalize_role_scope(value: Collection[str] | str | None) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        values = value.split(",") if isinstance(value, str) else value
+        return tuple(item.strip() for item in values if item.strip())
+
+    @staticmethod
+    def _prepare_activation(
+        memory: Memory,
+        *,
+        confirmed: bool,
+        allow_conservative_activation: bool,
+        require_active: bool = False,
+    ) -> Memory:
+        if confirmed:
+            return memory.model_copy(update={"status": MemoryStatus.ACTIVE})
+        if allow_conservative_activation and passes_conservative_activation(memory):
+            return memory.model_copy(update={"status": MemoryStatus.ACTIVE})
+        if memory.status is MemoryStatus.ACTIVE and (
+            memory.kind is MemoryKind.WORKING and passes_conservative_activation(memory)
+        ):
+            return memory
+        if memory.status is not MemoryStatus.ACTIVE and not require_active:
+            return memory
+        raise PermissionError(
+            "candidate knowledge requires explicit confirmation or conservative activation"
+        )
+
+    @staticmethod
+    def _authorize_memory(
+        snapshot: RoleSnapshot,
+        kind: MemoryKind,
+        *,
+        operation: str,
+        memory: Memory | None = None,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+    ) -> None:
+        scope = parse_memory_scope(snapshot.memory_scope)
+        if operation == "read":
+            allowed = scope.can_read(kind)
+        elif operation == "write":
+            allowed = scope.can_write(kind)
+        else:
+            raise ValueError(f"unknown memory operation: {operation}")
+        if not allowed:
+            raise PermissionError(f"memory {operation} scope does not allow: {kind.value}")
+
+        if kind is MemoryKind.WORKING:
+            if session_id is None:
+                raise ValueError("session_id is required for working memory")
+            if memory is not None and memory.source_session_id != session_id:
+                raise PermissionError("working memory belongs to another session")
+        if kind is MemoryKind.PROJECT:
+            if project_scope is None:
+                raise ValueError("project_scope is required for project memory")
+            if memory is not None and memory.project_scope != project_scope:
+                raise PermissionError("project memory belongs to another project scope")
+        if (
+            memory is not None
+            and memory.role_scope
+            and snapshot.role_id not in memory.role_scope
+            and snapshot.role_name not in memory.role_scope
+            and "*" not in memory.role_scope
+        ):
+            raise PermissionError("memory role_scope does not include this role")
+
     # Runtime control
 
     async def run_session(
@@ -272,9 +893,18 @@ class ApplicationService:
 
                 self._persist_runtime_event(session.id, agent.id, runtime_event)
                 yield runtime_event
-        except BaseException:
+        except asyncio.CancelledError:
             final_status = AgentStatus.FAILED
             raise
+        except Exception as exc:
+            failure_event = RuntimeEvent(
+                event_type="agent.failed",
+                turn=0,
+                payload={"error_type": type(exc).__name__},
+            )
+            self._persist_runtime_event(session.id, agent.id, failure_event)
+            yield failure_event
+            final_status = AgentStatus.FAILED
         finally:
             await iterator.aclose()
             self.store.update_agent_status(agent.id, final_status)

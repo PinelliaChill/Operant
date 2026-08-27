@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from operant.domain.memory import Memory, MemoryKind, MemoryStatus  # noqa: F401
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)

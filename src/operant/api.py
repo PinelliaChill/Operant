@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from operant.application.evaluation import EvaluationRunner
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow
+from operant.domain.evaluation import EvaluationResult, EvaluationSuite
+from operant.domain.memory import MemoryKind
 from operant.domain.models import (
     Budget,
     Effort,
@@ -156,10 +161,78 @@ class WorkflowRunRequest(BaseModel):
 
     task: str = Field(min_length=1)
     workspace: str = Field(min_length=1)
+    main_role_id: str | None = "role_main"
     planner_role_id: str = "role_planner"
+    explorer_role_ids: tuple[str, ...] = Field(
+        default=("role_explorer",),
+        max_length=4,
+    )
     coder_role_id: str = "role_coder"
     reviewer_role_id: str = "role_reviewer"
+    max_parallel_explorers: int = Field(default=2, ge=1, le=4)
     max_rework_rounds: int = Field(default=1, ge=0, le=3)
+
+
+class WorkflowResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allow_coder_replay: bool = False
+
+
+class EvaluationRunRequest(BaseModel):
+    """Start one persisted suite in an isolated, explicitly local artifact root."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    suite_id: str = Field(min_length=1, max_length=200)
+    artifact_root: str = Field(min_length=1, max_length=4_096)
+
+    @field_validator("artifact_root")
+    @classmethod
+    def validate_artifact_root(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or not Path(normalized).is_absolute():
+            raise ValueError("artifact_root must be an absolute path")
+        return normalized
+
+
+class CreateMemoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    kind: MemoryKind
+    content: str = Field(min_length=1)
+    project_scope: str | None = None
+    role_scope: tuple[str, ...] = ()
+    source_task: str | None = None
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    confirmed: bool = False
+
+
+def _safe_evaluation_result_payload(result: EvaluationResult) -> dict[str, Any]:
+    """Return a result suitable for CLI/API export, never its local workspace path."""
+
+    payload = result.model_dump(mode="json")
+    artifact_workspace = payload.get("artifact_workspace")
+    if isinstance(artifact_workspace, dict):
+        artifact_workspace.pop("local_workspace_path", None)
+    return payload
+
+
+def _safe_evaluation_error_type(exc: Exception) -> str:
+    """Classify stream failures without returning provider, filesystem, or prompt text."""
+
+    if isinstance(exc, NotFoundError):
+        return "not_found"
+    if isinstance(exc, ValueError):
+        return "validation_error"
+    if isinstance(exc, OSError):
+        return "io_error"
+    return "runner_error"
+
+
+def _sse_event(event_type: str, payload: dict[str, Any]) -> str:
+    return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
@@ -173,6 +246,17 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         description="由角色预设驱动的多模型 Coding Agent Runtime。",
         version="0.1.0",
     )
+    web_root = Path(__file__).with_name("web")
+    app.mount(
+        "/web/static",
+        StaticFiles(directory=web_root / "static"),
+        name="web-static",
+    )
+
+    @app.get("/web", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/web/", response_class=HTMLResponse, include_in_schema=False)
+    async def web_workbench() -> HTMLResponse:
+        return HTMLResponse((web_root / "index.html").read_text(encoding="utf-8"))
 
     @app.get("/healthz")
     async def health() -> dict[str, str]:
@@ -407,31 +491,298 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return {"accepted": True}
 
     @app.post("/v1/workflows/coding/runs")
+    @app.post("/v1/tasks")
     async def run_coding_workflow(
         request: WorkflowRunRequest,
     ) -> StreamingResponse:
-        for role_id in (
-            request.planner_role_id,
-            request.coder_role_id,
-            request.reviewer_role_id,
-        ):
-            try:
-                service.get_role(role_id)
-            except NotFoundError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            workflow.validate_configuration(
+                planner_role_id=request.planner_role_id,
+                explorer_role_ids=request.explorer_role_ids,
+                coder_role_id=request.coder_role_id,
+                reviewer_role_id=request.reviewer_role_id,
+                max_parallel_explorers=request.max_parallel_explorers,
+                main_role_id=request.main_role_id,
+            )
+        except (NotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         async def stream_events() -> AsyncIterator[str]:
             async for event in workflow.run(
                 task=request.task,
                 workspace=request.workspace,
+                main_role_id=request.main_role_id,
                 planner_role_id=request.planner_role_id,
+                explorer_role_ids=request.explorer_role_ids,
                 coder_role_id=request.coder_role_id,
                 reviewer_role_id=request.reviewer_role_id,
+                max_parallel_explorers=request.max_parallel_explorers,
                 max_rework_rounds=request.max_rework_rounds,
             ):
                 yield (f"event: {event.event_type}\ndata: {event.model_dump_json()}\n\n")
 
         return StreamingResponse(stream_events(), media_type="text/event-stream")
+
+    @app.get("/v1/tasks")
+    async def list_workflow_runs() -> list[dict[str, object]]:
+        return [run.model_dump(mode="json") for run in service.list_workflow_runs()]
+
+    @app.get("/v1/tasks/{workflow_run_id}")
+    async def get_workflow_run(workflow_run_id: str) -> dict[str, object]:
+        try:
+            run = service.get_workflow_run(workflow_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return run.model_dump(mode="json")
+
+    @app.get("/v1/tasks/{workflow_run_id}/events")
+    async def list_workflow_run_events(
+        workflow_run_id: str,
+    ) -> list[dict[str, object]]:
+        try:
+            events = service.list_workflow_events(workflow_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return [event.model_dump(mode="json") for event in events]
+
+    @app.get("/v1/tasks/{workflow_run_id}/trace")
+    async def get_workflow_trace(workflow_run_id: str) -> dict[str, object]:
+        try:
+            trace = service.get_workflow_trace(workflow_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return trace.model_dump(mode="json")
+
+    @app.get("/v1/tasks/{workflow_run_id}/trace.jsonl")
+    async def export_workflow_trace(workflow_run_id: str) -> StreamingResponse:
+        try:
+            lines = service.export_workflow_trace_jsonl(workflow_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        async def stream_lines() -> AsyncIterator[str]:
+            for line in lines:
+                yield f"{line}\n"
+
+        return StreamingResponse(
+            stream_lines(),
+            media_type="application/x-ndjson",
+            headers={
+                "Content-Disposition": (f'attachment; filename="{workflow_run_id}-trace.jsonl"')
+            },
+        )
+
+    @app.post("/v1/tasks/{workflow_run_id}/resume")
+    async def resume_workflow_run(
+        workflow_run_id: str,
+        request: WorkflowResumeRequest,
+    ) -> StreamingResponse:
+        try:
+            service.get_workflow_run(workflow_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        async def stream_events() -> AsyncIterator[str]:
+            try:
+                async for event in workflow.resume(
+                    workflow_run_id,
+                    allow_coder_replay=request.allow_coder_replay,
+                ):
+                    yield f"event: {event.event_type}\ndata: {event.model_dump_json()}\n\n"
+            except ValueError as exc:
+                error = json.dumps(
+                    {"error_type": type(exc).__name__, "message": str(exc)},
+                    ensure_ascii=False,
+                )
+                yield f"event: workflow.resume_rejected\ndata: {error}\n\n"
+
+        return StreamingResponse(stream_events(), media_type="text/event-stream")
+
+    @app.post("/v1/tasks/{workflow_run_id}/cancel")
+    async def cancel_workflow_run(workflow_run_id: str) -> dict[str, bool]:
+        try:
+            accepted = service.cancel_workflow_run(workflow_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"accepted": accepted}
+
+    # Evaluation Runner v1. The HTTP layer only translates typed Service/
+    # Runner calls; SQLite remains behind ApplicationService.
+
+    @app.get("/v1/evaluations/suites")
+    async def list_evaluation_suites(
+        status: str | None = None,
+        limit: int | None = Query(default=None, ge=1),
+    ) -> list[dict[str, Any]]:
+        try:
+            suites = service.list_evaluation_suites(status=status, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid evaluation suite query") from exc
+        return [suite.model_dump(mode="json") for suite in suites]
+
+    @app.post("/v1/evaluations/suites", status_code=201)
+    async def create_evaluation_suite(request: dict[str, Any]) -> dict[str, Any]:
+        try:
+            suite = EvaluationSuite.model_validate(request)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail="invalid evaluation suite") from exc
+        try:
+            created = service.create_evaluation_suite(suite)
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail="evaluation suite already exists") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid evaluation suite") from exc
+        return created.model_dump(mode="json")
+
+    @app.get("/v1/evaluations/suites/{suite_id}")
+    async def get_evaluation_suite(suite_id: str) -> dict[str, Any]:
+        try:
+            suite = service.get_evaluation_suite(suite_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="evaluation suite not found") from exc
+        return suite.model_dump(mode="json")
+
+    @app.get("/v1/evaluations/runs")
+    async def list_evaluation_runs(
+        suite_id: str | None = None,
+        status: str | None = None,
+        limit: int | None = Query(default=None, ge=1),
+    ) -> list[dict[str, Any]]:
+        try:
+            runs = service.list_evaluation_runs(
+                suite_id=suite_id,
+                status=status,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid evaluation run query") from exc
+        return [run.model_dump(mode="json") for run in runs]
+
+    @app.post("/v1/evaluations/runs")
+    async def run_evaluation_suite(request: EvaluationRunRequest) -> StreamingResponse:
+        try:
+            service.get_evaluation_suite(request.suite_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="evaluation suite not found") from exc
+        evaluation_runner = EvaluationRunner(service)
+
+        async def stream_events() -> AsyncIterator[str]:
+            try:
+                async for event in evaluation_runner.run_suite(
+                    request.suite_id,
+                    artifact_root=request.artifact_root,
+                ):
+                    yield _sse_event(event.event_type, event.model_dump(mode="json"))
+            except Exception as exc:
+                yield _sse_event(
+                    "evaluation.error",
+                    {
+                        "error_type": _safe_evaluation_error_type(exc),
+                        "message": "evaluation runner stopped before completion",
+                    },
+                )
+
+        return StreamingResponse(stream_events(), media_type="text/event-stream")
+
+    @app.get("/v1/evaluations/runs/{evaluation_run_id}")
+    async def get_evaluation_run(evaluation_run_id: str) -> dict[str, Any]:
+        try:
+            run = service.get_evaluation_run(evaluation_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="evaluation run not found") from exc
+        return run.model_dump(mode="json")
+
+    @app.get("/v1/evaluations/runs/{evaluation_run_id}/results")
+    async def list_evaluation_results(evaluation_run_id: str) -> list[dict[str, Any]]:
+        try:
+            results = service.list_evaluation_results(evaluation_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="evaluation run not found") from exc
+        return [_safe_evaluation_result_payload(result) for result in results]
+
+    @app.post("/v1/memories", status_code=201)
+    async def create_memory(request: CreateMemoryRequest) -> dict[str, object]:
+        try:
+            session = service.get_session(request.session_id)
+            memory = service.save_memory(
+                snapshot=session.role_snapshot,
+                session_id=session.id,
+                kind=request.kind,
+                content=request.content,
+                project_scope=request.project_scope,
+                role_scope=request.role_scope,
+                source_session_id=session.id,
+                source_task=request.source_task,
+                confidence=request.confidence,
+                confirmed=request.confirmed,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PermissionError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return memory.model_dump(mode="json")
+
+    @app.get("/v1/memories/search")
+    async def search_memories(
+        session_id: str,
+        query: str = Query(min_length=1),
+        project_scope: str | None = None,
+        include_candidates: bool = False,
+    ) -> list[dict[str, object]]:
+        try:
+            session = service.get_session(session_id)
+            memories = service.query_memories(
+                query,
+                snapshot=session.role_snapshot,
+                session_id=session.id,
+                project_scope=project_scope,
+                include_candidates=include_candidates,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PermissionError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return [memory.model_dump(mode="json") for memory in memories]
+
+    @app.post("/v1/memories/{memory_id}/confirm")
+    async def confirm_memory(
+        memory_id: str,
+        session_id: str,
+        project_scope: str | None = None,
+    ) -> dict[str, object]:
+        try:
+            session = service.get_session(session_id)
+            memory = service.confirm_memory(
+                memory_id,
+                snapshot=session.role_snapshot,
+                session_id=session.id,
+                project_scope=project_scope,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PermissionError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return memory.model_dump(mode="json")
+
+    @app.delete("/v1/memories/{memory_id}")
+    async def deactivate_memory(
+        memory_id: str,
+        session_id: str,
+        project_scope: str | None = None,
+    ) -> dict[str, object]:
+        try:
+            session = service.get_session(session_id)
+            memory = service.deactivate_memory(
+                memory_id,
+                snapshot=session.role_snapshot,
+                session_id=session.id,
+                project_scope=project_scope,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PermissionError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return memory.model_dump(mode="json")
 
     return app
 

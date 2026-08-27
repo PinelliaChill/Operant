@@ -45,6 +45,7 @@ def default_role_presets(
             effort=Effort.HIGH,
             tool_policy=readonly_tools,
             budget=Budget(max_turns=12),
+            memory_scope="read: [project, episodic]; write: []",
         ),
         RolePreset(
             id="role_planner",
@@ -56,6 +57,7 @@ def default_role_presets(
             effort=Effort.HIGH,
             tool_policy=readonly_tools,
             budget=Budget(max_turns=8),
+            memory_scope="read: [project, episodic]; write: []",
         ),
         RolePreset(
             id="role_explorer",
@@ -67,6 +69,7 @@ def default_role_presets(
             effort=Effort.MEDIUM,
             tool_policy=readonly_tools,
             budget=Budget(max_turns=8),
+            memory_scope="read: [project, episodic]; write: []",
         ),
         RolePreset(
             id="role_coder",
@@ -79,6 +82,7 @@ def default_role_presets(
             effort=Effort.HIGH,
             tool_policy=coder_tools,
             budget=Budget(max_turns=20, timeout_seconds=600),
+            memory_scope="read: [project, episodic]; write: [project, episodic]",
         ),
         RolePreset(
             id="role_reviewer",
@@ -92,5 +96,6 @@ def default_role_presets(
             effort=Effort.HIGH,
             tool_policy=readonly_tools,
             budget=Budget(max_turns=10),
+            memory_scope="read: [project, episodic]; write: []",
         ),
     )
