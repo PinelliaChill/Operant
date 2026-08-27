@@ -61,6 +61,70 @@ class SlowProvider(ImmediateProvider):
         )
 
 
+class FailingProvider(ImmediateProvider):
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        del snapshot, messages, tools
+        if False:
+            yield ProviderEvent(event_type="unreachable")
+        raise RuntimeError("raw provider detail must not enter persisted events")
+
+
+class ConcurrentExplorerProvider(ImmediateProvider):
+    def __init__(self) -> None:
+        self.active_explorers = 0
+        self.max_active_explorers = 0
+        self.user_messages: dict[str, str] = {}
+
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        self.user_messages[snapshot.role_name] = messages[-1].content or ""
+        if snapshot.role_name.startswith("Explorer"):
+            self.active_explorers += 1
+            self.max_active_explorers = max(
+                self.max_active_explorers,
+                self.active_explorers,
+            )
+            await asyncio.sleep(0.05)
+            self.active_explorers -= 1
+        async for event in super().stream(
+            snapshot=snapshot,
+            messages=messages,
+            tools=tools,
+        ):
+            yield event
+
+
+class SlowExplorerProvider(ConcurrentExplorerProvider):
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        self.user_messages[snapshot.role_name] = messages[-1].content or ""
+        if snapshot.role_name == "Explorer":
+            await asyncio.sleep(10)
+        async for event in ImmediateProvider.stream(
+            self,
+            snapshot=snapshot,
+            messages=messages,
+            tools=tools,
+        ):
+            yield event
+
+
 class ApprovalProvider(ImmediateProvider):
     def __init__(self) -> None:
         self.turn = 0
@@ -150,7 +214,9 @@ def service_with_roles(
         )
     )
     for role_id, name in (
+        ("role_main", "Main"),
         ("role_planner", "Planner"),
+        ("role_explorer", "Explorer"),
         ("role_coder", "Coder"),
         ("role_reviewer", "Reviewer"),
     ):
@@ -183,6 +249,105 @@ async def test_sequential_workflow_streams_three_isolated_sessions(tmp_path: Pat
     completed = [event for event in events if event.event_type == "agent.completed"]
     assert [event.role for event in completed] == ["planner", "coder", "reviewer"]
     assert len({event.session_id for event in completed}) == 3
+
+
+@pytest.mark.asyncio
+async def test_readonly_explorers_run_in_parallel_and_handoff_results(tmp_path: Path) -> None:
+    provider = ConcurrentExplorerProvider()
+    service = service_with_roles(tmp_path, provider)
+    service.create_role(
+        RolePreset(
+            id="role_api_explorer",
+            name="Explorer API",
+            system_prompt="Inspect API boundaries without changing files.",
+            model_profile_id="model_test",
+        )
+    )
+
+    events = [
+        event
+        async for event in SequentialCodingWorkflow(service).run(
+            task="Fix calculator",
+            workspace=tmp_path,
+            main_role_id="role_main",
+            planner_role_id="role_planner",
+            explorer_role_ids=("role_explorer", "role_api_explorer"),
+            coder_role_id="role_coder",
+            reviewer_role_id="role_reviewer",
+            max_parallel_explorers=2,
+        )
+    ]
+
+    completed = [event for event in events if event.event_type == "agent.completed"]
+    assert completed[0].role == "planner"
+    assert [event.role for event in completed[1:3]] == ["explorer", "explorer"]
+    assert [event.role for event in completed[3:]] == ["coder", "reviewer", "main"]
+    assert len({event.session_id for event in completed}) == 6
+    assert provider.max_active_explorers == 2
+    assert "role_explorer" in provider.user_messages["Coder"]
+    assert "role_api_explorer" in provider.user_messages["Coder"]
+    assert '"role":"reviewer"' in provider.user_messages["Main"].replace(" ", "")
+    assert events[-1].event_type == "workflow.completed"
+    assert events[-1].payload["verdict"] == "APPROVED"
+
+
+@pytest.mark.asyncio
+async def test_explorer_timeout_is_structured_and_nonfatal(tmp_path: Path) -> None:
+    provider = SlowExplorerProvider()
+    service = service_with_roles(tmp_path, provider)
+    service.update_role(
+        "role_explorer",
+        budget=Budget(timeout_seconds=1),
+    )
+
+    events = [
+        event
+        async for event in SequentialCodingWorkflow(service).run(
+            task="Fix calculator",
+            workspace=tmp_path,
+            main_role_id="role_main",
+            planner_role_id="role_planner",
+            explorer_role_ids=("role_explorer",),
+            coder_role_id="role_coder",
+            reviewer_role_id="role_reviewer",
+        )
+    ]
+
+    explorer_result = next(
+        event.payload["result"]
+        for event in events
+        if event.role == "explorer" and event.event_type == "workflow.subtask_result"
+    )
+    assert explorer_result["status"] == "timed_out"
+    assert explorer_result["failure_reason"] == "timeout after 1 seconds"
+    assert explorer_result["completed_steps"] == ["agent.started", "agent.timed_out"]
+    assert '"status":"timed_out"' in provider.user_messages["Coder"].replace(" ", "")
+    assert events[-1].event_type == "workflow.completed"
+
+
+def test_parallel_slots_reject_writable_explorer(tmp_path: Path) -> None:
+    service = service_with_roles(tmp_path, ImmediateProvider())
+    service.create_role(
+        RolePreset(
+            id="role_writable_explorer",
+            name="Writable Explorer",
+            system_prompt="Explore and edit.",
+            model_profile_id="model_test",
+            tool_policy=ToolPolicy(
+                allowed_tools=("apply_patch",),
+                workspace_write=True,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="explorer\\[1\\] role must be read-only"):
+        SequentialCodingWorkflow(service).validate_configuration(
+            planner_role_id="role_planner",
+            explorer_role_ids=("role_writable_explorer",),
+            coder_role_id="role_coder",
+            reviewer_role_id="role_reviewer",
+            max_parallel_explorers=2,
+        )
 
 
 @pytest.mark.asyncio
@@ -249,6 +414,28 @@ async def test_total_timeout_is_persisted(tmp_path: Path) -> None:
 
     assert events[-1].event_type == "agent.timed_out"
     assert service.list_events(session.id)[-1].event_type == "agent.timed_out"
+
+
+@pytest.mark.asyncio
+async def test_provider_exception_becomes_sanitized_persisted_failure(tmp_path: Path) -> None:
+    service = service_with_roles(tmp_path, FailingProvider())
+    session = service.create_session("role_planner")
+
+    events = [
+        event
+        async for event in service.run_session(
+            session.id,
+            user_message="Fail safely",
+            workspace=tmp_path,
+        )
+    ]
+
+    assert events[-1].event_type == "agent.failed"
+    assert events[-1].payload == {"error_type": "RuntimeError"}
+    persisted = service.list_events(session.id)[-1]
+    assert persisted.event_type == "agent.failed"
+    assert persisted.payload["error_type"] == "RuntimeError"
+    assert "raw provider detail" not in persisted.model_dump_json()
 
 
 @pytest.mark.asyncio

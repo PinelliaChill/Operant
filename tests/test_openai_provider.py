@@ -74,6 +74,8 @@ async def test_model_discovery_and_streamed_tool_call(
                 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
                 '"function":{"name":"file","arguments":"th\\":\\"x.txt\\"}"}}]},'
                 '"finish_reason":"tool_calls"}]}',
+                'data: {"choices":[],"usage":{"prompt_tokens":11,'
+                '"completion_tokens":7,"total_tokens":18}}',
                 "data: [DONE]",
                 "",
             )
@@ -114,6 +116,8 @@ async def test_model_discovery_and_streamed_tool_call(
     assert response.tool_calls[0].id == "call_1"
     assert response.tool_calls[0].name == "read_file"
     assert response.tool_calls[0].arguments() == {"path": "x.txt"}
+    assert response.usage is not None
+    assert response.usage.total_tokens == 18
 
 
 @pytest.mark.asyncio

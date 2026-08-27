@@ -54,12 +54,21 @@ class ToolDefinition(BaseModel):
     parameters: dict[str, Any]
 
 
+class ModelUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
 class ModelResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     content: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
     finish_reason: str | None = None
+    usage: ModelUsage | None = None
 
 
 class ProviderEvent(BaseModel):

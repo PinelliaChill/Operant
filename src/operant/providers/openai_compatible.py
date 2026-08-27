@@ -12,6 +12,7 @@ from operant.domain.messages import (
     Message,
     MessageRole,
     ModelResponse,
+    ModelUsage,
     ProviderEvent,
     ToolCall,
     ToolDefinition,
@@ -86,6 +87,7 @@ class OpenAICompatibleProvider:
         content_parts: list[str] = []
         tool_buffers: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
+        usage: ModelUsage | None = None
 
         try:
             async with (
@@ -108,6 +110,15 @@ class OpenAICompatibleProvider:
                     if data == "[DONE]":
                         break
                     chunk: Any = json.loads(data)
+                    raw_usage = chunk.get("usage") if isinstance(chunk, dict) else None
+                    if isinstance(raw_usage, dict):
+                        usage = ModelUsage(
+                            prompt_tokens=self._nonnegative_int(raw_usage.get("prompt_tokens")),
+                            completion_tokens=self._nonnegative_int(
+                                raw_usage.get("completion_tokens")
+                            ),
+                            total_tokens=self._nonnegative_int(raw_usage.get("total_tokens")),
+                        )
                     choices = chunk.get("choices") if isinstance(chunk, dict) else None
                     if not isinstance(choices, list) or not choices:
                         continue
@@ -141,6 +152,7 @@ class OpenAICompatibleProvider:
                 content="".join(content_parts) or None,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
+                usage=usage,
             ),
         )
 
@@ -214,3 +226,7 @@ class OpenAICompatibleProvider:
                 buffer["name"] += function["name"]
             if isinstance(function.get("arguments"), str):
                 buffer["arguments"] += function["arguments"]
+
+    @staticmethod
+    def _nonnegative_int(value: Any) -> int:
+        return value if isinstance(value, int) and value >= 0 else 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -38,6 +39,7 @@ class AgentLoop:
         user_message: str,
         approval_callback: ApprovalCallback | None = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
+        run_started = time.monotonic()
         messages = [
             Message(role=MessageRole.SYSTEM, content=snapshot.system_prompt),
             Message(role=MessageRole.USER, content=user_message),
@@ -57,6 +59,7 @@ class AgentLoop:
         no_progress = NoProgressDetector(snapshot.budget.max_consecutive_test_failures)
 
         for turn in range(1, snapshot.budget.max_turns + 1):
+            model_started = time.monotonic()
             completed: ModelResponse | None = None
             async for event in self.provider.stream(
                 snapshot=snapshot,
@@ -88,6 +91,10 @@ class AgentLoop:
                     "content": completed.content,
                     "finish_reason": completed.finish_reason,
                     "tool_calls": [call.model_dump() for call in completed.tool_calls],
+                    "usage": (
+                        None if completed.usage is None else completed.usage.model_dump(mode="json")
+                    ),
+                    "duration_ms": self._elapsed_ms(model_started),
                 },
             )
 
@@ -95,11 +102,15 @@ class AgentLoop:
                 yield RuntimeEvent(
                     event_type="agent.completed",
                     turn=turn,
-                    payload={"content": completed.content or ""},
+                    payload={
+                        "content": completed.content or "",
+                        "duration_ms": self._elapsed_ms(run_started),
+                    },
                 )
                 return
 
             for call in completed.tool_calls:
+                tool_started = time.monotonic()
                 yield RuntimeEvent(
                     event_type="tool.started",
                     turn=turn,
@@ -186,6 +197,7 @@ class AgentLoop:
                         "name": call.name,
                         "result": result,
                         "is_error": is_error,
+                        "duration_ms": self._elapsed_ms(tool_started),
                     },
                 )
                 if feedback is not None:
@@ -205,6 +217,7 @@ class AgentLoop:
                                 "max_consecutive_test_failures": (
                                     snapshot.budget.max_consecutive_test_failures
                                 ),
+                                "duration_ms": self._elapsed_ms(run_started),
                             },
                         )
                         return
@@ -212,8 +225,15 @@ class AgentLoop:
         yield RuntimeEvent(
             event_type="agent.max_turns",
             turn=snapshot.budget.max_turns,
-            payload={"max_turns": snapshot.budget.max_turns},
+            payload={
+                "max_turns": snapshot.budget.max_turns,
+                "duration_ms": self._elapsed_ms(run_started),
+            },
         )
+
+    @staticmethod
+    def _elapsed_ms(started: float) -> int:
+        return max(0, round((time.monotonic() - started) * 1000))
 
     @staticmethod
     def _attach_test_failure_feedback(result: str) -> tuple[str, dict[str, Any] | None]:
