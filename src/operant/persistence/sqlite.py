@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from operant.domain.actions import (
+    ApprovalAuditEvent,
+    ApprovalDecision,
+    ApprovalRequest,
+    ApprovalStatus,
+    CommandExecution,
+    CommandExecutionStatus,
+    ToolActionReceipt,
+    ToolActionReceiptStatus,
+)
 from operant.domain.evaluation import (
     ArtifactWorkspace,
     EvaluationCase,
@@ -15,6 +27,7 @@ from operant.domain.evaluation import (
     EvaluationResult,
     EvaluationResultStatus,
     EvaluationRun,
+    EvaluationRunEvent,
     EvaluationRunStatus,
     EvaluationSuite,
     EvaluationSuiteStatus,
@@ -47,14 +60,108 @@ class ConflictError(ValueError):
     pass
 
 
+class MigrationError(RuntimeError):
+    pass
+
+
+class IdempotencyConflictError(ConflictError):
+    pass
+
+
+class ActionOutcomeUnknownError(ConflictError):
+    pass
+
+
+MigrationStep = Callable[[sqlite3.Connection], None]
+
+
+@dataclass(frozen=True)
+class Migration:
+    version: int
+    name: str
+    manifest: str
+    upgrade: MigrationStep
+    downgrade: MigrationStep | None = None
+    frozen_checksum: str | None = None
+
+    @property
+    def checksum(self) -> str:
+        if self.frozen_checksum is not None:
+            return self.frozen_checksum
+        parts = [
+            str(self.version),
+            self.name,
+            self.manifest,
+        ]
+        return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
 class SQLiteStore:
+    _FROZEN_MANIFEST_SHA256 = {
+        1: "9efa030568ef8f28749732f82f0023a548d4ff3af708f86be9f8d3a70037ef18",
+        2: "1c1d79405a9f422aca4a84a9bd5e45b1647cb16d0c8b496f906932272fd05e98",
+        3: "2ac49a0e18c49ccfbfce434425bb7dd09f39710f190b635d3908af96512d9b34",
+    }
+    _FROZEN_MIGRATION_CHECKSUMS = {
+        1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
+        2: "f560a54b3361b717b8b0118efeb277b9869d66aa4528eb40015cbe571d9a9eef",
+        3: "9be47a848c184b5f1ab81540abfc764dcae2a4b054ff4128d3ed153635d5f709",
+    }
+    _TWO_STEP_PREVIEW_HISTORY = (
+        (
+            1,
+            "legacy_baseline",
+            "b715a4bd390840330393e393212d657bbd141d0e78473dba003c87956f84970f",
+        ),
+        (
+            2,
+            "m0_commands_approvals",
+            "0c97d5242ecde4446a07c12234aa7fe81bcff7c416da4866601bc061f0779212",
+        ),
+    )
+    _THREE_STEP_PREVIEW_HISTORY = (
+        (
+            1,
+            "week1_base",
+            "6c83c1031cc78f8e78cacdf4c64a527ec9f5713ef61d8931fb53099d87d82e29",
+        ),
+        (
+            2,
+            "week3_week4_features",
+            "9d93944346d425c634cbaae0a9eba31cd0f5553ba6bd3fbddb1c8744fc8e3b5f",
+        ),
+        (
+            3,
+            "m0_commands_approvals",
+            "f059816854c8e77af418c4acdde76a61e712b5468d34ae9190571ec5a5c9fe44",
+        ),
+    )
+    _MANIFEST_REWORK_PREVIEW_HISTORY = (
+        (
+            1,
+            "week1_base",
+            "f984b38c9c5d6ba792c55fc169901fc64f012d8118b9525c70958ce1aff827a8",
+        ),
+        (
+            2,
+            "week3_week4_features",
+            "e60372ecc8429706c2f9b51035483cd6a5eab68777b8b2b88b6f0f978ec7a2a9",
+        ),
+        (
+            3,
+            "m0_commands_approvals",
+            "20a5e2b308b838e7af9f054fb16e58f8d6ca3b505ec8901d61a2f7b3b7e0c4d2",
+        ),
+    )
+
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=30.0)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 30000")
         connection.execute("PRAGMA foreign_keys = ON")
         try:
             yield connection
@@ -67,9 +174,1172 @@ class SQLiteStore:
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.migrate()
         with self._connect() as connection:
-            connection.executescript(
+            connection.execute("BEGIN IMMEDIATE")
+            self._interrupt_running_workflows(connection)
+            self._interrupt_running_evaluations(connection)
+            self._reconcile_in_progress_commands(connection)
+            self._reconcile_in_progress_tool_actions(connection)
+            self._expire_pending_approvals(connection)
+
+    def migrate(
+        self,
+        target_version: int | None = None,
+        *,
+        _isolated_rollback: bool = False,
+    ) -> int:
+        """Move the schema transactionally to a known version.
+
+        Version 1 is the immutable legacy baseline. Downgrades below it are
+        deliberately unsupported because doing so would remove all user data.
+        """
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        migrations = self._migrations()
+        latest = migrations[-1].version
+        target = latest if target_version is None else target_version
+        if target < 1 or target > latest:
+            raise MigrationError(f"target schema version must be between 1 and {latest}")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._ensure_migration_table_on_connection(connection)
+            self._adopt_unversioned_legacy_history(connection, migrations)
+            self._adopt_known_preview_history(connection, migrations)
+            applied = self._validated_applied_migrations(migrations, connection=connection)
+            current = max(applied, default=0)
+            if target < current and not _isolated_rollback:
+                raise MigrationError(
+                    "downgrades require rollback(target_version, isolated=True) "
+                    "on an isolated database"
+                )
+            if target > current:
+                for migration in migrations:
+                    if current < migration.version <= target:
+                        self._apply_migration(connection, migration)
+            elif target < current:
+                for migration in reversed(migrations):
+                    if target < migration.version <= current:
+                        self._rollback_migration(connection, migration)
+            applied_after = self._validated_applied_migrations(
+                migrations,
+                connection=connection,
+            )
+            actual = max(applied_after, default=0)
+            if actual != target:
+                raise MigrationError(
+                    f"schema migration ended at version {actual}, expected {target}"
+                )
+            return actual
+
+    def rollback(self, target_version: int, *, isolated: bool = False) -> int:
+        """Downgrade only an explicitly isolated database with empty M0 audit tables."""
+
+        if not isolated:
+            raise MigrationError("rollback is allowed only for an explicitly isolated database")
+        return self.migrate(target_version, _isolated_rollback=True)
+
+    def schema_version(self) -> int:
+        self._ensure_migration_table()
+        migrations = self._migrations()
+        applied = self._validated_applied_migrations(migrations)
+        return max(applied, default=0)
+
+    def list_applied_migrations(self) -> list[dict[str, str | int]]:
+        self._ensure_migration_table()
+        migrations = self._migrations()
+        self._validated_applied_migrations(migrations)
+        with self._connect() as connection:
+            rows = connection.execute(
                 """
+                SELECT version, name, checksum, applied_at
+                FROM schema_migrations ORDER BY version
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _migrations(self) -> tuple[Migration, ...]:
+        def build(
+            version: int,
+            name: str,
+            upgrade: MigrationStep,
+            downgrade: MigrationStep | None = None,
+        ) -> Migration:
+            manifest = self._migration_manifest(version)
+            manifest_sha256 = hashlib.sha256(manifest.encode("utf-8")).hexdigest()
+            if manifest_sha256 != self._FROZEN_MANIFEST_SHA256[version]:
+                raise MigrationError(
+                    f"migration {version} schema manifest changed; add a new migration version"
+                )
+            calculated_checksum = hashlib.sha256(
+                "\n".join((str(version), name, manifest)).encode("utf-8")
+            ).hexdigest()
+            frozen_checksum = self._FROZEN_MIGRATION_CHECKSUMS[version]
+            if calculated_checksum != frozen_checksum:
+                raise MigrationError(
+                    f"migration {version} frozen checksum does not match its manifest"
+                )
+            return Migration(
+                version,
+                name,
+                manifest,
+                upgrade,
+                downgrade,
+                frozen_checksum,
+            )
+
+        return (
+            build(
+                1,
+                "week1_base",
+                self._upgrade_v1,
+            ),
+            build(
+                2,
+                "week3_week4_features",
+                self._upgrade_v2,
+            ),
+            build(
+                3,
+                "m0_commands_approvals",
+                self._upgrade_v3,
+                self._downgrade_v3,
+            ),
+        )
+
+    def _ensure_migration_table(self) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._ensure_migration_table_on_connection(connection)
+
+    @staticmethod
+    def _ensure_migration_table_on_connection(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+
+    def _adopt_known_preview_history(
+        self,
+        connection: sqlite3.Connection,
+        migrations: tuple[Migration, ...],
+    ) -> None:
+        """Preserve databases created by the exact uncommitted M0 preview build."""
+
+        rows = connection.execute(
+            "SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        identity = tuple(
+            (int(row["version"]), str(row["name"]), str(row["checksum"])) for row in rows
+        )
+        if identity == self._TWO_STEP_PREVIEW_HISTORY:
+            self._validate_v3_schema_shape(connection)
+        elif identity == self._THREE_STEP_PREVIEW_HISTORY:
+            self._validate_schema_contract(
+                connection,
+                version=3,
+                allow_missing_evaluation_events=True,
+            )
+            self._upgrade_preview_v3_evaluation_events(connection)
+            self._validate_v3_schema_shape(connection)
+        elif identity == self._MANIFEST_REWORK_PREVIEW_HISTORY:
+            self._validate_v3_schema_shape(connection)
+        else:
+            return
+        applied_at = str(rows[-1]["applied_at"])
+        connection.execute("DELETE FROM schema_migrations")
+        for migration in migrations[:3]:
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, checksum, applied_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (migration.version, migration.name, migration.checksum, applied_at),
+            )
+
+    def _adopt_unversioned_legacy_history(
+        self,
+        connection: sqlite3.Connection,
+        migrations: tuple[Migration, ...],
+    ) -> None:
+        """Adopt only exact Week 1 or Week 1-4 databases without history rows."""
+
+        history_row = connection.execute("SELECT 1 FROM schema_migrations LIMIT 1").fetchone()
+        if history_row is not None:
+            return
+        existing_tables = {
+            str(row["name"])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+            if not str(row["name"]).startswith("sqlite_")
+            and str(row["name"]) != "schema_migrations"
+        }
+        if not existing_tables:
+            return
+        self._validate_legacy_schema_shape(connection)
+        historical_version = 2 if "workflow_runs" in existing_tables else 1
+        if historical_version == 2:
+            self._upgrade_v2(connection)
+            self._validate_v2_schema_shape(connection)
+        applied_at = utc_now().isoformat()
+        for migration in migrations[:historical_version]:
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(version, name, checksum, applied_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (migration.version, migration.name, migration.checksum, applied_at),
+            )
+
+    def _validated_applied_migrations(
+        self,
+        migrations: tuple[Migration, ...],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[int, sqlite3.Row]:
+        expected = {migration.version: migration for migration in migrations}
+        if connection is None:
+            with self._connect() as read_connection:
+                self._validate_migration_table_shape(read_connection)
+                rows = read_connection.execute(
+                    "SELECT version, name, checksum, applied_at "
+                    "FROM schema_migrations ORDER BY version"
+                ).fetchall()
+        else:
+            self._validate_migration_table_shape(connection)
+            rows = connection.execute(
+                "SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        applied = {int(row["version"]): row for row in rows}
+        if applied and sorted(applied) != list(range(1, max(applied) + 1)):
+            raise MigrationError("schema migration history contains a version gap")
+        for version, row in applied.items():
+            migration = expected.get(version)
+            if migration is None:
+                raise MigrationError(f"database schema version {version} is newer than this build")
+            if row["name"] != migration.name or row["checksum"] != migration.checksum:
+                raise MigrationError(f"schema migration checksum mismatch at version {version}")
+        current = max(applied, default=0)
+        if current:
+            if connection is None:
+                with self._connect() as validation_connection:
+                    self._validate_schema_contract(
+                        validation_connection,
+                        version=current,
+                    )
+            else:
+                self._validate_schema_contract(connection, version=current)
+        else:
+            if connection is None:
+                with self._connect() as validation_connection:
+                    self._validate_unversioned_if_present(validation_connection)
+            else:
+                self._validate_unversioned_if_present(connection)
+        return applied
+
+    def _validate_unversioned_if_present(self, connection: sqlite3.Connection) -> None:
+        existing = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view', 'trigger') "
+            "AND name != 'schema_migrations' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone()
+        if existing is not None:
+            tables = {
+                str(row["name"])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' "
+                    "AND name != 'schema_migrations' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+            recognized = set(self._v1_required_columns()).union(self._v2_required_columns())
+            if not tables.intersection(recognized):
+                raise MigrationError("unversioned database contains no recognized legacy schema")
+            self._validate_legacy_schema_shape(connection)
+
+    def _validate_migration_table_shape(self, connection: sqlite3.Connection) -> None:
+        _objects, expected_ddl = self._canonical_schema_objects(0)
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+        ).fetchone()
+        actual_sql = "" if row is None else self._normalize_schema_sql(str(row["sql"]))
+        if actual_sql != expected_ddl["schema_migrations"]:
+            raise MigrationError("schema_migrations DDL differs from the migration manifest")
+
+    def _apply_migration(
+        self,
+        connection: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        existing = connection.execute(
+            "SELECT checksum FROM schema_migrations WHERE version = ?",
+            (migration.version,),
+        ).fetchone()
+        if existing is not None:
+            if existing["checksum"] != migration.checksum:
+                raise MigrationError(
+                    f"schema migration checksum mismatch at version {migration.version}"
+                )
+            return
+        if migration.version == 1:
+            self._validate_legacy_schema_shape(connection)
+        migration.upgrade(connection)
+        if migration.version == 1:
+            self._validate_v1_schema_shape(connection)
+        elif migration.version == 2:
+            self._validate_v2_schema_shape(connection)
+        elif migration.version == 3:
+            self._validate_v3_schema_shape(connection)
+        connection.execute(
+            """
+            INSERT INTO schema_migrations(version, name, checksum, applied_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (migration.version, migration.name, migration.checksum, utc_now().isoformat()),
+        )
+
+    def _rollback_migration(
+        self,
+        connection: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        if migration.downgrade is None:
+            raise MigrationError(f"schema migration {migration.version} cannot be rolled back")
+        row = connection.execute(
+            "SELECT checksum FROM schema_migrations WHERE version = ?",
+            (migration.version,),
+        ).fetchone()
+        if row is None:
+            return
+        if row["checksum"] != migration.checksum:
+            raise MigrationError(
+                f"schema migration checksum mismatch at version {migration.version}"
+            )
+        migration.downgrade(connection)
+        self._validate_schema_contract(connection, version=migration.version - 1)
+        connection.execute("DELETE FROM schema_migrations WHERE version = ?", (migration.version,))
+
+    @staticmethod
+    def _execute_sql_batch(connection: sqlite3.Connection, sql: str) -> None:
+        """Execute a SQL script statement-by-statement without implicit commits."""
+
+        statement = ""
+        for line in sql.splitlines():
+            statement += f"{line}\n"
+            if sqlite3.complete_statement(statement):
+                if statement.strip():
+                    connection.execute(statement)
+                statement = ""
+        if statement.strip():
+            raise MigrationError("migration ended with an incomplete SQL statement")
+
+    @staticmethod
+    def _v1_required_columns() -> dict[str, set[str]]:
+        return {
+            "model_profiles": {"id", "body", "created_at"},
+            "role_heads": {"id", "current_version"},
+            "role_versions": {"role_id", "version", "body", "created_at"},
+            "sessions": {"id", "body", "created_at"},
+            "agents": {"id", "session_id", "status", "body", "created_at"},
+            "events": {
+                "sequence",
+                "id",
+                "session_id",
+                "agent_id",
+                "event_type",
+                "body",
+                "created_at",
+            },
+        }
+
+    @staticmethod
+    def _v2_required_columns() -> dict[str, set[str]]:
+        return {
+            "workflow_runs": {
+                "id",
+                "body",
+                "status",
+                "current_stage",
+                "created_at",
+                "updated_at",
+            },
+            "workflow_run_events": {
+                "sequence",
+                "id",
+                "workflow_run_id",
+                "role",
+                "session_id",
+                "event_type",
+                "body",
+                "created_at",
+            },
+            "evaluation_suites": {"id", "body", "experiment", "status", "created_at"},
+            "evaluation_cases": {"id", "suite_id", "ordinal", "body", "created_at"},
+            "evaluation_variants": {"id", "suite_id", "ordinal", "body", "created_at"},
+            "evaluation_runs": {
+                "id",
+                "suite_id",
+                "body",
+                "status",
+                "execution_strategy",
+                "created_at",
+                "updated_at",
+            },
+            "evaluation_results": {
+                "id",
+                "run_id",
+                "case_id",
+                "variant_id",
+                "repetition",
+                "status",
+                "body",
+                "created_at",
+                "updated_at",
+            },
+            "memories": {"id", "current_version", "created_at"},
+            "memory_versions": {
+                "memory_id",
+                "version",
+                "body",
+                "kind",
+                "content",
+                "project_scope",
+                "role_scope",
+                "source_session_id",
+                "source_task",
+                "confidence",
+                "status",
+                "created_at",
+            },
+            "memory_fts": {"memory_id", "version", "content", "source_task", "project_scope"},
+        }
+
+    @staticmethod
+    def _v3_required_columns() -> dict[str, set[str]]:
+        return {
+            "tool_action_receipts": {
+                "id",
+                "scope",
+                "session_id",
+                "agent_id",
+                "idempotency_key",
+                "action_hash",
+                "command_name",
+                "status",
+                "result_json",
+                "error_code",
+                "created_at",
+                "updated_at",
+                "completed_at",
+            },
+            "command_executions": {
+                "id",
+                "command_type",
+                "idempotency_key",
+                "action_hash",
+                "status",
+                "resource_type",
+                "resource_id",
+                "response_json",
+                "http_status",
+                "error_code",
+                "created_at",
+                "updated_at",
+                "completed_at",
+            },
+            "approval_requests": {
+                "id",
+                "session_id",
+                "agent_id",
+                "tool_action_receipt_id",
+                "tool_call_id",
+                "action_hash",
+                "category",
+                "detail_summary",
+                "status",
+                "requested_at",
+                "expires_at",
+                "updated_at",
+                "decided_at",
+            },
+            "approval_decisions": {
+                "id",
+                "approval_id",
+                "approved",
+                "decided_by",
+                "reason_code",
+                "decided_at",
+            },
+            "approval_audit_events": {
+                "sequence",
+                "id",
+                "approval_id",
+                "event_type",
+                "body",
+                "created_at",
+            },
+            "evaluation_run_events": {
+                "sequence",
+                "id",
+                "evaluation_run_id",
+                "result_id",
+                "event_type",
+                "body",
+                "created_at",
+            },
+        }
+
+    @classmethod
+    def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
+        tables = {
+            "schema_migrations": {"version", "name", "checksum", "applied_at"},
+        }
+        if version >= 1:
+            tables.update(cls._v1_required_columns())
+        if version >= 2:
+            tables.update(cls._v2_required_columns())
+        if version >= 3:
+            tables.update(cls._v3_required_columns())
+        return tables
+
+    @staticmethod
+    def _nullable_column_contract() -> frozenset[tuple[str, str]]:
+        return frozenset(
+            {
+                ("events", "agent_id"),
+                ("workflow_run_events", "session_id"),
+                ("evaluation_suites", "experiment"),
+                ("memory_versions", "project_scope"),
+                ("memory_versions", "source_session_id"),
+                ("memory_versions", "source_task"),
+                ("tool_action_receipts", "result_json"),
+                ("tool_action_receipts", "error_code"),
+                ("tool_action_receipts", "completed_at"),
+                ("command_executions", "resource_type"),
+                ("command_executions", "resource_id"),
+                ("command_executions", "response_json"),
+                ("command_executions", "http_status"),
+                ("command_executions", "error_code"),
+                ("command_executions", "completed_at"),
+                ("approval_requests", "decided_at"),
+                ("approval_decisions", "reason_code"),
+                ("evaluation_run_events", "result_id"),
+            }
+        )
+
+    @staticmethod
+    def _integer_column_contract() -> frozenset[str]:
+        return frozenset(
+            {
+                "sequence",
+                "current_version",
+                "version",
+                "ordinal",
+                "repetition",
+                "http_status",
+                "approved",
+            }
+        )
+
+    @classmethod
+    def _column_contract(cls, version: int) -> dict[str, dict[str, dict[str, Any]]]:
+        """Return the physical column contract included in migration checksums."""
+
+        tables = cls._required_columns_contract(version)
+        primary_keys = cls._primary_key_contract(version)
+        nullable = cls._nullable_column_contract()
+        integer_columns = cls._integer_column_contract()
+        contract: dict[str, dict[str, dict[str, Any]]] = {}
+        for table, columns in tables.items():
+            if table == "memory_fts":
+                contract[table] = {
+                    column: {"type": "FTS5", "not_null": False} for column in sorted(columns)
+                }
+                continue
+            primary_key = primary_keys[table]
+            contract[table] = {}
+            for column in sorted(columns):
+                column_type = (
+                    "REAL"
+                    if column == "confidence"
+                    else "INTEGER"
+                    if column in integer_columns
+                    else "TEXT"
+                )
+                not_null = not (
+                    (table, column) in nullable or (len(primary_key) == 1 and column in primary_key)
+                )
+                contract[table][column] = {
+                    "type": column_type,
+                    "not_null": not_null,
+                }
+        return contract
+
+    @classmethod
+    def _migration_manifest(cls, version: int) -> str:
+        """Return the immutable, auditable schema contract bound into checksums."""
+
+        tables = cls._required_columns_contract(version)
+        objects, ddl = cls._canonical_schema_objects(version)
+        manifest = {
+            "schema": "operant.sqlite.migration-manifest.v1",
+            "version": version,
+            "tables": {name: sorted(columns) for name, columns in sorted(tables.items())},
+            "columns": cls._column_contract(version),
+            "primary_keys": cls._primary_key_contract(version),
+            "unique": cls._unique_contract(version),
+            "foreign_keys": cls._foreign_key_contract(version),
+            "indexes": cls._index_contract(version),
+            "checks": ({"approval_decisions": ["approved IN (0, 1)"]} if version >= 3 else {}),
+            "virtual_tables": ({"memory_fts": "fts5"} if version >= 2 else {}),
+            "objects": sorted(f"{object_type}:{name}" for object_type, name in objects),
+            "ddl": ddl,
+        }
+        return json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def _canonical_schema_objects(
+        cls,
+        version: int,
+    ) -> tuple[set[tuple[str, str]], dict[str, str]]:
+        """Materialize the exact managed SQLite DDL from the migration steps."""
+
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        store = SQLiteStore(":memory:")
+        try:
+            cls._ensure_migration_table_on_connection(connection)
+            if version >= 1:
+                store._upgrade_v1(connection)
+            if version >= 2:
+                store._upgrade_v2(connection)
+            if version >= 3:
+                store._upgrade_v3(connection)
+            rows = connection.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+            ).fetchall()
+        finally:
+            connection.close()
+        objects = {(str(row["type"]), str(row["name"])) for row in rows}
+        ddl = {
+            str(row["name"]): cls._normalize_schema_sql(str(row["sql"]))
+            for row in rows
+            if row["sql"] is not None and not str(row["name"]).startswith("memory_fts_")
+        }
+        return objects, ddl
+
+    @staticmethod
+    def _normalize_schema_sql(sql: str) -> str:
+        unquoted_identifiers = sql.translate(str.maketrans("", "", '"`[]'))
+        return re.sub(r"\s+", "", unquoted_identifiers).lower()
+
+    @staticmethod
+    def _primary_key_contract(version: int) -> dict[str, tuple[str, ...]]:
+        contract: dict[str, tuple[str, ...]] = {
+            "schema_migrations": ("version",),
+        }
+        if version >= 1:
+            contract.update(
+                {
+                    "model_profiles": ("id",),
+                    "role_heads": ("id",),
+                    "role_versions": ("role_id", "version"),
+                    "sessions": ("id",),
+                    "agents": ("id",),
+                    "events": ("sequence",),
+                }
+            )
+        if version >= 2:
+            contract.update(
+                {
+                    "workflow_runs": ("id",),
+                    "workflow_run_events": ("sequence",),
+                    "evaluation_suites": ("id",),
+                    "evaluation_cases": ("id",),
+                    "evaluation_variants": ("id",),
+                    "evaluation_runs": ("id",),
+                    "evaluation_results": ("id",),
+                    "memories": ("id",),
+                    "memory_versions": ("memory_id", "version"),
+                }
+            )
+        if version >= 3:
+            contract.update(
+                {
+                    "tool_action_receipts": ("id",),
+                    "command_executions": ("id",),
+                    "approval_requests": ("id",),
+                    "approval_decisions": ("id",),
+                    "approval_audit_events": ("sequence",),
+                    "evaluation_run_events": ("sequence",),
+                }
+            )
+        return contract
+
+    @staticmethod
+    def _unique_contract(version: int) -> dict[str, tuple[tuple[str, ...], ...]]:
+        contract: dict[str, tuple[tuple[str, ...], ...]] = {}
+        if version >= 1:
+            contract["events"] = (("id",),)
+        if version >= 2:
+            contract.update(
+                {
+                    "workflow_run_events": (("id",),),
+                    "evaluation_cases": (("suite_id", "ordinal"),),
+                    "evaluation_variants": (("suite_id", "ordinal"),),
+                    "evaluation_results": (("run_id", "case_id", "variant_id", "repetition"),),
+                }
+            )
+        if version >= 3:
+            contract.update(
+                {
+                    "tool_action_receipts": (("scope", "idempotency_key"),),
+                    "command_executions": (("command_type", "idempotency_key"),),
+                    "approval_requests": (("agent_id", "tool_call_id"),),
+                    "approval_decisions": (("approval_id",),),
+                    "approval_audit_events": (("id",),),
+                    "evaluation_run_events": (("id",),),
+                }
+            )
+        return contract
+
+    @staticmethod
+    def _foreign_key_contract(
+        version: int,
+    ) -> dict[str, tuple[tuple[str, str, str, str], ...]]:
+        contract: dict[str, tuple[tuple[str, str, str, str], ...]] = {}
+        if version >= 1:
+            contract.update(
+                {
+                    "role_versions": (("role_id", "role_heads", "id", "NO ACTION"),),
+                    "agents": (("session_id", "sessions", "id", "NO ACTION"),),
+                    "events": (("session_id", "sessions", "id", "NO ACTION"),),
+                }
+            )
+        if version >= 2:
+            contract.update(
+                {
+                    "workflow_run_events": (
+                        ("workflow_run_id", "workflow_runs", "id", "NO ACTION"),
+                    ),
+                    "evaluation_cases": (("suite_id", "evaluation_suites", "id", "CASCADE"),),
+                    "evaluation_variants": (("suite_id", "evaluation_suites", "id", "CASCADE"),),
+                    "evaluation_runs": (("suite_id", "evaluation_suites", "id", "NO ACTION"),),
+                    "evaluation_results": (
+                        ("run_id", "evaluation_runs", "id", "NO ACTION"),
+                        ("case_id", "evaluation_cases", "id", "NO ACTION"),
+                        ("variant_id", "evaluation_variants", "id", "NO ACTION"),
+                    ),
+                    "memory_versions": (("memory_id", "memories", "id", "NO ACTION"),),
+                }
+            )
+        if version >= 3:
+            contract.update(
+                {
+                    "tool_action_receipts": (
+                        ("session_id", "sessions", "id", "NO ACTION"),
+                        ("agent_id", "agents", "id", "NO ACTION"),
+                    ),
+                    "approval_requests": (
+                        ("session_id", "sessions", "id", "NO ACTION"),
+                        ("agent_id", "agents", "id", "NO ACTION"),
+                        (
+                            "tool_action_receipt_id",
+                            "tool_action_receipts",
+                            "id",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "approval_decisions": (
+                        ("approval_id", "approval_requests", "id", "NO ACTION"),
+                    ),
+                    "approval_audit_events": (
+                        ("approval_id", "approval_requests", "id", "NO ACTION"),
+                    ),
+                    "evaluation_run_events": (
+                        ("evaluation_run_id", "evaluation_runs", "id", "NO ACTION"),
+                        ("result_id", "evaluation_results", "id", "NO ACTION"),
+                    ),
+                }
+            )
+        return contract
+
+    @staticmethod
+    def _index_contract(version: int) -> dict[str, tuple[str, ...]]:
+        indexes: dict[str, tuple[str, ...]] = {}
+        if version >= 2:
+            indexes.update(
+                {
+                    "idx_workflow_run_events_run_sequence": (
+                        "workflow_run_id",
+                        "sequence",
+                    ),
+                    "idx_evaluation_cases_suite_ordinal": ("suite_id", "ordinal"),
+                    "idx_evaluation_variants_suite_ordinal": ("suite_id", "ordinal"),
+                    "idx_evaluation_runs_suite_status_created": (
+                        "suite_id",
+                        "status",
+                        "created_at",
+                    ),
+                    "idx_evaluation_results_run_status_created": (
+                        "run_id",
+                        "status",
+                        "created_at",
+                    ),
+                    "idx_memory_versions_source_session": ("source_session_id",),
+                    "idx_memory_versions_project_scope": ("project_scope",),
+                }
+            )
+        if version >= 3:
+            indexes.update(
+                {
+                    "idx_events_session_sequence": ("session_id", "sequence"),
+                    "idx_tool_action_receipts_session_created": (
+                        "session_id",
+                        "created_at",
+                    ),
+                    "idx_command_executions_status_updated": ("status", "updated_at"),
+                    "idx_approval_requests_session_status_requested": (
+                        "session_id",
+                        "status",
+                        "requested_at",
+                    ),
+                    "idx_approval_audit_approval_sequence": ("approval_id", "sequence"),
+                    "idx_evaluation_run_events_run_sequence": (
+                        "evaluation_run_id",
+                        "sequence",
+                    ),
+                }
+            )
+        return indexes
+
+    def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
+        """Recognize only an empty DB, the real Week 1 base, or full Week 1-4."""
+
+        week1 = self._v1_required_columns()
+        later = self._v2_required_columns()
+        required = {**week1, **later}
+        rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        existing = {
+            str(row["name"])
+            for row in rows
+            if not str(row["name"]).startswith("sqlite_")
+            and str(row["name"]) != "schema_migrations"
+        }
+        allowed = set(required).union(
+            {
+                "memory_fts_data",
+                "memory_fts_idx",
+                "memory_fts_content",
+                "memory_fts_docsize",
+                "memory_fts_config",
+            }
+        )
+        unknown = existing.difference(allowed)
+        if unknown:
+            raise MigrationError(f"legacy database contains unknown tables: {sorted(unknown)}")
+        core_existing = existing.intersection(required)
+        is_week1 = core_existing == set(week1)
+        is_full = core_existing == set(required)
+        if existing and not (is_week1 or is_full):
+            missing_tables = sorted(
+                (set(week1) if not set(week1).issubset(existing) else set(required)).difference(
+                    existing
+                )
+            )
+            raise MigrationError(
+                "legacy database does not match a recognized historical baseline; "
+                "missing required tables: "
+                f"{missing_tables}"
+            )
+        for table in existing.intersection(required):
+            actual = {
+                str(row["name"])
+                for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+            }
+            expected = set(required[table])
+            if table == "evaluation_results":
+                expected.discard("updated_at")
+            missing = expected.difference(actual)
+            if missing:
+                raise MigrationError(
+                    f"legacy table {table} is missing required columns: {sorted(missing)}"
+                )
+        if is_week1:
+            self._validate_v1_schema_shape(connection)
+        elif is_full:
+            self._validate_v2_schema_shape(connection, allow_missing_updated_at=True)
+
+    def _validate_v1_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=1)
+
+    def _validate_v2_schema_shape(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        allow_missing_updated_at: bool = False,
+    ) -> None:
+        self._validate_schema_contract(
+            connection,
+            version=2,
+            allow_missing_evaluation_updated_at=allow_missing_updated_at,
+        )
+
+    def _validate_v3_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=3)
+
+    def _validate_schema_contract(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        version: int,
+        allow_missing_evaluation_updated_at: bool = False,
+        allow_missing_evaluation_events: bool = False,
+    ) -> None:
+        required_tables = self._required_columns_contract(version)
+        if allow_missing_evaluation_events:
+            required_tables.pop("evaluation_run_events")
+        primary_keys = self._primary_key_contract(version)
+        column_contract = self._column_contract(version)
+        expected_objects, expected_ddl = self._canonical_schema_objects(version)
+        if allow_missing_evaluation_events:
+            excluded = {
+                ("table", "evaluation_run_events"),
+                ("index", "idx_evaluation_run_events_run_sequence"),
+                ("index", "sqlite_autoindex_evaluation_run_events_1"),
+            }
+            expected_objects.difference_update(excluded)
+            expected_ddl.pop("evaluation_run_events", None)
+            expected_ddl.pop("idx_evaluation_run_events_run_sequence", None)
+        object_rows = connection.execute(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
+        ).fetchall()
+        actual_objects = {
+            (str(row["type"]), str(row["name"]))
+            for row in object_rows
+            if re.fullmatch(r"sqlite_stat[1-4]", str(row["name"])) is None
+        }
+        if actual_objects != expected_objects:
+            missing = sorted(expected_objects.difference(actual_objects))
+            extra = sorted(actual_objects.difference(expected_objects))
+            raise MigrationError(
+                "schema managed objects differ from the migration manifest; "
+                f"missing={missing}, extra={extra}"
+            )
+        actual_ddl = {
+            str(row["name"]): self._normalize_schema_sql(str(row["sql"]))
+            for row in object_rows
+            if row["sql"] is not None
+            and not str(row["name"]).startswith("memory_fts_")
+            and re.fullmatch(r"sqlite_stat[1-4]", str(row["name"])) is None
+        }
+        for name, expected_sql in expected_ddl.items():
+            actual_sql = actual_ddl.get(name)
+            if (
+                allow_missing_evaluation_updated_at
+                and name == "evaluation_results"
+                and not any(
+                    str(row["name"]) == "updated_at"
+                    for row in connection.execute(
+                        'PRAGMA table_info("evaluation_results")'
+                    ).fetchall()
+                )
+            ):
+                expected_sql = expected_sql.replace(
+                    ",updated_attextnotnull",
+                    "",
+                )
+            if actual_sql != expected_sql:
+                raise MigrationError(
+                    f"schema object {name} DDL differs from the migration manifest"
+                )
+        for table, expected_columns in required_tables.items():
+            if table == "memory_fts":
+                continue
+            rows = connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+            actual_by_name = {str(row["name"]): row for row in rows}
+            expected = set(expected_columns)
+            if (
+                allow_missing_evaluation_updated_at
+                and table == "evaluation_results"
+                and "updated_at" not in actual_by_name
+            ):
+                expected.remove("updated_at")
+            if set(actual_by_name) != expected:
+                raise MigrationError(
+                    f"schema table {table} has unexpected columns: "
+                    f"expected {sorted(expected)}, got {sorted(actual_by_name)}"
+                )
+            expected_pk = primary_keys[table]
+            for column in expected:
+                row = actual_by_name[column]
+                expected_type = str(column_contract[table][column]["type"])
+                actual_type = str(row["type"]).upper()
+                if actual_type != expected_type:
+                    raise MigrationError(
+                        f"schema column {table}.{column} has type {actual_type!r}; "
+                        f"expected {expected_type}"
+                    )
+                expected_pk_position = expected_pk.index(column) + 1 if column in expected_pk else 0
+                if int(row["pk"]) != expected_pk_position:
+                    raise MigrationError(
+                        f"schema column {table}.{column} has unexpected primary-key position"
+                    )
+                expected_not_null = bool(column_contract[table][column]["not_null"])
+                actual_not_null = bool(row["notnull"])
+                if table == "evaluation_results" and column == "updated_at":
+                    null_row = connection.execute(
+                        "SELECT 1 FROM evaluation_results WHERE updated_at IS NULL LIMIT 1"
+                    ).fetchone()
+                    if null_row is not None:
+                        raise MigrationError(
+                            "legacy evaluation_results.updated_at contains NULL values"
+                        )
+                if actual_not_null is not expected_not_null:
+                    raise MigrationError(
+                        f"schema column {table}.{column} has unexpected NOT NULL constraint"
+                    )
+
+        expected_unique = self._unique_contract(version)
+        for table in required_tables:
+            if table == "memory_fts":
+                continue
+            actual_unique: set[tuple[str, ...]] = set()
+            for row in connection.execute(f'PRAGMA index_list("{table}")').fetchall():
+                if not bool(row["unique"]) or str(row["origin"]) == "pk":
+                    continue
+                index_name = str(row["name"])
+                actual_unique.add(
+                    tuple(
+                        str(item["name"])
+                        for item in connection.execute(
+                            f'PRAGMA index_info("{index_name}")'
+                        ).fetchall()
+                    )
+                )
+            wanted = set(expected_unique.get(table, ()))
+            if actual_unique != wanted:
+                raise MigrationError(
+                    f"schema table {table} has unexpected UNIQUE constraints: "
+                    f"expected {sorted(wanted)}, got {sorted(actual_unique)}"
+                )
+
+        expected_foreign_keys = self._foreign_key_contract(version)
+        for table in required_tables:
+            if table == "memory_fts":
+                continue
+            actual_foreign_keys = {
+                (
+                    str(row["from"]),
+                    str(row["table"]),
+                    str(row["to"]),
+                    str(row["on_delete"]).upper(),
+                )
+                for row in connection.execute(f'PRAGMA foreign_key_list("{table}")').fetchall()
+            }
+            wanted_foreign_keys = set(expected_foreign_keys.get(table, ()))
+            if actual_foreign_keys != wanted_foreign_keys:
+                raise MigrationError(
+                    f"schema table {table} has unexpected foreign keys: "
+                    f"expected {sorted(wanted_foreign_keys)}, "
+                    f"got {sorted(actual_foreign_keys)}"
+                )
+
+        expected_indexes = self._index_contract(version)
+        if allow_missing_evaluation_events:
+            expected_indexes.pop("idx_evaluation_run_events_run_sequence")
+        for index, expected_index_columns in expected_indexes.items():
+            index_row = None
+            for table in required_tables:
+                index_row = next(
+                    (
+                        row
+                        for row in connection.execute(f'PRAGMA index_list("{table}")').fetchall()
+                        if str(row["name"]) == index
+                    ),
+                    None,
+                )
+                if index_row is not None:
+                    break
+            if (
+                index_row is None
+                or bool(index_row["unique"])
+                or str(index_row["origin"]) != "c"
+                or bool(index_row["partial"])
+            ):
+                raise MigrationError(f"schema index {index} has unexpected attributes")
+            actual_index_columns = tuple(
+                str(row["name"])
+                for row in connection.execute(f'PRAGMA index_info("{index}")').fetchall()
+            )
+            if actual_index_columns != expected_index_columns:
+                raise MigrationError(
+                    f"schema index {index} has unexpected columns: {actual_index_columns!r}"
+                )
+
+        if version >= 2:
+            fts_row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'"
+            ).fetchone()
+            if fts_row is None or "using fts5" not in str(fts_row["sql"]).lower():
+                raise MigrationError("memory_fts is not an FTS5 virtual table")
+            fts_columns = {
+                str(row["name"])
+                for row in connection.execute('PRAGMA table_info("memory_fts")').fetchall()
+            }
+            if fts_columns != self._v2_required_columns()["memory_fts"]:
+                raise MigrationError("memory_fts has unexpected columns")
+            self._validate_fts5_integrity(connection)
+
+        if version >= 3:
+            approval_sql_row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'approval_decisions'"
+            ).fetchone()
+            normalized_sql = re.sub(
+                r"\s+", "", "" if approval_sql_row is None else str(approval_sql_row["sql"])
+            ).lower()
+            if "check(approvedin(0,1))" not in normalized_sql:
+                raise MigrationError("approval_decisions is missing its approved CHECK constraint")
+
+        try:
+            foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchall()
+        except sqlite3.DatabaseError as exc:
+            raise MigrationError("schema foreign-key validation failed") from exc
+        if foreign_key_errors:
+            first = foreign_key_errors[0]
+            raise MigrationError(
+                "foreign_key_check failed for "
+                f"{first['table']} rowid={first['rowid']} parent={first['parent']}"
+            )
+
+    @staticmethod
+    def _validate_fts5_integrity(connection: sqlite3.Connection) -> None:
+        """Run FTS5's full shadow-index check without retaining writes."""
+
+        connection.execute("SAVEPOINT operant_fts5_integrity")
+        try:
+            connection.execute(
+                "INSERT INTO memory_fts(memory_fts, rank) VALUES('integrity-check', 1)"
+            )
+        except sqlite3.DatabaseError as exc:
+            connection.execute("ROLLBACK TO operant_fts5_integrity")
+            connection.execute("RELEASE operant_fts5_integrity")
+            raise MigrationError("memory_fts failed its FTS5 integrity check") from exc
+        connection.execute("ROLLBACK TO operant_fts5_integrity")
+        connection.execute("RELEASE operant_fts5_integrity")
+
+    def _upgrade_v1(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
                 CREATE TABLE IF NOT EXISTS model_profiles (
                     id TEXT PRIMARY KEY,
                     body TEXT NOT NULL,
@@ -115,7 +1385,13 @@ class SQLiteStore:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
+                """,
+        )
 
+    def _upgrade_v2(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
                 CREATE TABLE IF NOT EXISTS workflow_runs (
                     id TEXT PRIMARY KEY,
                     body TEXT NOT NULL,
@@ -239,35 +1515,235 @@ class SQLiteStore:
                     source_task,
                     project_scope
                 );
-                """
-            )
-            # Schema DDL above may commit on SQLite.  Recovery itself must be
-            # atomic: a run cannot become interrupted while one of its
-            # scheduled rows remains pending.
-            connection.execute("BEGIN IMMEDIATE")
-            self._ensure_evaluation_result_columns(connection)
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_evaluation_results_run_status_created
-                ON evaluation_results(run_id, status, created_at)
-                """
-            )
-            self._interrupt_running_workflows(connection)
-            self._interrupt_running_evaluations(connection)
+                """,
+        )
+        self._ensure_evaluation_result_columns(connection)
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_evaluation_results_run_status_created
+            ON evaluation_results(run_id, status, created_at)
+            """
+        )
+
+    def _upgrade_v3(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE INDEX idx_events_session_sequence
+                ON events(session_id, sequence);
+
+            CREATE TABLE tool_action_receipts (
+                id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                action_hash TEXT NOT NULL,
+                command_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT,
+                error_code TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE(scope, idempotency_key),
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id)
+            );
+
+            CREATE INDEX idx_tool_action_receipts_session_created
+                ON tool_action_receipts(session_id, created_at);
+
+            CREATE TABLE command_executions (
+                id TEXT PRIMARY KEY,
+                command_type TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                action_hash TEXT NOT NULL,
+                status TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id TEXT,
+                response_json TEXT,
+                http_status INTEGER,
+                error_code TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE(command_type, idempotency_key)
+            );
+
+            CREATE INDEX idx_command_executions_status_updated
+                ON command_executions(status, updated_at);
+
+            CREATE TABLE approval_requests (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                tool_action_receipt_id TEXT NOT NULL,
+                tool_call_id TEXT NOT NULL,
+                action_hash TEXT NOT NULL,
+                category TEXT NOT NULL,
+                detail_summary TEXT NOT NULL,
+                status TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                decided_at TEXT,
+                UNIQUE(agent_id, tool_call_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id),
+                FOREIGN KEY (tool_action_receipt_id) REFERENCES tool_action_receipts(id)
+            );
+
+            CREATE INDEX idx_approval_requests_session_status_requested
+                ON approval_requests(session_id, status, requested_at);
+
+            CREATE TABLE approval_decisions (
+                id TEXT PRIMARY KEY,
+                approval_id TEXT UNIQUE NOT NULL,
+                approved INTEGER NOT NULL CHECK (approved IN (0, 1)),
+                decided_by TEXT NOT NULL,
+                reason_code TEXT,
+                decided_at TEXT NOT NULL,
+                FOREIGN KEY (approval_id) REFERENCES approval_requests(id)
+            );
+
+            CREATE TABLE approval_audit_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                approval_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (approval_id) REFERENCES approval_requests(id)
+            );
+
+            CREATE INDEX idx_approval_audit_approval_sequence
+                ON approval_audit_events(approval_id, sequence);
+
+            CREATE TABLE evaluation_run_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                evaluation_run_id TEXT NOT NULL,
+                result_id TEXT,
+                event_type TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (evaluation_run_id) REFERENCES evaluation_runs(id),
+                FOREIGN KEY (result_id) REFERENCES evaluation_results(id)
+            );
+
+            CREATE INDEX idx_evaluation_run_events_run_sequence
+                ON evaluation_run_events(evaluation_run_id, sequence);
+            """,
+        )
+
+    def _upgrade_preview_v3_evaluation_events(self, connection: sqlite3.Connection) -> None:
+        """Bring the exact first M0 preview schema to the final v3 contract."""
+
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE evaluation_run_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                evaluation_run_id TEXT NOT NULL,
+                result_id TEXT,
+                event_type TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (evaluation_run_id) REFERENCES evaluation_runs(id),
+                FOREIGN KEY (result_id) REFERENCES evaluation_results(id)
+            );
+
+            CREATE INDEX idx_evaluation_run_events_run_sequence
+                ON evaluation_run_events(evaluation_run_id, sequence);
+            """,
+        )
+
+    def _downgrade_v3(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM tool_action_receipts)
+                + (SELECT COUNT(*) FROM command_executions)
+                + (SELECT COUNT(*) FROM approval_requests)
+                + (SELECT COUNT(*) FROM approval_decisions)
+                + (SELECT COUNT(*) FROM approval_audit_events)
+                + (SELECT COUNT(*) FROM evaluation_run_events) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back M0 tables while they contain audit data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP INDEX idx_approval_audit_approval_sequence;
+            DROP TABLE approval_audit_events;
+            DROP INDEX idx_evaluation_run_events_run_sequence;
+            DROP TABLE evaluation_run_events;
+            DROP TABLE approval_decisions;
+            DROP INDEX idx_approval_requests_session_status_requested;
+            DROP TABLE approval_requests;
+            DROP INDEX idx_command_executions_status_updated;
+            DROP TABLE command_executions;
+            DROP INDEX idx_tool_action_receipts_session_created;
+            DROP TABLE tool_action_receipts;
+            DROP INDEX idx_events_session_sequence;
+            """,
+        )
 
     @staticmethod
     def _ensure_evaluation_result_columns(connection: sqlite3.Connection) -> None:
-        """Keep initialize idempotent for databases created before result updates existed."""
+        """Upgrade historical result tables to the one canonical NOT NULL shape."""
 
-        columns = {
-            str(row["name"])
-            for row in connection.execute("PRAGMA table_info(evaluation_results)").fetchall()
-        }
+        column_rows = connection.execute("PRAGMA table_info(evaluation_results)").fetchall()
+        columns = {str(row["name"]): row for row in column_rows}
         if "updated_at" not in columns:
             connection.execute("ALTER TABLE evaluation_results ADD COLUMN updated_at TEXT")
             connection.execute(
                 "UPDATE evaluation_results SET updated_at = created_at WHERE updated_at IS NULL"
             )
+            column_rows = connection.execute("PRAGMA table_info(evaluation_results)").fetchall()
+            columns = {str(row["name"]): row for row in column_rows}
+        null_row = connection.execute(
+            "SELECT 1 FROM evaluation_results WHERE updated_at IS NULL LIMIT 1"
+        ).fetchone()
+        if null_row is not None:
+            raise MigrationError("legacy evaluation_results.updated_at contains NULL values")
+        if bool(columns["updated_at"]["notnull"]):
+            return
+        SQLiteStore._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE evaluation_results__operant_v2 (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                case_id TEXT NOT NULL,
+                variant_id TEXT NOT NULL,
+                repetition INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(run_id, case_id, variant_id, repetition),
+                FOREIGN KEY (run_id) REFERENCES evaluation_runs(id),
+                FOREIGN KEY (case_id) REFERENCES evaluation_cases(id),
+                FOREIGN KEY (variant_id) REFERENCES evaluation_variants(id)
+            );
+
+            INSERT INTO evaluation_results__operant_v2(
+                id, run_id, case_id, variant_id, repetition, status, body,
+                created_at, updated_at
+            )
+            SELECT
+                id, run_id, case_id, variant_id, repetition, status, body,
+                created_at, updated_at
+            FROM evaluation_results;
+
+            DROP TABLE evaluation_results;
+            ALTER TABLE evaluation_results__operant_v2 RENAME TO evaluation_results;
+            """,
+        )
 
     @staticmethod
     def _interrupt_running_workflows(connection: sqlite3.Connection) -> None:
@@ -411,6 +1887,83 @@ class SQLiteStore:
                     updated.execution_strategy.value,
                     updated.updated_at.isoformat(),
                     row["id"],
+                ),
+            )
+
+    @staticmethod
+    def _reconcile_in_progress_commands(connection: sqlite3.Connection) -> None:
+        """Never replay a REST Command whose pre-crash outcome is uncertain."""
+
+        reconciled_at = utc_now().isoformat()
+        connection.execute(
+            """
+            UPDATE command_executions
+            SET status = ?, error_code = ?, updated_at = ?, completed_at = ?
+            WHERE status = ?
+            """,
+            (
+                CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED.value,
+                "process_interrupted",
+                reconciled_at,
+                reconciled_at,
+                CommandExecutionStatus.IN_PROGRESS.value,
+            ),
+        )
+
+    @staticmethod
+    def _reconcile_in_progress_tool_actions(connection: sqlite3.Connection) -> None:
+        reconciled_at = utc_now().isoformat()
+        connection.execute(
+            """
+            UPDATE tool_action_receipts
+            SET status = ?, error_code = ?, updated_at = ?
+            WHERE status = ?
+            """,
+            (
+                ToolActionReceiptStatus.OUTCOME_UNKNOWN.value,
+                "process_interrupted",
+                reconciled_at,
+                ToolActionReceiptStatus.IN_PROGRESS.value,
+            ),
+        )
+
+    @staticmethod
+    def _expire_pending_approvals(
+        connection: sqlite3.Connection, session_id: str | None = None
+    ) -> None:
+        now = utc_now()
+        expirable = (ApprovalStatus.PENDING.value, ApprovalStatus.APPROVED.value)
+        parameters: list[Any] = [*expirable, now.isoformat()]
+        query = (
+            "SELECT id, status FROM approval_requests WHERE status IN (?, ?) AND expires_at <= ?"
+        )
+        if session_id is not None:
+            query += " AND session_id = ?"
+            parameters.append(session_id)
+        rows = connection.execute(query, parameters).fetchall()
+        for row in rows:
+            cursor = connection.execute(
+                """
+                UPDATE approval_requests
+                SET status = ?, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    ApprovalStatus.EXPIRED.value,
+                    now.isoformat(),
+                    row["id"],
+                    row["status"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                continue
+            SQLiteStore._append_approval_audit_row(
+                connection,
+                ApprovalAuditEvent(
+                    approval_id=row["id"],
+                    event_type="approval.expired",
+                    payload={"status": ApprovalStatus.EXPIRED.value},
+                    created_at=now,
                 ),
             )
 
@@ -679,7 +2232,7 @@ class SQLiteStore:
     def append_event(self, event: Event) -> Event:
         self.get_session(event.session_id)
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO events(
                     id, session_id, agent_id, event_type, body, created_at
@@ -694,20 +2247,39 @@ class SQLiteStore:
                     event.created_at.isoformat(),
                 ),
             )
-        return event
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return an event cursor")
+            event_cursor = int(cursor.lastrowid)
+        return event.model_copy(update={"cursor": event_cursor})
 
-    def list_events(self, session_id: str) -> list[Event]:
+    def list_events(
+        self,
+        session_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 1000,
+    ) -> list[Event]:
+        if after_cursor is not None and after_cursor < 0:
+            raise ValueError("event cursor must not be negative")
+        if not 1 <= limit <= 1000:
+            raise ValueError("event list limit must be between 1 and 1000")
+        query = """
+            SELECT sequence, id, session_id, agent_id, event_type, body, created_at
+            FROM events WHERE session_id = ?
+        """
+        parameters: list[Any] = [session_id]
+        if after_cursor is not None:
+            query += " AND sequence > ?"
+            parameters.append(after_cursor)
+        query += " ORDER BY sequence"
+        query += " LIMIT ?"
+        parameters.append(limit)
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, session_id, agent_id, event_type, body, created_at
-                FROM events WHERE session_id = ? ORDER BY sequence
-                """,
-                (session_id,),
-            ).fetchall()
+            rows = connection.execute(query, parameters).fetchall()
         return [
             Event(
                 id=row["id"],
+                cursor=int(row["sequence"]),
                 session_id=row["session_id"],
                 agent_id=row["agent_id"],
                 event_type=row["event_type"],
@@ -716,6 +2288,667 @@ class SQLiteStore:
             )
             for row in rows
         ]
+
+    # M0 command and Action Gateway persistence
+
+    def reserve_tool_action(self, receipt: ToolActionReceipt) -> tuple[ToolActionReceipt, bool]:
+        """Claim one agent-scoped Tool Call or return its durable prior result."""
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM tool_action_receipts
+                WHERE scope = ? AND idempotency_key = ?
+                """,
+                (receipt.scope, receipt.idempotency_key),
+            ).fetchone()
+            if row is not None:
+                existing = self._tool_action_from_row(row)
+                existing_binding = (
+                    existing.scope,
+                    existing.idempotency_key,
+                    existing.action_hash,
+                    existing.session_id,
+                    existing.agent_id,
+                    existing.command_name,
+                )
+                requested_binding = (
+                    receipt.scope,
+                    receipt.idempotency_key,
+                    receipt.action_hash,
+                    receipt.session_id,
+                    receipt.agent_id,
+                    receipt.command_name,
+                )
+                if existing_binding != requested_binding:
+                    raise IdempotencyConflictError(
+                        "tool idempotency key was already used for a different action context"
+                    )
+                if existing.status in {
+                    ToolActionReceiptStatus.IN_PROGRESS,
+                    ToolActionReceiptStatus.OUTCOME_UNKNOWN,
+                }:
+                    raise ActionOutcomeUnknownError(
+                        "tool action is already in progress or its outcome is unknown"
+                    )
+                return existing, False
+
+            existing_id = connection.execute(
+                "SELECT 1 FROM tool_action_receipts WHERE id = ?", (receipt.id,)
+            ).fetchone()
+            if existing_id is not None:
+                raise IdempotencyConflictError(
+                    "tool action receipt ID is already bound to a different action context"
+                )
+            if (
+                receipt.status != ToolActionReceiptStatus.IN_PROGRESS
+                or receipt.result_json is not None
+                or receipt.error_code is not None
+                or receipt.completed_at is not None
+            ):
+                raise ConflictError(
+                    "a new tool action receipt must start in_progress without an outcome"
+                )
+
+            agent_row = connection.execute(
+                "SELECT session_id FROM agents WHERE id = ?", (receipt.agent_id,)
+            ).fetchone()
+            if agent_row is None:
+                raise ConflictError("tool action receipt agent does not exist")
+            if agent_row["session_id"] != receipt.session_id:
+                raise ConflictError("tool action receipt agent does not belong to session")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO tool_action_receipts(
+                        id, scope, session_id, agent_id, idempotency_key, action_hash,
+                        command_name, status, result_json, error_code, created_at,
+                        updated_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        receipt.id,
+                        receipt.scope,
+                        receipt.session_id,
+                        receipt.agent_id,
+                        receipt.idempotency_key,
+                        receipt.action_hash,
+                        receipt.command_name,
+                        receipt.status.value,
+                        receipt.result_json,
+                        receipt.error_code,
+                        receipt.created_at.isoformat(),
+                        receipt.updated_at.isoformat(),
+                        None,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("unable to reserve tool action") from exc
+        return receipt, True
+
+    def complete_tool_action(
+        self,
+        receipt_id: str,
+        *,
+        action_hash: str,
+        result_json: str,
+    ) -> ToolActionReceipt:
+        completed_at = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE tool_action_receipts
+                SET status = ?, result_json = ?, error_code = NULL,
+                    updated_at = ?, completed_at = ?
+                WHERE id = ? AND action_hash = ? AND status = ?
+                """,
+                (
+                    ToolActionReceiptStatus.COMPLETED.value,
+                    result_json,
+                    completed_at.isoformat(),
+                    completed_at.isoformat(),
+                    receipt_id,
+                    action_hash,
+                    ToolActionReceiptStatus.IN_PROGRESS.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ActionOutcomeUnknownError("tool action claim is no longer executable")
+            row = connection.execute(
+                "SELECT * FROM tool_action_receipts WHERE id = ?", (receipt_id,)
+            ).fetchone()
+        assert row is not None
+        return self._tool_action_from_row(row)
+
+    def fail_tool_action(
+        self,
+        receipt_id: str,
+        *,
+        action_hash: str,
+        error_code: str,
+        result_json: str,
+    ) -> ToolActionReceipt:
+        failed_at = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE tool_action_receipts
+                SET status = ?, result_json = ?, error_code = ?,
+                    updated_at = ?, completed_at = ?
+                WHERE id = ? AND action_hash = ? AND status = ?
+                """,
+                (
+                    ToolActionReceiptStatus.FAILED.value,
+                    result_json,
+                    error_code,
+                    failed_at.isoformat(),
+                    failed_at.isoformat(),
+                    receipt_id,
+                    action_hash,
+                    ToolActionReceiptStatus.IN_PROGRESS.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ActionOutcomeUnknownError("tool action claim is no longer executable")
+            row = connection.execute(
+                "SELECT * FROM tool_action_receipts WHERE id = ?", (receipt_id,)
+            ).fetchone()
+        assert row is not None
+        return self._tool_action_from_row(row)
+
+    def get_tool_action_receipt(self, receipt_id: str) -> ToolActionReceipt:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM tool_action_receipts WHERE id = ?", (receipt_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"tool action receipt not found: {receipt_id}")
+        return self._tool_action_from_row(row)
+
+    def reserve_command_execution(self, command: CommandExecution) -> tuple[CommandExecution, bool]:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM command_executions
+                WHERE command_type = ? AND idempotency_key = ?
+                """,
+                (command.command_type, command.idempotency_key),
+            ).fetchone()
+            if row is not None:
+                existing = self._command_execution_from_row(row)
+                if existing.action_hash != command.action_hash:
+                    raise IdempotencyConflictError(
+                        "idempotency key was already used with a different command payload"
+                    )
+                return existing, False
+            connection.execute(
+                """
+                INSERT INTO command_executions(
+                    id, command_type, idempotency_key, action_hash, status,
+                    resource_type, resource_id, response_json, http_status,
+                    error_code, created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    command.id,
+                    command.command_type,
+                    command.idempotency_key,
+                    command.action_hash,
+                    command.status.value,
+                    command.resource_type,
+                    command.resource_id,
+                    command.response_json,
+                    command.http_status,
+                    command.error_code,
+                    command.created_at.isoformat(),
+                    command.updated_at.isoformat(),
+                    None,
+                ),
+            )
+        return command, True
+
+    def complete_command_execution(
+        self,
+        command_id: str,
+        *,
+        response_json: str,
+        http_status: int,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+    ) -> CommandExecution:
+        completed_at = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE command_executions
+                SET status = ?, response_json = ?, http_status = ?,
+                    resource_type = COALESCE(?, resource_type),
+                    resource_id = COALESCE(?, resource_id),
+                    error_code = NULL, updated_at = ?, completed_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    CommandExecutionStatus.COMPLETED.value,
+                    response_json,
+                    http_status,
+                    resource_type,
+                    resource_id,
+                    completed_at.isoformat(),
+                    completed_at.isoformat(),
+                    command_id,
+                    CommandExecutionStatus.IN_PROGRESS.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ActionOutcomeUnknownError("command execution is no longer claimable")
+            row = connection.execute(
+                "SELECT * FROM command_executions WHERE id = ?", (command_id,)
+            ).fetchone()
+        assert row is not None
+        return self._command_execution_from_row(row)
+
+    def fail_command_execution(
+        self,
+        command_id: str,
+        *,
+        error_code: str,
+        http_status: int,
+        response_json: str,
+    ) -> CommandExecution:
+        failed_at = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE command_executions
+                SET status = ?, response_json = ?, http_status = ?, error_code = ?,
+                    updated_at = ?, completed_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    CommandExecutionStatus.FAILED.value,
+                    response_json,
+                    http_status,
+                    error_code,
+                    failed_at.isoformat(),
+                    failed_at.isoformat(),
+                    command_id,
+                    CommandExecutionStatus.IN_PROGRESS.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ActionOutcomeUnknownError("command execution is no longer claimable")
+            row = connection.execute(
+                "SELECT * FROM command_executions WHERE id = ?", (command_id,)
+            ).fetchone()
+        assert row is not None
+        return self._command_execution_from_row(row)
+
+    def mark_command_manual_reconcile(
+        self,
+        command_id: str,
+        *,
+        error_code: str,
+    ) -> CommandExecution:
+        """Close an uncommitted command claim whose side-effect outcome is unknown."""
+
+        reconciled_at = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE command_executions
+                SET status = ?, error_code = ?, updated_at = ?, completed_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED.value,
+                    error_code[:200],
+                    reconciled_at.isoformat(),
+                    reconciled_at.isoformat(),
+                    command_id,
+                    CommandExecutionStatus.IN_PROGRESS.value,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM command_executions WHERE id = ?", (command_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"command execution not found: {command_id}")
+        return self._command_execution_from_row(row)
+
+    def get_command_execution(self, command_id: str) -> CommandExecution:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM command_executions WHERE id = ?", (command_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"command execution not found: {command_id}")
+        return self._command_execution_from_row(row)
+
+    def create_approval_request(self, approval: ApprovalRequest) -> ApprovalRequest:
+        if approval.status is not ApprovalStatus.PENDING:
+            raise ConflictError("approval request must start in pending status")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            receipt_row = connection.execute(
+                "SELECT * FROM tool_action_receipts WHERE id = ?",
+                (approval.tool_action_receipt_id,),
+            ).fetchone()
+            if receipt_row is None:
+                raise ConflictError("approval requires an existing tool action receipt")
+            receipt = self._tool_action_from_row(receipt_row)
+            row = connection.execute(
+                """
+                SELECT * FROM approval_requests
+                WHERE agent_id = ? AND tool_call_id = ?
+                """,
+                (approval.agent_id, approval.tool_call_id),
+            ).fetchone()
+            if row is not None:
+                existing = self._approval_request_from_row(row)
+                if (
+                    existing.action_hash != approval.action_hash
+                    or existing.tool_action_receipt_id != approval.tool_action_receipt_id
+                    or existing.session_id != approval.session_id
+                ):
+                    raise IdempotencyConflictError(
+                        "approval tool call id was reused for a different action"
+                    )
+            if (
+                receipt.session_id != approval.session_id
+                or receipt.agent_id != approval.agent_id
+                or receipt.idempotency_key != approval.tool_call_id
+                or receipt.action_hash != approval.action_hash
+            ):
+                raise ConflictError("approval does not match its tool action receipt")
+            if receipt.status is not ToolActionReceiptStatus.IN_PROGRESS:
+                raise ConflictError("tool action receipt is not awaiting approval")
+            if row is not None:
+                return existing
+            connection.execute(
+                """
+                INSERT INTO approval_requests(
+                    id, session_id, agent_id, tool_action_receipt_id, tool_call_id,
+                    action_hash, category, detail_summary, status, requested_at,
+                    expires_at, updated_at, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    approval.id,
+                    approval.session_id,
+                    approval.agent_id,
+                    approval.tool_action_receipt_id,
+                    approval.tool_call_id,
+                    approval.action_hash,
+                    approval.category,
+                    approval.detail_summary,
+                    approval.status.value,
+                    approval.requested_at.isoformat(),
+                    approval.expires_at.isoformat(),
+                    approval.updated_at.isoformat(),
+                    None,
+                ),
+            )
+            self._append_approval_audit_row(
+                connection,
+                ApprovalAuditEvent(
+                    approval_id=approval.id,
+                    event_type="approval.requested",
+                    payload={"status": ApprovalStatus.PENDING.value},
+                ),
+            )
+        return approval
+
+    def get_approval_request(self, session_id: str, tool_call_id: str) -> ApprovalRequest:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire_pending_approvals(connection, session_id)
+            row = self._select_approval_row(connection, session_id, tool_call_id)
+        if row is None:
+            raise NotFoundError(f"approval not found: {session_id}/{tool_call_id}")
+        return self._approval_request_from_row(row)
+
+    def list_approval_requests(
+        self,
+        session_id: str,
+        *,
+        status: ApprovalStatus | str | None = ApprovalStatus.PENDING,
+    ) -> list[ApprovalRequest]:
+        parameters: list[Any] = [session_id]
+        query = "SELECT * FROM approval_requests WHERE session_id = ?"
+        if status is not None:
+            normalized = status if isinstance(status, ApprovalStatus) else ApprovalStatus(status)
+            query += " AND status = ?"
+            parameters.append(normalized.value)
+        query += " ORDER BY requested_at, id"
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire_pending_approvals(connection, session_id)
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._approval_request_from_row(row) for row in rows]
+
+    def decide_approval(
+        self,
+        session_id: str,
+        tool_call_id: str,
+        *,
+        approved: bool,
+        decided_by: str = "user",
+        reason_code: str | None = None,
+    ) -> tuple[ApprovalRequest, ApprovalDecision, bool]:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire_pending_approvals(connection, session_id)
+            row = self._select_approval_row(connection, session_id, tool_call_id)
+            if row is None:
+                raise NotFoundError(f"approval not found: {session_id}/{tool_call_id}")
+            request = self._approval_request_from_row(row)
+            decision_row = connection.execute(
+                "SELECT * FROM approval_decisions WHERE approval_id = ?", (request.id,)
+            ).fetchone()
+            if decision_row is not None:
+                decision = self._approval_decision_from_row(decision_row)
+                if decision.approved != approved:
+                    raise ConflictError("approval already has the opposite decision")
+                return request, decision, False
+            if request.status is not ApprovalStatus.PENDING:
+                raise ConflictError("approval is not pending")
+            decided_at = utc_now()
+            target_status = ApprovalStatus.APPROVED if approved else ApprovalStatus.DENIED
+            decision = ApprovalDecision(
+                approval_id=request.id,
+                approved=approved,
+                decided_by=decided_by,
+                reason_code=reason_code,
+                decided_at=decided_at,
+            )
+            connection.execute(
+                """
+                INSERT INTO approval_decisions(
+                    id, approval_id, approved, decided_by, reason_code, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision.id,
+                    decision.approval_id,
+                    int(decision.approved),
+                    decision.decided_by,
+                    decision.reason_code,
+                    decision.decided_at.isoformat(),
+                ),
+            )
+            cursor = connection.execute(
+                """
+                UPDATE approval_requests
+                SET status = ?, updated_at = ?, decided_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    target_status.value,
+                    decided_at.isoformat(),
+                    decided_at.isoformat(),
+                    request.id,
+                    ApprovalStatus.PENDING.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ConflictError("approval is no longer pending")
+            self._append_approval_audit_row(
+                connection,
+                ApprovalAuditEvent(
+                    approval_id=request.id,
+                    event_type="approval.decided",
+                    payload={"status": target_status.value, "approved": approved},
+                    created_at=decided_at,
+                ),
+            )
+            updated_row = connection.execute(
+                "SELECT * FROM approval_requests WHERE id = ?", (request.id,)
+            ).fetchone()
+        assert updated_row is not None
+        return self._approval_request_from_row(updated_row), decision, True
+
+    def get_approval_decision(self, approval_id: str) -> ApprovalDecision | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM approval_decisions WHERE approval_id = ?", (approval_id,)
+            ).fetchone()
+        return None if row is None else self._approval_decision_from_row(row)
+
+    def list_approval_audit_events(self, approval_id: str) -> list[ApprovalAuditEvent]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT sequence, id, approval_id, event_type, body, created_at
+                FROM approval_audit_events
+                WHERE approval_id = ? ORDER BY sequence
+                """,
+                (approval_id,),
+            ).fetchall()
+        return [
+            ApprovalAuditEvent(
+                id=row["id"],
+                approval_id=row["approval_id"],
+                cursor=int(row["sequence"]),
+                event_type=row["event_type"],
+                payload=json.loads(row["body"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def _append_approval_audit_row(
+        connection: sqlite3.Connection, event: ApprovalAuditEvent
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO approval_audit_events(id, approval_id, event_type, body, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                event.id,
+                event.approval_id,
+                event.event_type,
+                json.dumps(event.payload, ensure_ascii=False, separators=(",", ":")),
+                event.created_at.isoformat(),
+            ),
+        )
+
+    @staticmethod
+    def _tool_action_from_row(row: sqlite3.Row) -> ToolActionReceipt:
+        return ToolActionReceipt(
+            id=row["id"],
+            scope=row["scope"],
+            session_id=row["session_id"],
+            agent_id=row["agent_id"],
+            idempotency_key=row["idempotency_key"],
+            action_hash=row["action_hash"],
+            command_name=row["command_name"],
+            status=row["status"],
+            result_json=row["result_json"],
+            error_code=row["error_code"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            completed_at=row["completed_at"],
+        )
+
+    @staticmethod
+    def _command_execution_from_row(row: sqlite3.Row) -> CommandExecution:
+        return CommandExecution(
+            id=row["id"],
+            command_type=row["command_type"],
+            idempotency_key=row["idempotency_key"],
+            action_hash=row["action_hash"],
+            status=row["status"],
+            resource_type=row["resource_type"],
+            resource_id=row["resource_id"],
+            response_json=row["response_json"],
+            http_status=row["http_status"],
+            error_code=row["error_code"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            completed_at=row["completed_at"],
+        )
+
+    @staticmethod
+    def _select_approval_row(
+        connection: sqlite3.Connection, session_id: str, tool_call_id: str
+    ) -> sqlite3.Row | None:
+        rows = connection.execute(
+            """
+            SELECT * FROM approval_requests
+            WHERE session_id = ? AND tool_call_id = ?
+            ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+                     requested_at DESC, id DESC
+            """,
+            (session_id, tool_call_id),
+        ).fetchall()
+        pending = [row for row in rows if row["status"] == ApprovalStatus.PENDING.value]
+        if len(pending) > 1:
+            raise ConflictError("multiple pending approvals share the same legacy tool call id")
+        if pending:
+            selected: sqlite3.Row = pending[0]
+            return selected
+        if not rows:
+            return None
+        selected = rows[0]
+        return selected
+
+    @staticmethod
+    def _approval_request_from_row(row: sqlite3.Row) -> ApprovalRequest:
+        return ApprovalRequest(
+            id=row["id"],
+            session_id=row["session_id"],
+            agent_id=row["agent_id"],
+            tool_action_receipt_id=row["tool_action_receipt_id"],
+            tool_call_id=row["tool_call_id"],
+            action_hash=row["action_hash"],
+            category=row["category"],
+            detail_summary=row["detail_summary"],
+            status=row["status"],
+            requested_at=row["requested_at"],
+            expires_at=row["expires_at"],
+            updated_at=row["updated_at"],
+            decided_at=row["decided_at"],
+        )
+
+    @staticmethod
+    def _approval_decision_from_row(row: sqlite3.Row) -> ApprovalDecision:
+        return ApprovalDecision(
+            id=row["id"],
+            approval_id=row["approval_id"],
+            approved=bool(row["approved"]),
+            decided_by=row["decided_by"],
+            reason_code=row["reason_code"],
+            decided_at=row["decided_at"],
+        )
 
     # Workflow persistence
 
@@ -831,26 +3064,41 @@ class SQLiteStore:
             if cursor.lastrowid is None:
                 raise RuntimeError("SQLite did not return a workflow event sequence")
             sequence = cursor.lastrowid
-        return event.model_copy(update={"sequence": sequence})
+        return event.model_copy(update={"sequence": sequence, "cursor": sequence})
 
-    def list_workflow_events(self, workflow_run_id: str) -> list[WorkflowRunEvent]:
+    def list_workflow_events(
+        self,
+        workflow_run_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 1000,
+    ) -> list[WorkflowRunEvent]:
         self.get_workflow_run(workflow_run_id)
+        if after_cursor is not None and after_cursor < 0:
+            raise ValueError("event cursor must not be negative")
+        if not 1 <= limit <= 1000:
+            raise ValueError("event list limit must be between 1 and 1000")
+        query = """
+            SELECT sequence, id, workflow_run_id, role, session_id,
+                   event_type, body, created_at
+            FROM workflow_run_events
+            WHERE workflow_run_id = ?
+        """
+        parameters: list[Any] = [workflow_run_id]
+        if after_cursor is not None:
+            query += " AND sequence > ?"
+            parameters.append(after_cursor)
+        query += " ORDER BY sequence"
+        query += " LIMIT ?"
+        parameters.append(limit)
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT sequence, id, workflow_run_id, role, session_id,
-                       event_type, body, created_at
-                FROM workflow_run_events
-                WHERE workflow_run_id = ?
-                ORDER BY sequence
-                """,
-                (workflow_run_id,),
-            ).fetchall()
+            rows = connection.execute(query, parameters).fetchall()
         return [
             WorkflowRunEvent(
                 id=row["id"],
                 workflow_run_id=row["workflow_run_id"],
                 sequence=int(row["sequence"]),
+                cursor=int(row["sequence"]),
                 role=row["role"],
                 session_id=row["session_id"],
                 event_type=row["event_type"],
@@ -1084,6 +3332,69 @@ class SQLiteStore:
             if cursor.rowcount != 1:
                 raise NotFoundError(f"evaluation run not found: {evaluation_run_id}")
         return updated
+
+    def append_evaluation_event(self, event: EvaluationRunEvent) -> EvaluationRunEvent:
+        self.get_evaluation_run(event.evaluation_run_id)
+        with self._connect() as connection:
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO evaluation_run_events(
+                        id, evaluation_run_id, result_id, event_type, body, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.id,
+                        event.evaluation_run_id,
+                        event.result_id,
+                        event.event_type,
+                        json.dumps(event.payload, ensure_ascii=False, separators=(",", ":")),
+                        event.created_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError(f"evaluation event could not be appended: {event.id}") from exc
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return an evaluation event cursor")
+            event_cursor = int(cursor.lastrowid)
+        return event.model_copy(update={"cursor": event_cursor})
+
+    def list_evaluation_events(
+        self,
+        evaluation_run_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 1000,
+    ) -> list[EvaluationRunEvent]:
+        self.get_evaluation_run(evaluation_run_id)
+        if after_cursor is not None and after_cursor < 0:
+            raise ValueError("event cursor must not be negative")
+        if not 1 <= limit <= 1000:
+            raise ValueError("event list limit must be between 1 and 1000")
+        query = """
+            SELECT sequence, id, evaluation_run_id, result_id, event_type, body, created_at
+            FROM evaluation_run_events WHERE evaluation_run_id = ?
+        """
+        parameters: list[Any] = [evaluation_run_id]
+        if after_cursor is not None:
+            query += " AND sequence > ?"
+            parameters.append(after_cursor)
+        query += " ORDER BY sequence LIMIT ?"
+        parameters.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [
+            EvaluationRunEvent(
+                id=row["id"],
+                evaluation_run_id=row["evaluation_run_id"],
+                cursor=int(row["sequence"]),
+                result_id=row["result_id"],
+                event_type=row["event_type"],
+                payload=json.loads(row["body"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
 
     def append_evaluation_result(self, result: EvaluationResult) -> EvaluationResult:
         """Create one unique scheduled result after proving its suite membership."""

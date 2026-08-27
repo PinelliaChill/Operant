@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import Any
@@ -13,9 +14,16 @@ from operant.application.trace import (
     summarize_workflow_trace,
     workflow_trace_jsonl,
 )
+from operant.domain.actions import (
+    ApprovalRequest,
+    ApprovalStatus,
+    ToolActionReceipt,
+    ToolActionReceiptStatus,
+)
 from operant.domain.evaluation import (
     EvaluationResult,
     EvaluationRun,
+    EvaluationRunEvent,
     EvaluationRunStatus,
     EvaluationSuite,
     EvaluationSuiteStatus,
@@ -38,10 +46,161 @@ from operant.domain.models import (
     Session,
 )
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
-from operant.persistence.sqlite import NotFoundError, SQLiteStore
+from operant.persistence.sqlite import (
+    ActionOutcomeUnknownError,
+    ConflictError,
+    IdempotencyConflictError,
+    NotFoundError,
+    SQLiteStore,
+)
+from operant.protocol import redact_public_data, redact_public_text
 from operant.providers.base import ModelProvider
-from operant.runtime.loop import AgentLoop, RuntimeEvent
-from operant.tools.workspace import ApprovalCallback, WorkspaceTools
+from operant.runtime.loop import AgentLoop, RuntimeEvent, ToolActionClaim
+from operant.tools.workspace import ApprovalCallback, ToolError, WorkspaceTools
+
+
+class _PersistentActionGateway:
+    """Bind one Agent attempt to durable, argument-free Action receipts."""
+
+    def __init__(
+        self,
+        *,
+        store: SQLiteStore,
+        session_id: str,
+        agent_id: str,
+        tools: WorkspaceTools,
+    ) -> None:
+        self.store = store
+        self.session_id = session_id
+        self.agent_id = agent_id
+        self.tools = tools
+        self.scope = f"session:{session_id}:agent:{agent_id}:attempt:1"
+
+    def reserve_tool_action(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> ToolActionClaim:
+        action_hash = self.tools.action_hash(name, arguments)
+        try:
+            receipt, created = self.store.reserve_tool_action(
+                ToolActionReceipt(
+                    scope=self.scope,
+                    idempotency_key=tool_call_id,
+                    action_hash=action_hash,
+                    command_name=name,
+                    session_id=self.session_id,
+                    agent_id=self.agent_id,
+                )
+            )
+        except IdempotencyConflictError as exc:
+            raise ToolError("tool idempotency key conflicts with another action") from exc
+        except ActionOutcomeUnknownError as exc:
+            raise ToolError(
+                "tool action outcome is unknown; manual reconciliation required"
+            ) from exc
+        if created:
+            return ToolActionClaim(receipt_id=receipt.id, action_hash=action_hash)
+        if receipt.status is ToolActionReceiptStatus.COMPLETED and receipt.result_json is not None:
+            return ToolActionClaim(
+                receipt_id=receipt.id,
+                action_hash=action_hash,
+                replay_result=receipt.result_json,
+            )
+        if receipt.status is ToolActionReceiptStatus.FAILED and receipt.result_json is not None:
+            return ToolActionClaim(
+                receipt_id=receipt.id,
+                action_hash=action_hash,
+                replay_result=receipt.result_json,
+                replay_is_error=True,
+            )
+        raise ToolError("tool action outcome is unknown; manual reconciliation required")
+
+    def complete_tool_action(self, claim: ToolActionClaim, result: str) -> None:
+        self.store.complete_tool_action(
+            claim.receipt_id,
+            action_hash=claim.action_hash,
+            result_json=redact_public_text(result),
+        )
+
+    def fail_tool_action(
+        self,
+        claim: ToolActionClaim,
+        *,
+        error_code: str,
+        result: str,
+    ) -> None:
+        self.store.fail_tool_action(
+            claim.receipt_id,
+            action_hash=claim.action_hash,
+            error_code=redact_public_text(error_code, max_chars=200),
+            result_json=redact_public_text(result),
+        )
+
+    def request_approval(
+        self,
+        claim: ToolActionClaim,
+        *,
+        tool_call_id: str,
+        category: str,
+        detail: str,
+    ) -> dict[str, Any]:
+        approval = self.store.create_approval_request(
+            ApprovalRequest(
+                session_id=self.session_id,
+                agent_id=self.agent_id,
+                tool_action_receipt_id=claim.receipt_id,
+                tool_call_id=tool_call_id,
+                action_hash=claim.action_hash,
+                category=category,
+                detail_summary=redact_public_text(detail, max_chars=500),
+            )
+        )
+        return {
+            "approval_id": approval.id,
+            "action_hash": approval.action_hash,
+            "expires_at": approval.expires_at.isoformat(),
+            "continuation_available": True,
+        }
+
+    def verify_approval(
+        self,
+        claim: ToolActionClaim,
+        *,
+        tool_call_id: str,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        normalized_hash = self.tools.action_hash(name, arguments)
+        if normalized_hash != claim.action_hash:
+            raise ToolError("approved action changed before execution")
+        approval = self.store.get_approval_request(self.session_id, tool_call_id)
+        try:
+            receipt = self.store.get_tool_action_receipt(claim.receipt_id)
+        except NotFoundError as exc:
+            raise ToolError("approval receipt is unavailable") from exc
+        if (
+            approval.agent_id != self.agent_id
+            or approval.tool_action_receipt_id != claim.receipt_id
+            or approval.action_hash != normalized_hash
+            or receipt.session_id != self.session_id
+            or receipt.agent_id != self.agent_id
+            or receipt.idempotency_key != tool_call_id
+            or receipt.action_hash != normalized_hash
+            or receipt.command_name != name
+            or receipt.status is not ToolActionReceiptStatus.IN_PROGRESS
+        ):
+            raise ToolError("approval does not match this exact agent action")
+        decision = self.store.get_approval_decision(approval.id)
+        if (
+            approval.status is not ApprovalStatus.APPROVED
+            or decision is None
+            or decision.approval_id != approval.id
+            or not decision.approved
+        ):
+            raise ToolError("approval is not valid for execution")
 
 
 class ApplicationService:
@@ -54,6 +213,8 @@ class ApplicationService:
         self._cancellations: dict[str, asyncio.Event] = {}
         self._approval_futures: dict[tuple[str, str], asyncio.Future[bool]] = {}
         self._approval_details: dict[tuple[str, str], dict[str, str]] = {}
+        self._active_session_runs: set[str] = set()
+        self._session_run_guard = threading.Lock()
 
     def initialize(self) -> None:
         self.store.initialize()
@@ -168,9 +329,15 @@ class ApplicationService:
     def get_session(self, session_id: str) -> Session:
         return self.store.get_session(session_id)
 
-    def list_events(self, session_id: str) -> list[Event]:
+    def list_events(
+        self,
+        session_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 1000,
+    ) -> list[Event]:
         self.get_session(session_id)
-        return self.store.list_events(session_id)
+        return self.store.list_events(session_id, after_cursor=after_cursor, limit=limit)
 
     # Workflow persistence
 
@@ -194,8 +361,18 @@ class ApplicationService:
     def append_workflow_event(self, event: WorkflowRunEvent) -> WorkflowRunEvent:
         return self.store.append_workflow_event(event)
 
-    def list_workflow_events(self, workflow_run_id: str) -> list[WorkflowRunEvent]:
-        return self.store.list_workflow_events(workflow_run_id)
+    def list_workflow_events(
+        self,
+        workflow_run_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 1000,
+    ) -> list[WorkflowRunEvent]:
+        return self.store.list_workflow_events(
+            workflow_run_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
 
     def cancel_workflow_run(self, workflow_run_id: str) -> bool:
         run = self.get_workflow_run(workflow_run_id)
@@ -305,6 +482,22 @@ class ApplicationService:
 
     def update_evaluation_run(self, evaluation_run_id: str, **changes: Any) -> EvaluationRun:
         return self.store.update_evaluation_run(evaluation_run_id, **changes)
+
+    def append_evaluation_event(self, event: EvaluationRunEvent) -> EvaluationRunEvent:
+        return self.store.append_evaluation_event(event)
+
+    def list_evaluation_events(
+        self,
+        evaluation_run_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 1000,
+    ) -> list[EvaluationRunEvent]:
+        return self.store.list_evaluation_events(
+            evaluation_run_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
 
     def append_evaluation_result(self, result: EvaluationResult) -> EvaluationResult:
         return self.store.append_evaluation_result(result)
@@ -771,6 +964,29 @@ class ApplicationService:
 
     # Runtime control
 
+    def admit_session_run(self, session_id: str) -> bool:
+        """Atomically reserve the only in-process run slot for one Session."""
+
+        self.get_session(session_id)
+        with self._session_run_guard:
+            if session_id in self._active_session_runs:
+                return False
+            pending = self.store.list_approval_requests(
+                session_id,
+                status=ApprovalStatus.PENDING,
+            )
+            if pending:
+                raise ConflictError(
+                    "session has a pending durable approval; decide or reconcile it "
+                    "before starting another run"
+                )
+            self._active_session_runs.add(session_id)
+            return True
+
+    def release_session_run(self, session_id: str) -> None:
+        with self._session_run_guard:
+            self._active_session_runs.discard(session_id)
+
     async def run_session(
         self,
         session_id: str,
@@ -778,23 +994,73 @@ class ApplicationService:
         user_message: str,
         workspace: str | Path,
         approval_callback: ApprovalCallback | None = None,
+        _admission_granted: bool = False,
     ) -> AsyncIterator[RuntimeEvent]:
         session = self.get_session(session_id)
-        agent = self.factory.create_agent(session.id)
-        self.store.update_agent_status(agent.id, AgentStatus.RUNNING)
-        cancellation = asyncio.Event()
-        self._cancellations[session.id] = cancellation
-        loop = AgentLoop(
-            self.provider,
-            WorkspaceTools(
+        if not _admission_granted:
+            try:
+                admitted = self.admit_session_run(session.id)
+            except ConflictError as exc:
+                yield RuntimeEvent(
+                    event_type="agent.stream_error",
+                    turn=0,
+                    payload={
+                        "error": {
+                            "code": "session_pending_approval",
+                            "message": str(exc),
+                            "retryable": False,
+                            "recovery": "manual_reconcile",
+                        }
+                    },
+                )
+                return
+            if not admitted:
+                yield RuntimeEvent(
+                    event_type="agent.stream_error",
+                    turn=0,
+                    payload={
+                        "error": {
+                            "code": "session_run_conflict",
+                            "message": "session already has an active run",
+                            "retryable": True,
+                            "recovery": "retry_later",
+                        }
+                    },
+                )
+                return
+        try:
+            agent = self.factory.create_agent(session.id)
+            self.store.update_agent_status(agent.id, AgentStatus.RUNNING)
+            cancellation = asyncio.Event()
+            self._cancellations[session.id] = cancellation
+            tools = WorkspaceTools(
                 workspace,
                 policy=session.role_snapshot.tool_policy,
-            ),
-        )
+            )
+            loop = AgentLoop(
+                self.provider,
+                tools,
+                action_gateway=_PersistentActionGateway(
+                    store=self.store,
+                    session_id=session.id,
+                    agent_id=agent.id,
+                    tools=tools,
+                ),
+            )
+        except BaseException:
+            self.release_session_run(session.id)
+            raise
 
         async def wait_for_approval(tool_call_id: str, category: str, detail: str) -> bool:
             if approval_callback is not None:
-                return await approval_callback(tool_call_id, category, detail)
+                approved = await approval_callback(tool_call_id, category, detail)
+                self.store.decide_approval(
+                    session.id,
+                    tool_call_id,
+                    approved=approved,
+                    decided_by="callback",
+                )
+                return approved
             key = (session.id, tool_call_id)
             future = self._approval_futures.get(key)
             if future is None:
@@ -804,6 +1070,9 @@ class ApplicationService:
                     "category": category,
                     "detail": detail,
                 }
+            durable = self.store.get_approval_request(session.id, tool_call_id)
+            if durable.status is not ApprovalStatus.PENDING and not future.done():
+                future.set_result(durable.status is ApprovalStatus.APPROVED)
             return await future
 
         iterator = loop.run(
@@ -823,7 +1092,7 @@ class ApplicationService:
                         turn=0,
                         payload={"timeout_seconds": (session.role_snapshot.budget.timeout_seconds)},
                     )
-                    self._persist_runtime_event(session.id, agent.id, timeout_event)
+                    timeout_event = self._persist_runtime_event(session.id, agent.id, timeout_event)
                     yield timeout_event
                     final_status = AgentStatus.TIMED_OUT
                     break
@@ -857,7 +1126,7 @@ class ApplicationService:
                         turn=0,
                         payload={"timeout_seconds": (session.role_snapshot.budget.timeout_seconds)},
                     )
-                    self._persist_runtime_event(session.id, agent.id, timeout_event)
+                    timeout_event = self._persist_runtime_event(session.id, agent.id, timeout_event)
                     yield timeout_event
                     final_status = AgentStatus.TIMED_OUT
                     break
@@ -870,7 +1139,7 @@ class ApplicationService:
                         turn=0,
                         payload={},
                     )
-                    self._persist_runtime_event(session.id, agent.id, cancel_event)
+                    cancel_event = self._persist_runtime_event(session.id, agent.id, cancel_event)
                     yield cancel_event
                     final_status = AgentStatus.CANCELLED
                     break
@@ -884,14 +1153,18 @@ class ApplicationService:
                 if runtime_event.event_type == "tool.approval_required":
                     tool_call_id = str(runtime_event.payload["tool_call_id"])
                     key = (session.id, tool_call_id)
-                    if key not in self._approval_futures:
+                    approval = self.store.get_approval_request(session.id, tool_call_id)
+                    if (
+                        approval.status is ApprovalStatus.PENDING
+                        and key not in self._approval_futures
+                    ):
                         self._approval_futures[key] = asyncio.get_running_loop().create_future()
                         self._approval_details[key] = {
                             "category": str(runtime_event.payload["category"]),
                             "detail": str(runtime_event.payload["detail"]),
                         }
 
-                self._persist_runtime_event(session.id, agent.id, runtime_event)
+                runtime_event = self._persist_runtime_event(session.id, agent.id, runtime_event)
                 yield runtime_event
         except asyncio.CancelledError:
             final_status = AgentStatus.FAILED
@@ -902,14 +1175,17 @@ class ApplicationService:
                 turn=0,
                 payload={"error_type": type(exc).__name__},
             )
-            self._persist_runtime_event(session.id, agent.id, failure_event)
+            failure_event = self._persist_runtime_event(session.id, agent.id, failure_event)
             yield failure_event
             final_status = AgentStatus.FAILED
         finally:
-            await iterator.aclose()
-            self.store.update_agent_status(agent.id, final_status)
-            self._cancellations.pop(session.id, None)
-            self._clear_session_approvals(session.id)
+            try:
+                await iterator.aclose()
+                self.store.update_agent_status(agent.id, final_status)
+            finally:
+                self._cancellations.pop(session.id, None)
+                self._clear_session_approvals(session.id)
+                self.release_session_run(session.id)
 
     def cancel_session(self, session_id: str) -> bool:
         self.get_session(session_id)
@@ -920,31 +1196,79 @@ class ApplicationService:
         return True
 
     def submit_approval(self, session_id: str, tool_call_id: str, *, approved: bool) -> bool:
+        result = self.decide_approval(
+            session_id,
+            tool_call_id,
+            approved=approved,
+        )
+        return bool(result["accepted"])
+
+    def decide_approval(
+        self,
+        session_id: str,
+        tool_call_id: str,
+        *,
+        approved: bool,
+    ) -> dict[str, object]:
         self.get_session(session_id)
+        request, decision, changed = self.store.decide_approval(
+            session_id,
+            tool_call_id,
+            approved=approved,
+        )
         key = (session_id, tool_call_id)
         future = self._approval_futures.get(key)
-        if future is None or future.done():
-            return False
-        future.set_result(approved)
-        return True
+        future_available = future is not None and not future.done()
+        continuation_available = future_available or session_id in self._cancellations
+        if future_available:
+            assert future is not None
+            future.set_result(approved)
+        return {
+            "accepted": True,
+            "changed": changed,
+            "approved": decision.approved,
+            "status": request.status.value,
+            "approval_id": request.id,
+            "continuation_available": continuation_available,
+        }
 
-    def list_pending_approvals(self, session_id: str) -> list[dict[str, str]]:
+    def list_pending_approvals(self, session_id: str) -> list[dict[str, object]]:
         self.get_session(session_id)
-        pending: list[dict[str, str]] = []
-        for (candidate_session_id, tool_call_id), details in self._approval_details.items():
-            if candidate_session_id == session_id:
-                pending.append({"tool_call_id": tool_call_id, **details})
-        return pending
+        approvals = self.store.list_approval_requests(
+            session_id,
+            status=ApprovalStatus.PENDING,
+        )
+        return [
+            {
+                "approval_id": approval.id,
+                "tool_call_id": approval.tool_call_id,
+                "category": approval.category,
+                "detail": approval.detail_summary,
+                "action_hash": approval.action_hash,
+                "status": approval.status.value,
+                "requested_at": approval.requested_at.isoformat(),
+                "expires_at": approval.expires_at.isoformat(),
+                "continuation_available": (
+                    (session_id, approval.tool_call_id) in self._approval_futures
+                    and not self._approval_futures[(session_id, approval.tool_call_id)].done()
+                ),
+            }
+            for approval in approvals
+        ]
 
-    def _persist_runtime_event(self, session_id: str, agent_id: str, event: RuntimeEvent) -> None:
-        self.store.append_event(
+    def _persist_runtime_event(
+        self, session_id: str, agent_id: str, event: RuntimeEvent
+    ) -> RuntimeEvent:
+        sanitized_event = event.model_copy(update={"payload": redact_public_data(event.payload)})
+        persisted = self.store.append_event(
             Event(
                 session_id=session_id,
                 agent_id=agent_id,
-                event_type=event.event_type,
-                payload={"turn": event.turn, **event.payload},
+                event_type=sanitized_event.event_type,
+                payload={"turn": sanitized_event.turn, **sanitized_event.payload},
             )
         )
+        return sanitized_event.model_copy(update={"cursor": persisted.cursor})
 
     def _clear_session_approvals(self, session_id: str) -> None:
         keys = [key for key in self._approval_futures if key[0] == session_id]

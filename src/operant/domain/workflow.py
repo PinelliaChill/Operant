@@ -96,6 +96,7 @@ class WorkflowRunEvent(BaseModel):
     id: str = Field(default_factory=new_workflow_event_id)
     workflow_run_id: str
     sequence: int | None = Field(default=None, ge=1)
+    cursor: int | None = Field(default=None, ge=1)
     role: str
     session_id: str | None = None
     event_type: str = Field(min_length=1, max_length=100)

@@ -28,8 +28,6 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from operant.application.workflow import SequentialCodingWorkflow
 from operant.domain.evaluation import (
     ArtifactWorkspace,
@@ -43,6 +41,7 @@ from operant.domain.evaluation import (
     EvaluationResultStatus,
     EvaluationRoleSnapshot,
     EvaluationRun,
+    EvaluationRunEvent,
     EvaluationRunStatus,
     EvaluationSuite,
     EvaluationVariant,
@@ -127,17 +126,16 @@ def _within(path: Path, root: Path) -> bool:
 def _is_excluded(relative: Path, *, is_directory: bool) -> bool:
     """Return whether an item is excluded from an isolated evaluation copy."""
 
-    name = relative.name
-    lowered = name.lower()
-    if any(part in _EXCLUDED_DIRECTORY_NAMES for part in relative.parts):
+    lowered = relative.name.lower()
+    if any(part.lower() in _EXCLUDED_DIRECTORY_NAMES for part in relative.parts):
         return True
-    if name in _EXCLUDED_FILE_NAMES or lowered in _EXCLUDED_FILE_NAMES:
+    if lowered in _EXCLUDED_FILE_NAMES:
         return True
-    if name.startswith(".env."):
+    if lowered.startswith(".env."):
         return True
     if lowered.endswith((".pyc", ".pyo")):
         return True
-    return is_directory and name in _EXCLUDED_DIRECTORY_NAMES
+    return is_directory and lowered in _EXCLUDED_DIRECTORY_NAMES
 
 
 def _safe_relative_path(path: Path) -> str:
@@ -878,17 +876,6 @@ def role_snapshot_matches(expected: EvaluationRoleSnapshot, actual: RoleSnapshot
     )
 
 
-class EvaluationRunEvent(BaseModel):
-    """Small streaming event used by CLI/API without becoming persistence authority."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    evaluation_run_id: str
-    event_type: str
-    result_id: str | None = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
 class EvaluationService(Protocol):
     """The narrow service surface consumed by the runner.
 
@@ -905,6 +892,8 @@ class EvaluationService(Protocol):
         evaluation_run_id: str,
         **changes: Any,
     ) -> EvaluationRun: ...
+
+    def append_evaluation_event(self, event: EvaluationRunEvent) -> EvaluationRunEvent: ...
 
     def append_evaluation_result(self, result: EvaluationResult) -> EvaluationResult: ...
 
@@ -1016,13 +1005,15 @@ class EvaluationRunner:
             started_at=_utc_now(),
             last_error_type=None,
         )
-        yield EvaluationRunEvent(
-            evaluation_run_id=run.id,
-            event_type="evaluation.run_started",
-            payload={
-                "execution_strategy": "sequential",
-                "expected_results": suite.expanded_result_count,
-            },
+        yield self.service.append_evaluation_event(
+            EvaluationRunEvent(
+                evaluation_run_id=run.id,
+                event_type="evaluation.run_started",
+                payload={
+                    "execution_strategy": "sequential",
+                    "expected_results": suite.expanded_result_count,
+                },
+            )
         )
 
         terminal = False
@@ -1054,15 +1045,17 @@ class EvaluationRunner:
                 ),
             )
             terminal = True
-            yield EvaluationRunEvent(
-                evaluation_run_id=run.id,
-                event_type="evaluation.run_finished",
-                payload={
-                    "status": final_status.value,
-                    "result_count": completed_run.aggregate.result_count
-                    if completed_run.aggregate is not None
-                    else 0,
-                },
+            yield self.service.append_evaluation_event(
+                EvaluationRunEvent(
+                    evaluation_run_id=run.id,
+                    event_type="evaluation.run_finished",
+                    payload={
+                        "status": final_status.value,
+                        "result_count": completed_run.aggregate.result_count
+                        if completed_run.aggregate is not None
+                        else 0,
+                    },
+                )
             )
         except asyncio.CancelledError:
             self._interrupt_pending_results(run)
@@ -1131,11 +1124,13 @@ class EvaluationRunner:
                 created_at=result_created_at,
             )
         )
-        yield EvaluationRunEvent(
-            evaluation_run_id=run.id,
-            result_id=pending.id,
-            event_type="evaluation.result_started",
-            payload={"case_id": case.id, "variant_id": variant.id, "repetition": repetition},
+        yield self.service.append_evaluation_event(
+            EvaluationRunEvent(
+                evaluation_run_id=run.id,
+                result_id=pending.id,
+                event_type="evaluation.result_started",
+                payload={"case_id": case.id, "variant_id": variant.id, "repetition": repetition},
+            )
         )
 
         started = time.monotonic()
@@ -1241,15 +1236,17 @@ class EvaluationRunner:
             )
 
         persisted = self._update_pending_result(pending, result)
-        yield EvaluationRunEvent(
-            evaluation_run_id=run.id,
-            result_id=persisted.id,
-            event_type="evaluation.result_finished",
-            payload={
-                "status": persisted.status.value,
-                "verification_count": len(persisted.verification),
-                "changed_path_count": len(persisted.changed_paths),
-            },
+        yield self.service.append_evaluation_event(
+            EvaluationRunEvent(
+                evaluation_run_id=run.id,
+                result_id=persisted.id,
+                event_type="evaluation.result_finished",
+                payload={
+                    "status": persisted.status.value,
+                    "verification_count": len(persisted.verification),
+                    "changed_path_count": len(persisted.changed_paths),
+                },
+            )
         )
 
     def _empty_runtime(self, variant: EvaluationVariant) -> _RuntimeFacts:

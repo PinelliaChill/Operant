@@ -129,8 +129,20 @@ async def test_runner_isolates_secrets_and_captures_memory_metrics_and_cost(tmp_
     source = tmp_path / "fixture"
     _fixture(source)
     (source / ".env").write_text("OPERANT_KEY=do-not-copy", encoding="utf-8")
+    (source / ".ENV.PRODUCTION").write_text("OPERANT_KEY=uppercase", encoding="utf-8")
     (source / "secrets.json").write_text('{"token":"do-not-copy"}', encoding="utf-8")
-    (source / ".venv").mkdir()
+    lowercase = source / "lowercase"
+    (lowercase / ".venv").mkdir(parents=True)
+    uppercase_runtime_names = (
+        ".OPERANT",
+        ".VENV",
+        "NODE_MODULES",
+        ".PYTEST_CACHE",
+    )
+    for name in uppercase_runtime_names:
+        directory = source / name
+        directory.mkdir()
+        (directory / "must-not-copy.txt").write_text("local data", encoding="utf-8")
     external = tmp_path / "outside.txt"
     external.write_text("outside", encoding="utf-8")
     os.symlink(external, source / "outside_link")
@@ -223,8 +235,11 @@ async def test_runner_isolates_secrets_and_captures_memory_metrics_and_cost(tmp_
     artifact = Path(on.artifact_workspace.local_workspace_path or "")
     assert artifact.is_dir()
     assert not (artifact / ".env").exists()
+    assert not (artifact / ".ENV.PRODUCTION").exists()
     assert not (artifact / "secrets.json").exists()
-    assert not (artifact / ".venv").exists()
+    assert not (artifact / "lowercase" / ".venv").exists()
+    for name in uppercase_runtime_names:
+        assert not (artifact / name).exists()
     assert not (artifact / "outside_link").exists()
     assert (source / ".env").read_text(encoding="utf-8") == "OPERANT_KEY=do-not-copy"
     assert any(fact.name == "skipped_external_symlink_count" for fact in on.execution_facts)

@@ -693,6 +693,24 @@ class EvaluationRun(BaseModel):
         return self
 
 
+class EvaluationRunEvent(BaseModel):
+    """Immutable evaluation event persisted before it is exposed to a client."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(
+        default_factory=lambda: _new_id("evaluation_event"),
+        min_length=1,
+        max_length=200,
+    )
+    evaluation_run_id: str = Field(min_length=1, max_length=200)
+    cursor: int | None = Field(default=None, ge=1)
+    event_type: str = Field(min_length=1, max_length=100)
+    result_id: str | None = Field(default=None, max_length=200)
+    payload: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class EvaluationMetrics(BaseModel):
     """Metrics recorded as facts; every unavailable value remains ``None``."""
 

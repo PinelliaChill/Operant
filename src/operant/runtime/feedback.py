@@ -29,8 +29,12 @@ def is_test_command(argv: Sequence[str]) -> bool:
     )
 
 
-def test_failure_feedback(result: Mapping[str, Any]) -> dict[str, Any] | None:
-    argv = result.get("argv")
+def test_failure_feedback(
+    result: Mapping[str, Any],
+    *,
+    argv: Sequence[str] | None = None,
+) -> dict[str, Any] | None:
+    argv = result.get("argv") if argv is None else argv
     exit_code = result.get("exit_code")
     if (
         not isinstance(argv, list)
@@ -48,7 +52,10 @@ def test_failure_feedback(result: Mapping[str, Any]) -> dict[str, Any] | None:
     signature_input = "\0".join([*argv, str(exit_code), normalized])
     signature = hashlib.sha256(signature_input.encode("utf-8")).hexdigest()[:16]
     return {
-        "command": argv,
+        "command": {
+            "executable": Path(argv[0]).name,
+            "argument_count": len(argv),
+        },
         "exit_code": exit_code,
         "summary": summary,
         "signature": signature,

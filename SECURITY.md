@@ -1,6 +1,6 @@
 # Operant 安全边界
 
-> 最后更新：2026-08-25
+> 最后更新：2026-08-27
 
 Operant 会把模型输出视为不可信输入。模型只能请求由当前 `RoleSnapshot` 的 Tool Policy
 允许的工具；Runtime 和工具层会再次校验，不把“模型遵守提示词”当作安全边界。
@@ -16,10 +16,16 @@ Operant 会把模型输出视为不可信输入。模型只能请求由当前 `R
 
 ## Docker Runner 的边界
 
-Docker Runner 不直接挂载用户 workspace，而是先创建过滤后的临时快照。快照排除：
+Docker Runner 不直接挂载用户 workspace，而是先创建过滤后的临时快照。文件名匹配不区分大小写，
+快照排除：
 
-- `.git`、`.env`、`.env.local`、`secrets.json`；
+- `.git`、`.env` 与 `.env.*`；
+- `.credentials`、`.git-credentials`、`.netrc`、`.npmrc`、`.pypirc`；
+- `credentials.json`、`service-account.json`、`service_account.json`、`secrets.json/yaml/yml`；
+- `id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519` 及 `.key`、`.pem`、`.p12`、`.pfx` 文件；
 - `.operant`、`.venv`、`node_modules`、Python/pytest 缓存。
+
+因此 `.ENV`、`.NPMRC`、`ID_RSA`、`CREDENTIALS.JSON` 等大小写变体也会按同一规则排除。
 
 容器使用以下固定限制：
 
@@ -46,8 +52,11 @@ Docker 不能替代宿主机隔离：Docker daemon、镜像供应链、内核漏
 - `sudo` / `doas` 等特权命令；
 - Shell 解释器调用，防止以 `curl | sh` 等方式绕过无 Shell 的工具接口。
 
-文件工具在解析路径后仍要求目标位于给定 workspace 内，并拒绝访问敏感文件和 Git 元数据。该
-检查不等于对任意宿主命令参数的完整约束，所以不可信任务必须选择 Docker Runner。
+文件工具在解析路径后仍要求目标位于给定 workspace 内，并使用不区分大小写的规则拒绝访问上述
+敏感文件、私钥/证书后缀、Git 元数据和 `.operant` 本地权威运行数据。`.venv`、`node_modules` 与
+普通缓存只从 Docker/Evaluation 隔离副本排除，不作为文件工具的通用禁读目录，避免误伤用户明确放在
+workspace 内的依赖源码；该检查也不等于对任意宿主命令参数的完整约束，所以不可信任务必须选择
+Docker Runner。
 
 ## 失败、取消与审计
 

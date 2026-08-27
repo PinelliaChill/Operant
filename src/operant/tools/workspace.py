@@ -8,12 +8,13 @@ from typing import Any
 
 from operant.domain.messages import ToolDefinition
 from operant.domain.models import CommandRunnerType, ToolPolicy
+from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
 from operant.tools.execution import (
-    PROTECTED_WORKSPACE_NAMES,
     CommandRunner,
     CommandRunnerError,
     DockerCommandRunner,
     HostCommandRunner,
+    is_protected_workspace_name,
 )
 
 
@@ -165,7 +166,85 @@ class WorkspaceTools:
             )
         else:
             raise ToolError(f"unknown tool: {name}")
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(
+            redact_public_data(result, max_chars=self.output_limit),
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def is_side_effecting(name: str) -> bool:
+        return name in {"apply_patch", "run_command"}
+
+    def action_hash(self, name: str, arguments: dict[str, Any]) -> str:
+        """Hash the fully normalized action; callers persist only the digest."""
+
+        if not self.is_side_effecting(name):
+            raise ValueError(f"tool is not side effecting: {name}")
+        if name == "apply_patch":
+            normalized_arguments: dict[str, Any] = {
+                "target": str(self._resolve(str(arguments["path"]), may_not_exist=True)),
+                "old_text": str(arguments["old_text"]),
+                "new_text": str(arguments["new_text"]),
+            }
+        else:
+            raw_argv = arguments["argv"]
+            if not isinstance(raw_argv, list) or not all(
+                isinstance(item, str) for item in raw_argv
+            ):
+                raise ToolError("argv must be a list of strings")
+            normalized_arguments = {
+                "argv": list(raw_argv),
+                "cwd": str(
+                    self._resolve(
+                        str(arguments.get("cwd", ".")),
+                        allow_directory=True,
+                    )
+                ),
+                "timeout_seconds": int(arguments.get("timeout_seconds", 60)),
+            }
+        return canonical_action_hash(
+            {
+                "kind": "tool_action",
+                "tool": name,
+                "arguments": normalized_arguments,
+                "workspace": str(self.root),
+                "policy": self.policy.model_dump(mode="json"),
+                "output_limit": self.output_limit,
+            }
+        )
+
+    def safe_action_summary(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        category: str,
+    ) -> str:
+        """Return an approval preview that never includes argument values."""
+
+        if name == "run_command":
+            argv = arguments.get("argv")
+            executable = "unknown"
+            count = 0
+            if isinstance(argv, list):
+                count = len(argv)
+                if argv and isinstance(argv[0], str):
+                    executable = Path(argv[0]).name
+            return (
+                f"run_command category={category}; executable={executable}; argument_count={count}"
+            )
+        return f"{name} category={category}; workspace-scoped action"
+
+    def required_approval_category(self, name: str, arguments: dict[str, Any]) -> str | None:
+        if name != "run_command":
+            return None
+        raw_argv = arguments.get("argv")
+        if not isinstance(raw_argv, list) or not all(isinstance(item, str) for item in raw_argv):
+            raise ToolError("argv must be a list of strings")
+        category = self._approval_category(raw_argv)
+        if category is not None and category in self.policy.approval_required:
+            return category
+        return None
 
     async def git_diff(self, *, staged: bool = False) -> dict[str, Any]:
         argv = ["git", "diff", "--no-ext-diff"]
@@ -211,10 +290,19 @@ class WorkspaceTools:
         matches: list[dict[str, Any]] = []
         candidates = start.rglob("*") if start.is_dir() else (start,)
         for candidate in candidates:
-            if not candidate.is_file() or self._is_protected(candidate):
+            try:
+                resolved_candidate = candidate.resolve(strict=True)
+            except (OSError, RuntimeError):
+                # Broken links and symlink loops are not searchable files.
+                continue
+            if (
+                self._is_protected(candidate)
+                or self._is_protected(resolved_candidate)
+                or not resolved_candidate.is_file()
+            ):
                 continue
             try:
-                lines = candidate.read_text(encoding="utf-8").splitlines()
+                lines = resolved_candidate.read_text(encoding="utf-8").splitlines()
             except (OSError, UnicodeDecodeError):
                 continue
             for line_number, line in enumerate(lines, start=1):
@@ -267,7 +355,14 @@ class WorkspaceTools:
             and category in self.policy.approval_required
             and category not in approved_categories
         ):
-            raise ApprovalRequired(category, " ".join(argv))
+            raise ApprovalRequired(
+                category,
+                self.safe_action_summary(
+                    "run_command",
+                    {"argv": list(argv), "cwd": cwd, "timeout_seconds": timeout_seconds},
+                    category=category,
+                ),
+            )
 
         command_cwd = self._resolve(cwd, allow_directory=True)
         if not command_cwd.is_dir():
@@ -282,9 +377,12 @@ class WorkspaceTools:
                 output_limit=self.output_limit,
             )
         except CommandRunnerError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ToolError(
+                redact_public_text(str(exc), max_chars=max(self.output_limit, 200))
+            ) from exc
         return {
-            "argv": list(result.argv),
+            "executable": Path(result.argv[0]).name,
+            "argument_count": len(result.argv),
             "exit_code": result.exit_code,
             "stdout": result.stdout,
             "stdout_truncated": result.stdout_truncated,
@@ -318,7 +416,7 @@ class WorkspaceTools:
             relative = path.relative_to(self.root)
         except ValueError:
             return True
-        return any(part in PROTECTED_WORKSPACE_NAMES for part in relative.parts)
+        return any(is_protected_workspace_name(part) for part in relative.parts)
 
     def _runner_for_policy(self) -> CommandRunner:
         execution_policy = self.policy.command_execution_policy

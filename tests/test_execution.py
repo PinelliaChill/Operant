@@ -70,18 +70,40 @@ def test_docker_snapshot_excludes_secrets_and_local_runtime_data(tmp_path: Path)
     source.mkdir()
     (source / "visible.py").write_text("answer = 42\n", encoding="utf-8")
     (source / ".env").write_text("PRIVATE=value\n", encoding="utf-8")
+    (source / ".ENV").write_text("PRIVATE=uppercase\n", encoding="utf-8")
+    (source / ".NPMRC").write_text("TOKEN=uppercase\n", encoding="utf-8")
+    (source / "ID_RSA").write_text("private key\n", encoding="utf-8")
+    (source / "CREDENTIALS.JSON").write_text("{}\n", encoding="utf-8")
     (source / ".git").mkdir()
     (source / ".git" / "config").write_text("private git metadata\n", encoding="utf-8")
-    (source / ".operant").mkdir()
-    (source / ".operant" / "runtime.sqlite3").write_text("runtime data\n", encoding="utf-8")
+    lowercase = source / "lowercase"
+    (lowercase / ".operant").mkdir(parents=True)
+    (lowercase / ".operant" / "runtime.sqlite3").write_text("runtime data\n", encoding="utf-8")
+    uppercase_runtime_names = (
+        ".OPERANT",
+        ".VENV",
+        "NODE_MODULES",
+        "__PYCACHE__",
+        ".PYTEST_CACHE",
+    )
+    for name in uppercase_runtime_names:
+        directory = source / name
+        directory.mkdir()
+        (directory / "must-not-copy.txt").write_text("local data\n", encoding="utf-8")
     snapshot = tmp_path / "snapshot"
 
     DockerCommandRunner._copy_workspace_snapshot(source, snapshot)
 
     assert (snapshot / "visible.py").is_file()
     assert not (snapshot / ".env").exists()
+    assert not (snapshot / ".ENV").exists()
+    assert not (snapshot / ".NPMRC").exists()
+    assert not (snapshot / "ID_RSA").exists()
+    assert not (snapshot / "CREDENTIALS.JSON").exists()
     assert not (snapshot / ".git").exists()
-    assert not (snapshot / ".operant").exists()
+    assert not (snapshot / "lowercase" / ".operant").exists()
+    for name in uppercase_runtime_names:
+        assert not (snapshot / name).exists()
 
 
 @pytest.mark.asyncio
