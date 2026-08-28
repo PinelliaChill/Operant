@@ -5,6 +5,7 @@ import json
 import re
 import shlex
 from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from operant.domain.workflow import (
     WorkflowRunStatus,
     WorkflowStage,
 )
+from operant.persistence.sqlite import ConflictError
 
 
 class WorkflowEvent(BaseModel):
@@ -88,6 +90,9 @@ class RoleRunCapture:
         elif event_type == "agent.failed":
             self.status = AgentStatus.FAILED
             self.failure_reason = str(payload.get("error_type", "agent failure"))
+        elif event_type == "budget.exhausted":
+            self.status = AgentStatus.FAILED
+            self.failure_reason = f"budget exhausted: {payload.get('kind', 'unknown')}"
 
     def result(self) -> WorkflowSubtaskResult:
         status = self.status
@@ -203,31 +208,73 @@ class SequentialCodingWorkflow:
                 resumed_from_id=resumed_from_id,
             )
         )
-        self.service.update_workflow_run(
-            run.id,
-            status=WorkflowRunStatus.RUNNING,
-            current_stage=WorkflowStage.CREATED,
-        )
+        execution_lease = self.service.acquire_workflow_execution_lease(run.id)
+        if execution_lease is None:
+            raise ConflictError("workflow already has an active coordinator")
+        try:
+            self.service.activate_workflow_run(execution_lease)
+        except BaseException:
+            self.service.release_workflow_execution_lease(execution_lease)
+            raise
 
         terminal = False
+        guard_lost = asyncio.Event()
+        steps = self._run_steps(
+            workflow_run_id=run.id,
+            task=task,
+            workspace=workspace_path,
+            planner_role_id=planner_role_id,
+            coder_role_id=coder_role_id,
+            reviewer_role_id=reviewer_role_id,
+            explorer_role_ids=explorer_role_ids,
+            max_parallel_explorers=max_parallel_explorers,
+            max_rework_rounds=max_rework_rounds,
+            main_role_id=main_role_id,
+            checkpoint_results=_checkpoint_results,
+            resumed_from_id=resumed_from_id,
+            memory_enabled=memory_enabled,
+            memory_project_scope=memory_scope_path,
+        )
+
+        async def heartbeat_execution_lease() -> None:
+            current = execution_lease
+            while True:
+                await asyncio.sleep(self.service.workflow_execution_heartbeat_seconds)
+                renewed = self.service.renew_workflow_execution_lease(current)
+                if renewed is None:
+                    guard_lost.set()
+                    return
+                current = renewed
+
+        heartbeat = asyncio.create_task(heartbeat_execution_lease())
+        next_event: asyncio.Task[WorkflowEvent] | None = None
+        lost_waiter: asyncio.Task[bool] | None = None
         try:
-            async for raw_event in self._run_steps(
-                task=task,
-                workspace=workspace_path,
-                planner_role_id=planner_role_id,
-                coder_role_id=coder_role_id,
-                reviewer_role_id=reviewer_role_id,
-                explorer_role_ids=explorer_role_ids,
-                max_parallel_explorers=max_parallel_explorers,
-                max_rework_rounds=max_rework_rounds,
-                main_role_id=main_role_id,
-                checkpoint_results=_checkpoint_results,
-                resumed_from_id=resumed_from_id,
-                memory_enabled=memory_enabled,
-                memory_project_scope=memory_scope_path,
-            ):
+            while True:
+                next_event = asyncio.create_task(anext(steps))
+                lost_waiter = asyncio.create_task(guard_lost.wait())
+                done, _ = await asyncio.wait(
+                    {next_event, lost_waiter},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if lost_waiter in done and lost_waiter.result():
+                    if not next_event.done():
+                        next_event.cancel()
+                    await asyncio.gather(next_event, return_exceptions=True)
+                    self.service.cancel_workflow_children(run.id)
+                    break
+                lost_waiter.cancel()
+                await asyncio.gather(lost_waiter, return_exceptions=True)
+                try:
+                    raw_event = next_event.result()
+                except StopAsyncIteration:
+                    break
                 if self.service.get_workflow_run(run.id).status is WorkflowRunStatus.CANCELLED:
                     terminal = True
+                    break
+                if not self.service.verify_workflow_execution_lease(execution_lease):
+                    guard_lost.set()
+                    self.service.cancel_workflow_children(run.id)
                     break
                 if raw_event.event_type == "workflow.completed" and persist_memory_candidates:
                     for memory_event in self._knowledge_candidate_events(run, raw_event):
@@ -240,16 +287,38 @@ class SequentialCodingWorkflow:
                         yield persisted_memory_event
                 event = raw_event.model_copy(update={"workflow_run_id": run.id})
                 event = self._persist_workflow_event(run.id, event)
-                terminal = self._advance_workflow_run(run.id, event) or terminal
+                transition_terminal = self._advance_workflow_run(run.id, event)
+                terminal = transition_terminal or terminal
                 yield event
+                if transition_terminal:
+                    break
         finally:
+            for waiter in (next_event, lost_waiter):
+                if waiter is not None and not waiter.done():
+                    waiter.cancel()
+            await asyncio.gather(
+                *(waiter for waiter in (next_event, lost_waiter) if waiter is not None),
+                return_exceptions=True,
+            )
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+            await steps.aclose()
+            if guard_lost.is_set():
+                self.service.cancel_workflow_children(run.id)
+                self.service.interrupt_workflow_after_guard_loss(execution_lease)
             current = self.service.get_workflow_run(run.id)
-            if not terminal and current.status is WorkflowRunStatus.RUNNING:
-                self.service.update_workflow_run(
+            if (
+                not terminal
+                and current.status is WorkflowRunStatus.RUNNING
+                and self.service.verify_workflow_execution_lease(execution_lease)
+            ):
+                self.service.update_workflow_run_if_status(
                     run.id,
+                    expected_status=WorkflowRunStatus.RUNNING,
                     status=WorkflowRunStatus.INTERRUPTED,
                     last_error_type="stream_interrupted",
                 )
+            self.service.release_workflow_execution_lease(execution_lease)
 
     async def resume(
         self,
@@ -267,11 +336,14 @@ class SequentialCodingWorkflow:
             raise ValueError("only interrupted workflows can be resumed")
         persisted = self._workflow_history(original)
         if self._unknown_coder_outcome(original, persisted) and not allow_coder_replay:
-            self.service.update_workflow_run(
+            updated = self.service.update_workflow_run_if_status(
                 original.id,
+                expected_status=original.status,
                 status=WorkflowRunStatus.MANUAL_RECONCILE_REQUIRED,
                 last_error_type="coder_outcome_unknown",
             )
+            if updated is None:
+                raise ConflictError("workflow status changed while preparing resume")
             raise ValueError(
                 "coder outcome is unknown; inspect the workspace and resume with "
                 "allow_coder_replay=True only after reconciliation"
@@ -297,6 +369,7 @@ class SequentialCodingWorkflow:
     async def _run_steps(
         self,
         *,
+        workflow_run_id: str,
         task: str,
         workspace: str | Path,
         planner_role_id: str,
@@ -310,7 +383,7 @@ class SequentialCodingWorkflow:
         resumed_from_id: str | None = None,
         memory_enabled: bool = True,
         memory_project_scope: str | Path | None = None,
-    ) -> AsyncIterator[WorkflowEvent]:
+    ) -> AsyncGenerator[WorkflowEvent, None]:
         if not 0 <= max_rework_rounds <= 3:
             raise ValueError("max_rework_rounds must be between 0 and 3")
         self.validate_configuration(
@@ -345,6 +418,7 @@ class SequentialCodingWorkflow:
         )
         if planner_result is None:
             async for event in self._stream_role(
+                workflow_run_id=workflow_run_id,
                 message=task,
                 workspace=workspace,
                 capture=planner,
@@ -379,15 +453,19 @@ class SequentialCodingWorkflow:
                 task=task,
                 planner_output=planner.final_content,
             )
-            async for event in self._stream_parallel_readonly_roles(
-                captures=pending_explorers,
-                message=explorer_message,
-                workspace=workspace,
-                max_parallel=max_parallel_explorers,
-                memory_enabled=memory_enabled,
-                memory_project_scope=memory_project_scope,
-            ):
-                yield event
+            async with aclosing(
+                self._stream_parallel_readonly_roles(
+                    workflow_run_id=workflow_run_id,
+                    captures=pending_explorers,
+                    message=explorer_message,
+                    workspace=workspace,
+                    max_parallel=max_parallel_explorers,
+                    memory_enabled=memory_enabled,
+                    memory_project_scope=memory_project_scope,
+                )
+            ) as explorer_stream:
+                async for event in explorer_stream:
+                    yield event
         explorer_results = [capture.result() for capture in explorers]
         results.extend(explorer_results)
 
@@ -404,6 +482,7 @@ class SequentialCodingWorkflow:
                 explorer_results=explorer_results,
             )
             async for event in self._stream_role(
+                workflow_run_id=workflow_run_id,
                 message=coder_message,
                 workspace=workspace,
                 capture=coder,
@@ -430,6 +509,7 @@ class SequentialCodingWorkflow:
         )
         if reviewer_result is None:
             async for event in self._stream_role(
+                workflow_run_id=workflow_run_id,
                 message=self._reviewer_message(
                     task=task,
                     planner_output=planner.final_content,
@@ -461,6 +541,7 @@ class SequentialCodingWorkflow:
         for round_number in range(1, max_rework_rounds + 1):
             if verdict != "REWORK":
                 async for event in self._stream_completion(
+                    workflow_run_id=workflow_run_id,
                     task=task,
                     verdict=verdict,
                     results=results,
@@ -495,6 +576,7 @@ class SequentialCodingWorkflow:
                 "运行相关测试并检查 Git diff。"
             )
             async for event in self._stream_role(
+                workflow_run_id=workflow_run_id,
                 message=rework_message,
                 workspace=workspace,
                 capture=coder,
@@ -510,6 +592,7 @@ class SequentialCodingWorkflow:
 
             reviewer = RoleRunCapture(role="reviewer", role_id=reviewer_role_id)
             async for event in self._stream_role(
+                workflow_run_id=workflow_run_id,
                 message=self._reviewer_message(
                     task=task,
                     planner_output=planner.final_content,
@@ -546,6 +629,7 @@ class SequentialCodingWorkflow:
             )
             return
         async for event in self._stream_completion(
+            workflow_run_id=workflow_run_id,
             task=task,
             verdict=verdict,
             results=results,
@@ -611,6 +695,7 @@ class SequentialCodingWorkflow:
     async def _stream_parallel_readonly_roles(
         self,
         *,
+        workflow_run_id: str,
         captures: list[RoleRunCapture],
         message: str,
         workspace: str | Path,
@@ -625,6 +710,7 @@ class SequentialCodingWorkflow:
             try:
                 async with semaphore:
                     async for event in self._stream_role(
+                        workflow_run_id=workflow_run_id,
                         message=message,
                         workspace=workspace,
                         capture=capture,
@@ -655,6 +741,7 @@ class SequentialCodingWorkflow:
     async def _stream_completion(
         self,
         *,
+        workflow_run_id: str,
         task: str,
         verdict: str,
         results: list[WorkflowSubtaskResult],
@@ -678,6 +765,7 @@ class SequentialCodingWorkflow:
                     "不要修改 workspace，也不要把未验证事项描述为成功。"
                 )
                 async for event in self._stream_role(
+                    workflow_run_id=workflow_run_id,
                     message=message,
                     workspace=workspace,
                     capture=main,
@@ -697,6 +785,7 @@ class SequentialCodingWorkflow:
     async def _stream_role(
         self,
         *,
+        workflow_run_id: str,
         message: str,
         workspace: str | Path,
         capture: RoleRunCapture,
@@ -704,6 +793,15 @@ class SequentialCodingWorkflow:
         memory_project_scope: str | Path | None = None,
     ) -> AsyncGenerator[WorkflowEvent, None]:
         try:
+            if self.service.get_workflow_run(workflow_run_id).status is WorkflowRunStatus.CANCELLED:
+                capture.status = AgentStatus.CANCELLED
+                capture.failure_reason = "workflow cancelled"
+                return
+            execution_lease = self.service.admitted_workflow_execution_lease(workflow_run_id)
+            if execution_lease is None or not self.service.verify_workflow_execution_lease(
+                execution_lease
+            ):
+                raise ConflictError("workflow execution lease is expired, cancelled, or fenced")
             session = self.service.create_session(capture.role_id)
             capture.session_id = session.id
             memory_context = (
@@ -720,6 +818,8 @@ class SequentialCodingWorkflow:
                 session.id,
                 user_message=message,
                 workspace=workspace,
+                workflow_run_id=workflow_run_id,
+                workflow_execution_lease=execution_lease,
             ):
                 capture.observe(event.event_type, event.payload)
                 yield WorkflowEvent(
@@ -786,8 +886,9 @@ class SequentialCodingWorkflow:
 
     def _advance_workflow_run(self, workflow_run_id: str, event: WorkflowEvent) -> bool:
         if event.event_type == "workflow.completed":
-            self.service.update_workflow_run(
+            self.service.update_workflow_run_if_status(
                 workflow_run_id,
+                expected_status=WorkflowRunStatus.RUNNING,
                 status=WorkflowRunStatus.COMPLETED,
                 current_stage=WorkflowStage.COMPLETED,
                 final_verdict=str(event.payload.get("verdict", "")) or None,
@@ -799,8 +900,9 @@ class SequentialCodingWorkflow:
             "workflow.review_verdict_missing",
             "workflow.rework_limit_reached",
         }:
-            self.service.update_workflow_run(
+            self.service.update_workflow_run_if_status(
                 workflow_run_id,
+                expected_status=WorkflowRunStatus.RUNNING,
                 status=WorkflowRunStatus.FAILED,
                 last_error_type=event.event_type.removeprefix("workflow."),
             )
@@ -814,12 +916,14 @@ class SequentialCodingWorkflow:
         }
         stage = stage_by_role.get(event.role)
         if stage is not None:
-            self.service.update_workflow_run(
+            updated = self.service.update_workflow_run_if_status(
                 workflow_run_id,
+                expected_status=WorkflowRunStatus.RUNNING,
                 status=WorkflowRunStatus.RUNNING,
                 current_stage=stage,
                 last_error_type=None,
             )
+            return updated is None
         return False
 
     def _workflow_history(self, run: WorkflowRun) -> list[WorkflowRunEvent]:

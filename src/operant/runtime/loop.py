@@ -4,6 +4,7 @@ import json
 import time
 from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -77,6 +78,8 @@ class ActionGateway(Protocol):
         arguments: dict[str, Any],
     ) -> None: ...
 
+    def verify_execution(self) -> None: ...
+
 
 class AgentLoop:
     def __init__(
@@ -115,12 +118,49 @@ class AgentLoop:
             },
         )
         no_progress = NoProgressDetector(snapshot.budget.max_consecutive_test_failures)
+        completion_tokens_used = 0
+        cost_usd_used = Decimal(0)
+        tool_calls_used = 0
+
+        if snapshot.budget.max_cost_usd is not None and (
+            snapshot.input_usd_per_million_tokens is None
+            or snapshot.output_usd_per_million_tokens is None
+        ):
+            yield self._budget_exhausted(
+                turn=0,
+                kind="cost",
+                reason="pricing_unknown",
+                limit=snapshot.budget.max_cost_usd,
+                observed=None,
+            )
+            return
 
         for turn in range(1, snapshot.budget.max_turns + 1):
+            remaining_output_tokens = None
+            if snapshot.budget.max_output_tokens is not None:
+                remaining_output_tokens = snapshot.budget.max_output_tokens - completion_tokens_used
+                if remaining_output_tokens <= 0:
+                    yield self._budget_exhausted(
+                        turn=turn,
+                        kind="output_tokens",
+                        reason="limit_reached",
+                        limit=snapshot.budget.max_output_tokens,
+                        observed=completion_tokens_used,
+                    )
+                    return
+            request_snapshot = snapshot
+            if remaining_output_tokens is not None:
+                request_snapshot = snapshot.model_copy(
+                    update={
+                        "budget": snapshot.budget.model_copy(
+                            update={"max_output_tokens": remaining_output_tokens}
+                        )
+                    }
+                )
             model_started = time.monotonic()
             completed: ModelResponse | None = None
             async for event in self.provider.stream(
-                snapshot=snapshot,
+                snapshot=request_snapshot,
                 messages=messages,
                 tools=self.tools.definitions(),
             ):
@@ -156,6 +196,62 @@ class AgentLoop:
                 },
             )
 
+            usage = completed.usage
+            if snapshot.budget.max_output_tokens is not None:
+                if usage is None or usage.completion_tokens is None:
+                    yield self._budget_exhausted(
+                        turn=turn,
+                        kind="output_tokens",
+                        reason="usage_unknown",
+                        limit=snapshot.budget.max_output_tokens,
+                        observed=None,
+                    )
+                    return
+                completion_tokens_used += usage.completion_tokens
+                if completion_tokens_used > snapshot.budget.max_output_tokens or (
+                    completion_tokens_used == snapshot.budget.max_output_tokens
+                    and completed.tool_calls
+                ):
+                    yield self._budget_exhausted(
+                        turn=turn,
+                        kind="output_tokens",
+                        reason="limit_reached",
+                        limit=snapshot.budget.max_output_tokens,
+                        observed=completion_tokens_used,
+                    )
+                    return
+
+            if snapshot.budget.max_cost_usd is not None:
+                if usage is None or usage.prompt_tokens is None or usage.completion_tokens is None:
+                    yield self._budget_exhausted(
+                        turn=turn,
+                        kind="cost",
+                        reason="usage_unknown",
+                        limit=snapshot.budget.max_cost_usd,
+                        observed=None,
+                    )
+                    return
+                assert snapshot.input_usd_per_million_tokens is not None
+                assert snapshot.output_usd_per_million_tokens is not None
+                cost_limit_usd = Decimal(str(snapshot.budget.max_cost_usd))
+                cost_usd_used += (
+                    Decimal(usage.prompt_tokens)
+                    * Decimal(str(snapshot.input_usd_per_million_tokens))
+                    + Decimal(usage.completion_tokens)
+                    * Decimal(str(snapshot.output_usd_per_million_tokens))
+                ) / Decimal(1_000_000)
+                if cost_usd_used > cost_limit_usd or (
+                    cost_usd_used >= cost_limit_usd and completed.tool_calls
+                ):
+                    yield self._budget_exhausted(
+                        turn=turn,
+                        kind="cost",
+                        reason="limit_reached",
+                        limit=snapshot.budget.max_cost_usd,
+                        observed=float(cost_usd_used),
+                    )
+                    return
+
             if not completed.tool_calls:
                 yield RuntimeEvent(
                     event_type="agent.completed",
@@ -168,6 +264,19 @@ class AgentLoop:
                 return
 
             for call in completed.tool_calls:
+                if (
+                    snapshot.budget.max_tool_calls is not None
+                    and tool_calls_used >= snapshot.budget.max_tool_calls
+                ):
+                    yield self._budget_exhausted(
+                        turn=turn,
+                        kind="tool_calls",
+                        reason="limit_reached",
+                        limit=snapshot.budget.max_tool_calls,
+                        observed=tool_calls_used,
+                    )
+                    return
+                tool_calls_used += 1
                 tool_started = time.monotonic()
                 arguments: dict[str, Any] = {}
                 claim: ToolActionClaim | None = None
@@ -190,6 +299,11 @@ class AgentLoop:
                         is_error = claim.replay_is_error
                         event_type = "tool.failed" if is_error else "tool.completed"
                     else:
+                        if claim is not None:
+                            assert action_gateway is not None
+                            verify_execution = getattr(action_gateway, "verify_execution", None)
+                            if verify_execution is not None:
+                                verify_execution()
                         result = self._safe_tool_result(
                             await self.tools.execute(call.name, arguments)
                         )
@@ -245,6 +359,9 @@ class AgentLoop:
                                     name=call.name,
                                     arguments=arguments,
                                 )
+                                verify_execution = getattr(action_gateway, "verify_execution", None)
+                                if verify_execution is not None:
+                                    verify_execution()
                             result = self._safe_tool_result(
                                 await self.tools.execute(
                                     call.name,
@@ -362,6 +479,27 @@ class AgentLoop:
     @staticmethod
     def _elapsed_ms(started: float) -> int:
         return max(0, round((time.monotonic() - started) * 1000))
+
+    @staticmethod
+    def _budget_exhausted(
+        *,
+        turn: int,
+        kind: str,
+        reason: str,
+        limit: int | float,
+        observed: int | float | None,
+    ) -> RuntimeEvent:
+        return RuntimeEvent(
+            event_type="budget.exhausted",
+            turn=turn,
+            payload={
+                "kind": kind,
+                "reason": reason,
+                "limit": limit,
+                "observed": observed,
+                "usage_state": "unknown" if observed is None else "known",
+            },
+        )
 
     @staticmethod
     def _safe_tool_result(result: str) -> str:

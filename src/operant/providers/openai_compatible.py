@@ -69,6 +69,11 @@ class OpenAICompatibleProvider:
             "messages": [self._message_payload(message) for message in messages],
             "stream": True,
         }
+        if snapshot.budget.max_output_tokens is not None:
+            # Chat Completions uses this portable spelling for current models.
+            # The runtime also enforces the cumulative value from returned
+            # usage; this request limit only prevents avoidable overshoot.
+            payload["max_completion_tokens"] = snapshot.budget.max_output_tokens
         if tools:
             payload["tools"] = [
                 {
@@ -228,5 +233,7 @@ class OpenAICompatibleProvider:
                 buffer["arguments"] += function["arguments"]
 
     @staticmethod
-    def _nonnegative_int(value: Any) -> int:
-        return value if isinstance(value, int) and value >= 0 else 0
+    def _nonnegative_int(value: Any) -> int | None:
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None

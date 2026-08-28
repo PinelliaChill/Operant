@@ -91,7 +91,7 @@ def test_unversioned_week1_and_full_week1_to_4_databases_upgrade_with_data(
     week1 = SQLiteStore(week1_path)
     assert week1.schema_version() == 0
     week1.initialize()
-    assert week1.schema_version() == 3
+    assert week1.schema_version() == 4
     assert week1.get_model_profile(profile.id) == profile
 
     full_path = tmp_path / "week1-4.sqlite3"
@@ -178,7 +178,7 @@ def test_unversioned_week1_and_full_week1_to_4_databases_upgrade_with_data(
         connection.execute("DROP TABLE schema_migrations")
 
     full.initialize()
-    assert full.schema_version() == 3
+    assert full.schema_version() == 4
     assert full.get_workflow_run(workflow.id) == workflow
     assert full.get_memory(memory.id) == memory
     assert full.search_memories("migration marker", project_scope=str(tmp_path)) == [memory]
@@ -256,7 +256,7 @@ def test_migrations_are_atomic_reject_corruption_and_support_explicit_empty_roll
     store = SQLiteStore(tmp_path / "rollback.sqlite3")
     store.initialize()
     assert store.rollback(2, isolated=True) == 2
-    assert store.migrate() == 3
+    assert store.migrate() == 4
     store.reserve_command_execution(
         CommandExecution(
             command_type="POST:/v1/test",
@@ -278,7 +278,7 @@ def test_migrations_are_atomic_reject_corruption_and_support_explicit_empty_roll
         ("gap", "DELETE FROM schema_migrations WHERE version=2", "version gap"),
         (
             "future",
-            "INSERT INTO schema_migrations VALUES (4, 'future', 'future', 'now')",
+            "INSERT INTO schema_migrations VALUES (5, 'future', 'future', 'now')",
             "newer than this build",
         ),
     ):
@@ -298,8 +298,8 @@ def test_concurrent_migration_to_same_target_is_repeatable(tmp_path: Path) -> No
         return SQLiteStore(path).migrate()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        assert list(executor.map(lambda _item: migrate(), range(2))) == [3, 3]
-    assert SQLiteStore(path).schema_version() == 3
+        assert list(executor.map(lambda _item: migrate(), range(2))) == [4, 4]
+    assert SQLiteStore(path).schema_version() == 4
 
 
 def test_each_migration_and_downgrade_step_revalidates_the_manifest(tmp_path: Path) -> None:
@@ -313,6 +313,10 @@ def test_each_migration_and_downgrade_step_revalidates_the_manifest(tmp_path: Pa
     assert store.rollback(2, isolated=True) == 2
     assert store.schema_version() == 2
     assert store.migrate(3) == 3
+    assert store.migrate(4) == 4
+    assert store.schema_version() == 4
+    assert store.rollback(3, isolated=True) == 3
+    assert store.migrate(4) == 4
 
     migrations = store._migrations()
     manifest = json.loads(migrations[-1].manifest)
@@ -341,7 +345,7 @@ def test_exact_preview_histories_upgrade_but_unknown_or_drifted_preview_is_rejec
 ) -> None:
     preview_path = tmp_path / "known-preview.sqlite3"
     preview = SQLiteStore(preview_path)
-    preview.initialize()
+    preview.migrate(3)
     profile = preview.add_model_profile(
         ModelProfile(
             id="model_preview_preserved",
@@ -362,7 +366,7 @@ def test_exact_preview_histories_upgrade_but_unknown_or_drifted_preview_is_rejec
 
     upgraded = SQLiteStore(preview_path)
     upgraded.initialize()
-    assert upgraded.schema_version() == 3
+    assert upgraded.schema_version() == 4
     assert upgraded.get_model_profile(profile.id) == profile
     with sqlite3.connect(preview_path) as connection:
         assert connection.execute(
@@ -371,7 +375,7 @@ def test_exact_preview_histories_upgrade_but_unknown_or_drifted_preview_is_rejec
 
     rework_path = tmp_path / "known-manifest-rework-preview.sqlite3"
     rework = SQLiteStore(rework_path)
-    rework.initialize()
+    rework.migrate(3)
     with sqlite3.connect(rework_path) as connection:
         for version, name, checksum in SQLiteStore._MANIFEST_REWORK_PREVIEW_HISTORY:
             connection.execute(
@@ -379,7 +383,7 @@ def test_exact_preview_histories_upgrade_but_unknown_or_drifted_preview_is_rejec
                 (name, checksum, version),
             )
     SQLiteStore(rework_path).initialize()
-    assert SQLiteStore(rework_path).schema_version() == 3
+    assert SQLiteStore(rework_path).schema_version() == 4
 
     unknown_path = tmp_path / "unknown-preview.sqlite3"
     unknown = SQLiteStore(unknown_path)

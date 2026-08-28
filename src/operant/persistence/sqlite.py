@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,7 @@ from operant.domain.models import (
     RoleStatus,
     Session,
     SnapshotOverrides,
+    new_id,
     utc_now,
 )
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
@@ -96,16 +98,45 @@ class Migration:
         return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class SessionRunLease:
+    session_id: str
+    lease_token: str
+    owner_id: str
+    generation: int
+    workflow_run_id: str | None
+    agent_id: str | None
+    cancel_requested: bool
+    acquired_at: datetime
+    renewed_at: datetime
+    expires_at: datetime
+    released_at: datetime | None
+
+
+@dataclass(frozen=True)
+class WorkflowExecutionLease:
+    workflow_run_id: str
+    lease_token: str
+    owner_id: str
+    generation: int
+    acquired_at: datetime
+    renewed_at: datetime
+    expires_at: datetime
+    released_at: datetime | None
+
+
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
         1: "9efa030568ef8f28749732f82f0023a548d4ff3af708f86be9f8d3a70037ef18",
         2: "1c1d79405a9f422aca4a84a9bd5e45b1647cb16d0c8b496f906932272fd05e98",
         3: "2ac49a0e18c49ccfbfce434425bb7dd09f39710f190b635d3908af96512d9b34",
+        4: "dd860b7b4b448ab4296c1e7803a0fcb90a1e5f27015066916cf871e455373f1c",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
         2: "f560a54b3361b717b8b0118efeb277b9869d66aa4528eb40015cbe571d9a9eef",
         3: "9be47a848c184b5f1ab81540abfc764dcae2a4b054ff4128d3ed153635d5f709",
+        4: "7a787a9ce4262293dfd5a0ad524f7f50c245722abef763a64ea82a2eaed1fc14",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -305,6 +336,12 @@ class SQLiteStore:
                 self._upgrade_v3,
                 self._downgrade_v3,
             ),
+            build(
+                4,
+                "phase0_session_run_leases",
+                self._upgrade_v4,
+                self._downgrade_v4,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -495,6 +532,8 @@ class SQLiteStore:
             self._validate_v2_schema_shape(connection)
         elif migration.version == 3:
             self._validate_v3_schema_shape(connection)
+        elif migration.version == 4:
+            self._validate_v4_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -694,6 +733,34 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v4_required_columns() -> dict[str, set[str]]:
+        return {
+            "session_run_leases": {
+                "session_id",
+                "lease_token",
+                "owner_id",
+                "generation",
+                "workflow_run_id",
+                "agent_id",
+                "cancel_requested",
+                "acquired_at",
+                "renewed_at",
+                "expires_at",
+                "released_at",
+            },
+            "workflow_execution_leases": {
+                "workflow_run_id",
+                "lease_token",
+                "owner_id",
+                "generation",
+                "acquired_at",
+                "renewed_at",
+                "expires_at",
+                "released_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -705,6 +772,8 @@ class SQLiteStore:
             tables.update(cls._v2_required_columns())
         if version >= 3:
             tables.update(cls._v3_required_columns())
+        if version >= 4:
+            tables.update(cls._v4_required_columns())
         return tables
 
     @staticmethod
@@ -729,6 +798,10 @@ class SQLiteStore:
                 ("approval_requests", "decided_at"),
                 ("approval_decisions", "reason_code"),
                 ("evaluation_run_events", "result_id"),
+                ("session_run_leases", "workflow_run_id"),
+                ("session_run_leases", "agent_id"),
+                ("session_run_leases", "released_at"),
+                ("workflow_execution_leases", "released_at"),
             }
         )
 
@@ -743,6 +816,8 @@ class SQLiteStore:
                 "repetition",
                 "http_status",
                 "approved",
+                "generation",
+                "cancel_requested",
             }
         )
 
@@ -795,7 +870,24 @@ class SQLiteStore:
             "unique": cls._unique_contract(version),
             "foreign_keys": cls._foreign_key_contract(version),
             "indexes": cls._index_contract(version),
-            "checks": ({"approval_decisions": ["approved IN (0, 1)"]} if version >= 3 else {}),
+            "checks": (
+                {
+                    "approval_decisions": ["approved IN (0, 1)"],
+                    **(
+                        {
+                            "session_run_leases": [
+                                "generation >= 1",
+                                "cancel_requested IN (0, 1)",
+                            ],
+                            "workflow_execution_leases": ["generation >= 1"],
+                        }
+                        if version >= 4
+                        else {}
+                    ),
+                }
+                if version >= 3
+                else {}
+            ),
             "virtual_tables": ({"memory_fts": "fts5"} if version >= 2 else {}),
             "objects": sorted(f"{object_type}:{name}" for object_type, name in objects),
             "ddl": ddl,
@@ -821,6 +913,8 @@ class SQLiteStore:
                 store._upgrade_v2(connection)
             if version >= 3:
                 store._upgrade_v3(connection)
+            if version >= 4:
+                store._upgrade_v4(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -881,6 +975,13 @@ class SQLiteStore:
                     "evaluation_run_events": ("sequence",),
                 }
             )
+        if version >= 4:
+            contract.update(
+                {
+                    "session_run_leases": ("session_id",),
+                    "workflow_execution_leases": ("workflow_run_id",),
+                }
+            )
         return contract
 
     @staticmethod
@@ -906,6 +1007,13 @@ class SQLiteStore:
                     "approval_decisions": (("approval_id",),),
                     "approval_audit_events": (("id",),),
                     "evaluation_run_events": (("id",),),
+                }
+            )
+        if version >= 4:
+            contract.update(
+                {
+                    "session_run_leases": (("lease_token",),),
+                    "workflow_execution_leases": (("lease_token",),),
                 }
             )
         return contract
@@ -969,6 +1077,19 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 4:
+            contract.update(
+                {
+                    "session_run_leases": (
+                        ("session_id", "sessions", "id", "NO ACTION"),
+                        ("workflow_run_id", "workflow_runs", "id", "NO ACTION"),
+                        ("agent_id", "agents", "id", "NO ACTION"),
+                    ),
+                    "workflow_execution_leases": (
+                        ("workflow_run_id", "workflow_runs", "id", "NO ACTION"),
+                    ),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1016,6 +1137,16 @@ class SQLiteStore:
                         "evaluation_run_id",
                         "sequence",
                     ),
+                }
+            )
+        if version >= 4:
+            indexes.update(
+                {
+                    "idx_session_run_leases_workflow_active": (
+                        "workflow_run_id",
+                        "released_at",
+                    ),
+                    "idx_workflow_execution_leases_active": ("released_at", "expires_at"),
                 }
             )
         return indexes
@@ -1094,6 +1225,9 @@ class SQLiteStore:
 
     def _validate_v3_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=3)
+
+    def _validate_v4_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=4)
 
     def _validate_schema_contract(
         self,
@@ -1660,6 +1794,70 @@ class SQLiteStore:
             """,
         )
 
+    def _upgrade_v4(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE session_run_leases (
+                session_id TEXT PRIMARY KEY,
+                lease_token TEXT UNIQUE NOT NULL,
+                owner_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation >= 1),
+                workflow_run_id TEXT,
+                agent_id TEXT,
+                cancel_requested INTEGER NOT NULL CHECK (cancel_requested IN (0, 1)),
+                acquired_at TEXT NOT NULL,
+                renewed_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id)
+            );
+
+            CREATE INDEX idx_session_run_leases_workflow_active
+                ON session_run_leases(workflow_run_id, released_at);
+
+            CREATE TABLE workflow_execution_leases (
+                workflow_run_id TEXT PRIMARY KEY,
+                lease_token TEXT UNIQUE NOT NULL,
+                owner_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation >= 1),
+                acquired_at TEXT NOT NULL,
+                renewed_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
+            );
+
+            CREATE INDEX idx_workflow_execution_leases_active
+                ON workflow_execution_leases(released_at, expires_at);
+            """,
+        )
+        # Any RUNNING row that predates v4 cannot own a v4 execution guard or
+        # Session lease and is therefore an actual interrupted legacy run.
+        self._interrupt_running_workflows(connection)
+
+    def _downgrade_v4(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM session_run_leases)
+                + (SELECT COUNT(*) FROM workflow_execution_leases) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back execution leases while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP INDEX idx_workflow_execution_leases_active;
+            DROP TABLE workflow_execution_leases;
+            DROP INDEX idx_session_run_leases_workflow_active;
+            DROP TABLE session_run_leases;
+            """,
+        )
+
     def _downgrade_v3(self, connection: sqlite3.Connection) -> None:
         populated = connection.execute(
             """
@@ -1746,16 +1944,41 @@ class SQLiteStore:
         )
 
     @staticmethod
-    def _interrupt_running_workflows(connection: sqlite3.Connection) -> None:
+    def _interrupt_running_workflows(
+        connection: sqlite3.Connection,
+        *,
+        now: datetime | None = None,
+    ) -> None:
         """Make runs left in ``running`` state safe to inspect after restart."""
 
+        observed_at = utc_now() if now is None else now
         rows = connection.execute(
-            "SELECT id, body FROM workflow_runs WHERE status = ?",
-            (WorkflowRunStatus.RUNNING.value,),
+            """
+            SELECT id, body, updated_at FROM workflow_runs
+            WHERE status = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM workflow_execution_leases AS guard
+                  WHERE guard.workflow_run_id = workflow_runs.id
+                    AND guard.released_at IS NULL
+                    AND guard.expires_at > ?
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM session_run_leases AS lease
+                  WHERE lease.workflow_run_id = workflow_runs.id
+                    AND lease.released_at IS NULL
+                    AND lease.cancel_requested = 0
+                    AND lease.expires_at > ?
+              )
+            """,
+            (
+                WorkflowRunStatus.RUNNING.value,
+                observed_at.isoformat(),
+                observed_at.isoformat(),
+            ),
         ).fetchall()
         if not rows:
             return
-        interrupted_at = utc_now()
+        interrupted_at = observed_at
         for row in rows:
             workflow_run = WorkflowRun.model_validate_json(row["body"])
             updated = workflow_run.model_copy(
@@ -1917,13 +2140,21 @@ class SQLiteStore:
             """
             UPDATE tool_action_receipts
             SET status = ?, error_code = ?, updated_at = ?
-            WHERE status = ?
+            WHERE status = ? AND NOT EXISTS (
+                SELECT 1 FROM session_run_leases AS lease
+                WHERE lease.session_id = tool_action_receipts.session_id
+                  AND lease.agent_id = tool_action_receipts.agent_id
+                  AND lease.released_at IS NULL
+                  AND lease.cancel_requested = 0
+                  AND lease.expires_at > ?
+            )
             """,
             (
                 ToolActionReceiptStatus.OUTCOME_UNKNOWN.value,
                 "process_interrupted",
                 reconciled_at,
                 ToolActionReceiptStatus.IN_PROGRESS.value,
+                reconciled_at,
             ),
         )
 
@@ -2146,11 +2377,11 @@ class SQLiteStore:
             )
 
         budget = role.budget
+        if budget.max_output_tokens is None and profile.default_token_budget is not None:
+            budget = budget.model_copy(update={"max_output_tokens": profile.default_token_budget})
         overridden_budget_fields: tuple[str, ...] = ()
         if budget_overrides:
-            budget = type(role.budget).model_validate(
-                {**role.budget.model_dump(), **budget_overrides}
-            )
+            budget = type(role.budget).model_validate({**budget.model_dump(), **budget_overrides})
             overridden_budget_fields = tuple(sorted(budget_overrides))
 
         snapshot = RoleSnapshot(
@@ -2164,6 +2395,8 @@ class SQLiteStore:
             model_id=profile.model_id,
             base_url=profile.base_url,
             secret_ref=profile.secret_ref,
+            input_usd_per_million_tokens=profile.input_usd_per_million_tokens,
+            output_usd_per_million_tokens=profile.output_usd_per_million_tokens,
             effort=selected_effort,
             provider_effort_parameter=profile.effort_parameter,
             provider_effort_value=profile.provider_effort_value(selected_effort),
@@ -2289,13 +2522,720 @@ class SQLiteStore:
             for row in rows
         ]
 
+    # Phase 0 durable Workflow coordinator and Session execution leases
+
+    def acquire_workflow_execution_lease(
+        self,
+        workflow_run_id: str,
+        *,
+        owner_id: str,
+        ttl_seconds: float,
+        now: datetime | None = None,
+    ) -> WorkflowExecutionLease | None:
+        """Acquire the coordinator guard before marking a Workflow RUNNING."""
+
+        if ttl_seconds <= 0:
+            raise ValueError("workflow execution lease TTL must be positive")
+        observed_at = utc_now() if now is None else now
+        expires_at = observed_at + timedelta(seconds=ttl_seconds)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            workflow_row = connection.execute(
+                "SELECT status FROM workflow_runs WHERE id = ?", (workflow_run_id,)
+            ).fetchone()
+            if workflow_row is None:
+                raise NotFoundError(f"workflow run not found: {workflow_run_id}")
+            if workflow_row["status"] != WorkflowRunStatus.CREATED.value:
+                raise ConflictError("workflow run cannot acquire an execution lease")
+            row = connection.execute(
+                "SELECT * FROM workflow_execution_leases WHERE workflow_run_id = ?",
+                (workflow_run_id,),
+            ).fetchone()
+            generation = 1
+            if row is not None:
+                existing = self._workflow_execution_lease_from_row(row)
+                if existing.released_at is None and existing.expires_at > observed_at:
+                    return None
+                generation = existing.generation + 1
+            lease_token = new_id("workflow_lease")
+            connection.execute(
+                """
+                INSERT INTO workflow_execution_leases(
+                    workflow_run_id, lease_token, owner_id, generation,
+                    acquired_at, renewed_at, expires_at, released_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(workflow_run_id) DO UPDATE SET
+                    lease_token = excluded.lease_token,
+                    owner_id = excluded.owner_id,
+                    generation = excluded.generation,
+                    acquired_at = excluded.acquired_at,
+                    renewed_at = excluded.renewed_at,
+                    expires_at = excluded.expires_at,
+                    released_at = NULL
+                """,
+                (
+                    workflow_run_id,
+                    lease_token,
+                    owner_id,
+                    generation,
+                    observed_at.isoformat(),
+                    observed_at.isoformat(),
+                    expires_at.isoformat(),
+                ),
+            )
+            claimed = connection.execute(
+                "SELECT * FROM workflow_execution_leases WHERE workflow_run_id = ?",
+                (workflow_run_id,),
+            ).fetchone()
+        assert claimed is not None
+        return self._workflow_execution_lease_from_row(claimed)
+
+    def activate_workflow_run(
+        self,
+        lease: WorkflowExecutionLease,
+        *,
+        now: datetime | None = None,
+    ) -> WorkflowRun | None:
+        """Move a guarded CREATED run to RUNNING without reviving a cancelled run."""
+
+        return self.update_workflow_run_if_status(
+            lease.workflow_run_id,
+            expected_status=WorkflowRunStatus.CREATED,
+            execution_lease=lease,
+            now=now,
+            status=WorkflowRunStatus.RUNNING,
+        )
+
+    def renew_workflow_execution_lease(
+        self,
+        lease: WorkflowExecutionLease,
+        *,
+        ttl_seconds: float,
+        now: datetime | None = None,
+    ) -> WorkflowExecutionLease | None:
+        if ttl_seconds <= 0:
+            raise ValueError("workflow execution lease TTL must be positive")
+        observed_at = utc_now() if now is None else now
+        expires_at = observed_at + timedelta(seconds=ttl_seconds)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE workflow_execution_leases
+                SET renewed_at = ?, expires_at = ?
+                WHERE workflow_run_id = ? AND lease_token = ? AND generation = ?
+                  AND owner_id = ? AND released_at IS NULL AND expires_at > ?
+                  AND EXISTS (
+                      SELECT 1 FROM workflow_runs
+                      WHERE id = workflow_execution_leases.workflow_run_id
+                        AND status = ?
+                  )
+                """,
+                (
+                    observed_at.isoformat(),
+                    expires_at.isoformat(),
+                    lease.workflow_run_id,
+                    lease.lease_token,
+                    lease.generation,
+                    lease.owner_id,
+                    observed_at.isoformat(),
+                    WorkflowRunStatus.RUNNING.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM workflow_execution_leases WHERE workflow_run_id = ?",
+                (lease.workflow_run_id,),
+            ).fetchone()
+        assert row is not None
+        return self._workflow_execution_lease_from_row(row)
+
+    def assert_workflow_execution_lease(
+        self,
+        lease: WorkflowExecutionLease,
+        *,
+        now: datetime | None = None,
+    ) -> WorkflowExecutionLease:
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT guard.* FROM workflow_execution_leases AS guard
+                JOIN workflow_runs AS run ON run.id = guard.workflow_run_id
+                WHERE guard.workflow_run_id = ?
+                  AND run.status = ?
+                """,
+                (lease.workflow_run_id, WorkflowRunStatus.RUNNING.value),
+            ).fetchone()
+        if row is None:
+            raise ConflictError("workflow execution lease is unavailable")
+        current = self._workflow_execution_lease_from_row(row)
+        if (
+            current.lease_token != lease.lease_token
+            or current.generation != lease.generation
+            or current.owner_id != lease.owner_id
+            or current.released_at is not None
+            or current.expires_at <= observed_at
+        ):
+            raise ConflictError("workflow execution lease is expired, cancelled, or fenced")
+        return current
+
+    def release_workflow_execution_lease(
+        self,
+        lease: WorkflowExecutionLease,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE workflow_execution_leases SET released_at = ?
+                WHERE workflow_run_id = ? AND lease_token = ? AND generation = ?
+                  AND owner_id = ? AND released_at IS NULL
+                """,
+                (
+                    observed_at.isoformat(),
+                    lease.workflow_run_id,
+                    lease.lease_token,
+                    lease.generation,
+                    lease.owner_id,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def interrupt_workflow_run_if_execution_lease_matches(
+        self,
+        lease: WorkflowExecutionLease,
+        *,
+        error_type: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Record coordinator loss only while the expected guard still owns the run."""
+
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT run.body FROM workflow_runs AS run
+                JOIN workflow_execution_leases AS guard
+                  ON guard.workflow_run_id = run.id
+                WHERE run.id = ? AND run.status = ?
+                  AND guard.lease_token = ? AND guard.generation = ?
+                  AND guard.owner_id = ?
+                """,
+                (
+                    lease.workflow_run_id,
+                    WorkflowRunStatus.RUNNING.value,
+                    lease.lease_token,
+                    lease.generation,
+                    lease.owner_id,
+                ),
+            ).fetchone()
+            if row is None:
+                return False
+            current = WorkflowRun.model_validate_json(row["body"])
+            interrupted = current.model_copy(
+                update={
+                    "status": WorkflowRunStatus.INTERRUPTED,
+                    "last_error_type": error_type,
+                    "updated_at": observed_at,
+                }
+            )
+            cursor = connection.execute(
+                """
+                UPDATE workflow_runs
+                SET body = ?, status = ?, current_stage = ?, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    interrupted.model_dump_json(),
+                    interrupted.status.value,
+                    interrupted.current_stage.value,
+                    interrupted.updated_at.isoformat(),
+                    interrupted.id,
+                    WorkflowRunStatus.RUNNING.value,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def get_workflow_execution_lease(self, workflow_run_id: str) -> WorkflowExecutionLease:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workflow_execution_leases WHERE workflow_run_id = ?",
+                (workflow_run_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"workflow execution lease not found: {workflow_run_id}")
+        return self._workflow_execution_lease_from_row(row)
+
+    @staticmethod
+    def _workflow_execution_lease_from_row(row: sqlite3.Row) -> WorkflowExecutionLease:
+        return WorkflowExecutionLease(
+            workflow_run_id=str(row["workflow_run_id"]),
+            lease_token=str(row["lease_token"]),
+            owner_id=str(row["owner_id"]),
+            generation=int(row["generation"]),
+            acquired_at=datetime.fromisoformat(str(row["acquired_at"])),
+            renewed_at=datetime.fromisoformat(str(row["renewed_at"])),
+            expires_at=datetime.fromisoformat(str(row["expires_at"])),
+            released_at=(
+                None
+                if row["released_at"] is None
+                else datetime.fromisoformat(str(row["released_at"]))
+            ),
+        )
+
+    def acquire_session_run_lease(
+        self,
+        session_id: str,
+        *,
+        owner_id: str,
+        ttl_seconds: float,
+        workflow_run_id: str | None = None,
+        workflow_execution_lease: WorkflowExecutionLease | None = None,
+        now: datetime | None = None,
+    ) -> SessionRunLease | None:
+        """Atomically acquire or reclaim the single run lease for a Session.
+
+        An expired lease may be reclaimed only when its previous Agent has no
+        uncertain side-effect receipt.  This prevents a process crash from
+        turning an unknown write into an automatic replay.
+        """
+
+        if ttl_seconds <= 0:
+            raise ValueError("session run lease TTL must be positive")
+        observed_at = utc_now() if now is None else now
+        expires_at = observed_at + timedelta(seconds=ttl_seconds)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+                is None
+            ):
+                raise NotFoundError(f"session not found: {session_id}")
+            if workflow_run_id is not None:
+                workflow_row = connection.execute(
+                    "SELECT status FROM workflow_runs WHERE id = ?", (workflow_run_id,)
+                ).fetchone()
+                if workflow_row is None:
+                    raise NotFoundError(f"workflow run not found: {workflow_run_id}")
+                if workflow_row["status"] != WorkflowRunStatus.RUNNING.value:
+                    raise ConflictError("workflow run is not running")
+                if workflow_execution_lease is None:
+                    raise ConflictError("workflow execution lease is required for a child run")
+                if workflow_execution_lease.workflow_run_id != workflow_run_id:
+                    raise ConflictError("workflow execution lease belongs to another run")
+                guard = connection.execute(
+                    """
+                    SELECT 1 FROM workflow_execution_leases
+                    WHERE workflow_run_id = ? AND lease_token = ? AND generation = ?
+                      AND owner_id = ? AND released_at IS NULL AND expires_at > ?
+                    """,
+                    (
+                        workflow_run_id,
+                        workflow_execution_lease.lease_token,
+                        workflow_execution_lease.generation,
+                        workflow_execution_lease.owner_id,
+                        observed_at.isoformat(),
+                    ),
+                ).fetchone()
+                if guard is None:
+                    raise ConflictError("workflow execution lease is expired, cancelled, or fenced")
+            pending = connection.execute(
+                """
+                SELECT 1 FROM approval_requests
+                WHERE session_id = ? AND status = ? LIMIT 1
+                """,
+                (session_id, ApprovalStatus.PENDING.value),
+            ).fetchone()
+            if pending is not None:
+                raise ConflictError(
+                    "session has a pending durable approval; decide or reconcile it "
+                    "before starting another run"
+                )
+            row = connection.execute(
+                "SELECT * FROM session_run_leases WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            generation = 1
+            if row is not None:
+                existing = self._session_run_lease_from_row(row)
+                if existing.released_at is None and existing.expires_at > observed_at:
+                    return None
+                generation = existing.generation + 1
+            # A durable denial proves the approval-gated action was never
+            # authorized. Resolve only that exact receipt while admitting a
+            # later run; do not pre-empt a still-live Agent continuation.
+            connection.execute(
+                """
+                UPDATE tool_action_receipts
+                SET status = ?, result_json = ?, error_code = ?,
+                    updated_at = ?, completed_at = ?
+                WHERE session_id = ? AND status IN (?, ?)
+                  AND EXISTS (
+                      SELECT 1
+                      FROM approval_requests AS request
+                      JOIN approval_decisions AS decision
+                        ON decision.approval_id = request.id
+                      WHERE request.tool_action_receipt_id = tool_action_receipts.id
+                        AND request.session_id = tool_action_receipts.session_id
+                        AND request.agent_id = tool_action_receipts.agent_id
+                        AND decision.approved = 0
+                  )
+                """,
+                (
+                    ToolActionReceiptStatus.FAILED.value,
+                    json.dumps(
+                        {"error": "approval denied"},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "approval_denied",
+                    observed_at.isoformat(),
+                    observed_at.isoformat(),
+                    session_id,
+                    ToolActionReceiptStatus.IN_PROGRESS.value,
+                    ToolActionReceiptStatus.OUTCOME_UNKNOWN.value,
+                ),
+            )
+            uncertain = connection.execute(
+                """
+                SELECT 1 FROM tool_action_receipts
+                WHERE session_id = ? AND status IN (?, ?)
+                LIMIT 1
+                """,
+                (
+                    session_id,
+                    ToolActionReceiptStatus.IN_PROGRESS.value,
+                    ToolActionReceiptStatus.OUTCOME_UNKNOWN.value,
+                ),
+            ).fetchone()
+            if uncertain is not None:
+                connection.execute(
+                    """
+                    UPDATE tool_action_receipts
+                    SET status = ?, error_code = ?, updated_at = ?
+                    WHERE session_id = ? AND status = ?
+                    """,
+                    (
+                        ToolActionReceiptStatus.OUTCOME_UNKNOWN.value,
+                        "session_lease_expired",
+                        observed_at.isoformat(),
+                        session_id,
+                        ToolActionReceiptStatus.IN_PROGRESS.value,
+                    ),
+                )
+                # Persist the fail-safe state before surfacing the
+                # manual-reconcile conflict to the caller.
+                connection.commit()
+                raise ActionOutcomeUnknownError(
+                    "session has an uncertain tool action; manual reconciliation required"
+                )
+            lease_token = new_id("lease")
+            connection.execute(
+                """
+                INSERT INTO session_run_leases(
+                    session_id, lease_token, owner_id, generation,
+                    workflow_run_id, agent_id, cancel_requested,
+                    acquired_at, renewed_at, expires_at, released_at
+                ) VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, NULL)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    lease_token = excluded.lease_token,
+                    owner_id = excluded.owner_id,
+                    generation = excluded.generation,
+                    workflow_run_id = excluded.workflow_run_id,
+                    agent_id = NULL,
+                    cancel_requested = 0,
+                    acquired_at = excluded.acquired_at,
+                    renewed_at = excluded.renewed_at,
+                    expires_at = excluded.expires_at,
+                    released_at = NULL
+                """,
+                (
+                    session_id,
+                    lease_token,
+                    owner_id,
+                    generation,
+                    workflow_run_id,
+                    observed_at.isoformat(),
+                    observed_at.isoformat(),
+                    expires_at.isoformat(),
+                ),
+            )
+            claimed = connection.execute(
+                "SELECT * FROM session_run_leases WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        assert claimed is not None
+        return self._session_run_lease_from_row(claimed)
+
+    def bind_session_run_lease_agent(
+        self,
+        lease: SessionRunLease,
+        agent_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> SessionRunLease:
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            agent = connection.execute(
+                "SELECT session_id FROM agents WHERE id = ?", (agent_id,)
+            ).fetchone()
+            if agent is None:
+                raise NotFoundError(f"agent not found: {agent_id}")
+            if str(agent["session_id"]) != lease.session_id:
+                raise ConflictError("agent belongs to another session")
+            cursor = connection.execute(
+                """
+                UPDATE session_run_leases SET agent_id = ?
+                WHERE session_id = ? AND lease_token = ? AND generation = ? AND owner_id = ?
+                  AND released_at IS NULL AND cancel_requested = 0 AND expires_at > ?
+                """,
+                (
+                    agent_id,
+                    lease.session_id,
+                    lease.lease_token,
+                    lease.generation,
+                    lease.owner_id,
+                    observed_at.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ConflictError("session run lease is no longer current")
+            row = connection.execute(
+                "SELECT * FROM session_run_leases WHERE session_id = ?",
+                (lease.session_id,),
+            ).fetchone()
+        assert row is not None
+        return self._session_run_lease_from_row(row)
+
+    def renew_session_run_lease(
+        self,
+        lease: SessionRunLease,
+        *,
+        ttl_seconds: float,
+        now: datetime | None = None,
+    ) -> SessionRunLease | None:
+        if ttl_seconds <= 0:
+            raise ValueError("session run lease TTL must be positive")
+        observed_at = utc_now() if now is None else now
+        expires_at = observed_at + timedelta(seconds=ttl_seconds)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE session_run_leases
+                SET renewed_at = ?, expires_at = ?
+                WHERE session_id = ? AND lease_token = ? AND generation = ? AND owner_id = ?
+                  AND released_at IS NULL AND cancel_requested = 0 AND expires_at > ?
+                """,
+                (
+                    observed_at.isoformat(),
+                    expires_at.isoformat(),
+                    lease.session_id,
+                    lease.lease_token,
+                    lease.generation,
+                    lease.owner_id,
+                    observed_at.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM session_run_leases WHERE session_id = ?",
+                (lease.session_id,),
+            ).fetchone()
+        assert row is not None
+        return self._session_run_lease_from_row(row)
+
+    def assert_session_run_lease(
+        self,
+        lease: SessionRunLease,
+        *,
+        now: datetime | None = None,
+    ) -> SessionRunLease:
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM session_run_leases
+                WHERE session_id = ? AND lease_token = ? AND generation = ? AND owner_id = ?
+                """,
+                (
+                    lease.session_id,
+                    lease.lease_token,
+                    lease.generation,
+                    lease.owner_id,
+                ),
+            ).fetchone()
+        if row is None:
+            raise ConflictError("session run lease is expired, cancelled, or fenced")
+        current = self._session_run_lease_from_row(row)
+        if (
+            current.lease_token != lease.lease_token
+            or current.generation != lease.generation
+            or current.owner_id != lease.owner_id
+            or current.released_at is not None
+            or current.cancel_requested
+            or current.expires_at <= observed_at
+        ):
+            raise ConflictError("session run lease is expired, cancelled, or fenced")
+        return current
+
+    def release_session_run_lease(
+        self,
+        lease: SessionRunLease,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE session_run_leases
+                SET released_at = ?, expires_at = ?
+                WHERE session_id = ? AND lease_token = ? AND generation = ? AND owner_id = ?
+                  AND released_at IS NULL
+                """,
+                (
+                    observed_at.isoformat(),
+                    observed_at.isoformat(),
+                    lease.session_id,
+                    lease.lease_token,
+                    lease.generation,
+                    lease.owner_id,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def cancel_session_run_lease(
+        self,
+        session_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT 1 FROM session_run_leases
+                WHERE session_id = ? AND released_at IS NULL AND expires_at > ?
+                """,
+                (session_id, observed_at.isoformat()),
+            ).fetchone()
+            if row is None:
+                return False
+            connection.execute(
+                """
+                UPDATE session_run_leases SET cancel_requested = 1
+                WHERE session_id = ? AND released_at IS NULL AND expires_at > ?
+                """,
+                (session_id, observed_at.isoformat()),
+            )
+        return True
+
+    def cancel_workflow_run_leases(
+        self,
+        workflow_run_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[str, ...]:
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT session_id FROM session_run_leases
+                WHERE workflow_run_id = ? AND released_at IS NULL AND expires_at > ?
+                ORDER BY session_id
+                """,
+                (workflow_run_id, observed_at.isoformat()),
+            ).fetchall()
+            connection.execute(
+                """
+                UPDATE session_run_leases
+                SET cancel_requested = 1, released_at = ?, expires_at = ?
+                WHERE workflow_run_id = ? AND released_at IS NULL AND expires_at > ?
+                """,
+                (
+                    observed_at.isoformat(),
+                    observed_at.isoformat(),
+                    workflow_run_id,
+                    observed_at.isoformat(),
+                ),
+            )
+        return tuple(str(row["session_id"]) for row in rows)
+
+    def get_session_run_lease(self, session_id: str) -> SessionRunLease:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM session_run_leases WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"session run lease not found: {session_id}")
+        return self._session_run_lease_from_row(row)
+
+    @staticmethod
+    def _session_run_lease_from_row(row: sqlite3.Row) -> SessionRunLease:
+        return SessionRunLease(
+            session_id=str(row["session_id"]),
+            lease_token=str(row["lease_token"]),
+            owner_id=str(row["owner_id"]),
+            generation=int(row["generation"]),
+            workflow_run_id=(
+                None if row["workflow_run_id"] is None else str(row["workflow_run_id"])
+            ),
+            agent_id=None if row["agent_id"] is None else str(row["agent_id"]),
+            cancel_requested=bool(row["cancel_requested"]),
+            acquired_at=datetime.fromisoformat(str(row["acquired_at"])),
+            renewed_at=datetime.fromisoformat(str(row["renewed_at"])),
+            expires_at=datetime.fromisoformat(str(row["expires_at"])),
+            released_at=(
+                None
+                if row["released_at"] is None
+                else datetime.fromisoformat(str(row["released_at"]))
+            ),
+        )
+
     # M0 command and Action Gateway persistence
 
-    def reserve_tool_action(self, receipt: ToolActionReceipt) -> tuple[ToolActionReceipt, bool]:
+    def reserve_tool_action(
+        self,
+        receipt: ToolActionReceipt,
+        *,
+        lease: SessionRunLease | None = None,
+        now: datetime | None = None,
+    ) -> tuple[ToolActionReceipt, bool]:
         """Claim one agent-scoped Tool Call or return its durable prior result."""
 
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if lease is not None:
+                observed_at = utc_now() if now is None else now
+                lease_row = connection.execute(
+                    """
+                    SELECT * FROM session_run_leases
+                    WHERE session_id = ? AND lease_token = ? AND generation = ?
+                      AND owner_id = ? AND released_at IS NULL
+                      AND cancel_requested = 0 AND expires_at > ?
+                    """,
+                    (
+                        lease.session_id,
+                        lease.lease_token,
+                        lease.generation,
+                        lease.owner_id,
+                        observed_at.isoformat(),
+                    ),
+                ).fetchone()
+                if lease_row is None or lease.session_id != receipt.session_id:
+                    raise ConflictError("session run lease is expired, cancelled, or fenced")
             row = connection.execute(
                 """
                 SELECT * FROM tool_action_receipts
@@ -3038,6 +3978,147 @@ class SQLiteStore:
             if cursor.rowcount != 1:
                 raise NotFoundError(f"workflow run not found: {workflow_run_id}")
         return updated
+
+    def update_workflow_run_if_status(
+        self,
+        workflow_run_id: str,
+        *,
+        expected_status: WorkflowRunStatus | str,
+        execution_lease: WorkflowExecutionLease | None = None,
+        now: datetime | None = None,
+        **changes: Any,
+    ) -> WorkflowRun | None:
+        """Atomically update a Workflow only from the expected persisted status."""
+
+        forbidden = {"id", "created_at"}
+        attempted = forbidden.intersection(changes)
+        if attempted:
+            raise ValueError(f"cannot change workflow run identity fields: {sorted(attempted)}")
+        normalized_status = (
+            expected_status
+            if isinstance(expected_status, WorkflowRunStatus)
+            else WorkflowRunStatus(expected_status)
+        )
+        observed_at = utc_now() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT body, status FROM workflow_runs WHERE id = ?",
+                (workflow_run_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"workflow run not found: {workflow_run_id}")
+            current = WorkflowRun.model_validate_json(row["body"])
+            if (
+                str(row["status"]) != normalized_status.value
+                or current.status is not normalized_status
+            ):
+                return None
+            if execution_lease is not None:
+                if execution_lease.workflow_run_id != workflow_run_id:
+                    raise ConflictError("workflow execution lease belongs to another run")
+                guard = connection.execute(
+                    """
+                    SELECT 1 FROM workflow_execution_leases
+                    WHERE workflow_run_id = ? AND lease_token = ? AND generation = ?
+                      AND owner_id = ? AND released_at IS NULL AND expires_at > ?
+                    """,
+                    (
+                        workflow_run_id,
+                        execution_lease.lease_token,
+                        execution_lease.generation,
+                        execution_lease.owner_id,
+                        observed_at.isoformat(),
+                    ),
+                ).fetchone()
+                if guard is None:
+                    return None
+            updated_data = current.model_dump()
+            updated_data.update(changes)
+            updated_data["updated_at"] = observed_at
+            updated = WorkflowRun.model_validate(updated_data)
+            cursor = connection.execute(
+                """
+                UPDATE workflow_runs
+                SET body = ?, status = ?, current_stage = ?, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    updated.model_dump_json(),
+                    updated.status.value,
+                    updated.current_stage.value,
+                    updated.updated_at.isoformat(),
+                    workflow_run_id,
+                    normalized_status.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+        return updated
+
+    def cancel_workflow_run_atomically(
+        self,
+        workflow_run_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[bool, tuple[str, ...]]:
+        """Cancel a Workflow and fence every unreleased child lease in one commit."""
+
+        observed_at = utc_now() if now is None else now
+        terminal_statuses = {
+            WorkflowRunStatus.COMPLETED,
+            WorkflowRunStatus.FAILED,
+            WorkflowRunStatus.CANCELLED,
+        }
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT body, status FROM workflow_runs WHERE id = ?",
+                (workflow_run_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"workflow run not found: {workflow_run_id}")
+            current = WorkflowRun.model_validate_json(row["body"])
+            if current.status in terminal_statuses:
+                return False, ()
+            cancelled = WorkflowRun.model_validate(
+                {
+                    **current.model_dump(),
+                    "status": WorkflowRunStatus.CANCELLED,
+                    "last_error_type": "cancelled",
+                    "updated_at": observed_at,
+                }
+            )
+            connection.execute(
+                """
+                UPDATE workflow_runs
+                SET body = ?, status = ?, current_stage = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    cancelled.model_dump_json(),
+                    cancelled.status.value,
+                    cancelled.current_stage.value,
+                    cancelled.updated_at.isoformat(),
+                    workflow_run_id,
+                ),
+            )
+            rows = connection.execute(
+                """
+                SELECT session_id FROM session_run_leases
+                WHERE workflow_run_id = ? AND released_at IS NULL
+                ORDER BY session_id
+                """,
+                (workflow_run_id,),
+            ).fetchall()
+            connection.execute(
+                """
+                UPDATE session_run_leases SET cancel_requested = 1
+                WHERE workflow_run_id = ? AND released_at IS NULL
+                """,
+                (workflow_run_id,),
+            )
+        return True, tuple(str(row["session_id"]) for row in rows)
 
     def append_workflow_event(self, event: WorkflowRunEvent) -> WorkflowRunEvent:
         self.get_workflow_run(event.workflow_run_id)

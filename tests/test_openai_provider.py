@@ -121,6 +121,37 @@ async def test_model_discovery_and_streamed_tool_call(
 
 
 @pytest.mark.asyncio
+async def test_output_limit_is_forwarded_and_missing_usage_fields_remain_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPERANT_TEST_API_KEY", "test-only-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["max_completion_tokens"] == 17
+        return httpx.Response(
+            200,
+            text=('data: {"choices":[],"usage":{"prompt_tokens":4}}\ndata: [DONE]\n'),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    snapshot = provider_snapshot().model_copy(
+        update={"budget": Budget(max_turns=2, max_output_tokens=17)}
+    )
+    events = [
+        event
+        async for event in OpenAICompatibleProvider(transport=httpx.MockTransport(handler)).stream(
+            snapshot=snapshot, messages=(), tools=()
+        )
+    ]
+    usage = events[-1].response.usage if events[-1].response is not None else None
+    assert usage is not None
+    assert usage.prompt_tokens == 4
+    assert usage.completion_tokens is None
+    assert usage.total_tokens is None
+
+
+@pytest.mark.asyncio
 async def test_missing_secret_reports_reference_not_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

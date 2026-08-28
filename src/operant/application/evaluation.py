@@ -2118,7 +2118,7 @@ def _sum_usage(usages: Sequence[Any], key: str) -> int | None:
         if not isinstance(usage, dict):
             return None
         value = usage.get(key)
-        if not isinstance(value, int) or value < 0:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             return None
         values.append(value)
     return sum(values)
