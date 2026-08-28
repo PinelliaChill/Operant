@@ -97,6 +97,7 @@ class Budget(BaseModel):
     timeout_seconds: int = Field(default=300, ge=1, le=3600)
     max_output_tokens: int | None = Field(default=None, ge=1)
     max_cost_usd: float | None = Field(default=None, gt=0)
+    max_tool_calls: int | None = Field(default=None, ge=0)
 
 
 class EffortMapping(BaseModel):
@@ -119,6 +120,8 @@ class ModelProfile(BaseModel):
     secret_ref: str = Field(min_length=1, max_length=200)
     context_window: int | None = Field(default=None, ge=1)
     default_token_budget: int | None = Field(default=None, ge=1)
+    input_usd_per_million_tokens: float | None = Field(default=None, ge=0)
+    output_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     supported_efforts: tuple[Effort, ...] = (Effort.LOW, Effort.MEDIUM, Effort.HIGH)
     default_effort: Effort = Effort.MEDIUM
     effort_parameter: str | None = "reasoning_effort"
@@ -160,6 +163,10 @@ class ModelProfile(BaseModel):
             mapped_efforts
         ):
             raise ValueError("effort_mapping must cover every supported effort")
+        if (self.input_usd_per_million_tokens is None) != (
+            self.output_usd_per_million_tokens is None
+        ):
+            raise ValueError("input and output token prices must be configured together")
         return self
 
     def provider_effort_value(self, effort: Effort) -> str | None:
@@ -210,6 +217,8 @@ class RoleSnapshot(BaseModel):
     model_id: str
     base_url: str
     secret_ref: str
+    input_usd_per_million_tokens: float | None = Field(default=None, ge=0)
+    output_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     effort: Effort
     provider_effort_parameter: str | None
     provider_effort_value: str | None
@@ -218,6 +227,14 @@ class RoleSnapshot(BaseModel):
     memory_scope: str
     captured_at: datetime = Field(default_factory=utc_now)
     overrides: SnapshotOverrides = Field(default_factory=SnapshotOverrides)
+
+    @model_validator(mode="after")
+    def validate_pricing_pair(self) -> RoleSnapshot:
+        if (self.input_usd_per_million_tokens is None) != (
+            self.output_usd_per_million_tokens is None
+        ):
+            raise ValueError("input and output token prices must be configured together")
+        return self
 
 
 class Session(BaseModel):

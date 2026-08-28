@@ -57,9 +57,12 @@ class ToolDefinition(BaseModel):
 class ModelUsage(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    prompt_tokens: int = Field(default=0, ge=0)
-    completion_tokens: int = Field(default=0, ge=0)
-    total_tokens: int = Field(default=0, ge=0)
+    # Providers commonly omit either the whole usage object or individual
+    # counters.  ``None`` is an execution fact: it must never be converted to
+    # zero because doing so would silently bypass a hard budget.
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
 
 
 class ModelResponse(BaseModel):

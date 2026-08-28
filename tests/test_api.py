@@ -152,4 +152,5 @@ def test_task_queries_trace_export_and_cancel(tmp_path: Path) -> None:
         assert exported.headers["content-type"].startswith("application/x-ndjson")
         assert '"record_type":"trace.workflow"' in exported.text
         assert client.post(f"/v1/tasks/{run.id}/cancel").json() == {"accepted": True}
+        assert client.post(f"/v1/tasks/{run.id}/cancel").json() == {"accepted": False}
         assert client.get(f"/v1/tasks/{run.id}").json()["status"] == "cancelled"

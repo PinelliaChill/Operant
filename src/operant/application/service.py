@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import Any
@@ -44,6 +43,7 @@ from operant.domain.models import (
     RolePreset,
     RoleSnapshot,
     Session,
+    new_id,
 )
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
 from operant.persistence.sqlite import (
@@ -51,7 +51,9 @@ from operant.persistence.sqlite import (
     ConflictError,
     IdempotencyConflictError,
     NotFoundError,
+    SessionRunLease,
     SQLiteStore,
+    WorkflowExecutionLease,
 )
 from operant.protocol import redact_public_data, redact_public_text
 from operant.providers.base import ModelProvider
@@ -69,11 +71,13 @@ class _PersistentActionGateway:
         session_id: str,
         agent_id: str,
         tools: WorkspaceTools,
+        lease: SessionRunLease | None = None,
     ) -> None:
         self.store = store
         self.session_id = session_id
         self.agent_id = agent_id
         self.tools = tools
+        self.lease = lease
         self.scope = f"session:{session_id}:agent:{agent_id}:attempt:1"
 
     def reserve_tool_action(
@@ -93,7 +97,8 @@ class _PersistentActionGateway:
                     command_name=name,
                     session_id=self.session_id,
                     agent_id=self.agent_id,
-                )
+                ),
+                lease=self.lease,
             )
         except IdempotencyConflictError as exc:
             raise ToolError("tool idempotency key conflicts with another action") from exc
@@ -202,19 +207,45 @@ class _PersistentActionGateway:
         ):
             raise ToolError("approval is not valid for execution")
 
+    def verify_execution(self) -> None:
+        if self.lease is None:
+            return
+        try:
+            self.store.assert_session_run_lease(self.lease)
+        except ConflictError as exc:
+            raise ToolError("session run lease is expired, cancelled, or fenced") from exc
+
 
 class ApplicationService:
     """Use-case layer shared by CLI, API, and workflows."""
 
-    def __init__(self, store: SQLiteStore, provider: ModelProvider) -> None:
+    def __init__(
+        self,
+        store: SQLiteStore,
+        provider: ModelProvider,
+        *,
+        session_lease_ttl_seconds: float = 15.0,
+        session_lease_heartbeat_seconds: float | None = None,
+    ) -> None:
+        if session_lease_ttl_seconds <= 0:
+            raise ValueError("session lease TTL must be positive")
         self.store = store
         self.provider = provider
         self.factory = AgentFactory(store)
         self._cancellations: dict[str, asyncio.Event] = {}
         self._approval_futures: dict[tuple[str, str], asyncio.Future[bool]] = {}
         self._approval_details: dict[tuple[str, str], dict[str, str]] = {}
-        self._active_session_runs: set[str] = set()
-        self._session_run_guard = threading.Lock()
+        self._session_run_leases: dict[str, SessionRunLease] = {}
+        self._workflow_execution_leases: dict[str, WorkflowExecutionLease] = {}
+        self._lease_owner_id = new_id("core")
+        self._session_lease_ttl_seconds = session_lease_ttl_seconds
+        self._session_lease_heartbeat_seconds = (
+            session_lease_ttl_seconds / 3
+            if session_lease_heartbeat_seconds is None
+            else session_lease_heartbeat_seconds
+        )
+        if not 0 < self._session_lease_heartbeat_seconds < session_lease_ttl_seconds:
+            raise ValueError("session and workflow lease heartbeat must be positive and below TTL")
 
     def initialize(self) -> None:
         self.store.initialize()
@@ -358,6 +389,19 @@ class ApplicationService:
     def update_workflow_run(self, workflow_run_id: str, **changes: Any) -> WorkflowRun:
         return self.store.update_workflow_run(workflow_run_id, **changes)
 
+    def update_workflow_run_if_status(
+        self,
+        workflow_run_id: str,
+        *,
+        expected_status: WorkflowRunStatus | str,
+        **changes: Any,
+    ) -> WorkflowRun | None:
+        return self.store.update_workflow_run_if_status(
+            workflow_run_id,
+            expected_status=expected_status,
+            **changes,
+        )
+
     def append_workflow_event(self, event: WorkflowRunEvent) -> WorkflowRunEvent:
         return self.store.append_workflow_event(event)
 
@@ -375,22 +419,41 @@ class ApplicationService:
         )
 
     def cancel_workflow_run(self, workflow_run_id: str) -> bool:
-        run = self.get_workflow_run(workflow_run_id)
-        if run.status in {
-            WorkflowRunStatus.COMPLETED,
-            WorkflowRunStatus.FAILED,
-            WorkflowRunStatus.CANCELLED,
-        }:
+        changed, leased_session_ids = self.store.cancel_workflow_run_atomically(workflow_run_id)
+        if not changed:
             return False
-        for event in reversed(self.list_workflow_events(workflow_run_id)):
-            if event.session_id and self.cancel_session(event.session_id):
-                break
-        self.update_workflow_run(
-            workflow_run_id,
-            status=WorkflowRunStatus.CANCELLED,
-            last_error_type="cancelled",
-        )
+        session_ids = set(leased_session_ids)
+        historical_session_ids = {
+            event.session_id
+            for event in self.list_workflow_events(workflow_run_id)
+            if event.session_id is not None
+        }
+        for session_id in historical_session_ids.difference(session_ids):
+            self.store.cancel_session_run_lease(session_id)
+        session_ids.update(historical_session_ids)
+        for session_id in session_ids:
+            cancellation = self._cancellations.get(session_id)
+            if cancellation is not None:
+                cancellation.set()
         return True
+
+    def cancel_workflow_children(self, workflow_run_id: str) -> None:
+        """Fence every active child without changing the Workflow status."""
+
+        session_ids = set(self.store.cancel_workflow_run_leases(workflow_run_id))
+        # Preserve cancellation for runs created before workflow_id was bound
+        # into a v4 lease, while stopping every active child instead of only
+        # the most recent event's Session.
+        session_ids.update(
+            event.session_id
+            for event in self.list_workflow_events(workflow_run_id)
+            if event.session_id is not None
+        )
+        for session_id in session_ids:
+            self.store.cancel_session_run_lease(session_id)
+            cancellation = self._cancellations.get(session_id)
+            if cancellation is not None:
+                cancellation.set()
 
     def get_workflow_trace(self, workflow_run_id: str) -> WorkflowTraceSummary:
         run = self.get_workflow_run(workflow_run_id)
@@ -964,28 +1027,145 @@ class ApplicationService:
 
     # Runtime control
 
-    def admit_session_run(self, session_id: str) -> bool:
-        """Atomically reserve the only in-process run slot for one Session."""
+    @property
+    def workflow_execution_heartbeat_seconds(self) -> float:
+        return self._session_lease_heartbeat_seconds
 
-        self.get_session(session_id)
-        with self._session_run_guard:
-            if session_id in self._active_session_runs:
-                return False
-            pending = self.store.list_approval_requests(
-                session_id,
-                status=ApprovalStatus.PENDING,
-            )
-            if pending:
-                raise ConflictError(
-                    "session has a pending durable approval; decide or reconcile it "
-                    "before starting another run"
-                )
-            self._active_session_runs.add(session_id)
-            return True
+    def acquire_workflow_execution_lease(
+        self, workflow_run_id: str
+    ) -> WorkflowExecutionLease | None:
+        if workflow_run_id in self._workflow_execution_leases:
+            return None
+        lease = self.store.acquire_workflow_execution_lease(
+            workflow_run_id,
+            owner_id=self._lease_owner_id,
+            ttl_seconds=self._session_lease_ttl_seconds,
+        )
+        if lease is not None:
+            self._workflow_execution_leases[workflow_run_id] = lease
+        return lease
 
-    def release_session_run(self, session_id: str) -> None:
-        with self._session_run_guard:
-            self._active_session_runs.discard(session_id)
+    def activate_workflow_run(self, lease: WorkflowExecutionLease) -> WorkflowRun:
+        current = self._workflow_execution_leases.get(lease.workflow_run_id)
+        if current is None or not self._same_workflow_execution_lease(current, lease):
+            raise ConflictError("workflow execution lease is no longer admitted")
+        activated = self.store.activate_workflow_run(lease)
+        if activated is None:
+            raise ConflictError("workflow run was cancelled or its execution lease was fenced")
+        return activated
+
+    def renew_workflow_execution_lease(
+        self, lease: WorkflowExecutionLease
+    ) -> WorkflowExecutionLease | None:
+        current = self._workflow_execution_leases.get(lease.workflow_run_id)
+        if current is None or not self._same_workflow_execution_lease(current, lease):
+            return None
+        renewed = self.store.renew_workflow_execution_lease(
+            lease,
+            ttl_seconds=self._session_lease_ttl_seconds,
+        )
+        if renewed is not None:
+            latest = self._workflow_execution_leases.get(lease.workflow_run_id)
+            if latest is not None and self._same_workflow_execution_lease(latest, lease):
+                self._workflow_execution_leases[lease.workflow_run_id] = renewed
+        else:
+            latest = self._workflow_execution_leases.get(lease.workflow_run_id)
+            if latest is not None and self._same_workflow_execution_lease(latest, lease):
+                self._workflow_execution_leases.pop(lease.workflow_run_id, None)
+        return renewed
+
+    def admitted_workflow_execution_lease(
+        self, workflow_run_id: str
+    ) -> WorkflowExecutionLease | None:
+        return self._workflow_execution_leases.get(workflow_run_id)
+
+    def verify_workflow_execution_lease(self, lease: WorkflowExecutionLease) -> bool:
+        current = self._workflow_execution_leases.get(lease.workflow_run_id)
+        if current is None or not self._same_workflow_execution_lease(current, lease):
+            return False
+        try:
+            self.store.assert_workflow_execution_lease(current)
+        except ConflictError:
+            latest = self._workflow_execution_leases.get(lease.workflow_run_id)
+            if latest is not None and self._same_workflow_execution_lease(latest, lease):
+                self._workflow_execution_leases.pop(lease.workflow_run_id, None)
+            return False
+        return True
+
+    def release_workflow_execution_lease(self, lease: WorkflowExecutionLease) -> None:
+        current = self._workflow_execution_leases.get(lease.workflow_run_id)
+        if current is not None and not self._same_workflow_execution_lease(current, lease):
+            return
+        if current is not None:
+            self._workflow_execution_leases.pop(lease.workflow_run_id, None)
+        self.store.release_workflow_execution_lease(lease)
+
+    def interrupt_workflow_after_guard_loss(self, lease: WorkflowExecutionLease) -> bool:
+        return self.store.interrupt_workflow_run_if_execution_lease_matches(
+            lease,
+            error_type="workflow_execution_lease_lost",
+        )
+
+    @staticmethod
+    def _same_workflow_execution_lease(
+        left: WorkflowExecutionLease,
+        right: WorkflowExecutionLease,
+    ) -> bool:
+        return (
+            left.lease_token == right.lease_token
+            and left.generation == right.generation
+            and left.owner_id == right.owner_id
+        )
+
+    def admit_session_run(
+        self,
+        session_id: str,
+        *,
+        workflow_run_id: str | None = None,
+        workflow_execution_lease: WorkflowExecutionLease | None = None,
+    ) -> bool:
+        """Atomically reserve the cross-process run lease for one Session."""
+
+        # A stale coroutine in this process still owns its in-memory Approval
+        # futures.  Do not reclaim over it locally; cross-process reclaim is
+        # handled by SQLite once the old process is gone.
+        if session_id in self._session_run_leases:
+            return False
+        lease = self.store.acquire_session_run_lease(
+            session_id,
+            owner_id=self._lease_owner_id,
+            ttl_seconds=self._session_lease_ttl_seconds,
+            workflow_run_id=workflow_run_id,
+            workflow_execution_lease=workflow_execution_lease,
+        )
+        if lease is None:
+            return False
+        self._session_run_leases[session_id] = lease
+        return True
+
+    def admitted_session_run_lease(self, session_id: str) -> SessionRunLease | None:
+        return self._session_run_leases.get(session_id)
+
+    @staticmethod
+    def _same_lease(left: SessionRunLease, right: SessionRunLease) -> bool:
+        return (
+            left.lease_token == right.lease_token
+            and left.generation == right.generation
+            and left.owner_id == right.owner_id
+        )
+
+    def release_session_run(
+        self,
+        session_id: str,
+        expected_lease: SessionRunLease | None = None,
+    ) -> None:
+        lease = self._session_run_leases.get(session_id)
+        if lease is None:
+            return
+        if expected_lease is not None and not self._same_lease(lease, expected_lease):
+            return
+        self._session_run_leases.pop(session_id, None)
+        self.store.release_session_run_lease(expected_lease or lease)
 
     async def run_session(
         self,
@@ -994,22 +1174,37 @@ class ApplicationService:
         user_message: str,
         workspace: str | Path,
         approval_callback: ApprovalCallback | None = None,
+        workflow_run_id: str | None = None,
+        workflow_execution_lease: WorkflowExecutionLease | None = None,
         _admission_granted: bool = False,
     ) -> AsyncIterator[RuntimeEvent]:
         session = self.get_session(session_id)
         if not _admission_granted:
             try:
-                admitted = self.admit_session_run(session.id)
+                admitted = self.admit_session_run(
+                    session.id,
+                    workflow_run_id=workflow_run_id,
+                    workflow_execution_lease=workflow_execution_lease,
+                )
             except ConflictError as exc:
+                manual_reconcile = isinstance(exc, ActionOutcomeUnknownError) or (
+                    "pending durable approval" in str(exc)
+                )
                 yield RuntimeEvent(
                     event_type="agent.stream_error",
                     turn=0,
                     payload={
                         "error": {
-                            "code": "session_pending_approval",
+                            "code": (
+                                "session_manual_reconcile_required"
+                                if isinstance(exc, ActionOutcomeUnknownError)
+                                else "session_pending_approval"
+                                if manual_reconcile
+                                else "session_run_conflict"
+                            ),
                             "message": str(exc),
-                            "retryable": False,
-                            "recovery": "manual_reconcile",
+                            "retryable": not manual_reconcile,
+                            "recovery": ("manual_reconcile" if manual_reconcile else "retry_later"),
                         }
                     },
                 )
@@ -1029,7 +1224,13 @@ class ApplicationService:
                 )
                 return
         try:
+            lease = self._session_run_leases.get(session.id)
+            if lease is None:
+                raise ConflictError("session run admission lease is unavailable")
             agent = self.factory.create_agent(session.id)
+            lease = self.store.bind_session_run_lease_agent(lease, agent.id)
+            run_lease = lease
+            self._session_run_leases[session.id] = lease
             self.store.update_agent_status(agent.id, AgentStatus.RUNNING)
             cancellation = asyncio.Event()
             self._cancellations[session.id] = cancellation
@@ -1045,6 +1246,7 @@ class ApplicationService:
                     session_id=session.id,
                     agent_id=agent.id,
                     tools=tools,
+                    lease=lease,
                 ),
             )
         except BaseException:
@@ -1083,6 +1285,26 @@ class ApplicationService:
         deadline = asyncio.get_running_loop().time() + session.role_snapshot.budget.timeout_seconds
         final_status = AgentStatus.FAILED
 
+        async def watch_lease() -> None:
+            current = run_lease
+            while True:
+                await asyncio.sleep(self._session_lease_heartbeat_seconds)
+                renewed = self.store.renew_session_run_lease(
+                    current,
+                    ttl_seconds=self._session_lease_ttl_seconds,
+                )
+                if renewed is None:
+                    cancellation.set()
+                    return
+                current = renewed
+                mapped = self._session_run_leases.get(session.id)
+                if mapped is not None and self._same_lease(mapped, run_lease):
+                    self._session_run_leases[session.id] = renewed
+
+        lease_watcher = asyncio.create_task(watch_lease())
+        next_event: asyncio.Future[RuntimeEvent] | None = None
+        cancelled: asyncio.Task[bool] | None = None
+
         try:
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
@@ -1097,7 +1319,7 @@ class ApplicationService:
                     final_status = AgentStatus.TIMED_OUT
                     break
 
-                next_event: asyncio.Future[RuntimeEvent] = asyncio.ensure_future(anext(iterator))
+                next_event = asyncio.ensure_future(anext(iterator))
                 cancelled = asyncio.create_task(cancellation.wait())
                 waiters: set[asyncio.Future[Any]] = {
                     next_event,
@@ -1167,7 +1389,13 @@ class ApplicationService:
                 runtime_event = self._persist_runtime_event(session.id, agent.id, runtime_event)
                 yield runtime_event
         except asyncio.CancelledError:
-            final_status = AgentStatus.FAILED
+            final_status = AgentStatus.CANCELLED
+            cancel_event = RuntimeEvent(
+                event_type="agent.cancelled",
+                turn=0,
+                payload={"reason": "stream_cancelled"},
+            )
+            self._persist_runtime_event(session.id, agent.id, cancel_event)
             raise
         except Exception as exc:
             failure_event = RuntimeEvent(
@@ -1180,20 +1408,32 @@ class ApplicationService:
             final_status = AgentStatus.FAILED
         finally:
             try:
-                await iterator.aclose()
-                self.store.update_agent_status(agent.id, final_status)
+                for waiter in (next_event, cancelled):
+                    if waiter is not None and not waiter.done():
+                        waiter.cancel()
+                await asyncio.gather(
+                    *(waiter for waiter in (next_event, cancelled) if waiter is not None),
+                    return_exceptions=True,
+                )
+                lease_watcher.cancel()
+                await asyncio.gather(lease_watcher, return_exceptions=True)
+                try:
+                    await iterator.aclose()
+                finally:
+                    self.store.update_agent_status(agent.id, final_status)
             finally:
-                self._cancellations.pop(session.id, None)
+                if self._cancellations.get(session.id) is cancellation:
+                    self._cancellations.pop(session.id, None)
                 self._clear_session_approvals(session.id)
-                self.release_session_run(session.id)
+                self.release_session_run(session.id, run_lease)
 
     def cancel_session(self, session_id: str) -> bool:
         self.get_session(session_id)
+        accepted = self.store.cancel_session_run_lease(session_id)
         cancellation = self._cancellations.get(session_id)
-        if cancellation is None:
-            return False
-        cancellation.set()
-        return True
+        if cancellation is not None:
+            cancellation.set()
+        return accepted
 
     def submit_approval(self, session_id: str, tool_call_id: str, *, approved: bool) -> bool:
         result = self.decide_approval(

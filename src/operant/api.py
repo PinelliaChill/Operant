@@ -32,6 +32,7 @@ from operant.domain.models import (
     new_id,
 )
 from operant.persistence.sqlite import (
+    ActionOutcomeUnknownError,
     ConflictError,
     IdempotencyConflictError,
     NotFoundError,
@@ -60,6 +61,8 @@ class CreateModelProfileRequest(BaseModel):
     secret_ref: str = "OPERANT_API_KEY"
     context_window: int | None = None
     default_token_budget: int | None = None
+    input_usd_per_million_tokens: float | None = Field(default=None, ge=0)
+    output_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     supported_efforts: tuple[Effort, ...] = (
         Effort.LOW,
         Effort.MEDIUM,
@@ -86,6 +89,8 @@ class UpdateModelProfileRequest(BaseModel):
     secret_ref: str | None = None
     context_window: int | None = None
     default_token_budget: int | None = None
+    input_usd_per_million_tokens: float | None = Field(default=None, ge=0)
+    output_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     supported_efforts: tuple[Effort, ...] | None = None
     default_effort: Effort | None = None
     effort_parameter: str | None = None
@@ -1213,21 +1218,41 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
         try:
             admitted = service.admit_session_run(session_id)
-        except ConflictError:
+        except ConflictError as exc:
+            manual_reconcile = isinstance(exc, ActionOutcomeUnknownError) or (
+                "pending durable approval" in str(exc)
+            )
             return protocol_response(
                 status_code=409,
-                code="session_pending_approval",
-                message=(
-                    "session has a pending durable approval; decide or reconcile it "
-                    "before starting another run"
+                code=(
+                    "session_manual_reconcile_required"
+                    if isinstance(exc, ActionOutcomeUnknownError)
+                    else "session_pending_approval"
+                    if manual_reconcile
+                    else "session_run_conflict"
                 ),
-                recovery=RecoveryAction.MANUAL_RECONCILE,
+                message=redact_public_text(str(exc), max_chars=300),
+                retryable=not manual_reconcile,
+                recovery=(
+                    RecoveryAction.MANUAL_RECONCILE
+                    if manual_reconcile
+                    else RecoveryAction.RETRY_LATER
+                ),
             )
         if not admitted:
             return protocol_response(
                 status_code=409,
                 code="session_run_conflict",
                 message="session already has an active run",
+                retryable=True,
+                recovery=RecoveryAction.RETRY_LATER,
+            )
+        admitted_lease = service.admitted_session_run_lease(session_id)
+        if admitted_lease is None:
+            return protocol_response(
+                status_code=409,
+                code="session_run_conflict",
+                message="session run lease is unavailable",
                 retryable=True,
                 recovery=RecoveryAction.RETRY_LATER,
             )
@@ -1261,12 +1286,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 )
                 yield _sse_event("agent.stream_error", payload)
             finally:
-                service.release_session_run(session_id)
+                service.release_session_run(session_id, admitted_lease)
 
         return StreamingResponse(
             stream_events(),
             media_type="text/event-stream",
-            background=BackgroundTask(service.release_session_run, session_id),
+            background=BackgroundTask(
+                service.release_session_run,
+                session_id,
+                admitted_lease,
+            ),
         )
 
     @app.post("/v1/sessions/{session_id}/cancel")

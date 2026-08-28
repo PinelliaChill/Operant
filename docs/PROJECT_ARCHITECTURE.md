@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-08-27
+> 最后更新：2026-08-28
 >
-> 对应版本：Operant 2.0 M0 后端协议基线
+> 对应版本：Operant 2.0 Phase 0 后端可靠性收尾
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -43,7 +43,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 会话级模型、effort 和 budget 覆盖；
 - Session、Agent 和 Event 的 SQLite 持久化；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1/v2/v3 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1/v2/v3/v4 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -54,9 +54,10 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - Role Tool Policy 双层校验；
 - 持久化 Action Gateway：副作用 Tool Call 的规范化 Action Hash、Receipt、结果重放和未知结果保护；
 - 高风险命令的持久化审批请求、单次决定、过期、审计，以及同进程暂停后继续执行；
-- 总超时和运行中取消；
-- Session 级 single-flight：同一 Session 同时只允许一个 Agent run，持久 Pending Approval 也会阻止
-  重启后误开新 run；不同 Session 仍可并发；
+- Token、精确费用、时间和 Tool Call 硬预算；依赖的 usage 或定价缺失时保持 unknown 并安全停止；
+- 总超时和全 Workflow 协作式取消；取消会持久传播到并行 Explorer 和其他活跃 Agent；
+- SQLite Session run lease：同一 Session 跨服务进程只允许一个 Agent run，持久 Pending Approval 也会
+  阻止重启后误开新 run；租约以 token、generation 和 owner 防止旧执行者 ABA 释放或续期；
 - 完整的 Typer CLI；
 - Model、Role、Session、审批和 Workflow 的 FastAPI/SSE；REST Command 提供持久化
   `Idempotency-Key` Receipt、Action Hash、结果重放和统一错误信封；
@@ -86,11 +87,10 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ### 尚未完成
 
-- Token/费用预算的强制执行与真实费用计算；
 - 模型流中任意字节位置的恢复，以及结果未知 Coder 写操作的无人值守恢复；
 - 审批 Future 的跨进程恢复；
 - 使用真实 Provider 完成 Exp 19—24、形成统计性实验结论和用户学习验收；
-- 自动模型价格发现、预算强制执行、显著性分析，以及中断 Evaluation Run 的逐 Result 自动续跑；
+- 自动模型价格发现、显著性分析，以及中断 Evaluation Run 的逐 Result 自动续跑；
 - Web 身份认证、设备配对和远程访问控制；
 - 通用 Graph Runtime、Definition Compiler、Team/Mailbox 和智能创建；
 - 类型化 TypeScript/Python Client SDK、React GUI/PWA、Textual TUI 和 Tauri 桌面壳；
@@ -337,6 +337,7 @@ Model Profile 保存模型的非敏感配置：
 - Base URL；
 - Secret Reference；
 - 上下文窗口和默认 Token 预算元数据；
+- 成对配置的每百万输入/输出 Token 价格；
 - 支持的 effort 档位；
 - effort 到 Provider 参数的映射；
 - 启用状态。
@@ -352,7 +353,7 @@ Role Preset 保存可编辑的角色配置：
 - 绑定的 Model Profile；
 - effort；
 - Tool Policy；
-- 最大轮次、连续相同测试失败上限、超时、输出 Token 和费用预算；
+- 最大轮次、连续相同测试失败上限、超时、输出 Token、费用和 Tool Call 预算；
 - Memory Scope；
 - 状态和版本。
 
@@ -378,6 +379,7 @@ Snapshot 保存：
 - 角色名称与 System Prompt；
 - Model Profile ID、模型 ID 和 Provider 地址；
 - Secret Reference 名称；
+- 成对配置的每百万输入/输出 Token 价格；
 - effort 及其 Provider 参数映射；
 - Tool Policy；
 - Budget；
@@ -398,12 +400,25 @@ Session 表示一次具有固定执行配置的会话。AgentInstance 表示该 
 CREATED → RUNNING → COMPLETED / FAILED / CANCELLED / TIMED_OUT
 ```
 
-一个服务进程内，同一 Session 同时只允许一个 run。FastAPI 在建立 SSE 响应前先完成 admission；第二个
-同 Session 请求直接返回 JSON 409，不会先返回 SSE 头，也不会创建多余 AgentInstance。直接调用
-Application Service 时同样执行该保护，但以结构化 `agent.stream_error` 返回冲突。不同 Session 拥有
-独立 run slot，可以并发；取消、生成器关闭或终态都会释放 slot。该 single-flight 是单服务进程内的
-`Lock + set`，SQLite Session lease 尚未实现；当前部署仍假设只有一个 Operant Service 进程，多进程
-不能依赖这项保护互斥同一 Session。
+同一 Session 同时只允许一个 run。FastAPI 在建立 SSE 响应前先完成 admission；第二个同 Session 请求
+直接返回 JSON 409，不会先返回 SSE 头，也不会创建多余 AgentInstance。Application Service 同样执行
+该保护，但以结构化 `agent.stream_error` 返回冲突。不同 Session 拥有独立 run slot，可以并发。
+
+single-flight 的权威是 SQLite `session_run_leases`。租约记录 owner、随机 token、单调 generation、
+可选 Workflow/Agent 绑定、取消位和到期时间；获取、续期、释放、取消及 Action Gateway 执行栅栏都在
+`BEGIN IMMEDIATE` 事务中比较 token + generation + owner，旧 watcher/finally 不能操作后来回收的新租约。
+Service 按租约 TTL 的三分之一独立续期，因此即使正在等待长时间 Provider 流也会维持租约；同一 Service
+还保留轻量本地 slot，避免旧 coroutine 清理后来 run 的审批 Future。过期租约可被另一进程回收，但若
+旧 Agent 留有 `in_progress`/`outcome_unknown` 写 Receipt，会先落成 `outcome_unknown` 并拒绝自动重放，
+要求人工核对。绑定 Workflow 的租约在获取事务内再次确认 Workflow 仍为 `running`，关闭取消与创建新
+Agent 的竞态。
+
+Workflow 取消在同一个 `BEGIN IMMEDIATE` 事务中把 Run 改为 `cancelled`，并为其全部未释放 child
+Session lease 写入 cancel bit；提交后再唤醒本进程取消信号。并行 Explorer 和其他活跃 Agent 会停止，
+后续阶段、Agent 和工具副作用不再启动。启动激活与阶段/终态推进都使用 expected-status CAS，迟到事件
+不能把 `cancelled` 改回 `running` 或其他终态；重复取消是幂等操作。取消是协作式栅栏：已经交给外部
+执行器、无法撤回的写操作仍可能结果未知，必须按 Tool Receipt 的人工核对边界处理，不能宣称可回滚
+该外部动作。
 
 ### Action Receipt、Command Receipt 与 Approval
 
@@ -438,6 +453,19 @@ Application Service 都拒绝启动新 run；必须先决定该审批或等待�
 `WorkflowRunEvent` 使用 SQLite 单调递增序号作为 Cursor 保存 Workflow 和角色运行事件。事件在 SSE
 发出前先提交 SQLite，Query 和 SSE 回放都使用 `sequence > after_cursor` 的开区间语义。客户端断线后
 可以查询已提交阶段和对应 Session；SQLite 是恢复权威，JSONL 只用于脱敏导出，不参与状态判断。
+
+协调器在创建 `WorkflowRun(created)` 后、改为 `running` 前，必须原子取得 SQLite
+`workflow_execution_leases` guard。guard 使用 owner、随机 token、单调 generation、TTL 和独立
+heartbeat；每个新 child Session 在同一 admission 事务中同时核对 Workflow 状态和当前 guard，旧协调器
+失效后不能再创建 Agent。长时间等待 Provider 时 heartbeat 仍独立运行；续期失败会唤醒协调器、取消并
+等待全部活跃 child Session 收束，且任何新 Action Gateway 副作用都会被 Session lease fencing 拒绝。
+只有 expected token + generation + owner 仍匹配时，旧协调器才能把仍为 `running` 的 run 条件更新为
+`interrupted`，不会覆盖用户已经写入的 `cancelled`，也不会用 stale guard 改写其他执行者状态。
+
+同一个 `running` run 不允许回收 guard。进程崩溃后，活跃 guard 或 child Session lease 的 TTL 未到期
+时，第二实例 `initialize()` 不会中断该 run；TTL 到期后才转为 `interrupted`，随后显式 resume 创建新的
+WorkflowRun ID 并从阶段检查点恢复。没有 v4 guard/child lease 的 legacy 或孤立 `running` row 在
+`initialize()` 时立即转为 `interrupted`，不使用会掩盖真实崩溃的时间宽限。
 
 ### Memory
 
@@ -551,10 +579,17 @@ Loop 的关键规则：
 9. 继续调用模型；
 10. 没有 Tool Call 时结束；
 11. 高风险命令先持久化审批请求；批准后再次校验精确 Action Hash，再执行原动作；
-12. 达到 `max_turns` 时强制停止。
+12. 在模型返回后的任何 Tool Receipt/审批/执行之前核对累计 Token、精确费用和 Tool Call 预算；
+13. 达到 `max_turns` 或任一硬预算时强制停止。
 
 `ApplicationService` 以 Snapshot 的 `timeout_seconds` 为整次运行设置绝对截止时间，并可通过
-取消信号中止正在等待的模型流。`max_output_tokens` 和 `max_cost_usd` 仍只建模，尚未计量。
+取消信号中止正在等待的模型流。`max_output_tokens` 是整个 Agent run 的累计 completion Token 上限，
+每一轮传给 Provider 的 `max_completion_tokens` 只取剩余额度；`max_tool_calls` 在准备第 N+1 个调用、
+尚未预留 Receipt 或发起审批前停止。费用只使用 Snapshot 中成对冻结的输入/输出单价，并且只有该轮
+prompt 与 completion usage 都已知时才累计；不会用 total Token 反推缺失分量，也不会凭模型名猜价格。
+若启用了依赖 usage/价格的硬预算而必需数据未知，Loop 会 fail closed，产生可审计
+`budget.exhausted`，且该模型响应的工具不会进入 `tool.started` 或副作用链路。没有配置这些硬预算时，
+缺失 usage 仍以 `null`/unknown 保存，绝不伪装为 0。
 
 ## 9. Runtime 事件
 
@@ -574,6 +609,7 @@ Loop 的关键规则：
 | `agent.completed` | Agent 正常完成 |
 | `agent.max_turns` | 达到最大轮次 |
 | `agent.no_progress` | 重复测试失败触发安全停止 |
+| `budget.exhausted` | Token、费用或 Tool Call 预算耗尽，或硬预算所需 usage/定价未知而安全停止 |
 | `agent.cancelled` | 用户取消运行 |
 | `agent.timed_out` | 达到整次运行总超时 |
 | `agent.failed` | Provider 或运行时异常；只保存异常类型，不保存原始错误正文 |
@@ -581,7 +617,8 @@ Loop 的关键规则：
 Application Service 会把 RuntimeEvent 转换为持久化 Event，关联 Session 和 AgentInstance。
 `agent.started` 的 Event payload 还包含角色版本、模型、Provider 和 effort，使审计可区分每次
 模型调用来源。Provider 返回 usage 时，`model.completed` 保存 Token 统计；模型、工具和 Agent
-终态事件保存单调时钟耗时。上游不返回 usage 时字段保持未知，不伪装为 0。
+终态事件保存单调时钟耗时。上游不返回 usage 时字段保持未知，不伪装为 0；Trace 对 prompt、completion
+和 total 三个计数分别传播 unknown，任何分量未知都不会把对应聚合改写为零或从其他分量反推。
 
 每条持久化 Session Event 的 SQLite `sequence` 同时作为公开 `cursor` 返回；查询使用严格大于
 `after_cursor` 的开区间语义。事件 payload、Tool Result、测试反馈、命令输出和 Receipt Result 使用
@@ -761,13 +798,16 @@ SQLiteStore 当前创建以下表：
 | `approval_requests` | 保存绑定精确 Tool Receipt/Action Hash 的审批请求与过期时间 |
 | `approval_decisions` | 保存审批的唯一决定 |
 | `approval_audit_events` | 保存请求、决定和过期的只追加审计事件 |
+| `session_run_leases` | 保存 Session 跨进程 single-flight、Workflow/Agent 绑定、取消位和执行栅栏 |
+| `workflow_execution_leases` | 保存 Workflow 协调器 owner、token、generation、TTL 和释放状态 |
 
 当前使用 Python 标准库 `sqlite3`，每个 Store 操作创建独立连接，并启用外键约束。写操作使用
 事务；异常时回滚。Migration 使用 `BEGIN IMMEDIATE`，当前版本为：
 
 1. v1：Week 1 Model/Role/Session/Agent/Event 基线；
 2. v2：Week 3—4 Workflow、Memory、FTS5 和 Evaluation 表；
-3. v3：M0 Tool/REST Receipt、持久 Approval/Audit、Evaluation Event 和 Cursor 索引。
+3. v3：M0 Tool/REST Receipt、持久 Approval/Audit、Evaluation Event 和 Cursor 索引；
+4. v4：Session run lease 与 Workflow coordinator execution lease。
 
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
@@ -778,18 +818,20 @@ UNIQUE、CHECK、外键声明、普通索引属性与列顺序、FTS5 类型/列
 无版本的真实 Week 1 数据库和完整 Week 1—4 数据库可在保留数据的前提下识别并升级；历史识别、
 preview 收编、逐步升级、每步 manifest 复验和历史写入全部位于同一个 `BEGIN IMMEDIATE` 事务中，失败
 不会留下半套表，并发初始化会串行到同一目标版本。已知的未提交 M0 preview 只能在精确历史名称、
-checksum 和 schema 形状全部匹配时收编；最终 v3 还能把该 preview 精确升级到 Evaluation Event 完整
-契约，未知或漂移的 preview 一律拒绝。
+checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
+随后再升级 v4 execution lease；未知或漂移的 preview 一律拒绝。
 
-v3 只提供一个刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(2, isolated=True)`，且
-`tool_action_receipts`、`command_executions`、审批/审计和 Evaluation Event 等全部 M0 表都为空；否则
-拒绝回滚。v1、v2 不可 downgrade，生产数据迁移不是通用双向回滚机制。
+v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；回滚
+v4 要求两张 execution lease 表为空，继续回滚 v3 还要求 Tool/Command Receipt、审批/审计和
+Evaluation Event 等全部 M0 表为空。v1、v2 不可 downgrade，生产数据迁移不是通用双向回滚机制。
 
 Store 初始化时还会在同一事务内把遗留的 `running` Workflow 和 Evaluation Run
 安全标记为 `interrupted`，并把对应 Pending Evaluation Result 原地转为 Interrupted、重算完整 Suite
 计划分母；遗留 REST Command 变为 `manual_reconcile_required`，遗留 Tool Action 变为
-`outcome_unknown`，待审批记录按时间过期。这个实现仍假设单个 Operant 服务进程拥有 SQLite；多进程
-Scheduler 租约尚未实现。
+`outcome_unknown`，待审批记录按时间过期。Session run 和 Workflow coordinator 已使用 SQLite lease
+实现同库多服务进程互斥；这不等于分布式 Core 或高可用。REST Command Receipt 仍没有独立 owner/liveness
+lease，另一个服务进程执行 `initialize()` 会把全库遗留 `in_progress` Command 保守转为人工核对，因此
+当前多进程能力只承诺 Session/Workflow 不重复执行，不承诺多个常驻 Core 进程的无中断 Command 协调。
 
 ## 13. CLI
 
@@ -1121,8 +1163,8 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 - artifact 隔离复制、越界软链接排除、外部验证超时/进程组终止和变更路径检查；
 - Session/Workflow Variant、Memory 开关与禁用回写、实际角色漂移、指标/费用聚合和五类 Trace RCA；
 - Evaluation CLI/API/SSE、错误清洗和本地 artifact 路径脱敏。
-- v1/v2/v3 Migration 的旧库保留数据升级、原子失败、并发初始化、校验和/版本损坏拒绝，以及只有显式
-  isolated 且 M0 表为空时才允许的 v3 rollback；逐版本冻结 manifest/checksum、完整受管对象/DDL/列/
+- v1/v2/v3/v4 Migration 的旧库保留数据升级、原子失败、并发初始化、校验和/版本损坏拒绝，以及只有
+  显式 isolated 且对应租约/M0 表为空时才允许的受限 rollback；逐版本冻结 manifest/checksum、完整受管对象/DDL/列/
   PK/UNIQUE/CHECK/FK/index/trigger/FTS integrity/AUTOINCREMENT/`foreign_key_check` 漂移拒绝，以及
   真实 Week 1/完整 Week 1—4/精确 preview 的兼容升级；
 - REST `Idempotency-Key` 自动生成、相同 Action Hash 结果重放、不同 Hash 冲突、Handler/首帧前流失败
@@ -1133,7 +1175,12 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 - Approval 初始 pending、Receipt 上下文/状态精确绑定、持久正向 Decision 执行校验、决定/过期/CAS/
   审计/重启查询，以及决定落库早于 Future 创建的竞态恢复；
 - Session single-flight、API 建立 SSE 前 JSON 409、Service 层兜底、Pending Approval 重启阻断，
-  以及不同 Session 并发；
+  跨进程并发 acquire 只有一个胜者、lease 过期回收、stale token/generation/owner fencing、取消后
+  Action Gateway 禁止新副作用，以及不同 Session 并发；
+- Workflow coordinator guard、活跃 guard/child lease 的多实例初始化保护、guard 过期崩溃恢复、
+  长 Provider 等待时 guard 丢失收束、并行 Explorer 全取消、重复取消和取消后不启动 Coder；
+- 累计 completion Token、精确定价费用、整次运行时间和 Tool Call 硬预算，usage/定价 unknown 时
+  副作用前 fail closed，以及 Provider 剩余额度、Trace/Evaluation unknown 传播；
 - Session、Workflow、Evaluation 的真实 SQLite Cursor、开区间 Query、SSE `id` 一致性和
   `Last-Event-ID` 已提交事件回放；
 - 统一错误信封、校验输入与未知异常不泄密，以及首次非流 Command、REST 4xx/5xx、命令输出、
@@ -1150,7 +1197,10 @@ uv run pytest
 git diff --check
 ```
 
-2026-08-27 的 M0 后端协议基线最终门禁使用确定性 Provider、隔离 fixture、临时
+2026-08-28 的 Phase 0 可靠性收尾使用确定性 Provider、隔离 fixture 和临时 `OPERANT_DB_PATH`：
+完整 pytest 为 194 通过、1 个条件性 Docker 测试跳过，并保留 1 个上游 Starlette TestClient 弃用
+警告；Ruff format/check、mypy 和 `git diff --check` 通过。未设置真实 Provider，也不把 Docker skip
+视为容器验收。2026-08-27 的 M0 后端协议基线最终门禁使用确定性 Provider、隔离 fixture、临时
 `OPERANT_DB_PATH` 和 FastAPI TestClient：完整 pytest 为 161 通过、1 个条件性 Docker 测试跳过，
 并保留 1 个上游 Starlette TestClient 弃用警告；Ruff
 format/check、mypy 和 `git diff --check` 通过。未设置真实 Provider，也不把 Docker skip 视为容器
@@ -1210,31 +1260,30 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 
 ## 18. 已知技术债务
 
-1. `max_output_tokens` 和 `max_cost_usd` 目前只建模，尚未执行计量；
-2. SQLite 使用同步 API，运行规模扩大后需要评估异步边界；
-3. Workflow 仍是固定状态机和有限次数返工；恢复只发生在已持久化的阶段边界，不支持从任意模型
+1. SQLite 使用同步 API，运行规模扩大后需要评估异步边界；
+2. Workflow 仍是固定状态机和有限次数返工；恢复只发生在已持久化的阶段边界，不支持从任意模型
    流位置继续。Coder 写入结果未知时必须人工核对，不能无人值守恢复；
-4. Approval Request、Decision 和 Audit 已持久化，但待审批工具调用的 `Future` 与任意模型流位置仍只
+3. Approval Request、Decision 和 Audit 已持久化，但待审批工具调用的 `Future` 与任意模型流位置仍只
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
-5. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
+4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-6. 已有 v1/v2/v3 原子 Migration 和旧库识别升级，但 v3 rollback 仅用于显式 isolated 且 M0 审计表
-   全空的数据库；没有通用生产 downgrade、多进程 migration lease、Session run lease 或多 Writer
-   协调；
-7. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，但不支持任意模型流位置续传；SSE 断线
+5. 已有 v1/v2/v3/v4 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
+   但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
+   Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
+6. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，但不支持任意模型流位置续传；SSE 断线
    不保证后台继续，客户端仍需查询持久状态并按安全恢复规则操作；
-8. Web 工作台和 API 没有身份认证、CSRF 防护、设备配对或 Remote Gateway，只能绑定受信任本机地址；
-9. Evaluation Runner v1 已有可复现 Suite、隔离 artifact、外部验证、指标和五类 Trace RCA，但模型
-   价格必须由 Suite 固定提供，尚无自动价格发现、预算强制执行、统计显著性、真实模型 Exp 19—24
-   结果或逐 Result 断点续跑；中断组合会保留为不可重放的 Interrupted Result，当前仍需新建 Run 才能
-   重新执行；
-10. Docker Runner 已跑通真实隔离集成用例，第三周六角色 Workflow 也已在可信临时 Host fixture 上
+7. Web 工作台和 API 没有身份认证、CSRF 防护、设备配对或 Remote Gateway，只能绑定受信任本机地址；
+8. Evaluation Runner v1 已有可复现 Suite、隔离 artifact、外部验证、指标和五类 Trace RCA，但模型
+   价格仍须由配置/Suite 固定提供，尚无自动价格发现、Evaluation Run 级总预算与调度、统计显著性、
+   真实模型 Exp 19—24 结果或逐 Result 断点续跑；中断组合会保留为不可重放的 Interrupted Result，
+   当前仍需新建 Run 才能重新执行；
+9. Docker Runner 已跑通真实隔离集成用例，第三周六角色 Workflow 也已在可信临时 Host fixture 上
     完成真实模型验收；两者仍是不同证据，尚未完成“真实模型 + Docker Coder”的同一次端到端验收，
     也尚未构建专用 Operant 镜像；
-11. 通用 Graph Runtime、Definition/Revision、Team/Mailbox、React GUI/PWA、TUI、Tauri、Remote
+10. 通用 Graph Runtime、Definition/Revision、Team/Mailbox、React GUI/PWA、TUI、Tauri、Remote
     Control、Host Connector、自托管 Relay、Remote Gateway 和 Remote Execution Target 均未实现；
     当前 `/web` 与 `/v1/*` 不能作为这些目标能力的实现证据，也不得直接暴露到公网。
-12. Session/Workflow/Evaluation 事件、Tool/Command Receipt 和 Approval Audit 当前没有 retention、归档或
+11. Session/Workflow/Evaluation 事件、Tool/Command Receipt 和 Approval Audit 当前没有 retention、归档或
     清理策略，会随运行持续增长；M0 尚未实现安全删除与对象级保留策略，不能把容量治理写成已解决。
 
 ## 19. 文档维护规则
@@ -1266,6 +1315,25 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-08-28
+
+- 新增冻结 manifest/checksum 的 SQLite v4：`session_run_leases` 以 owner、token、generation、TTL、
+  Agent/Workflow 绑定和 cancel bit 提供跨服务进程 Session single-flight；`workflow_execution_leases`
+  为协调器起步、阶段间隙和长 Provider 等待提供独立 guard，旧执行者不能续期、释放或创建新 child；
+- Agent Loop 强制累计 completion Token、成对冻结价格计算的精确费用和 Tool Call 预算；整次运行时间
+  继续由 Service 绝对 deadline 强制。依赖 usage/价格的硬预算遇到 unknown 时产生
+  `budget.exhausted`，并在 `tool.started`、Receipt、审批和副作用之前停止；
+- Workflow 取消改为在同一事务内持久化 `cancelled` 并 fence 全部活跃 child lease，再唤醒本进程任务；
+  并行 Explorer、其他活跃 Agent 和后续阶段均停止。启动和事件推进使用状态 CAS；guard 丢失会取消
+  child、条件写入 `interrupted`，不覆盖用户取消，也不自动重放结果未知的 Coder/Tool 写入；
+- Model Profile 增加可选成对输入/输出单价，Budget 增加可选 `max_tool_calls`，Model usage 三个计数可
+  分别保持 `null`；Trace 与 Evaluation 不将缺失计数改写为 0。REST/SSE 既有成功响应保持兼容，未知
+  写入 lease 回收返回人工核对语义；客户端增量契约记录为待 OpenCode 确认的 COM-20260827-007；
+- 新增预算、并发 acquire、租约过期/ABA/fencing、双实例初始化、崩溃恢复、重复取消、并行取消、
+  guard 丢失、未知写入和恢复边界测试；最终门禁为 194 通过、1 个 Docker 条件 skip、1 个上游 warning，
+  Ruff format/check、mypy 和 `git diff --check` 全绿。未实现 Graph、Remote Control、Relay、GUI、TUI、
+  Tauri 或任意模型流位置恢复，未修改 `clients/`、`sdk/` 和前端设计文档。
 
 ### 2026-08-27
 

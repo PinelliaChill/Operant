@@ -61,17 +61,41 @@ def summarize_session_trace(session: Session, events: list[Event]) -> TraceSumma
     prompt_tokens = 0
     completion_tokens = 0
     total_tokens = 0
-    has_usage = False
+    model_usage_seen = False
+    prompt_tokens_known = True
+    completion_tokens_known = True
+    total_tokens_known = True
     error_types: list[str] = []
     duration_ms: int | None = None
 
     for event in events:
         usage = event.payload.get("usage")
-        if event.event_type == "model.completed" and isinstance(usage, dict):
-            prompt_tokens += _safe_int(usage.get("prompt_tokens"))
-            completion_tokens += _safe_int(usage.get("completion_tokens"))
-            total_tokens += _safe_int(usage.get("total_tokens"))
-            has_usage = True
+        if event.event_type == "model.completed":
+            model_usage_seen = True
+            if not isinstance(usage, dict):
+                prompt_tokens_known = False
+                completion_tokens_known = False
+                total_tokens_known = False
+            else:
+                prompt = usage.get("prompt_tokens")
+                completion = usage.get("completion_tokens")
+                total = usage.get("total_tokens")
+                if isinstance(prompt, int) and not isinstance(prompt, bool) and prompt >= 0:
+                    prompt_tokens += prompt
+                else:
+                    prompt_tokens_known = False
+                if (
+                    isinstance(completion, int)
+                    and not isinstance(completion, bool)
+                    and completion >= 0
+                ):
+                    completion_tokens += completion
+                else:
+                    completion_tokens_known = False
+                if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+                    total_tokens += total
+                else:
+                    total_tokens_known = False
         candidate_duration = event.payload.get("duration_ms")
         if event.event_type.startswith("agent.") and isinstance(candidate_duration, int):
             duration_ms = max(duration_ms or 0, candidate_duration)
@@ -96,9 +120,11 @@ def summarize_session_trace(session: Session, events: list[Event]) -> TraceSumma
         tool_calls=sum(event.event_type == "tool.started" for event in events),
         tool_failures=sum(event.event_type == "tool.failed" for event in events),
         test_feedback_events=sum(event.event_type == "test.failure_feedback" for event in events),
-        prompt_tokens=prompt_tokens if has_usage else None,
-        completion_tokens=completion_tokens if has_usage else None,
-        total_tokens=total_tokens if has_usage else None,
+        prompt_tokens=(prompt_tokens if model_usage_seen and prompt_tokens_known else None),
+        completion_tokens=(
+            completion_tokens if model_usage_seen and completion_tokens_known else None
+        ),
+        total_tokens=total_tokens if model_usage_seen and total_tokens_known else None,
         duration_ms=duration_ms,
         error_types=tuple(error_types),
     )
@@ -128,6 +154,9 @@ def session_trace_jsonl(session: Session, events: list[Event]) -> Iterable[str]:
                 "command_execution": snapshot.tool_policy.command_execution,
                 "max_turns": snapshot.budget.max_turns,
                 "timeout_seconds": snapshot.budget.timeout_seconds,
+                "max_output_tokens": snapshot.budget.max_output_tokens,
+                "max_cost_usd": snapshot.budget.max_cost_usd,
+                "max_tool_calls": snapshot.budget.max_tool_calls,
                 "memory_scope": snapshot.memory_scope,
             },
         },
@@ -172,7 +201,7 @@ def summarize_workflow_trace(
         values = [getattr(trace, field) for trace in session_traces]
         token_totals[field] = (
             sum(value for value in values if value is not None)
-            if any(value is not None for value in values)
+            if values and all(value is not None for value in values)
             else None
         )
     error_types = list(unique(error for trace in session_traces for error in trace.error_types))
@@ -295,6 +324,10 @@ def _sanitized_payload(event: Event) -> dict[str, Any]:
         "consecutive_failures",
         "max_consecutive_test_failures",
         "max_turns",
+        "kind",
+        "limit",
+        "observed",
+        "usage_state",
         "error_type",
     }
     sanitized = {key: payload[key] for key in safe_keys if key in payload}
@@ -354,6 +387,7 @@ def _terminal_status(events: list[Event]) -> str:
         "agent.failed": "failed",
         "agent.no_progress": "failed",
         "agent.max_turns": "failed",
+        "budget.exhausted": "failed",
     }
     for event in reversed(events):
         status = terminal.get(event.event_type)

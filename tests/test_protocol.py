@@ -11,7 +11,12 @@ from typing import Any
 import pytest
 
 from operant.application.service import ApplicationService, _PersistentActionGateway
-from operant.domain.actions import ApprovalRequest, ApprovalStatus, ToolActionReceipt
+from operant.domain.actions import (
+    ApprovalRequest,
+    ApprovalStatus,
+    ToolActionReceipt,
+    ToolActionReceiptStatus,
+)
 from operant.domain.messages import Message, ModelResponse, ProviderEvent, ToolCall, ToolDefinition
 from operant.domain.models import (
     ModelProfile,
@@ -815,6 +820,56 @@ async def test_approval_decision_between_request_commit_and_future_creation_resu
     listed = restarted.list_pending_approvals(session.id)
     assert listed[0]["approval_id"] == pending.id
     assert listed[0]["continuation_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_live_approval_denial_does_not_preempt_agent_receipt_finalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "change.txt").write_text("change\n", encoding="utf-8")
+    service, role_id = _service_with_role(
+        tmp_path,
+        GitAddProvider(),
+        policy=ToolPolicy(allowed_tools=("run_command",), command_execution=True),
+    )
+    session = service.create_session(role_id)
+    original_create = service.store.create_approval_request
+
+    def create_then_deny(approval: ApprovalRequest) -> ApprovalRequest:
+        persisted = original_create(approval)
+        service.decide_approval(
+            approval.session_id,
+            approval.tool_call_id,
+            approved=False,
+        )
+        return persisted
+
+    monkeypatch.setattr(service.store, "create_approval_request", create_then_deny)
+    events = [
+        event
+        async for event in service.run_session(
+            session.id,
+            user_message="do not stage the file",
+            workspace=tmp_path,
+        )
+    ]
+
+    assert any(event.event_type == "tool.failed" for event in events)
+    assert events[-1].event_type == "agent.completed"
+    approval = service.store.list_approval_requests(session.id, status=None)[0]
+    receipt = service.store.get_tool_action_receipt(approval.tool_action_receipt_id)
+    assert receipt.status is ToolActionReceiptStatus.FAILED
+    assert receipt.error_code == "approval_denied"
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert staged.stdout == ""
 
 
 @pytest.mark.parametrize(
