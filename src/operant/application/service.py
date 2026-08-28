@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import Any
+
+from pydantic import TypeAdapter, ValidationError
 
 from operant.application.defaults import default_role_presets
 from operant.application.factory import AgentFactory
@@ -13,6 +16,7 @@ from operant.application.trace import (
     summarize_workflow_trace,
     workflow_trace_jsonl,
 )
+from operant.artifacts import ArtifactStore
 from operant.domain.actions import (
     ApprovalRequest,
     ApprovalStatus,
@@ -45,6 +49,16 @@ from operant.domain.models import (
     Session,
     new_id,
 )
+from operant.domain.threads import (
+    Artifact,
+    ArtifactSensitivity,
+    ArtifactSourceRef,
+    ConversationThread,
+    Item,
+    ItemPayload,
+    ThreadStatus,
+    Turn,
+)
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
 from operant.persistence.sqlite import (
     ActionOutcomeUnknownError,
@@ -59,6 +73,9 @@ from operant.protocol import redact_public_data, redact_public_text
 from operant.providers.base import ModelProvider
 from operant.runtime.loop import AgentLoop, RuntimeEvent, ToolActionClaim
 from operant.tools.workspace import ApprovalCallback, ToolError, WorkspaceTools
+
+DEFAULT_ARTIFACT_MAX_SIZE_BYTES = 16 * 1024 * 1024
+_ITEM_PAYLOAD_ADAPTER: TypeAdapter[ItemPayload] = TypeAdapter(ItemPayload)
 
 
 class _PersistentActionGateway:
@@ -226,6 +243,9 @@ class ApplicationService:
         *,
         session_lease_ttl_seconds: float = 15.0,
         session_lease_heartbeat_seconds: float | None = None,
+        artifact_root: str | Path | None = None,
+        artifact_max_size_bytes: int = DEFAULT_ARTIFACT_MAX_SIZE_BYTES,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         if session_lease_ttl_seconds <= 0:
             raise ValueError("session lease TTL must be positive")
@@ -246,9 +266,29 @@ class ApplicationService:
         )
         if not 0 < self._session_lease_heartbeat_seconds < session_lease_ttl_seconds:
             raise ValueError("session and workflow lease heartbeat must be positive and below TTL")
+        if artifact_max_size_bytes < 1:
+            raise ValueError("artifact maximum size must be positive")
+        if artifact_store is not None and artifact_root is not None:
+            raise ValueError("provide artifact_store or artifact_root, not both")
+        self._artifact_store = artifact_store
+        self._artifact_root = (
+            self.store.path.parent.absolute() / "artifacts"
+            if artifact_root is None
+            else Path(artifact_root)
+        )
+        if not self._artifact_root.is_absolute():
+            raise ValueError("artifact root must be absolute")
+        self._artifact_max_size_bytes = artifact_max_size_bytes
 
     def initialize(self) -> None:
         self.store.initialize()
+
+    def close(self) -> None:
+        """Release long-lived storage descriptors owned by this service."""
+
+        if self._artifact_store is not None:
+            self._artifact_store.close()
+            self._artifact_store = None
 
     # Model Registry
 
@@ -369,6 +409,143 @@ class ApplicationService:
     ) -> list[Event]:
         self.get_session(session_id)
         return self.store.list_events(session_id, after_cursor=after_cursor, limit=limit)
+
+    # Canonical Thread history and Artifact metadata
+
+    def create_thread(self, thread: ConversationThread) -> ConversationThread:
+        """Create one explicit Thread without synthesizing legacy history."""
+
+        if thread.status is not ThreadStatus.ACTIVE or thread.archived_at is not None:
+            raise ValueError("new threads must start active")
+        return self.store.create_thread(thread)
+
+    def get_thread(self, thread_id: str) -> ConversationThread:
+        return self.store.get_thread(thread_id)
+
+    def list_threads(
+        self,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+        parent_thread_id: str | None = None,
+        workspace_ref: str | None = None,
+        status: ThreadStatus | str | None = None,
+    ) -> list[ConversationThread]:
+        return self.store.list_threads(
+            after_cursor=after_cursor,
+            limit=limit,
+            parent_thread_id=parent_thread_id,
+            workspace_ref=workspace_ref,
+            status=status,
+        )
+
+    def archive_thread(self, thread_id: str) -> ConversationThread:
+        return self.store.archive_thread(thread_id)
+
+    def set_thread_status(
+        self,
+        thread_id: str,
+        status: ThreadStatus | str,
+    ) -> ConversationThread:
+        return self.store.set_thread_status(thread_id, status)
+
+    def create_turn(self, turn: Turn) -> Turn:
+        return self.store.create_turn(turn)
+
+    def list_turns(
+        self,
+        thread_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[Turn]:
+        return self.store.list_turns(
+            thread_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+
+    def append_item(self, item: Item) -> Item:
+        """Redact bounded dynamic content before accepting an immutable Item."""
+
+        sanitized = redact_public_data(item.payload.model_dump(mode="json"))
+        try:
+            payload = _ITEM_PAYLOAD_ADAPTER.validate_python(sanitized)
+        except ValidationError as exc:
+            raise ValueError("item payload is invalid after safety filtering") from exc
+        canonical = Item.model_validate({**item.model_dump(), "payload": payload})
+        return self.store.append_item(canonical)
+
+    def list_items(
+        self,
+        thread_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+        turn_id: str | None = None,
+    ) -> list[Item]:
+        return self.store.list_items(
+            thread_id,
+            after_cursor=after_cursor,
+            limit=limit,
+            turn_id=turn_id,
+        )
+
+    def create_artifact(
+        self,
+        *,
+        content: bytes,
+        media_type: str,
+        sensitivity: ArtifactSensitivity = ArtifactSensitivity.NORMAL,
+        source_refs: Collection[ArtifactSourceRef] = (),
+        retention_policy_ref: str = "default",
+    ) -> tuple[Artifact, bool]:
+        """Validate references before publishing, then register metadata atomically."""
+
+        source_refs = tuple(source_refs)
+        self.store.validate_artifact_source_refs(source_refs)
+        artifact = Artifact(
+            content_hash=hashlib.sha256(content).hexdigest(),
+            media_type=media_type,
+            size_bytes=len(content),
+            sensitivity=sensitivity,
+            source_refs=source_refs,
+            retention_policy_ref=retention_policy_ref,
+        )
+        blob = self._artifact_blob_store().put_bytes(content)
+        return self.store.register_artifact(artifact, storage_key=blob.storage_key)
+
+    def get_artifact(self, artifact_id: str, *, verify: bool = True) -> Artifact:
+        artifact = self.store.get_artifact(artifact_id)
+        if verify:
+            self._artifact_blob_store().verify(
+                artifact.content_hash,
+                artifact.size_bytes,
+            )
+        return artifact
+
+    def list_artifacts(
+        self,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+        sensitivity: ArtifactSensitivity | str | None = None,
+    ) -> list[Artifact]:
+        # Listing is metadata-only and intentionally does not perform O(total
+        # blob bytes) verification. A single-resource GET is the integrity gate.
+        return self.store.list_artifacts(
+            after_cursor=after_cursor,
+            limit=limit,
+            sensitivity=sensitivity,
+        )
+
+    def _artifact_blob_store(self) -> ArtifactStore:
+        if self._artifact_store is None:
+            self._artifact_store = ArtifactStore(
+                self._artifact_root,
+                max_size_bytes=self._artifact_max_size_bytes,
+            )
+        return self._artifact_store
 
     # Workflow persistence
 

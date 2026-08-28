@@ -4,7 +4,7 @@
 >
 > 最后更新：2026-08-28
 >
-> 对应版本：Operant 2.0 Phase 0 后端可靠性收尾
+> 对应版本：Operant 2.0 Phase 1A Thread、Turn、Item 与 Artifact 后端底座
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -42,8 +42,14 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 不可变 Role Snapshot；
 - 会话级模型、effort 和 budget 覆盖；
 - Session、Agent 和 Event 的 SQLite 持久化；
+- 正式 Thread、Turn、Item Canonical History：父子关系、Workspace 绑定、终态/归档、稳定 Cursor 与
+  Thread 内 position；Turn/Item 只追加且不可原地改写或删除；
+- User Message、Agent Message、Tool Call、Tool Result Ref、Artifact Ref、Approval Link、Steering 和
+  System Event 八类类型化 Item；
+- 内容寻址 Artifact Store：SHA-256、media type、size、sensitivity、source refs、retention policy ref，
+  原子写入、并发去重、读取校验和路径/软链接边界；公开领域对象与 API 不暴露 storage key 或本地路径；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1/v2/v3/v4 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1/v2/v3/v4/v5 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -94,6 +100,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - Web 身份认证、设备配对和远程访问控制；
 - 通用 Graph Runtime、Definition Compiler、Team/Mailbox 和智能创建；
 - 类型化 TypeScript/Python Client SDK、React GUI/PWA、Textual TUI 和 Tauri 桌面壳；
+- Context Composer、PromptLayout、Compaction、复杂 `@` 引用和 Artifact 内容下载/导出接口；
 - Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
 
 ## 3. 总体架构
@@ -172,7 +179,10 @@ operant/
 │   │   ├── memory.py             # 三类 Memory、作用域和激活规则
 │   │   ├── models.py             # Model、Role、Snapshot、Session、Agent、Event
 │   │   ├── messages.py           # 模型消息、Tool Call、Provider Event
+│   │   ├── threads.py            # Thread、Turn、八类 Item 与 Artifact metadata
 │   │   └── workflow.py           # WorkflowRun、状态、阶段和任务事件
+│   ├── artifacts/
+│   │   └── store.py              # 内容寻址 blob、原子发布、校验与路径边界
 │   ├── persistence/
 │   │   └── sqlite.py             # Registry、Session、Agent、Event Store
 │   ├── providers/
@@ -220,6 +230,8 @@ Application Service 负责用例编排：
 - 启动 AgentLoop；
 - 管理总超时、取消信号和待审批 Future；
 - 将 RuntimeEvent 写入 SQLite 并回填持久 Cursor；
+- 创建、归档和查询 Thread，追加 Turn/Item，并提供 Thread 内稳定分页与只读 SSE 回放；
+- 先原子发布 Artifact blob，再事务注册不可变 metadata/source refs；单件查询执行完整 hash/size 校验；
 - 为副作用 Tool Call 注入持久化 Action Gateway，管理 Receipt、精确 Action Hash 与审批记录；
 - 根据最终事件更新 Agent 状态；
 - 持久化 Workflow 事件、推进任务状态并支持阶段边界恢复；
@@ -243,6 +255,7 @@ Infrastructure 包含：
 
 - OpenAI-compatible Provider；
 - SQLite Store；
+- 内容寻址 Artifact Store；
 - workspace 文件和命令工具；
 - Evaluation artifact 复制、清单哈希和受限外部验证进程。
 
@@ -419,6 +432,33 @@ Session lease 写入 cancel bit；提交后再唤醒本进程取消信号。并�
 不能把 `cancelled` 改回 `running` 或其他终态；重复取消是幂等操作。取消是协作式栅栏：已经交给外部
 执行器、无法撤回的写操作仍可能结果未知，必须按 Tool Receipt 的人工核对边界处理，不能宣称可回滚
 该外部动作。
+
+### Thread、Turn、Item 与 Artifact
+
+`ConversationThread` 是 Phase 1A 的正式对话身份。它保存稳定 ID、可选父 Thread、不可变 Workspace
+绑定、状态、创建/更新时间和归档时间。新 Thread 固定从 `active` 开始；只能推进到 `completed`、
+`cancelled` 或 `archived`，已终止 Thread 只能继续归档，不能回到 active。父关系和 Workspace 绑定
+创建后不可改写；父 Thread 必须先存在，因此在不可变父关系下不能形成环。
+
+`Turn` 与 `Item` 构成 Canonical History。两者都由 SQLite 分配全表单调 Cursor，并在 Thread 内分配
+从 1 开始的无重复 position；并发分配位于同一个 `BEGIN IMMEDIATE` 事务。Turn 和 Item 一经接受便
+禁止 UPDATE/DELETE，终态或已归档 Thread 也禁止继续追加。Item 使用带 discriminator 的八类 payload：
+User Message、Agent Message、Tool Call、Tool Result Ref、Artifact Ref、Approval Link、Steering 和
+System Event。Artifact/Approval 引用在插入事务中核对；接受前公开动态字段经过 bounded redaction，
+接受后的安全 payload 才成为不可改写的 Canonical History。Phase 1A 不做 Context Composer、Prompt
+Layout 或 Compaction；后续派生摘要不得删除或原地改写这些原始记录。
+
+旧 `Session` 与 `WorkflowRun` 继续保留原表和行为，不会在 Migration 中被猜测性补写为 Thread。
+调用方只能在创建新 Thread 时显式声明 `thread_legacy_refs`；Store 会验证目标旧记录存在，并保证每个
+旧 source 只映射到一个 Thread。该映射用于兼容查询，不转移或覆盖旧状态机的恢复权威。
+
+`Artifact` 公开对象只保存内容 hash、media type、size、sensitivity、source refs、retention policy ref
+和时间；没有本地路径或正文。blob 由独立 Artifact Store 按小写 SHA-256 派生受控相对 key，在同一
+文件系统临时文件完整写入并 fsync 后以 create-if-absent hardlink 原子发布；并发相同内容复用同一 blob，
+已有目标必须重新核对 hash/size。目录从绝对 root 开始逐组件以 no-follow 语义打开并核对 inode/真实
+大小写，拒绝路径穿越、软链接、非普通文件、目录替换和外部路径写入。SQLite 以 content hash 唯一
+注册不可变 metadata 与 source refs；同 hash 但 media type、sensitivity、retention 或来源不同会冲突，
+不会静默降低敏感级别。单件 GET 重新校验 blob，列表只返回 metadata，Phase 1A 不提供内容下载接口。
 
 ### Action Receipt、Command Receipt 与 Approval
 
@@ -800,6 +840,13 @@ SQLiteStore 当前创建以下表：
 | `approval_audit_events` | 保存请求、决定和过期的只追加审计事件 |
 | `session_run_leases` | 保存 Session 跨进程 single-flight、Workflow/Agent 绑定、取消位和执行栅栏 |
 | `workflow_execution_leases` | 保存 Workflow 协调器 owner、token、generation、TTL 和释放状态 |
+| `threads` | 保存正式 Thread 身份、父关系、Workspace 绑定、状态、时间和全表 Cursor |
+| `turns` | 保存 Thread 内稳定 position 的不可变 Turn |
+| `items` | 保存八类只追加 Canonical Item、Thread 内 position 和 Cursor |
+| `thread_legacy_refs` | 保存显式且唯一的 Session/WorkflowRun → Thread 兼容映射 |
+| `artifact_blobs` | 保存内部 content hash、受控 storage key、size；不进入公开领域/API |
+| `artifacts` | 保存 content hash 唯一的公开 Artifact metadata |
+| `artifact_source_refs` | 保存 Artifact 的有序、不可变来源关联 |
 
 当前使用 Python 标准库 `sqlite3`，每个 Store 操作创建独立连接，并启用外键约束。写操作使用
 事务；异常时回滚。Migration 使用 `BEGIN IMMEDIATE`，当前版本为：
@@ -807,7 +854,8 @@ SQLiteStore 当前创建以下表：
 1. v1：Week 1 Model/Role/Session/Agent/Event 基线；
 2. v2：Week 3—4 Workflow、Memory、FTS5 和 Evaluation 表；
 3. v3：M0 Tool/REST Receipt、持久 Approval/Audit、Evaluation Event 和 Cursor 索引；
-4. v4：Session run lease 与 Workflow coordinator execution lease。
+4. v4：Session run lease 与 Workflow coordinator execution lease；
+5. v5：Thread/Turn/Item Canonical History、显式 legacy mapping 与内容寻址 Artifact metadata。
 
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
@@ -819,10 +867,11 @@ UNIQUE、CHECK、外键声明、普通索引属性与列顺序、FTS5 类型/列
 preview 收编、逐步升级、每步 manifest 复验和历史写入全部位于同一个 `BEGIN IMMEDIATE` 事务中，失败
 不会留下半套表，并发初始化会串行到同一目标版本。已知的未提交 M0 preview 只能在精确历史名称、
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
-随后再升级 v4 execution lease；未知或漂移的 preview 一律拒绝。
+随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；回滚
-v4 要求两张 execution lease 表为空，继续回滚 v3 还要求 Tool/Command Receipt、审批/审计和
+v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+回滚 v5 要求全部 Phase 1A 表为空，回滚 v4 要求两张 execution lease 表为空，继续回滚 v3 还要求
+Tool/Command Receipt、审批/审计和
 Evaluation Event 等全部 M0 表为空。v1、v2 不可 downgrade，生产数据迁移不是通用双向回滚机制。
 
 Store 初始化时还会在同一事务内把遗留的 `running` Workflow 和 Evaluation Run
@@ -935,6 +984,15 @@ workspace 绝对路径。
 | `POST` | `/v1/sessions/{id}/cancel` | 取消运行中的 Session |
 | `GET` | `/v1/sessions/{id}/approvals` | 查询待审批工具调用 |
 | `POST` | `/v1/sessions/{id}/approvals/{tool_call_id}` | 提交审批决定 |
+| `GET/POST` | `/v1/threads` | 按 Cursor 查询或显式创建 active Thread |
+| `GET` | `/v1/threads/{id}` | 查询 Thread metadata 与显式 legacy refs |
+| `POST` | `/v1/threads/{id}/archive` | 幂等归档 Thread |
+| `GET/POST` | `/v1/threads/{id}/turns` | 按 Cursor 查询或追加不可变 Turn |
+| `GET` | `/v1/threads/{id}/items` | 按 Cursor/Turn 查询 Canonical Item |
+| `GET` | `/v1/threads/{id}/items/stream` | 以 SSE 只读回放已提交 Item |
+| `POST` | `/v1/threads/{id}/turns/{turn_id}/items` | 追加类型化 Canonical Item |
+| `GET/POST` | `/v1/artifacts` | 查询 metadata 或原子写入并注册 Artifact |
+| `GET` | `/v1/artifacts/{id}` | 校验 blob 后返回 metadata，不返回正文/路径 |
 | `POST` | `/v1/workflows/coding/runs` | 运行角色驱动的多 Agent Workflow 并返回 SSE |
 | `POST/GET` | `/v1/tasks` | 运行 Workflow，或查询已持久化任务 |
 | `GET` | `/v1/tasks/{id}` | 查询任务状态、阶段和角色选择 |
@@ -1011,14 +1069,17 @@ Basic auth、URL userinfo 和常见 secret key；`secret_ref` 环境变量名保
 
 ### Cursor 与 SSE 回放边界
 
-Session、Workflow、Evaluation 三类事件都使用实际 SQLite 自增序号作为 Cursor。Query 和回放采用
+Session、Workflow、Evaluation 事件与 Thread Item 都使用实际 SQLite 自增序号作为 Cursor。Query 和回放采用
 `cursor > after_cursor` 开区间，因此 SSE `id`、JSON `cursor` 与 SQLite 事实一致。Cursor 只允许在
 产生它的同一资源和事件流 scope 内复用；每张事件表的全表 `AUTOINCREMENT` 会因其他 Session/Run 的
 写入产生正常 gap，客户端不能拿另一 Session、Workflow Run 或 Evaluation Run 的 Cursor 跳过当前
-资源事件。公开 Cursor 只接受 SQLite 有符号整数范围 `0..2^63-1`。Session run 和
+资源事件；Thread/Artifact 列表同样允许其他资源造成正常 gap。公开 Cursor 只接受 SQLite 有符号整数
+范围 `0..2^63-1`。Session run 和
 Workflow resume 支持 `Last-Event-ID`；Evaluation 提供独立的事件 Query 与 replay-only SSE。带
 `Last-Event-ID` 的现有资源回放只读取已提交事件，会绕过修改 Command Receipt，即使同时传入
 `Idempotency-Key` 也不会启动或登记新的执行。新建 Workflow 不能用 `Last-Event-ID`，会在启动前失败。
+Thread Item 提供独立 replay-only SSE：`id` 等于 Item Cursor，`data.cursor` 保留同一值；它不会创建
+Turn、Item、Agent 或任何副作用。
 
 SSE 只承诺回放已经提交 SQLite 的事件，不承诺从任意模型字节、未提交事件或进程内生成器位置续传。
 客户端断开 SSE 也不保证后台任务继续；断开可能取消当前生成器。客户端必须重新查询资源状态与已提交
@@ -1183,6 +1244,13 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
   副作用前 fail closed，以及 Provider 剩余额度、Trace/Evaluation unknown 传播；
 - Session、Workflow、Evaluation 的真实 SQLite Cursor、开区间 Query、SSE `id` 一致性和
   `Last-Event-ID` 已提交事件回放；
+- v1/v2/v3/v4 → v5 升级、重复初始化、逐步空表回滚、失败原子性、历史数据保留和 schema drift；
+- 父子 Thread、显式 legacy mapping、并发 Turn/Item position、八类 Item、终态追加栅栏、不可变 trigger、
+  Thread/Turn/Item/Artifact Cursor 分页和 Thread Item SSE `Last-Event-ID` 回放；
+- Artifact 原子发布、跨实例/并发去重、同 hash metadata 冲突、完整性损坏、大小上限、临时文件清理，
+  以及路径穿越、逐组件软链接、大小写别名、非普通文件和 inode 替换拒绝；
+- Thread/Artifact 修改 Command 的 M0 Receipt 重放、Action Hash 冲突、UTF-8 字节限额、metadata-only
+  响应和本地路径/正文不泄露；
 - 统一错误信封、校验输入与未知异常不泄密，以及首次非流 Command、REST 4xx/5xx、命令输出、
   Receipt、事件、模型 Tool Result 共用 bounded redaction；短 Bearer、任意/不完整 PEM 私钥块和
   大小写敏感文件名回归。
@@ -1196,6 +1264,13 @@ uv run mypy src
 uv run pytest
 git diff --check
 ```
+
+2026-08-28 的 Phase 1A 后端底座使用隔离 v1/v2/v3/v4/preview 数据库、并发进程/线程、受控文件系统
+竞态和临时 `OPERANT_DB_PATH`：完整 pytest 为 237 通过、1 个条件性 Docker 测试跳过，并保留 1 个
+上游 Starlette TestClient 弃用警告；Ruff format/check、mypy、`uv lock --check` 和
+`git diff --check` 通过。独立 terra-max Reviewer 复验 chunked body 有界读取、Canonical 引用防伪、
+root 替换、preview 原子拒绝、并发 migration/position/blob 去重与旧 API 兼容，最终 P0/P1/P2 均为 0。
+未设置真实 Provider，也未做吞吐基准；Docker skip 不视为容器验收。
 
 2026-08-28 的 Phase 0 可靠性收尾使用确定性 Provider、隔离 fixture 和临时 `OPERANT_DB_PATH`：
 完整 pytest 为 194 通过、1 个条件性 Docker 测试跳过，并保留 1 个上游 Starlette TestClient 弃用
@@ -1267,7 +1342,7 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-5. 已有 v1/v2/v3/v4 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
+5. 已有 v1/v2/v3/v4/v5 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
    但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
    Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
 6. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，但不支持任意模型流位置续传；SSE 断线
@@ -1283,8 +1358,13 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 10. 通用 Graph Runtime、Definition/Revision、Team/Mailbox、React GUI/PWA、TUI、Tauri、Remote
     Control、Host Connector、自托管 Relay、Remote Gateway 和 Remote Execution Target 均未实现；
     当前 `/web` 与 `/v1/*` 不能作为这些目标能力的实现证据，也不得直接暴露到公网。
-11. Session/Workflow/Evaluation 事件、Tool/Command Receipt 和 Approval Audit 当前没有 retention、归档或
-    清理策略，会随运行持续增长；M0 尚未实现安全删除与对象级保留策略，不能把容量治理写成已解决。
+11. Session/Workflow/Evaluation 事件、Thread Canonical History、Artifact、Tool/Command Receipt 和
+    Approval Audit 当前没有已执行的对象级清理策略，会随运行持续增长；Artifact Store 崩溃时也可能
+    留下未被 SQLite metadata 引用的临时/已发布 blob。Phase 1A 只保存 retention policy ref，不执行
+    删除；不得把容量治理或自动清扫写成已解决。
+12. Thread/Turn/Item 与 Artifact 已建立持久底座，但尚未接入现有 Session/Workflow 的自动历史投影，
+    也没有 Context Composer、PromptLayout、Compaction、复杂 `@` 引用、Artifact 内容下载/导出或
+    sensitivity 授权策略；旧数据只支持显式 legacy mapping，不能伪称已转换为 Canonical History。
 
 ## 19. 文档维护规则
 
@@ -1318,6 +1398,23 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 
 ### 2026-08-28
 
+- 建立正式 Thread/Turn/Item Canonical History：父子关系、不可变 Workspace 绑定、终态/归档、八类
+  类型化 Item、Thread 内稳定 position 和 SQLite Cursor；Turn/Item 只追加，终态 Thread 禁止继续写入，
+  旧 Session/Workflow 只允许核验后的显式 mapping，不自动伪造历史；
+- 新增冻结 manifest/checksum 的 SQLite v5，包含 Thread/Turn/Item、Artifact blob/metadata/source refs 与
+  legacy mapping 表、完整 FK/UNIQUE/CHECK/index/trigger、自增 Cursor 和受限空表 rollback；支持
+  v1/v2/v3/v4 保留数据升级，并精确验证/原子收编未合并的旧 Phase 1A preview；
+- 新增内容寻址 Artifact Store：SHA-256 派生路径、同文件系统临时写入与 hardlink 原子发布、fsync、
+  并发去重、完整 hash/size 校验、逐组件 no-follow/真实大小写/inode 检查；root/shard/target 并发替换、
+  路径穿越、软链接和非普通文件均安全失败，公开对象/API 不返回正文、storage key 或真实本地路径；
+- 新增 Thread/Turn/Item/Artifact Application Service 与 REST/只读 SSE；修改请求继续使用 M0
+  Idempotency-Key、Action Hash、Receipt 和统一错误，Query 使用开区间 Cursor，Thread Item SSE 支持
+  `Last-Event-ID`。Artifact 上传以纯 ASGI 有界读取拒绝缺失/伪小 Content-Length 的超限 stream；
+  Tool Result、Artifact source 和 legacy mapping 在 Store/trigger 双层核对，不能伪造 Canonical 关联；
+- 新增 Phase 1A migration、并发顺序、append-only、八类 Item、preview、Receipt/SSE、Artifact 去重/
+  损坏/上传限额和路径竞态测试；完整门禁为 237 通过、1 个 Docker 条件 skip、1 个上游 warning，
+  Ruff format/check、mypy、`uv lock --check` 和 `git diff --check` 全绿。未实现 Phase 1B Context/
+  Compaction、Graph、Remote、Relay、GUI/TUI/Tauri 或客户端生成，未修改 `clients/`、`sdk/` 和前端文档；
 - 新增冻结 manifest/checksum 的 SQLite v4：`session_run_leases` 以 owner、token、generation、TTL、
   Agent/Workflow 绑定和 cancel bit 提供跨服务进程 Session single-flight；`workflow_execution_leases`
   为协调器起步、阶段间隙和长 Provider 等待提供独立 guard，旧执行者不能续期、释放或创建新 child；

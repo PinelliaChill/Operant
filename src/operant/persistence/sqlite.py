@@ -51,6 +51,20 @@ from operant.domain.models import (
     new_id,
     utc_now,
 )
+from operant.domain.threads import (
+    ApprovalLinkPayload,
+    Artifact,
+    ArtifactRefPayload,
+    ArtifactSourceRef,
+    ArtifactSourceType,
+    ConversationThread,
+    Item,
+    ThreadLegacyRef,
+    ThreadStatus,
+    ToolCallPayload,
+    ToolResultRefPayload,
+    Turn,
+)
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
 
 
@@ -131,12 +145,14 @@ class SQLiteStore:
         2: "1c1d79405a9f422aca4a84a9bd5e45b1647cb16d0c8b496f906932272fd05e98",
         3: "2ac49a0e18c49ccfbfce434425bb7dd09f39710f190b635d3908af96512d9b34",
         4: "dd860b7b4b448ab4296c1e7803a0fcb90a1e5f27015066916cf871e455373f1c",
+        5: "dc6ce273aa869446a520af09fb19335369dab273ffd38789d38298356e5d9df6",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
         2: "f560a54b3361b717b8b0118efeb277b9869d66aa4528eb40015cbe571d9a9eef",
         3: "9be47a848c184b5f1ab81540abfc764dcae2a4b054ff4128d3ed153635d5f709",
         4: "7a787a9ce4262293dfd5a0ad524f7f50c245722abef763a64ea82a2eaed1fc14",
+        5: "ec6dad28422980314a01fa56a1a2d28e1b2bee4744eb76d28240124a4a112490",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -182,6 +198,17 @@ class SQLiteStore:
             3,
             "m0_commands_approvals",
             "20a5e2b308b838e7af9f054fb16e58f8d6ca3b505ec8901d61a2f7b3b7e0c4d2",
+        ),
+    )
+    _PHASE1A_V5_PREVIEW_HISTORY = (
+        (1, "week1_base", _FROZEN_MIGRATION_CHECKSUMS[1]),
+        (2, "week3_week4_features", _FROZEN_MIGRATION_CHECKSUMS[2]),
+        (3, "m0_commands_approvals", _FROZEN_MIGRATION_CHECKSUMS[3]),
+        (4, "phase0_session_run_leases", _FROZEN_MIGRATION_CHECKSUMS[4]),
+        (
+            5,
+            "phase1a_thread_artifact_history",
+            "863fdbdb5d3030fecab446f0469faf2424d43f87b3f63c5913017e36b1056528",
         ),
     )
 
@@ -342,6 +369,12 @@ class SQLiteStore:
                 self._upgrade_v4,
                 self._downgrade_v4,
             ),
+            build(
+                5,
+                "phase1a_thread_artifact_history",
+                self._upgrade_v5,
+                self._downgrade_v5,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -387,6 +420,20 @@ class SQLiteStore:
             self._validate_v3_schema_shape(connection)
         elif identity == self._MANIFEST_REWORK_PREVIEW_HISTORY:
             self._validate_v3_schema_shape(connection)
+        elif identity == self._PHASE1A_V5_PREVIEW_HISTORY:
+            self._validate_schema_contract(
+                connection,
+                version=5,
+                allow_missing_phase1a_reference_guards=True,
+            )
+            self._validate_preview_v5_reference_rows(connection)
+            self._upgrade_preview_v5_reference_guards(connection)
+            self._validate_v5_schema_shape(connection)
+            connection.execute(
+                "UPDATE schema_migrations SET checksum = ? WHERE version = 5",
+                (migrations[4].checksum,),
+            )
+            return
         else:
             return
         applied_at = str(rows[-1]["applied_at"])
@@ -534,6 +581,8 @@ class SQLiteStore:
             self._validate_v3_schema_shape(connection)
         elif migration.version == 4:
             self._validate_v4_schema_shape(connection)
+        elif migration.version == 5:
+            self._validate_v5_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -761,6 +810,69 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v5_required_columns() -> dict[str, set[str]]:
+        return {
+            "threads": {
+                "sequence",
+                "id",
+                "parent_thread_id",
+                "workspace_ref",
+                "status",
+                "body",
+                "created_at",
+                "updated_at",
+                "archived_at",
+            },
+            "turns": {
+                "sequence",
+                "id",
+                "thread_id",
+                "position",
+                "body",
+                "created_at",
+            },
+            "items": {
+                "sequence",
+                "id",
+                "thread_id",
+                "turn_id",
+                "position",
+                "item_type",
+                "body",
+                "created_at",
+            },
+            "artifact_blobs": {
+                "content_hash",
+                "storage_key",
+                "size_bytes",
+                "created_at",
+            },
+            "artifacts": {
+                "sequence",
+                "id",
+                "content_hash",
+                "media_type",
+                "size_bytes",
+                "sensitivity",
+                "retention_policy_ref",
+                "body",
+                "created_at",
+            },
+            "artifact_source_refs": {
+                "artifact_id",
+                "ordinal",
+                "source_type",
+                "source_id",
+            },
+            "thread_legacy_refs": {
+                "thread_id",
+                "source_type",
+                "source_id",
+                "created_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -774,6 +886,8 @@ class SQLiteStore:
             tables.update(cls._v3_required_columns())
         if version >= 4:
             tables.update(cls._v4_required_columns())
+        if version >= 5:
+            tables.update(cls._v5_required_columns())
         return tables
 
     @staticmethod
@@ -802,6 +916,9 @@ class SQLiteStore:
                 ("session_run_leases", "agent_id"),
                 ("session_run_leases", "released_at"),
                 ("workflow_execution_leases", "released_at"),
+                ("threads", "parent_thread_id"),
+                ("threads", "workspace_ref"),
+                ("threads", "archived_at"),
             }
         )
 
@@ -818,6 +935,8 @@ class SQLiteStore:
                 "approved",
                 "generation",
                 "cancel_requested",
+                "position",
+                "size_bytes",
             }
         )
 
@@ -884,6 +1003,42 @@ class SQLiteStore:
                         if version >= 4
                         else {}
                     ),
+                    **(
+                        {
+                            "threads": [
+                                "status IN ('active', 'completed', 'cancelled', 'archived')",
+                                "(status = 'archived' AND archived_at IS NOT NULL) OR "
+                                "(status != 'archived' AND archived_at IS NULL)",
+                                "parent_thread_id IS NULL OR parent_thread_id != id",
+                                "workspace_ref IS NULL OR length(workspace_ref) >= 1",
+                            ],
+                            "turns": ["position >= 1"],
+                            "items": [
+                                "position >= 1",
+                                "item_type IN ('user_message', 'agent_message', "
+                                "'tool_call', 'tool_result_ref', 'artifact_ref', "
+                                "'approval_link', 'steering', 'system_event')",
+                            ],
+                            "artifact_blobs": [
+                                "size_bytes >= 0",
+                                "length(content_hash) = 64",
+                                "content_hash NOT GLOB '*[^0-9a-f]*'",
+                                "storage_key = 'sha256/' || substr(content_hash, 1, 2) || '/' || "
+                                "substr(content_hash, 3, 2) || '/' || content_hash",
+                            ],
+                            "artifacts": [
+                                "size_bytes >= 0",
+                                "sensitivity IN ('normal', 'sensitive', 'restricted')",
+                                "length(content_hash) = 64",
+                                "content_hash NOT GLOB '*[^0-9a-f]*'",
+                                "length(media_type) >= 1",
+                                "length(retention_policy_ref) >= 1",
+                            ],
+                            "artifact_source_refs": ["ordinal >= 1", "length(source_id) >= 1"],
+                        }
+                        if version >= 5
+                        else {}
+                    ),
                 }
                 if version >= 3
                 else {}
@@ -915,6 +1070,8 @@ class SQLiteStore:
                 store._upgrade_v3(connection)
             if version >= 4:
                 store._upgrade_v4(connection)
+            if version >= 5:
+                store._upgrade_v5(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -982,6 +1139,18 @@ class SQLiteStore:
                     "workflow_execution_leases": ("workflow_run_id",),
                 }
             )
+        if version >= 5:
+            contract.update(
+                {
+                    "threads": ("sequence",),
+                    "turns": ("sequence",),
+                    "items": ("sequence",),
+                    "artifact_blobs": ("content_hash",),
+                    "artifacts": ("sequence",),
+                    "artifact_source_refs": ("artifact_id", "ordinal"),
+                    "thread_legacy_refs": ("source_type", "source_id"),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1014,6 +1183,22 @@ class SQLiteStore:
                 {
                     "session_run_leases": (("lease_token",),),
                     "workflow_execution_leases": (("lease_token",),),
+                }
+            )
+        if version >= 5:
+            contract.update(
+                {
+                    "threads": (("id",),),
+                    "turns": (
+                        ("id",),
+                        ("thread_id", "position"),
+                        ("id", "thread_id"),
+                    ),
+                    "items": (("id",), ("thread_id", "position")),
+                    "artifact_blobs": (("storage_key",),),
+                    "artifacts": (("id",), ("content_hash",)),
+                    "artifact_source_refs": (("artifact_id", "source_type", "source_id"),),
+                    "thread_legacy_refs": (("thread_id", "source_type", "source_id"),),
                 }
             )
         return contract
@@ -1090,6 +1275,20 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 5:
+            contract.update(
+                {
+                    "threads": (("parent_thread_id", "threads", "id", "NO ACTION"),),
+                    "turns": (("thread_id", "threads", "id", "NO ACTION"),),
+                    "items": (
+                        ("thread_id", "turns", "thread_id", "NO ACTION"),
+                        ("turn_id", "turns", "id", "NO ACTION"),
+                    ),
+                    "artifacts": (("content_hash", "artifact_blobs", "content_hash", "NO ACTION"),),
+                    "artifact_source_refs": (("artifact_id", "artifacts", "id", "NO ACTION"),),
+                    "thread_legacy_refs": (("thread_id", "threads", "id", "NO ACTION"),),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1147,6 +1346,23 @@ class SQLiteStore:
                         "released_at",
                     ),
                     "idx_workflow_execution_leases_active": ("released_at", "expires_at"),
+                }
+            )
+        if version >= 5:
+            indexes.update(
+                {
+                    "idx_threads_parent_sequence": ("parent_thread_id", "sequence"),
+                    "idx_threads_workspace_status_sequence": (
+                        "workspace_ref",
+                        "status",
+                        "sequence",
+                    ),
+                    "idx_turns_thread_sequence": ("thread_id", "sequence"),
+                    "idx_items_thread_sequence": ("thread_id", "sequence"),
+                    "idx_items_turn_sequence": ("turn_id", "sequence"),
+                    "idx_artifacts_hash_sequence": ("content_hash", "sequence"),
+                    "idx_artifact_sources_type_id": ("source_type", "source_id"),
+                    "idx_thread_legacy_refs_thread": ("thread_id",),
                 }
             )
         return indexes
@@ -1229,6 +1445,9 @@ class SQLiteStore:
     def _validate_v4_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=4)
 
+    def _validate_v5_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=5)
+
     def _validate_schema_contract(
         self,
         connection: sqlite3.Connection,
@@ -1236,6 +1455,7 @@ class SQLiteStore:
         version: int,
         allow_missing_evaluation_updated_at: bool = False,
         allow_missing_evaluation_events: bool = False,
+        allow_missing_phase1a_reference_guards: bool = False,
     ) -> None:
         required_tables = self._required_columns_contract(version)
         if allow_missing_evaluation_events:
@@ -1252,6 +1472,16 @@ class SQLiteStore:
             expected_objects.difference_update(excluded)
             expected_ddl.pop("evaluation_run_events", None)
             expected_ddl.pop("idx_evaluation_run_events_run_sequence", None)
+        if allow_missing_phase1a_reference_guards:
+            guard_names = {
+                "artifact_source_refs_insert_guard",
+                "items_tool_call_unique_guard",
+                "items_tool_result_call_guard",
+                "thread_legacy_refs_insert_guard",
+            }
+            expected_objects.difference_update(("trigger", name) for name in guard_names)
+            for name in guard_names:
+                expected_ddl.pop(name, None)
         object_rows = connection.execute(
             "SELECT type, name, sql FROM sqlite_master "
             "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -1855,6 +2085,655 @@ class SQLiteStore:
             DROP TABLE workflow_execution_leases;
             DROP INDEX idx_session_run_leases_workflow_active;
             DROP TABLE session_run_leases;
+            """,
+        )
+
+    def _upgrade_preview_v5_reference_guards(self, connection: sqlite3.Connection) -> None:
+        """Upgrade only the exact unmerged Phase 1A preview schema."""
+
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TRIGGER items_tool_call_unique_guard
+            BEFORE INSERT ON items
+            WHEN NEW.item_type = 'tool_call'
+                AND EXISTS (
+                    SELECT 1 FROM items
+                    WHERE thread_id = NEW.thread_id
+                        AND item_type = 'tool_call'
+                        AND json_extract(body, '$.payload.tool_call_id')
+                            = json_extract(NEW.body, '$.payload.tool_call_id')
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'duplicate tool call in thread');
+            END;
+
+            CREATE TRIGGER items_tool_result_call_guard
+            BEFORE INSERT ON items
+            WHEN NEW.item_type = 'tool_result_ref'
+                AND NOT EXISTS (
+                    SELECT 1 FROM items
+                    WHERE thread_id = NEW.thread_id
+                        AND position < NEW.position
+                        AND item_type = 'tool_call'
+                        AND json_extract(body, '$.payload.tool_call_id')
+                            = json_extract(NEW.body, '$.payload.tool_call_id')
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'tool call reference not found in thread');
+            END;
+
+            CREATE TRIGGER artifact_source_refs_insert_guard
+            BEFORE INSERT ON artifact_source_refs
+            WHEN (NEW.source_type = 'thread' AND NOT EXISTS (
+                    SELECT 1 FROM threads WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'turn' AND NOT EXISTS (
+                    SELECT 1 FROM turns WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'item' AND NOT EXISTS (
+                    SELECT 1 FROM items WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'session' AND NOT EXISTS (
+                    SELECT 1 FROM sessions WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'agent' AND NOT EXISTS (
+                    SELECT 1 FROM agents WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'workflow_run' AND NOT EXISTS (
+                    SELECT 1 FROM workflow_runs WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'tool_action_receipt' AND NOT EXISTS (
+                    SELECT 1 FROM tool_action_receipts WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'approval' AND NOT EXISTS (
+                    SELECT 1 FROM approval_requests WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'evaluation_run' AND NOT EXISTS (
+                    SELECT 1 FROM evaluation_runs WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'tool_call'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM items
+                        WHERE item_type = 'tool_call'
+                            AND json_extract(body, '$.payload.tool_call_id') = NEW.source_id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM approval_requests WHERE tool_call_id = NEW.source_id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM tool_action_receipts
+                        WHERE idempotency_key = NEW.source_id
+                    ))
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact source reference not found');
+            END;
+
+            CREATE TRIGGER thread_legacy_refs_insert_guard
+            BEFORE INSERT ON thread_legacy_refs
+            WHEN (NEW.source_type = 'session' AND NOT EXISTS (
+                    SELECT 1 FROM sessions WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'workflow_run' AND NOT EXISTS (
+                    SELECT 1 FROM workflow_runs WHERE id = NEW.source_id
+                ))
+            BEGIN
+                SELECT RAISE(ABORT, 'legacy source not found');
+            END;
+            """,
+        )
+
+    def _validate_preview_v5_reference_rows(self, connection: sqlite3.Connection) -> None:
+        duplicate_tool_call = connection.execute(
+            """
+            SELECT 1 FROM items
+            WHERE item_type = 'tool_call'
+            GROUP BY thread_id, json_extract(body, '$.payload.tool_call_id')
+            HAVING COUNT(*) > 1
+            LIMIT 1
+            """
+        ).fetchone()
+        bogus_tool_result = connection.execute(
+            """
+            SELECT 1 FROM items AS result
+            WHERE result.item_type = 'tool_result_ref'
+                AND NOT EXISTS (
+                    SELECT 1 FROM items AS call
+                    WHERE call.thread_id = result.thread_id
+                        AND call.position < result.position
+                        AND call.item_type = 'tool_call'
+                        AND json_extract(call.body, '$.payload.tool_call_id')
+                            = json_extract(result.body, '$.payload.tool_call_id')
+                )
+            LIMIT 1
+            """
+        ).fetchone()
+        if duplicate_tool_call is not None or bogus_tool_result is not None:
+            raise MigrationError("Phase 1A preview contains invalid tool call history")
+        try:
+            for row in connection.execute(
+                "SELECT source_type, source_id FROM artifact_source_refs"
+            ).fetchall():
+                self._validate_artifact_source_ref(
+                    connection,
+                    ArtifactSourceRef.model_validate(
+                        {
+                            "source_type": str(row["source_type"]),
+                            "source_id": str(row["source_id"]),
+                        }
+                    ),
+                )
+            for row in connection.execute(
+                "SELECT source_type, source_id FROM thread_legacy_refs"
+            ).fetchall():
+                self._validate_legacy_ref(
+                    connection,
+                    ThreadLegacyRef.model_validate(
+                        {
+                            "source_type": str(row["source_type"]),
+                            "source_id": str(row["source_id"]),
+                        }
+                    ),
+                )
+        except (NotFoundError, ValueError) as exc:
+            raise MigrationError("Phase 1A preview contains invalid source references") from exc
+
+    def _upgrade_v5(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE threads (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                parent_thread_id TEXT,
+                workspace_ref TEXT,
+                status TEXT NOT NULL CHECK (
+                    status IN ('active', 'completed', 'cancelled', 'archived')
+                ),
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                archived_at TEXT,
+                CHECK (
+                    (status = 'archived' AND archived_at IS NOT NULL)
+                    OR (status != 'archived' AND archived_at IS NULL)
+                ),
+                CHECK (parent_thread_id IS NULL OR parent_thread_id != id),
+                CHECK (workspace_ref IS NULL OR length(workspace_ref) >= 1),
+                FOREIGN KEY (parent_thread_id) REFERENCES threads(id)
+            );
+
+            CREATE INDEX idx_threads_parent_sequence
+                ON threads(parent_thread_id, sequence);
+            CREATE INDEX idx_threads_workspace_status_sequence
+                ON threads(workspace_ref, status, sequence);
+
+            CREATE TABLE turns (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                thread_id TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (position >= 1),
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(thread_id, position),
+                UNIQUE(id, thread_id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id)
+            );
+
+            CREATE INDEX idx_turns_thread_sequence
+                ON turns(thread_id, sequence);
+
+            CREATE TABLE items (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                thread_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (position >= 1),
+                item_type TEXT NOT NULL CHECK (
+                    item_type IN (
+                        'user_message', 'agent_message', 'tool_call',
+                        'tool_result_ref', 'artifact_ref', 'approval_link',
+                        'steering', 'system_event'
+                    )
+                ),
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(thread_id, position),
+                FOREIGN KEY (turn_id, thread_id) REFERENCES turns(id, thread_id)
+            );
+
+            CREATE INDEX idx_items_thread_sequence
+                ON items(thread_id, sequence);
+            CREATE INDEX idx_items_turn_sequence
+                ON items(turn_id, sequence);
+
+            CREATE TABLE artifact_blobs (
+                content_hash TEXT PRIMARY KEY CHECK (
+                    length(content_hash) = 64
+                    AND content_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                storage_key TEXT UNIQUE NOT NULL CHECK (
+                    storage_key = 'sha256/' || substr(content_hash, 1, 2)
+                        || '/' || substr(content_hash, 3, 2) || '/' || content_hash
+                ),
+                size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE artifacts (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                content_hash TEXT NOT NULL CHECK (
+                    length(content_hash) = 64
+                    AND content_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                media_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+                sensitivity TEXT NOT NULL CHECK (
+                    sensitivity IN ('normal', 'sensitive', 'restricted')
+                ),
+                retention_policy_ref TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(content_hash),
+                CHECK (length(media_type) >= 1),
+                CHECK (length(retention_policy_ref) >= 1),
+                FOREIGN KEY (content_hash) REFERENCES artifact_blobs(content_hash)
+            );
+
+            CREATE INDEX idx_artifacts_hash_sequence
+                ON artifacts(content_hash, sequence);
+
+            CREATE TABLE artifact_source_refs (
+                artifact_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
+                source_type TEXT NOT NULL CHECK (
+                    source_type IN (
+                        'thread', 'turn', 'item', 'session', 'agent',
+                        'workflow_run', 'tool_call', 'tool_action_receipt',
+                        'approval', 'evaluation_run'
+                    )
+                ),
+                source_id TEXT NOT NULL,
+                PRIMARY KEY (artifact_id, ordinal),
+                UNIQUE(artifact_id, source_type, source_id),
+                CHECK (length(source_id) >= 1),
+                FOREIGN KEY (artifact_id) REFERENCES artifacts(id)
+            );
+
+            CREATE INDEX idx_artifact_sources_type_id
+                ON artifact_source_refs(source_type, source_id);
+
+            CREATE TABLE thread_legacy_refs (
+                thread_id TEXT NOT NULL,
+                source_type TEXT NOT NULL CHECK (source_type IN ('session', 'workflow_run')),
+                source_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (source_type, source_id),
+                UNIQUE(thread_id, source_type, source_id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id)
+            );
+
+            CREATE INDEX idx_thread_legacy_refs_thread
+                ON thread_legacy_refs(thread_id);
+
+            CREATE TRIGGER threads_identity_no_update
+            BEFORE UPDATE OF id, parent_thread_id, workspace_ref, created_at ON threads
+            BEGIN
+                SELECT RAISE(ABORT, 'thread identity is immutable');
+            END;
+
+            CREATE TRIGGER threads_body_guard_insert
+            BEFORE INSERT ON threads
+            WHEN json_extract(NEW.body, '$.id') IS NOT NEW.id
+                OR json_extract(NEW.body, '$.parent_thread_id') IS NOT NEW.parent_thread_id
+                OR json_extract(NEW.body, '$.workspace_ref') IS NOT NEW.workspace_ref
+                OR json_extract(NEW.body, '$.status') IS NOT NEW.status
+            BEGIN
+                SELECT RAISE(ABORT, 'thread body metadata mismatch');
+            END;
+
+            CREATE TRIGGER threads_body_guard_update
+            BEFORE UPDATE OF body, status, updated_at, archived_at ON threads
+            WHEN json_extract(NEW.body, '$.id') IS NOT NEW.id
+                OR json_extract(NEW.body, '$.parent_thread_id') IS NOT NEW.parent_thread_id
+                OR json_extract(NEW.body, '$.workspace_ref') IS NOT NEW.workspace_ref
+                OR json_extract(NEW.body, '$.status') IS NOT NEW.status
+            BEGIN
+                SELECT RAISE(ABORT, 'thread body metadata mismatch');
+            END;
+
+            CREATE TRIGGER threads_no_delete
+            BEFORE DELETE ON threads
+            BEGIN
+                SELECT RAISE(ABORT, 'canonical thread history cannot be deleted');
+            END;
+
+            CREATE TRIGGER threads_status_transition_guard
+            BEFORE UPDATE OF status ON threads
+            WHEN OLD.status != NEW.status
+                AND NOT (
+                    (OLD.status = 'active' AND NEW.status IN (
+                        'completed', 'cancelled', 'archived'
+                    ))
+                    OR (
+                        OLD.status IN ('completed', 'cancelled')
+                        AND NEW.status = 'archived'
+                    )
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'invalid thread status transition');
+            END;
+
+            CREATE TRIGGER turns_active_thread_guard
+            BEFORE INSERT ON turns
+            WHEN NOT EXISTS (
+                SELECT 1 FROM threads
+                WHERE id = NEW.thread_id AND status = 'active'
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'thread is not active');
+            END;
+
+            CREATE TRIGGER turns_no_update
+            BEFORE UPDATE ON turns
+            BEGIN
+                SELECT RAISE(ABORT, 'canonical history is append-only');
+            END;
+
+            CREATE TRIGGER turns_body_guard
+            BEFORE INSERT ON turns
+            WHEN json_extract(NEW.body, '$.id') IS NOT NEW.id
+                OR json_extract(NEW.body, '$.thread_id') IS NOT NEW.thread_id
+                OR json_extract(NEW.body, '$.position') IS NOT NEW.position
+            BEGIN
+                SELECT RAISE(ABORT, 'turn body metadata mismatch');
+            END;
+
+            CREATE TRIGGER turns_no_delete
+            BEFORE DELETE ON turns
+            BEGIN
+                SELECT RAISE(ABORT, 'canonical history is append-only');
+            END;
+
+            CREATE TRIGGER items_no_update
+            BEFORE UPDATE ON items
+            BEGIN
+                SELECT RAISE(ABORT, 'canonical history is append-only');
+            END;
+
+            CREATE TRIGGER items_no_delete
+            BEFORE DELETE ON items
+            BEGIN
+                SELECT RAISE(ABORT, 'canonical history is append-only');
+            END;
+
+            CREATE TRIGGER items_active_thread_guard
+            BEFORE INSERT ON items
+            WHEN NOT EXISTS (
+                SELECT 1 FROM threads
+                WHERE id = NEW.thread_id AND status = 'active'
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'thread is not active');
+            END;
+
+            CREATE TRIGGER items_body_guard
+            BEFORE INSERT ON items
+            WHEN json_extract(NEW.body, '$.id') IS NOT NEW.id
+                OR json_extract(NEW.body, '$.thread_id') IS NOT NEW.thread_id
+                OR json_extract(NEW.body, '$.turn_id') IS NOT NEW.turn_id
+                OR json_extract(NEW.body, '$.position') IS NOT NEW.position
+                OR json_extract(NEW.body, '$.payload.type') IS NOT NEW.item_type
+            BEGIN
+                SELECT RAISE(ABORT, 'item body metadata mismatch');
+            END;
+
+            CREATE TRIGGER items_artifact_ref_guard
+            BEFORE INSERT ON items
+            WHEN NEW.item_type IN ('artifact_ref', 'tool_result_ref')
+                AND NOT EXISTS (
+                    SELECT 1 FROM artifacts
+                    WHERE id = json_extract(NEW.body, '$.payload.artifact_id')
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact reference not found');
+            END;
+
+            CREATE TRIGGER items_tool_call_unique_guard
+            BEFORE INSERT ON items
+            WHEN NEW.item_type = 'tool_call'
+                AND EXISTS (
+                    SELECT 1 FROM items
+                    WHERE thread_id = NEW.thread_id
+                        AND item_type = 'tool_call'
+                        AND json_extract(body, '$.payload.tool_call_id')
+                            = json_extract(NEW.body, '$.payload.tool_call_id')
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'duplicate tool call in thread');
+            END;
+
+            CREATE TRIGGER items_tool_result_call_guard
+            BEFORE INSERT ON items
+            WHEN NEW.item_type = 'tool_result_ref'
+                AND NOT EXISTS (
+                    SELECT 1 FROM items
+                    WHERE thread_id = NEW.thread_id
+                        AND position < NEW.position
+                        AND item_type = 'tool_call'
+                        AND json_extract(body, '$.payload.tool_call_id')
+                            = json_extract(NEW.body, '$.payload.tool_call_id')
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'tool call reference not found in thread');
+            END;
+
+            CREATE TRIGGER items_approval_link_guard
+            BEFORE INSERT ON items
+            WHEN NEW.item_type = 'approval_link'
+                AND NOT EXISTS (
+                    SELECT 1 FROM approval_requests
+                    WHERE id = json_extract(NEW.body, '$.payload.approval_id')
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'approval reference not found');
+            END;
+
+            CREATE TRIGGER artifacts_blob_size_guard
+            BEFORE INSERT ON artifacts
+            WHEN NOT EXISTS (
+                SELECT 1 FROM artifact_blobs
+                WHERE content_hash = NEW.content_hash
+                    AND size_bytes = NEW.size_bytes
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact blob metadata mismatch');
+            END;
+
+            CREATE TRIGGER artifacts_body_guard
+            BEFORE INSERT ON artifacts
+            WHEN json_extract(NEW.body, '$.id') IS NOT NEW.id
+                OR json_extract(NEW.body, '$.content_hash') IS NOT NEW.content_hash
+                OR json_extract(NEW.body, '$.media_type') IS NOT NEW.media_type
+                OR json_extract(NEW.body, '$.size_bytes') IS NOT NEW.size_bytes
+                OR json_extract(NEW.body, '$.sensitivity') IS NOT NEW.sensitivity
+                OR json_extract(NEW.body, '$.retention_policy_ref')
+                    IS NOT NEW.retention_policy_ref
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact body metadata mismatch');
+            END;
+
+            CREATE TRIGGER artifact_blobs_no_update
+            BEFORE UPDATE ON artifact_blobs
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact blob identity is immutable');
+            END;
+
+            CREATE TRIGGER artifact_blobs_no_delete
+            BEFORE DELETE ON artifact_blobs
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact blob identity is immutable');
+            END;
+
+            CREATE TRIGGER artifacts_no_update
+            BEFORE UPDATE ON artifacts
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact metadata is immutable');
+            END;
+
+            CREATE TRIGGER artifacts_no_delete
+            BEFORE DELETE ON artifacts
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact metadata is immutable');
+            END;
+
+            CREATE TRIGGER artifact_source_refs_no_update
+            BEFORE UPDATE ON artifact_source_refs
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact source refs are immutable');
+            END;
+
+            CREATE TRIGGER artifact_source_refs_insert_guard
+            BEFORE INSERT ON artifact_source_refs
+            WHEN (NEW.source_type = 'thread' AND NOT EXISTS (
+                    SELECT 1 FROM threads WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'turn' AND NOT EXISTS (
+                    SELECT 1 FROM turns WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'item' AND NOT EXISTS (
+                    SELECT 1 FROM items WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'session' AND NOT EXISTS (
+                    SELECT 1 FROM sessions WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'agent' AND NOT EXISTS (
+                    SELECT 1 FROM agents WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'workflow_run' AND NOT EXISTS (
+                    SELECT 1 FROM workflow_runs WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'tool_action_receipt' AND NOT EXISTS (
+                    SELECT 1 FROM tool_action_receipts WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'approval' AND NOT EXISTS (
+                    SELECT 1 FROM approval_requests WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'evaluation_run' AND NOT EXISTS (
+                    SELECT 1 FROM evaluation_runs WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'tool_call'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM items
+                        WHERE item_type = 'tool_call'
+                            AND json_extract(body, '$.payload.tool_call_id') = NEW.source_id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM approval_requests WHERE tool_call_id = NEW.source_id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM tool_action_receipts
+                        WHERE idempotency_key = NEW.source_id
+                    ))
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact source reference not found');
+            END;
+
+            CREATE TRIGGER artifact_source_refs_no_delete
+            BEFORE DELETE ON artifact_source_refs
+            BEGIN
+                SELECT RAISE(ABORT, 'artifact source refs are immutable');
+            END;
+
+            CREATE TRIGGER thread_legacy_refs_no_update
+            BEFORE UPDATE ON thread_legacy_refs
+            BEGIN
+                SELECT RAISE(ABORT, 'thread legacy refs are immutable');
+            END;
+
+            CREATE TRIGGER thread_legacy_refs_insert_guard
+            BEFORE INSERT ON thread_legacy_refs
+            WHEN (NEW.source_type = 'session' AND NOT EXISTS (
+                    SELECT 1 FROM sessions WHERE id = NEW.source_id
+                ))
+                OR (NEW.source_type = 'workflow_run' AND NOT EXISTS (
+                    SELECT 1 FROM workflow_runs WHERE id = NEW.source_id
+                ))
+            BEGIN
+                SELECT RAISE(ABORT, 'legacy source not found');
+            END;
+
+            CREATE TRIGGER thread_legacy_refs_no_delete
+            BEFORE DELETE ON thread_legacy_refs
+            BEGIN
+                SELECT RAISE(ABORT, 'thread legacy refs are immutable');
+            END;
+            """,
+        )
+
+    def _downgrade_v5(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM threads)
+                + (SELECT COUNT(*) FROM turns)
+                + (SELECT COUNT(*) FROM items)
+                + (SELECT COUNT(*) FROM artifact_blobs)
+                + (SELECT COUNT(*) FROM artifacts)
+                + (SELECT COUNT(*) FROM artifact_source_refs)
+                + (SELECT COUNT(*) FROM thread_legacy_refs) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back Phase 1A tables while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER thread_legacy_refs_no_delete;
+            DROP TRIGGER thread_legacy_refs_insert_guard;
+            DROP TRIGGER thread_legacy_refs_no_update;
+            DROP TRIGGER artifact_source_refs_no_delete;
+            DROP TRIGGER artifact_source_refs_insert_guard;
+            DROP TRIGGER artifact_source_refs_no_update;
+            DROP TRIGGER artifacts_no_delete;
+            DROP TRIGGER artifacts_no_update;
+            DROP TRIGGER artifacts_body_guard;
+            DROP TRIGGER artifacts_blob_size_guard;
+            DROP TRIGGER artifact_blobs_no_delete;
+            DROP TRIGGER artifact_blobs_no_update;
+            DROP TRIGGER items_no_delete;
+            DROP TRIGGER items_no_update;
+            DROP TRIGGER items_approval_link_guard;
+            DROP TRIGGER items_tool_result_call_guard;
+            DROP TRIGGER items_tool_call_unique_guard;
+            DROP TRIGGER items_artifact_ref_guard;
+            DROP TRIGGER items_body_guard;
+            DROP TRIGGER items_active_thread_guard;
+            DROP TRIGGER turns_no_delete;
+            DROP TRIGGER turns_no_update;
+            DROP TRIGGER turns_body_guard;
+            DROP TRIGGER turns_active_thread_guard;
+            DROP TRIGGER threads_no_delete;
+            DROP TRIGGER threads_status_transition_guard;
+            DROP TRIGGER threads_body_guard_update;
+            DROP TRIGGER threads_body_guard_insert;
+            DROP TRIGGER threads_identity_no_update;
+            DROP INDEX idx_thread_legacy_refs_thread;
+            DROP TABLE thread_legacy_refs;
+            DROP INDEX idx_artifact_sources_type_id;
+            DROP TABLE artifact_source_refs;
+            DROP INDEX idx_artifacts_hash_sequence;
+            DROP TABLE artifacts;
+            DROP TABLE artifact_blobs;
+            DROP INDEX idx_items_turn_sequence;
+            DROP INDEX idx_items_thread_sequence;
+            DROP TABLE items;
+            DROP INDEX idx_turns_thread_sequence;
+            DROP TABLE turns;
+            DROP INDEX idx_threads_workspace_status_sequence;
+            DROP INDEX idx_threads_parent_sequence;
+            DROP TABLE threads;
             """,
         )
 
@@ -2521,6 +3400,719 @@ class SQLiteStore:
             )
             for row in rows
         ]
+
+    # Phase 1A canonical Thread history
+
+    def create_thread(self, thread: ConversationThread) -> ConversationThread:
+        if thread.cursor is not None:
+            raise ValueError("a new thread cannot provide a cursor")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if thread.parent_thread_id is not None:
+                parent = connection.execute(
+                    "SELECT 1 FROM threads WHERE id = ?",
+                    (thread.parent_thread_id,),
+                ).fetchone()
+                if parent is None:
+                    raise NotFoundError(f"parent thread not found: {thread.parent_thread_id}")
+            for legacy_ref in thread.legacy_refs:
+                self._validate_legacy_ref(connection, legacy_ref)
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO threads(
+                        id, parent_thread_id, workspace_ref, status, body,
+                        created_at, updated_at, archived_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        thread.id,
+                        thread.parent_thread_id,
+                        thread.workspace_ref,
+                        thread.status.value,
+                        thread.model_dump_json(),
+                        thread.created_at.isoformat(),
+                        thread.updated_at.isoformat(),
+                        thread.archived_at.isoformat() if thread.archived_at is not None else None,
+                    ),
+                ).lastrowid
+                if cursor is None:
+                    raise RuntimeError("thread insert did not produce a cursor")
+                for legacy_ref in thread.legacy_refs:
+                    connection.execute(
+                        """
+                        INSERT INTO thread_legacy_refs(
+                            thread_id, source_type, source_id, created_at
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            thread.id,
+                            legacy_ref.source_type.value,
+                            legacy_ref.source_id,
+                            thread.created_at.isoformat(),
+                        ),
+                    )
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("thread identity or legacy mapping already exists") from exc
+            row = connection.execute(
+                "SELECT * FROM threads WHERE id = ?",
+                (thread.id,),
+            ).fetchone()
+            assert row is not None
+            return self._thread_from_row(connection, row)
+
+    def get_thread(self, thread_id: str) -> ConversationThread:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM threads WHERE id = ?",
+                (thread_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"thread not found: {thread_id}")
+            return self._thread_from_row(connection, row)
+
+    def list_threads(
+        self,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+        parent_thread_id: str | None = None,
+        workspace_ref: str | None = None,
+        status: ThreadStatus | str | None = None,
+    ) -> list[ConversationThread]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        where = ["sequence > ?"]
+        params: list[Any] = [cursor]
+        if parent_thread_id is not None:
+            where.append("parent_thread_id = ?")
+            params.append(parent_thread_id)
+        if workspace_ref is not None:
+            where.append("workspace_ref = ?")
+            params.append(workspace_ref)
+        if status is not None:
+            normalized_status = ThreadStatus(status)
+            where.append("status = ?")
+            params.append(normalized_status.value)
+        params.append(page_limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM threads WHERE {' AND '.join(where)} ORDER BY sequence LIMIT ?",
+                params,
+            ).fetchall()
+            return [self._thread_from_row(connection, row) for row in rows]
+
+    def get_thread_by_legacy_ref(
+        self,
+        legacy_ref: ThreadLegacyRef,
+    ) -> ConversationThread:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT threads.*
+                FROM threads
+                JOIN thread_legacy_refs ON thread_legacy_refs.thread_id = threads.id
+                WHERE thread_legacy_refs.source_type = ?
+                    AND thread_legacy_refs.source_id = ?
+                """,
+                (legacy_ref.source_type.value, legacy_ref.source_id),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("thread legacy mapping not found")
+            return self._thread_from_row(connection, row)
+
+    def set_thread_status(
+        self,
+        thread_id: str,
+        status: ThreadStatus | str,
+    ) -> ConversationThread:
+        normalized_status = ThreadStatus(status)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM threads WHERE id = ?",
+                (thread_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"thread not found: {thread_id}")
+            current = self._thread_from_row(connection, row)
+            if current.status is normalized_status:
+                return current
+            allowed = (
+                current.status is ThreadStatus.ACTIVE
+                and normalized_status
+                in {ThreadStatus.COMPLETED, ThreadStatus.CANCELLED, ThreadStatus.ARCHIVED}
+            ) or (
+                current.status in {ThreadStatus.COMPLETED, ThreadStatus.CANCELLED}
+                and normalized_status is ThreadStatus.ARCHIVED
+            )
+            if not allowed:
+                raise ConflictError("invalid thread status transition")
+            updated_at = utc_now()
+            updated = ConversationThread.model_validate(
+                {
+                    **current.model_dump(),
+                    "status": normalized_status,
+                    "updated_at": updated_at,
+                    "archived_at": (
+                        updated_at if normalized_status is ThreadStatus.ARCHIVED else None
+                    ),
+                }
+            )
+            try:
+                connection.execute(
+                    """
+                    UPDATE threads
+                    SET status = ?, body = ?, updated_at = ?, archived_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        updated.status.value,
+                        updated.model_dump_json(),
+                        updated.updated_at.isoformat(),
+                        (
+                            updated.archived_at.isoformat()
+                            if updated.archived_at is not None
+                            else None
+                        ),
+                        thread_id,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("invalid thread status transition") from exc
+            return updated
+
+    def archive_thread(self, thread_id: str) -> ConversationThread:
+        return self.set_thread_status(thread_id, ThreadStatus.ARCHIVED)
+
+    def create_turn(self, turn: Turn) -> Turn:
+        if turn.cursor is not None or turn.position is not None:
+            raise ValueError("a new turn cannot provide a cursor or position")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_active_thread(connection, turn.thread_id)
+            position = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(position), 0) + 1 FROM turns WHERE thread_id = ?",
+                    (turn.thread_id,),
+                ).fetchone()[0]
+            )
+            persisted = Turn.model_validate({**turn.model_dump(), "position": position})
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO turns(id, thread_id, position, body, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        persisted.id,
+                        persisted.thread_id,
+                        position,
+                        persisted.model_dump_json(),
+                        persisted.created_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("turn identity or position already exists") from exc
+            if cursor is None:
+                raise RuntimeError("turn insert did not produce a cursor")
+            return Turn.model_validate({**persisted.model_dump(), "cursor": int(cursor)})
+
+    def list_turns(
+        self,
+        thread_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[Turn]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        with self._connect() as connection:
+            if (
+                connection.execute("SELECT 1 FROM threads WHERE id = ?", (thread_id,)).fetchone()
+                is None
+            ):
+                raise NotFoundError(f"thread not found: {thread_id}")
+            rows = connection.execute(
+                """
+                SELECT * FROM turns
+                WHERE thread_id = ? AND sequence > ?
+                ORDER BY sequence LIMIT ?
+                """,
+                (thread_id, cursor, page_limit),
+            ).fetchall()
+        return [self._turn_from_row(row) for row in rows]
+
+    def append_item(self, item: Item) -> Item:
+        if item.cursor is not None or item.position is not None:
+            raise ValueError("a new item cannot provide a cursor or position")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_active_thread(connection, item.thread_id)
+            turn_row = connection.execute(
+                "SELECT 1 FROM turns WHERE id = ? AND thread_id = ?",
+                (item.turn_id, item.thread_id),
+            ).fetchone()
+            if turn_row is None:
+                raise NotFoundError("turn not found in thread")
+            self._validate_item_reference(connection, item)
+            position = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(position), 0) + 1 FROM items WHERE thread_id = ?",
+                    (item.thread_id,),
+                ).fetchone()[0]
+            )
+            persisted = Item.model_validate({**item.model_dump(), "position": position})
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO items(
+                        id, thread_id, turn_id, position, item_type, body, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        persisted.id,
+                        persisted.thread_id,
+                        persisted.turn_id,
+                        position,
+                        persisted.item_type.value,
+                        persisted.model_dump_json(),
+                        persisted.created_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("item identity, position, or reference is invalid") from exc
+            if cursor is None:
+                raise RuntimeError("item insert did not produce a cursor")
+            return Item.model_validate({**persisted.model_dump(), "cursor": int(cursor)})
+
+    def get_item(self, item_id: str) -> Item:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"item not found: {item_id}")
+        return self._item_from_row(row)
+
+    def list_items(
+        self,
+        thread_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+        turn_id: str | None = None,
+    ) -> list[Item]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        where = ["thread_id = ?", "sequence > ?"]
+        params: list[Any] = [thread_id, cursor]
+        if turn_id is not None:
+            where.append("turn_id = ?")
+            params.append(turn_id)
+        params.append(page_limit)
+        with self._connect() as connection:
+            if (
+                connection.execute("SELECT 1 FROM threads WHERE id = ?", (thread_id,)).fetchone()
+                is None
+            ):
+                raise NotFoundError(f"thread not found: {thread_id}")
+            rows = connection.execute(
+                f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY sequence LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._item_from_row(row) for row in rows]
+
+    # Phase 1A Artifact metadata. The storage key is internal-only.
+
+    def validate_artifact_source_refs(
+        self,
+        source_refs: Collection[ArtifactSourceRef],
+    ) -> None:
+        """Preflight source references without creating blob-store state."""
+
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            for source_ref in source_refs:
+                self._validate_artifact_source_ref(connection, source_ref)
+
+    def register_artifact(
+        self,
+        artifact: Artifact,
+        *,
+        storage_key: str,
+    ) -> tuple[Artifact, bool]:
+        if artifact.cursor is not None:
+            raise ValueError("a new artifact cannot provide a cursor")
+        expected_storage_key = self._artifact_storage_key(artifact.content_hash)
+        if storage_key != expected_storage_key:
+            raise ValueError("artifact storage key does not match its content hash")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for source_ref in artifact.source_refs:
+                self._validate_artifact_source_ref(connection, source_ref)
+            existing_row = connection.execute(
+                "SELECT * FROM artifacts WHERE content_hash = ?",
+                (artifact.content_hash,),
+            ).fetchone()
+            if existing_row is not None:
+                existing = self._artifact_from_row(connection, existing_row)
+                if not self._artifact_metadata_matches(existing, artifact):
+                    raise ConflictError("artifact content hash already has different metadata")
+                blob_row = connection.execute(
+                    "SELECT storage_key, size_bytes FROM artifact_blobs WHERE content_hash = ?",
+                    (artifact.content_hash,),
+                ).fetchone()
+                if (
+                    blob_row is None
+                    or blob_row["storage_key"] != storage_key
+                    or int(blob_row["size_bytes"]) != artifact.size_bytes
+                ):
+                    raise ConflictError("artifact blob metadata is inconsistent")
+                return existing, False
+
+            blob_row = connection.execute(
+                "SELECT storage_key, size_bytes FROM artifact_blobs WHERE content_hash = ?",
+                (artifact.content_hash,),
+            ).fetchone()
+            if blob_row is None:
+                connection.execute(
+                    """
+                    INSERT INTO artifact_blobs(content_hash, storage_key, size_bytes, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        artifact.content_hash,
+                        storage_key,
+                        artifact.size_bytes,
+                        artifact.created_at.isoformat(),
+                    ),
+                )
+            elif (
+                blob_row["storage_key"] != storage_key
+                or int(blob_row["size_bytes"]) != artifact.size_bytes
+            ):
+                raise ConflictError("artifact blob metadata is inconsistent")
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO artifacts(
+                        id, content_hash, media_type, size_bytes, sensitivity,
+                        retention_policy_ref, body, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        artifact.id,
+                        artifact.content_hash,
+                        artifact.media_type,
+                        artifact.size_bytes,
+                        artifact.sensitivity.value,
+                        artifact.retention_policy_ref,
+                        artifact.model_dump_json(),
+                        artifact.created_at.isoformat(),
+                    ),
+                ).lastrowid
+                if cursor is None:
+                    raise RuntimeError("artifact insert did not produce a cursor")
+                for ordinal, source_ref in enumerate(artifact.source_refs, start=1):
+                    connection.execute(
+                        """
+                        INSERT INTO artifact_source_refs(
+                            artifact_id, ordinal, source_type, source_id
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            artifact.id,
+                            ordinal,
+                            source_ref.source_type.value,
+                            source_ref.source_id,
+                        ),
+                    )
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("artifact identity or metadata already exists") from exc
+            row = connection.execute(
+                "SELECT * FROM artifacts WHERE id = ?",
+                (artifact.id,),
+            ).fetchone()
+            assert row is not None
+            return self._artifact_from_row(connection, row), True
+
+    def get_artifact(self, artifact_id: str) -> Artifact:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM artifacts WHERE id = ?",
+                (artifact_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"artifact not found: {artifact_id}")
+            return self._artifact_from_row(connection, row)
+
+    def get_artifact_by_hash(self, content_hash: str) -> Artifact:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM artifacts WHERE content_hash = ?",
+                (content_hash,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("artifact not found by content hash")
+            return self._artifact_from_row(connection, row)
+
+    def list_artifacts(
+        self,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+        sensitivity: str | None = None,
+    ) -> list[Artifact]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        where = ["sequence > ?"]
+        params: list[Any] = [cursor]
+        if sensitivity is not None:
+            where.append("sensitivity = ?")
+            params.append(sensitivity)
+        params.append(page_limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM artifacts WHERE {' AND '.join(where)} ORDER BY sequence LIMIT ?",
+                params,
+            ).fetchall()
+            return [self._artifact_from_row(connection, row) for row in rows]
+
+    def get_artifact_blob_record(self, content_hash: str) -> dict[str, str | int]:
+        """Return physical metadata for trusted internal storage adapters only."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT storage_key, size_bytes
+                FROM artifact_blobs WHERE content_hash = ?
+                """,
+                (content_hash,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("artifact blob metadata not found")
+        return {"storage_key": str(row["storage_key"]), "size_bytes": int(row["size_bytes"])}
+
+    @staticmethod
+    def _validate_cursor_page(after_cursor: int | None, limit: int) -> tuple[int, int]:
+        if isinstance(limit, bool) or limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        if after_cursor is None:
+            return 0, limit
+        if isinstance(after_cursor, bool) or after_cursor < 0:
+            raise ValueError("after_cursor must be a non-negative integer")
+        return after_cursor, limit
+
+    @staticmethod
+    def _artifact_storage_key(content_hash: str) -> str:
+        if re.fullmatch(r"[0-9a-f]{64}", content_hash) is None:
+            raise ValueError("invalid artifact content hash")
+        return f"sha256/{content_hash[:2]}/{content_hash[2:4]}/{content_hash}"
+
+    @staticmethod
+    def _assert_active_thread(connection: sqlite3.Connection, thread_id: str) -> None:
+        row = connection.execute(
+            "SELECT status FROM threads WHERE id = ?",
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"thread not found: {thread_id}")
+        if row["status"] != ThreadStatus.ACTIVE.value:
+            raise ConflictError("thread is not active")
+
+    @staticmethod
+    def _validate_legacy_ref(
+        connection: sqlite3.Connection,
+        legacy_ref: ThreadLegacyRef,
+    ) -> None:
+        table = {
+            "session": "sessions",
+            "workflow_run": "workflow_runs",
+        }[legacy_ref.source_type.value]
+        row = connection.execute(
+            f'SELECT 1 FROM "{table}" WHERE id = ?',
+            (legacy_ref.source_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError("legacy source not found")
+
+    @staticmethod
+    def _validate_item_reference(connection: sqlite3.Connection, item: Item) -> None:
+        payload = item.payload
+        if isinstance(payload, (ArtifactRefPayload, ToolResultRefPayload)):
+            artifact_exists = connection.execute(
+                "SELECT 1 FROM artifacts WHERE id = ?", (payload.artifact_id,)
+            ).fetchone()
+            if artifact_exists is None:
+                raise NotFoundError(f"artifact not found: {payload.artifact_id}")
+        if isinstance(payload, ToolCallPayload):
+            duplicate = connection.execute(
+                """
+                SELECT 1 FROM items
+                WHERE thread_id = ? AND item_type = 'tool_call'
+                    AND json_extract(body, '$.payload.tool_call_id') = ?
+                """,
+                (item.thread_id, payload.tool_call_id),
+            ).fetchone()
+            if duplicate is not None:
+                raise ConflictError("tool call already exists in thread")
+        elif isinstance(payload, ToolResultRefPayload):
+            tool_call_exists = connection.execute(
+                """
+                SELECT 1 FROM items
+                WHERE thread_id = ? AND item_type = 'tool_call'
+                    AND json_extract(body, '$.payload.tool_call_id') = ?
+                """,
+                (item.thread_id, payload.tool_call_id),
+            ).fetchone()
+            if tool_call_exists is None:
+                raise NotFoundError("tool call reference not found in thread")
+        elif isinstance(payload, ApprovalLinkPayload):
+            approval_exists = connection.execute(
+                "SELECT 1 FROM approval_requests WHERE id = ?", (payload.approval_id,)
+            ).fetchone()
+            if approval_exists is None:
+                raise NotFoundError(f"approval not found: {payload.approval_id}")
+
+    @staticmethod
+    def _validate_artifact_source_ref(
+        connection: sqlite3.Connection,
+        source_ref: ArtifactSourceRef,
+    ) -> None:
+        table = {
+            ArtifactSourceType.THREAD: "threads",
+            ArtifactSourceType.TURN: "turns",
+            ArtifactSourceType.ITEM: "items",
+            ArtifactSourceType.SESSION: "sessions",
+            ArtifactSourceType.AGENT: "agents",
+            ArtifactSourceType.WORKFLOW_RUN: "workflow_runs",
+            ArtifactSourceType.TOOL_ACTION_RECEIPT: "tool_action_receipts",
+            ArtifactSourceType.APPROVAL: "approval_requests",
+            ArtifactSourceType.EVALUATION_RUN: "evaluation_runs",
+        }.get(source_ref.source_type)
+        if table is not None:
+            row = connection.execute(
+                f'SELECT 1 FROM "{table}" WHERE id = ?',
+                (source_ref.source_id,),
+            ).fetchone()
+        else:
+            # Tool calls have no legacy first-class table. Require a durable
+            # canonical Item, Approval, or Action receipt carrying that ID.
+            row = connection.execute(
+                """
+                SELECT 1 FROM items
+                WHERE item_type = 'tool_call'
+                    AND json_extract(body, '$.payload.tool_call_id') = ?
+                UNION ALL
+                SELECT 1 FROM approval_requests WHERE tool_call_id = ?
+                UNION ALL
+                SELECT 1 FROM tool_action_receipts WHERE idempotency_key = ?
+                LIMIT 1
+                """,
+                (source_ref.source_id, source_ref.source_id, source_ref.source_id),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("artifact source reference not found")
+
+    @staticmethod
+    def _thread_from_row(
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+    ) -> ConversationThread:
+        legacy_rows = connection.execute(
+            """
+            SELECT source_type, source_id FROM thread_legacy_refs
+            WHERE thread_id = ? ORDER BY source_type, source_id
+            """,
+            (row["id"],),
+        ).fetchall()
+        refs = tuple(
+            ThreadLegacyRef(source_type=ref["source_type"], source_id=ref["source_id"])
+            for ref in legacy_rows
+        )
+        stored = ConversationThread.model_validate_json(row["body"])
+        return ConversationThread.model_validate(
+            {
+                **stored.model_dump(),
+                "cursor": int(row["sequence"]),
+                "parent_thread_id": row["parent_thread_id"],
+                "workspace_ref": row["workspace_ref"],
+                "status": row["status"],
+                "legacy_refs": refs,
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "archived_at": row["archived_at"],
+            }
+        )
+
+    @staticmethod
+    def _turn_from_row(row: sqlite3.Row) -> Turn:
+        stored = Turn.model_validate_json(row["body"])
+        return Turn.model_validate(
+            {
+                **stored.model_dump(),
+                "cursor": int(row["sequence"]),
+                "thread_id": row["thread_id"],
+                "position": int(row["position"]),
+                "created_at": row["created_at"],
+            }
+        )
+
+    @staticmethod
+    def _item_from_row(row: sqlite3.Row) -> Item:
+        stored = Item.model_validate_json(row["body"])
+        return Item.model_validate(
+            {
+                **stored.model_dump(),
+                "cursor": int(row["sequence"]),
+                "thread_id": row["thread_id"],
+                "turn_id": row["turn_id"],
+                "position": int(row["position"]),
+                "created_at": row["created_at"],
+            }
+        )
+
+    @staticmethod
+    def _artifact_from_row(
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+    ) -> Artifact:
+        source_rows = connection.execute(
+            """
+            SELECT source_type, source_id FROM artifact_source_refs
+            WHERE artifact_id = ? ORDER BY ordinal
+            """,
+            (row["id"],),
+        ).fetchall()
+        source_refs = tuple(
+            ArtifactSourceRef(source_type=ref["source_type"], source_id=ref["source_id"])
+            for ref in source_rows
+        )
+        stored = Artifact.model_validate_json(row["body"])
+        return Artifact.model_validate(
+            {
+                **stored.model_dump(),
+                "cursor": int(row["sequence"]),
+                "content_hash": row["content_hash"],
+                "media_type": row["media_type"],
+                "size_bytes": int(row["size_bytes"]),
+                "sensitivity": row["sensitivity"],
+                "source_refs": source_refs,
+                "retention_policy_ref": row["retention_policy_ref"],
+                "created_at": row["created_at"],
+            }
+        )
+
+    @staticmethod
+    def _artifact_metadata_matches(existing: Artifact, requested: Artifact) -> bool:
+        existing_sources = {(ref.source_type, ref.source_id) for ref in existing.source_refs}
+        requested_sources = {(ref.source_type, ref.source_id) for ref in requested.source_refs}
+        return (
+            existing.content_hash == requested.content_hash
+            and existing.media_type == requested.media_type
+            and existing.size_bytes == requested.size_bytes
+            and existing.sensitivity is requested.sensitivity
+            and existing.retention_policy_ref == requested.retention_policy_ref
+            and existing_sources == requested_sources
+        )
 
     # Phase 0 durable Workflow coordinator and Session execution leases
 
