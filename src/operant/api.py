@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -11,13 +13,29 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from starlette.background import BackgroundTask
 from starlette.middleware.base import RequestResponseEndpoint
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from operant.application.evaluation import EvaluationRunner
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
+from operant.artifacts import (
+    ArtifactCorruptionError,
+    ArtifactNotFoundError,
+    ArtifactSecurityError,
+    ArtifactStoreError,
+    ArtifactTooLargeError,
+    ArtifactValidationError,
+)
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
 from operant.domain.evaluation import EvaluationResult, EvaluationRunEvent, EvaluationSuite
 from operant.domain.memory import MemoryKind
@@ -30,6 +48,16 @@ from operant.domain.models import (
     RoleStatus,
     ToolPolicy,
     new_id,
+)
+from operant.domain.threads import (
+    ArtifactSensitivity,
+    ArtifactSourceRef,
+    ConversationThread,
+    Item,
+    ItemPayload,
+    ThreadLegacyRef,
+    ThreadStatus,
+    Turn,
 )
 from operant.persistence.sqlite import (
     ActionOutcomeUnknownError,
@@ -50,6 +78,109 @@ from operant.providers.openai_compatible import (
     ProviderError,
 )
 from operant.settings import database_path, load_local_env
+
+MAX_ARTIFACT_UPLOAD_BYTES = 16 * 1024 * 1024
+MAX_ARTIFACT_BASE64_CHARS = ((MAX_ARTIFACT_UPLOAD_BYTES + 2) // 3) * 4
+MAX_ARTIFACT_REQUEST_BODY_BYTES = MAX_ARTIFACT_BASE64_CHARS + 64 * 1024
+
+
+class _ArtifactRequestTooLarge(Exception):
+    pass
+
+
+class _ArtifactRequestBodyLimitMiddleware:
+    """Stop oversized artifact streams without draining or buffering them."""
+
+    def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != "/v1/artifacts":
+            await self.app(scope, receive, send)
+            return
+
+        content_length: int | None = None
+        for name, value in scope["headers"]:
+            if name.lower() != b"content-length":
+                continue
+            try:
+                content_length = int(value)
+            except ValueError:
+                await self._error_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=400,
+                    code="invalid_content_length",
+                    message="Content-Length must be a non-negative integer",
+                )
+                return
+            if content_length < 0:
+                await self._error_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code=400,
+                    code="invalid_content_length",
+                    message="Content-Length must be a non-negative integer",
+                )
+                return
+            break
+        if content_length is not None and content_length > self.max_body_bytes:
+            await self._too_large_response(scope, receive, send)
+            return
+
+        consumed = 0
+        response_started = False
+
+        async def bounded_receive() -> Message:
+            nonlocal consumed
+            message = await receive()
+            if message["type"] == "http.request":
+                consumed += len(message.get("body", b""))
+                if consumed > self.max_body_bytes:
+                    raise _ArtifactRequestTooLarge
+            return message
+
+        async def tracked_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, bounded_receive, tracked_send)
+        except _ArtifactRequestTooLarge:
+            if response_started:
+                raise
+            await self._too_large_response(scope, receive, send)
+
+    async def _too_large_response(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._error_response(
+            scope,
+            receive,
+            send,
+            status_code=413,
+            code="artifact_request_too_large",
+            message="artifact request exceeds the API size limit",
+        )
+
+    @staticmethod
+    async def _error_response(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+    ) -> None:
+        response = JSONResponse(
+            status_code=status_code,
+            content=error_payload(code=code, message=message),
+        )
+        await response(scope, receive, send)
 
 
 class CreateModelProfileRequest(BaseModel):
@@ -229,6 +360,98 @@ class CreateMemoryRequest(BaseModel):
     confirmed: bool = False
 
 
+class CreateThreadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parent_thread_id: str | None = Field(default=None, max_length=300)
+    workspace_ref: str | None = Field(default=None, min_length=1, max_length=2048)
+    legacy_refs: tuple[ThreadLegacyRef, ...] = Field(default=(), max_length=16)
+
+    @field_validator("parent_thread_id", "workspace_ref")
+    @classmethod
+    def normalize_optional_ref(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("reference must not be blank")
+        return normalized
+
+    def to_domain(self) -> ConversationThread:
+        return ConversationThread(**self.model_dump())
+
+
+class CreateTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    def to_domain(self, thread_id: str) -> Turn:
+        return Turn(thread_id=thread_id)
+
+
+class AppendItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    payload: ItemPayload
+
+    def to_domain(self, *, thread_id: str, turn_id: str) -> Item:
+        return Item(thread_id=thread_id, turn_id=turn_id, payload=self.payload)
+
+
+class CreateArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content_base64: str | None = Field(default=None, max_length=MAX_ARTIFACT_BASE64_CHARS)
+    content_text: str | None = Field(default=None, max_length=MAX_ARTIFACT_UPLOAD_BYTES)
+    media_type: str = Field(min_length=3, max_length=255)
+    sensitivity: ArtifactSensitivity = ArtifactSensitivity.NORMAL
+    source_refs: tuple[ArtifactSourceRef, ...] = Field(default=(), max_length=100)
+    retention_policy_ref: str = Field(default="default", min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def validate_content_source(self) -> CreateArtifactRequest:
+        if (self.content_base64 is None) == (self.content_text is None):
+            raise ValueError("provide exactly one of content_base64 or content_text")
+        return self
+
+    @field_validator("media_type")
+    @classmethod
+    def validate_media_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        type_part, separator, subtype_part = normalized.partition("/")
+        allowed = frozenset("abcdefghijklmnopqrstuvwxyz0123456789!#$&^_.+-")
+        if (
+            not separator
+            or not type_part
+            or not subtype_part
+            or "/" in subtype_part
+            or any(character not in allowed for character in type_part)
+            or any(character not in allowed for character in subtype_part)
+        ):
+            raise ValueError("media_type must be a valid type/subtype without parameters")
+        return normalized
+
+    @field_validator("retention_policy_ref")
+    @classmethod
+    def normalize_retention_policy_ref(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("retention_policy_ref must not be blank")
+        return normalized
+
+    def decoded_content(self) -> bytes:
+        if self.content_text is not None:
+            content = self.content_text.encode("utf-8")
+        else:
+            assert self.content_base64 is not None
+            try:
+                content = base64.b64decode(self.content_base64, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("content_base64 must be strict RFC 4648 base64") from exc
+        if len(content) > MAX_ARTIFACT_UPLOAD_BYTES:
+            raise ValueError("artifact content exceeds the API size limit")
+        return content
+
+
 def _safe_evaluation_result_payload(result: EvaluationResult) -> dict[str, Any]:
     """Return a result suitable for CLI/API export, never its local workspace path."""
 
@@ -363,6 +586,8 @@ def _is_sse_replay_route(method: str, path: str) -> bool:
         return True
     if method == "POST" and path.startswith("/v1/tasks/") and path.endswith("/resume"):
         return True
+    if method == "GET" and path.startswith("/v1/threads/") and path.endswith("/items/stream"):
+        return True
     return (
         method == "GET"
         and path.startswith("/v1/evaluations/runs/")
@@ -376,6 +601,11 @@ def _is_event_cursor_query_route(method: str, path: str) -> bool:
     return (
         (path.startswith("/v1/sessions/") and path.endswith("/events"))
         or (path.startswith("/v1/tasks/") and path.endswith("/events"))
+        or (path.startswith("/v1/threads/") and path.endswith("/items"))
+        or (path.startswith("/v1/threads/") and path.endswith("/turns"))
+        or (path == "/v1/threads")
+        or (path == "/v1/artifacts")
+        or (path.startswith("/v1/threads/") and path.endswith("/items/stream"))
         or (
             path.startswith("/v1/evaluations/runs/")
             and (path.endswith("/events") or path.endswith("/events/stream"))
@@ -596,10 +826,25 @@ def _first_stream_summary(
     )
 
 
-def create_app(db_path: str | Path | None = None) -> FastAPI:
+def create_app(
+    db_path: str | Path | None = None,
+    *,
+    artifact_root: str | Path | None = None,
+    artifact_max_size_bytes: int = MAX_ARTIFACT_UPLOAD_BYTES,
+) -> FastAPI:
     load_local_env()
     store = SQLiteStore(db_path or database_path())
-    service = ApplicationService(store, OpenAICompatibleProvider())
+    configured_artifact_root = (
+        store.path.parent.absolute() / "artifacts" if artifact_root is None else Path(artifact_root)
+    )
+    if not configured_artifact_root.is_absolute():
+        raise ValueError("artifact_root must be an absolute path")
+    service = ApplicationService(
+        store,
+        OpenAICompatibleProvider(),
+        artifact_root=configured_artifact_root,
+        artifact_max_size_bytes=artifact_max_size_bytes,
+    )
     service.initialize()
     workflow = SequentialCodingWorkflow(service)
     app = FastAPI(
@@ -607,6 +852,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         description="由角色预设驱动的多模型 Coding Agent Runtime。",
         version="0.1.0",
     )
+    app.router.add_event_handler("shutdown", service.close)
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_request: Request, exc: HTTPException) -> JSONResponse:
@@ -1142,6 +1388,202 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return role.model_dump(mode="json")
+
+    @app.get("/v1/threads")
+    async def list_threads(
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+        parent_thread_id: str | None = Query(default=None, max_length=300),
+        workspace_ref: str | None = Query(default=None, max_length=2048),
+        status: ThreadStatus | None = None,
+    ) -> list[dict[str, object]]:
+        threads = service.list_threads(
+            after_cursor=after_cursor,
+            limit=limit,
+            parent_thread_id=parent_thread_id,
+            workspace_ref=workspace_ref,
+            status=status,
+        )
+        return [thread.model_dump(mode="json") for thread in threads]
+
+    @app.post("/v1/threads", status_code=201)
+    async def create_thread(request: CreateThreadRequest) -> dict[str, object]:
+        try:
+            thread = service.create_thread(request.to_domain())
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return thread.model_dump(mode="json")
+
+    @app.get("/v1/threads/{thread_id}")
+    async def get_thread(thread_id: str) -> dict[str, object]:
+        try:
+            thread = service.get_thread(thread_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return thread.model_dump(mode="json")
+
+    @app.post("/v1/threads/{thread_id}/archive")
+    async def archive_thread(thread_id: str) -> dict[str, object]:
+        try:
+            thread = service.archive_thread(thread_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return thread.model_dump(mode="json")
+
+    @app.get("/v1/threads/{thread_id}/turns")
+    async def list_turns(
+        thread_id: str,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[dict[str, object]]:
+        try:
+            turns = service.list_turns(
+                thread_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return [turn.model_dump(mode="json") for turn in turns]
+
+    @app.post("/v1/threads/{thread_id}/turns", status_code=201)
+    async def create_turn(
+        thread_id: str,
+        request: CreateTurnRequest,
+    ) -> dict[str, object]:
+        try:
+            turn = service.create_turn(request.to_domain(thread_id))
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return turn.model_dump(mode="json")
+
+    @app.get("/v1/threads/{thread_id}/items")
+    async def list_thread_items(
+        thread_id: str,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+        turn_id: str | None = Query(default=None, max_length=300),
+    ) -> list[dict[str, object]]:
+        try:
+            items = service.list_items(
+                thread_id,
+                after_cursor=after_cursor,
+                limit=limit,
+                turn_id=turn_id,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return [item.model_dump(mode="json") for item in items]
+
+    @app.get("/v1/threads/{thread_id}/items/stream")
+    async def stream_thread_items(
+        thread_id: str,
+        raw_request: Request,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> StreamingResponse:
+        header_cursor = _parse_last_event_id(raw_request.headers.get("Last-Event-ID"))
+        replay_cursor = header_cursor if header_cursor is not None else after_cursor
+        try:
+            items = service.list_items(
+                thread_id,
+                after_cursor=replay_cursor,
+                limit=limit,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        async def replay_items() -> AsyncIterator[str]:
+            for item in items:
+                yield _sse_event(
+                    "thread.item.appended",
+                    item.model_dump(mode="json"),
+                    cursor=item.cursor,
+                )
+
+        return StreamingResponse(replay_items(), media_type="text/event-stream")
+
+    @app.post("/v1/threads/{thread_id}/turns/{turn_id}/items", status_code=201)
+    async def append_thread_item(
+        thread_id: str,
+        turn_id: str,
+        request: AppendItemRequest,
+    ) -> dict[str, object]:
+        try:
+            item = service.append_item(request.to_domain(thread_id=thread_id, turn_id=turn_id))
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return item.model_dump(mode="json")
+
+    @app.get("/v1/artifacts")
+    async def list_artifacts(
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+        sensitivity: ArtifactSensitivity | None = None,
+    ) -> list[dict[str, object]]:
+        artifacts = service.list_artifacts(
+            after_cursor=after_cursor,
+            limit=limit,
+            sensitivity=sensitivity,
+        )
+        return [artifact.model_dump(mode="json") for artifact in artifacts]
+
+    @app.post("/v1/artifacts", responses={200: {"description": "Deduplicated artifact"}})
+    async def create_artifact(request: CreateArtifactRequest) -> JSONResponse:
+        try:
+            content = request.decoded_content()
+            artifact, created = service.create_artifact(
+                content=content,
+                media_type=request.media_type,
+                sensitivity=request.sensitivity,
+                source_refs=request.source_refs,
+                retention_policy_ref=request.retention_policy_ref,
+            )
+        except ArtifactTooLargeError as exc:
+            raise HTTPException(status_code=413, detail="artifact content is too large") from exc
+        except ArtifactValidationError as exc:
+            raise HTTPException(status_code=400, detail="artifact content is invalid") from exc
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ArtifactStoreError as exc:
+            raise HTTPException(status_code=500, detail="artifact storage failed safely") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content=artifact.model_dump(mode="json"),
+        )
+
+    @app.get("/v1/artifacts/{artifact_id}")
+    async def get_artifact(artifact_id: str) -> Response:
+        try:
+            artifact = service.get_artifact(artifact_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ArtifactCorruptionError, ArtifactNotFoundError, ArtifactSecurityError):
+            return protocol_response(
+                status_code=409,
+                code="artifact_integrity_failed",
+                message="artifact content failed integrity verification",
+                recovery=RecoveryAction.MANUAL_RECONCILE,
+            )
+        except ArtifactStoreError as exc:
+            raise HTTPException(status_code=500, detail="artifact storage failed safely") from exc
+        return JSONResponse(content=artifact.model_dump(mode="json"))
 
     @app.post("/v1/sessions", status_code=201)
     async def create_session(
@@ -1787,6 +2229,12 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return memory.model_dump(mode="json")
 
+    # Added last so this pure ASGI guard wraps the BaseHTTP command middleware:
+    # oversized chunked bodies fail before request.body() can buffer them.
+    app.add_middleware(
+        _ArtifactRequestBodyLimitMiddleware,
+        max_body_bytes=MAX_ARTIFACT_REQUEST_BODY_BYTES,
+    )
     return app
 
 
