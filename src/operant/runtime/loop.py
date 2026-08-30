@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from operant.domain.messages import Message, MessageRole, ModelResponse
+from operant.domain.context import ContextRevision
+from operant.domain.messages import Message, MessageRole, ModelResponse, ToolDefinition
 from operant.domain.models import RoleSnapshot
 from operant.protocol import redact_public_text
 from operant.providers.base import ModelProvider
@@ -81,6 +82,28 @@ class ActionGateway(Protocol):
     def verify_execution(self) -> None: ...
 
 
+class ComposedContext(Protocol):
+    @property
+    def messages(self) -> Sequence[Message]: ...
+
+    @property
+    def tools(self) -> Sequence[ToolDefinition]: ...
+
+    @property
+    def revision(self) -> ContextRevision: ...
+
+
+class ContextComposer(Protocol):
+    def compose(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+        request_ordinal: int,
+    ) -> ComposedContext: ...
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -88,10 +111,12 @@ class AgentLoop:
         tools: WorkspaceTools,
         *,
         action_gateway: ActionGateway | None = None,
+        context_composer: ContextComposer | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
         self.action_gateway = action_gateway
+        self.context_composer = context_composer
 
     async def run(
         self,
@@ -157,12 +182,26 @@ class AgentLoop:
                         )
                     }
                 )
+            tool_definitions = self.tools.definitions()
+            request_messages: Sequence[Message] = messages
+            request_tools: Sequence[ToolDefinition] = tool_definitions
+            context_revision_id: str | None = None
+            if self.context_composer is not None:
+                composed = self.context_composer.compose(
+                    snapshot=request_snapshot,
+                    messages=messages,
+                    tools=tool_definitions,
+                    request_ordinal=turn,
+                )
+                request_messages = composed.messages
+                request_tools = composed.tools
+                context_revision_id = composed.revision.id
             model_started = time.monotonic()
             completed: ModelResponse | None = None
             async for event in self.provider.stream(
                 snapshot=request_snapshot,
-                messages=messages,
-                tools=self.tools.definitions(),
+                messages=request_messages,
+                tools=request_tools,
             ):
                 if event.event_type == "model.delta":
                     yield RuntimeEvent(
@@ -182,18 +221,21 @@ class AgentLoop:
                     tool_calls=completed.tool_calls,
                 )
             )
+            completed_payload: dict[str, Any] = {
+                "content": completed.content,
+                "finish_reason": completed.finish_reason,
+                "tool_calls": [call.model_dump() for call in completed.tool_calls],
+                "usage": (
+                    None if completed.usage is None else completed.usage.model_dump(mode="json")
+                ),
+                "duration_ms": self._elapsed_ms(model_started),
+            }
+            if context_revision_id is not None:
+                completed_payload["context_revision_id"] = context_revision_id
             yield RuntimeEvent(
                 event_type="model.completed",
                 turn=turn,
-                payload={
-                    "content": completed.content,
-                    "finish_reason": completed.finish_reason,
-                    "tool_calls": [call.model_dump() for call in completed.tool_calls],
-                    "usage": (
-                        None if completed.usage is None else completed.usage.model_dump(mode="json")
-                    ),
-                    "duration_ms": self._elapsed_ms(model_started),
-                },
+                payload=completed_payload,
             )
 
             usage = completed.usage

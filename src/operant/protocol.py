@@ -152,7 +152,14 @@ def redact_public_text(value: str, *, max_chars: int = MAX_PUBLIC_TEXT_CHARS) ->
     return f"{redacted[:max_chars]}...[truncated]"
 
 
-def _is_sensitive_key(key: str) -> bool:
+def is_sensitive_key(key: str) -> bool:
+    """Return whether a mapping key denotes a credential-bearing value.
+
+    This is the shared key contract for public payload and model Context
+    redaction. ``secret_ref`` is deliberately metadata: it names an
+    environment variable and is not the secret value itself.
+    """
+
     normalized = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
     if normalized == "secret_ref":
         return False
@@ -185,7 +192,7 @@ def _bounded_public_data(
                 break
             remaining_items[0] -= 1
             safe_key = redact_public_text(str(key), max_chars=500)
-            if _is_sensitive_key(safe_key):
+            if is_sensitive_key(safe_key):
                 sanitized[safe_key] = "[REDACTED]"
             else:
                 sanitized[safe_key] = _bounded_public_data(

@@ -128,7 +128,7 @@ def test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows(
     store.initialize()
     store.initialize()
 
-    assert store.schema_version() == 5
+    assert store.schema_version() == 6
     assert store.get_model_profile(profile.id) == profile
     assert store.list_threads() == []
     assert store.list_artifacts() == []
@@ -164,14 +164,14 @@ def test_v5_migration_failure_is_atomic_and_empty_rollback_is_explicit(
     empty = SQLiteStore(tmp_path / "empty-rollback.sqlite3")
     empty.initialize()
     assert empty.rollback(4, isolated=True) == 4
-    assert empty.migrate() == 5
+    assert empty.migrate() == 6
 
 
 def test_exact_phase1a_preview_adds_reference_guards_and_updates_checksum(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "phase1a-preview.sqlite3"
-    _initialized_store(database)
+    SQLiteStore(database).migrate(5)
     with sqlite3.connect(database) as connection:
         for trigger in (
             "artifact_source_refs_insert_guard",
@@ -230,7 +230,7 @@ def test_v4_session_workflow_event_receipt_and_approval_remain_readable(
         )
     )
 
-    assert store.migrate() == 5
+    assert store.migrate() == 6
 
     assert store.get_session(session.id) == session
     assert store.get_agent(agent.id) == agent

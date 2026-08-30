@@ -21,6 +21,23 @@ from operant.domain.actions import (
     ToolActionReceipt,
     ToolActionReceiptStatus,
 )
+from operant.domain.context import (
+    Compaction,
+    CompactionSourceType,
+    CompactionSummary,
+    ContextReferenceType,
+    ContextRevision,
+    ContextSourceRef,
+    ContextSourceType,
+    ContextWatermark,
+    ContextWatermarkState,
+    PromptBlock,
+    PromptBlockType,
+    PromptLayout,
+    ReferenceBinding,
+    ToolResultStub,
+    compaction_coverage_hash,
+)
 from operant.domain.evaluation import (
     ArtifactWorkspace,
     EvaluationCase,
@@ -37,7 +54,14 @@ from operant.domain.evaluation import (
     assert_evaluation_result_contract,
     interrupted_evaluation_failure_analysis,
 )
-from operant.domain.memory import Memory, MemoryKind, MemorySource, MemoryStatus
+from operant.domain.memory import (
+    Memory,
+    MemoryKind,
+    MemorySource,
+    MemoryStatus,
+    parse_memory_scope,
+)
+from operant.domain.messages import Message, ToolDefinition
 from operant.domain.models import (
     AgentInstance,
     AgentStatus,
@@ -66,6 +90,51 @@ from operant.domain.threads import (
     Turn,
 )
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
+
+
+def _sha256_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+
+
+def _thread_item_refs_sha256(value: Any) -> str:
+    """Hash the frozen, ordered THREAD_ITEMS evidence representation."""
+
+    try:
+        refs = json.loads(str(value))
+        if not isinstance(refs, list):
+            return ""
+        digest = hashlib.sha256()
+        for ref in refs:
+            if not isinstance(ref, dict):
+                return ""
+            digest.update(
+                json.dumps(
+                    {
+                        "id": ref["source_id"],
+                        "cursor": ref["cursor"],
+                        "content_hash": ref["content_hash"],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            digest.update(b"\n")
+        return digest.hexdigest()
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return ""
+
+
+def _memory_scope_allows(scope: Any, kind: Any) -> int:
+    """SQLite predicate for the immutable Session memory-scope snapshot."""
+
+    try:
+        parsed_scope = parse_memory_scope(str(scope or ""))
+        return int(parsed_scope.can_read(MemoryKind(str(kind))))
+    except (TypeError, ValueError):
+        return 0
 
 
 class NotFoundError(LookupError):
@@ -146,6 +215,7 @@ class SQLiteStore:
         3: "2ac49a0e18c49ccfbfce434425bb7dd09f39710f190b635d3908af96512d9b34",
         4: "dd860b7b4b448ab4296c1e7803a0fcb90a1e5f27015066916cf871e455373f1c",
         5: "dc6ce273aa869446a520af09fb19335369dab273ffd38789d38298356e5d9df6",
+        6: "e12f7993df336c97f2a97532615abfcda457bfba4b10d902223634417e59d373",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -153,6 +223,7 @@ class SQLiteStore:
         3: "9be47a848c184b5f1ab81540abfc764dcae2a4b054ff4128d3ed153635d5f709",
         4: "7a787a9ce4262293dfd5a0ad524f7f50c245722abef763a64ea82a2eaed1fc14",
         5: "ec6dad28422980314a01fa56a1a2d28e1b2bee4744eb76d28240124a4a112490",
+        6: "5430fb415059679846e3f0c18a3b6c998573a053b81c1b4ce4a67719f6f60f66",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -219,6 +290,24 @@ class SQLiteStore:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=30.0)
         connection.row_factory = sqlite3.Row
+        connection.create_function(
+            "sha256_text",
+            1,
+            _sha256_text,
+            deterministic=True,
+        )
+        connection.create_function(
+            "thread_item_refs_sha256",
+            1,
+            _thread_item_refs_sha256,
+            deterministic=True,
+        )
+        connection.create_function(
+            "memory_scope_allows",
+            2,
+            _memory_scope_allows,
+            deterministic=True,
+        )
         connection.execute("PRAGMA busy_timeout = 30000")
         connection.execute("PRAGMA foreign_keys = ON")
         try:
@@ -374,6 +463,12 @@ class SQLiteStore:
                 "phase1a_thread_artifact_history",
                 self._upgrade_v5,
                 self._downgrade_v5,
+            ),
+            build(
+                6,
+                "phase1b_context_composer",
+                self._upgrade_v6,
+                self._downgrade_v6,
             ),
         )
 
@@ -583,6 +678,8 @@ class SQLiteStore:
             self._validate_v4_schema_shape(connection)
         elif migration.version == 5:
             self._validate_v5_schema_shape(connection)
+        elif migration.version == 6:
+            self._validate_v6_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -873,6 +970,126 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v6_required_columns() -> dict[str, set[str]]:
+        return {
+            "threads": {
+                "sequence",
+                "id",
+                "parent_thread_id",
+                "workspace_ref",
+                "status",
+                "body",
+                "body_hash",
+                "created_at",
+                "updated_at",
+                "archived_at",
+            },
+            "items": {
+                "sequence",
+                "id",
+                "thread_id",
+                "turn_id",
+                "position",
+                "item_type",
+                "body",
+                "body_hash",
+                "created_at",
+            },
+            "memory_versions": {
+                "memory_id",
+                "version",
+                "body",
+                "body_hash",
+                "kind",
+                "content",
+                "project_scope",
+                "role_scope",
+                "source_session_id",
+                "source_task",
+                "confidence",
+                "status",
+                "created_at",
+            },
+            "compactions": {
+                "sequence",
+                "id",
+                "session_id",
+                "agent_id",
+                "thread_id",
+                "source_type",
+                "source_cursor_start",
+                "source_cursor_end",
+                "source_snapshot_hash",
+                "summary_json",
+                "content_hash",
+                "covered_item_refs_json",
+                "created_at",
+            },
+            "context_revisions": {
+                "sequence",
+                "id",
+                "session_id",
+                "agent_id",
+                "thread_id",
+                "workspace_ref",
+                "request_ordinal",
+                "model_id",
+                "prompt_layout_version",
+                "context_window",
+                "reserved_output_tokens",
+                "tool_schema_token_estimate",
+                "safety_margin_tokens",
+                "available_input_tokens",
+                "pre_compaction_token_estimate",
+                "input_token_estimate",
+                "estimation_method",
+                "watermark_state",
+                "compaction_id",
+                "messages_json",
+                "tools_json",
+                "tools_hash",
+                "tool_result_stubs_json",
+                "message_ids_json",
+                "source_item_ids_json",
+                "artifact_refs_json",
+                "memory_refs_json",
+                "compaction_refs_json",
+                "source_snapshots_json",
+                "token_estimate",
+                "source_cursor_start",
+                "source_cursor_end",
+                "source_cursor_namespace",
+                "created_at",
+            },
+            "prompt_blocks": {
+                "revision_id",
+                "position",
+                "id",
+                "block_type",
+                "content",
+                "content_hash",
+                "source_refs_json",
+                "stable_until",
+                "visibility",
+                "token_estimate",
+                "cache_eligible",
+            },
+            "reference_bindings": {
+                "revision_id",
+                "position",
+                "id",
+                "ref_type",
+                "user_text",
+                "resolved_target",
+                "source_snapshot_hash",
+                "include_mode",
+                "max_tokens",
+                "visibility",
+                "resolved_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -888,6 +1105,8 @@ class SQLiteStore:
             tables.update(cls._v4_required_columns())
         if version >= 5:
             tables.update(cls._v5_required_columns())
+        if version >= 6:
+            tables.update(cls._v6_required_columns())
         return tables
 
     @staticmethod
@@ -919,6 +1138,21 @@ class SQLiteStore:
                 ("threads", "parent_thread_id"),
                 ("threads", "workspace_ref"),
                 ("threads", "archived_at"),
+                ("compactions", "thread_id"),
+                ("context_revisions", "thread_id"),
+                ("context_revisions", "workspace_ref"),
+                ("context_revisions", "context_window"),
+                ("context_revisions", "reserved_output_tokens"),
+                ("context_revisions", "safety_margin_tokens"),
+                ("context_revisions", "available_input_tokens"),
+                ("context_revisions", "compaction_id"),
+                ("context_revisions", "source_cursor_start"),
+                ("context_revisions", "source_cursor_end"),
+                ("context_revisions", "source_cursor_namespace"),
+                ("prompt_blocks", "stable_until"),
+                ("prompt_blocks", "token_estimate"),
+                ("reference_bindings", "user_text"),
+                ("reference_bindings", "max_tokens"),
             }
         )
 
@@ -937,6 +1171,19 @@ class SQLiteStore:
                 "cancel_requested",
                 "position",
                 "size_bytes",
+                "request_ordinal",
+                "context_window",
+                "reserved_output_tokens",
+                "tool_schema_token_estimate",
+                "safety_margin_tokens",
+                "available_input_tokens",
+                "pre_compaction_token_estimate",
+                "input_token_estimate",
+                "source_cursor_start",
+                "source_cursor_end",
+                "token_estimate",
+                "cache_eligible",
+                "max_tokens",
             }
         )
 
@@ -1039,6 +1286,48 @@ class SQLiteStore:
                         if version >= 5
                         else {}
                     ),
+                    **(
+                        {
+                            "compactions": [
+                                "source_cursor_start >= 1",
+                                "source_cursor_end >= source_cursor_start",
+                                "source_type IN ('context_revisions', 'thread_items')",
+                                "source_type != 'thread_items' OR thread_id IS NOT NULL",
+                            ],
+                            "context_revisions": [
+                                "request_ordinal >= 1",
+                                "context_window IS NULL OR context_window >= 1",
+                                "reserved_output_tokens IS NULL OR reserved_output_tokens >= 1",
+                                "tool_schema_token_estimate >= 0",
+                                "safety_margin_tokens IS NULL OR safety_margin_tokens >= 1",
+                                "available_input_tokens IS NULL OR available_input_tokens >= 0",
+                                "pre_compaction_token_estimate >= 0",
+                                "input_token_estimate >= 0",
+                                "token_estimate >= 0",
+                                "watermark_state IN ('green', 'yellow', 'red', "
+                                "'emergency', 'unknown')",
+                                "workspace_ref IS NULL OR length(workspace_ref) >= 1",
+                                "json_valid(source_snapshots_json) AND "
+                                "json_type(source_snapshots_json) = 'array'",
+                                "(source_cursor_start IS NULL AND source_cursor_end IS NULL AND "
+                                "source_cursor_namespace IS NULL) OR "
+                                "(source_cursor_start >= 1 AND "
+                                "source_cursor_end >= source_cursor_start AND "
+                                "source_cursor_namespace = 'items.sequence')",
+                            ],
+                            "prompt_blocks": [
+                                "position >= 1",
+                                "token_estimate IS NULL OR token_estimate >= 0",
+                                "cache_eligible IN (0, 1)",
+                            ],
+                            "reference_bindings": [
+                                "position >= 1",
+                                "max_tokens IS NULL OR max_tokens >= 1",
+                            ],
+                        }
+                        if version >= 6
+                        else {}
+                    ),
                 }
                 if version >= 3
                 else {}
@@ -1072,6 +1361,8 @@ class SQLiteStore:
                 store._upgrade_v4(connection)
             if version >= 5:
                 store._upgrade_v5(connection)
+            if version >= 6:
+                store._upgrade_v6(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -1151,6 +1442,15 @@ class SQLiteStore:
                     "thread_legacy_refs": ("source_type", "source_id"),
                 }
             )
+        if version >= 6:
+            contract.update(
+                {
+                    "compactions": ("sequence",),
+                    "context_revisions": ("sequence",),
+                    "prompt_blocks": ("revision_id", "position"),
+                    "reference_bindings": ("revision_id", "position"),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1199,6 +1499,18 @@ class SQLiteStore:
                     "artifacts": (("id",), ("content_hash",)),
                     "artifact_source_refs": (("artifact_id", "source_type", "source_id"),),
                     "thread_legacy_refs": (("thread_id", "source_type", "source_id"),),
+                }
+            )
+        if version >= 6:
+            contract.update(
+                {
+                    "compactions": (("id",),),
+                    "context_revisions": (("id",), ("agent_id", "request_ordinal")),
+                    "prompt_blocks": (("id",),),
+                    "reference_bindings": (
+                        ("id",),
+                        ("revision_id", "ref_type", "resolved_target"),
+                    ),
                 }
             )
         return contract
@@ -1289,6 +1601,26 @@ class SQLiteStore:
                     "thread_legacy_refs": (("thread_id", "threads", "id", "NO ACTION"),),
                 }
             )
+        if version >= 6:
+            contract.update(
+                {
+                    "compactions": (
+                        ("session_id", "sessions", "id", "NO ACTION"),
+                        ("agent_id", "agents", "id", "NO ACTION"),
+                        ("thread_id", "threads", "id", "NO ACTION"),
+                    ),
+                    "context_revisions": (
+                        ("session_id", "sessions", "id", "NO ACTION"),
+                        ("agent_id", "agents", "id", "NO ACTION"),
+                        ("thread_id", "threads", "id", "NO ACTION"),
+                        ("compaction_id", "compactions", "id", "NO ACTION"),
+                    ),
+                    "prompt_blocks": (("revision_id", "context_revisions", "id", "NO ACTION"),),
+                    "reference_bindings": (
+                        ("revision_id", "context_revisions", "id", "NO ACTION"),
+                    ),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1363,6 +1695,17 @@ class SQLiteStore:
                     "idx_artifacts_hash_sequence": ("content_hash", "sequence"),
                     "idx_artifact_sources_type_id": ("source_type", "source_id"),
                     "idx_thread_legacy_refs_thread": ("thread_id",),
+                }
+            )
+        if version >= 6:
+            indexes.update(
+                {
+                    "idx_compactions_agent_sequence": ("agent_id", "sequence"),
+                    "idx_compactions_thread_sequence": ("thread_id", "sequence"),
+                    "idx_context_revisions_session_sequence": ("session_id", "sequence"),
+                    "idx_context_revisions_thread_sequence": ("thread_id", "sequence"),
+                    "idx_prompt_blocks_revision_position": ("revision_id", "position"),
+                    "idx_reference_bindings_target": ("ref_type", "resolved_target"),
                 }
             )
         return indexes
@@ -1447,6 +1790,9 @@ class SQLiteStore:
 
     def _validate_v5_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=5)
+
+    def _validate_v6_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=6)
 
     def _validate_schema_contract(
         self,
@@ -2737,6 +3083,1312 @@ class SQLiteStore:
             """,
         )
 
+    @staticmethod
+    def _ensure_v6_body_hash_column(
+        connection: sqlite3.Connection,
+        table: str,
+    ) -> None:
+        """Persist canonical JSON hashes for SQL-only provenance guards."""
+
+        if table not in {"memory_versions", "threads", "items"}:
+            raise ValueError("unsupported v6 body-hash table")
+        columns = {
+            str(row["name"])
+            for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+        }
+        restore_item_guard = table == "items" and "body_hash" not in columns
+        if restore_item_guard:
+            connection.execute("DROP TRIGGER items_no_update")
+        if "body_hash" not in columns:
+            connection.execute(
+                f"ALTER TABLE \"{table}\" ADD COLUMN body_hash TEXT NOT NULL DEFAULT ''"
+            )
+        if table == "memory_versions":
+            rows = connection.execute(
+                'SELECT memory_id, version, body FROM "memory_versions"'
+            ).fetchall()
+        else:
+            rows = connection.execute(f'SELECT sequence, body FROM "{table}"').fetchall()
+        for row in rows:
+            body_hash = hashlib.sha256(str(row["body"]).encode("utf-8")).hexdigest()
+            if table == "memory_versions":
+                connection.execute(
+                    'UPDATE "memory_versions" SET body_hash = ? '
+                    "WHERE memory_id = ? AND version = ?",
+                    (body_hash, row["memory_id"], row["version"]),
+                )
+            else:
+                connection.execute(
+                    f'UPDATE "{table}" SET body_hash = ? WHERE sequence = ?',
+                    (body_hash, row["sequence"]),
+                )
+        if restore_item_guard:
+            connection.execute(
+                """
+                CREATE TRIGGER items_no_update
+                BEFORE UPDATE ON items
+                BEGIN
+                    SELECT RAISE(ABORT, 'canonical history is append-only');
+                END
+                """
+            )
+
+    def _upgrade_v6(self, connection: sqlite3.Connection) -> None:
+        for table in ("memory_versions", "threads", "items"):
+            self._ensure_v6_body_hash_column(connection, table)
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE compactions (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                thread_id TEXT,
+                source_type TEXT NOT NULL CHECK (
+                    source_type IN ('context_revisions', 'thread_items')
+                ),
+                source_cursor_start INTEGER NOT NULL CHECK (source_cursor_start >= 1),
+                source_cursor_end INTEGER NOT NULL CHECK (
+                    source_cursor_end >= source_cursor_start
+                ),
+                source_snapshot_hash TEXT NOT NULL CHECK (
+                    length(source_snapshot_hash) = 64
+                    AND source_snapshot_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                summary_json TEXT NOT NULL CHECK (json_valid(summary_json)),
+                content_hash TEXT NOT NULL CHECK (
+                    length(content_hash) = 64
+                    AND content_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                covered_item_refs_json TEXT NOT NULL CHECK (
+                    json_valid(covered_item_refs_json)
+                    AND json_type(covered_item_refs_json) = 'array'
+                ),
+                created_at TEXT NOT NULL,
+                CHECK (source_type != 'thread_items' OR thread_id IS NOT NULL),
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id)
+            );
+
+            CREATE INDEX idx_compactions_agent_sequence
+                ON compactions(agent_id, sequence);
+            CREATE INDEX idx_compactions_thread_sequence
+                ON compactions(thread_id, sequence);
+
+            CREATE TABLE context_revisions (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                thread_id TEXT,
+                workspace_ref TEXT CHECK (
+                    workspace_ref IS NULL OR length(workspace_ref) >= 1
+                ),
+                request_ordinal INTEGER NOT NULL CHECK (request_ordinal >= 1),
+                model_id TEXT NOT NULL,
+                prompt_layout_version TEXT NOT NULL CHECK (
+                    prompt_layout_version = 'phase1b.v1'
+                ),
+                context_window INTEGER CHECK (context_window IS NULL OR context_window >= 1),
+                reserved_output_tokens INTEGER CHECK (
+                    reserved_output_tokens IS NULL OR reserved_output_tokens >= 1
+                ),
+                tool_schema_token_estimate INTEGER NOT NULL CHECK (
+                    tool_schema_token_estimate >= 0
+                ),
+                safety_margin_tokens INTEGER CHECK (
+                    safety_margin_tokens IS NULL OR safety_margin_tokens >= 1
+                ),
+                available_input_tokens INTEGER CHECK (
+                    available_input_tokens IS NULL OR available_input_tokens >= 0
+                ),
+                pre_compaction_token_estimate INTEGER NOT NULL CHECK (
+                    pre_compaction_token_estimate >= 0
+                ),
+                input_token_estimate INTEGER NOT NULL CHECK (input_token_estimate >= 0),
+                estimation_method TEXT NOT NULL,
+                watermark_state TEXT NOT NULL CHECK (
+                    watermark_state IN ('green', 'yellow', 'red', 'emergency', 'unknown')
+                ),
+                compaction_id TEXT,
+                messages_json TEXT NOT NULL CHECK (json_valid(messages_json)),
+                tools_json TEXT NOT NULL CHECK (json_valid(tools_json)),
+                tools_hash TEXT NOT NULL CHECK (
+                    length(tools_hash) = 64
+                    AND tools_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                tool_result_stubs_json TEXT NOT NULL CHECK (
+                    json_valid(tool_result_stubs_json)
+                ),
+                message_ids_json TEXT NOT NULL CHECK (json_valid(message_ids_json)),
+                source_item_ids_json TEXT NOT NULL CHECK (json_valid(source_item_ids_json)),
+                artifact_refs_json TEXT NOT NULL CHECK (json_valid(artifact_refs_json)),
+                memory_refs_json TEXT NOT NULL CHECK (json_valid(memory_refs_json)),
+                compaction_refs_json TEXT NOT NULL CHECK (json_valid(compaction_refs_json)),
+                source_snapshots_json TEXT NOT NULL CHECK (
+                    json_valid(source_snapshots_json)
+                    AND json_type(source_snapshots_json) = 'array'
+                ),
+                token_estimate INTEGER NOT NULL CHECK (token_estimate >= 0),
+                source_cursor_start INTEGER,
+                source_cursor_end INTEGER,
+                source_cursor_namespace TEXT CHECK (
+                    source_cursor_namespace IS NULL
+                    OR source_cursor_namespace = 'items.sequence'
+                ),
+                created_at TEXT NOT NULL,
+                UNIQUE(agent_id, request_ordinal),
+                CHECK (
+                    (
+                        source_cursor_start IS NULL
+                        AND source_cursor_end IS NULL
+                        AND source_cursor_namespace IS NULL
+                    )
+                    OR (
+                        source_cursor_start >= 1
+                        AND source_cursor_end >= source_cursor_start
+                        AND source_cursor_namespace = 'items.sequence'
+                    )
+                ),
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id),
+                FOREIGN KEY (compaction_id) REFERENCES compactions(id)
+            );
+
+            CREATE INDEX idx_context_revisions_session_sequence
+                ON context_revisions(session_id, sequence);
+            CREATE INDEX idx_context_revisions_thread_sequence
+                ON context_revisions(thread_id, sequence);
+
+            CREATE TABLE prompt_blocks (
+                revision_id TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (position >= 1),
+                id TEXT UNIQUE NOT NULL,
+                block_type TEXT NOT NULL CHECK (
+                    block_type IN (
+                        'role_instructions', 'tool_schema', 'explicit_references',
+                        'compaction', 'conversation'
+                    )
+                ),
+                content TEXT NOT NULL,
+                content_hash TEXT NOT NULL CHECK (
+                    length(content_hash) = 64
+                    AND content_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                source_refs_json TEXT NOT NULL CHECK (
+                    json_valid(source_refs_json)
+                    AND json_type(source_refs_json) = 'array'
+                    AND json_array_length(source_refs_json) >= 1
+                ),
+                stable_until TEXT,
+                visibility TEXT NOT NULL CHECK (
+                    visibility IN ('role_private', 'session')
+                ),
+                token_estimate INTEGER CHECK (token_estimate IS NULL OR token_estimate >= 0),
+                cache_eligible INTEGER NOT NULL CHECK (cache_eligible IN (0, 1)),
+                PRIMARY KEY (revision_id, position),
+                FOREIGN KEY (revision_id) REFERENCES context_revisions(id)
+            );
+
+            CREATE INDEX idx_prompt_blocks_revision_position
+                ON prompt_blocks(revision_id, position);
+
+            CREATE TABLE reference_bindings (
+                revision_id TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (position >= 1),
+                id TEXT UNIQUE NOT NULL,
+                ref_type TEXT NOT NULL CHECK (
+                    ref_type IN ('thread', 'item', 'artifact', 'memory')
+                ),
+                user_text TEXT,
+                resolved_target TEXT NOT NULL,
+                source_snapshot_hash TEXT NOT NULL CHECK (
+                    length(source_snapshot_hash) = 64
+                    AND source_snapshot_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                include_mode TEXT NOT NULL CHECK (include_mode IN ('inline', 'metadata')),
+                max_tokens INTEGER CHECK (max_tokens IS NULL OR max_tokens >= 1),
+                visibility TEXT NOT NULL CHECK (
+                    visibility IN ('role_private', 'session')
+                ),
+                resolved_at TEXT NOT NULL,
+                PRIMARY KEY (revision_id, position),
+                UNIQUE(revision_id, ref_type, resolved_target),
+                FOREIGN KEY (revision_id) REFERENCES context_revisions(id)
+            );
+
+            CREATE INDEX idx_reference_bindings_target
+                ON reference_bindings(ref_type, resolved_target);
+
+            CREATE TRIGGER compactions_scope_guard
+            BEFORE INSERT ON compactions
+            WHEN sha256_text(NEW.summary_json) != NEW.content_hash
+                OR NOT EXISTS (
+                    SELECT 1 FROM agents
+                    WHERE id = NEW.agent_id AND session_id = NEW.session_id
+                )
+                OR (
+                    NEW.source_type = 'context_revisions'
+                    AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM context_revisions
+                            WHERE sequence = NEW.source_cursor_start
+                                AND session_id = NEW.session_id
+                                AND agent_id = NEW.agent_id
+                                AND thread_id IS NEW.thread_id
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM context_revisions
+                            WHERE sequence = NEW.source_cursor_end
+                                AND session_id = NEW.session_id
+                                AND agent_id = NEW.agent_id
+                                AND thread_id IS NEW.thread_id
+                        )
+                    )
+                )
+                OR (
+                    NEW.source_type = 'thread_items'
+                    AND (
+                        json_array_length(NEW.covered_item_refs_json) = 0
+                        OR EXISTS (
+                            SELECT 1 FROM json_each(NEW.covered_item_refs_json) AS ref
+                            WHERE COALESCE(json_type(ref.value), '') != 'object'
+                                OR (SELECT COUNT(*) FROM json_each(ref.value)) != 4
+                                OR EXISTS (
+                                    SELECT 1 FROM json_each(ref.value) AS field
+                                    WHERE field.key NOT IN (
+                                        'source_type', 'source_id', 'cursor', 'content_hash'
+                                    )
+                                )
+                                OR COALESCE(
+                                    json_type(ref.value, '$.source_type'), ''
+                                ) != 'text'
+                                OR json_extract(ref.value, '$.source_type') != 'item'
+                                OR COALESCE(
+                                    json_type(ref.value, '$.source_id'), ''
+                                ) != 'text'
+                                OR length(
+                                    json_extract(ref.value, '$.source_id')
+                                ) NOT BETWEEN 1 AND 300
+                                OR COALESCE(
+                                    json_type(ref.value, '$.cursor'), ''
+                                ) != 'integer'
+                                OR json_extract(ref.value, '$.cursor') < 1
+                                OR COALESCE(
+                                    json_type(ref.value, '$.content_hash'), ''
+                                ) != 'text'
+                                OR length(
+                                    json_extract(ref.value, '$.content_hash')
+                                ) != 64
+                                OR json_extract(
+                                    ref.value, '$.content_hash'
+                                ) GLOB '*[^0-9a-f]*'
+                                OR NOT EXISTS (
+                                    SELECT 1 FROM items
+                                    WHERE id = json_extract(ref.value, '$.source_id')
+                                        AND sequence = json_extract(ref.value, '$.cursor')
+                                        AND thread_id = NEW.thread_id
+                                        AND sha256_text(body) =
+                                            json_extract(ref.value, '$.content_hash')
+                                )
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM json_each(NEW.covered_item_refs_json) AS ref
+                            WHERE CAST(ref.key AS INTEGER) > 0
+                                AND json_extract(ref.value, '$.cursor') <= json_extract(
+                                    NEW.covered_item_refs_json,
+                                    '$[' || (CAST(ref.key AS INTEGER) - 1) || '].cursor'
+                                )
+                        )
+                        OR json_extract(
+                            NEW.covered_item_refs_json, '$[0].cursor'
+                        ) != NEW.source_cursor_start
+                        OR json_extract(
+                            NEW.covered_item_refs_json,
+                            '$[' || (
+                                json_array_length(NEW.covered_item_refs_json) - 1
+                            ) || '].cursor'
+                        ) != NEW.source_cursor_end
+                        OR thread_item_refs_sha256(NEW.covered_item_refs_json) !=
+                            NEW.source_snapshot_hash
+                        OR NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_start
+                                AND thread_id = NEW.thread_id
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_end
+                                AND thread_id = NEW.thread_id
+                        )
+                    )
+                )
+                OR (
+                    NEW.source_type = 'context_revisions'
+                    AND json_array_length(NEW.covered_item_refs_json) != 0
+                )
+                OR (
+                    NEW.thread_id IS NOT NULL
+                    AND NOT EXISTS (SELECT 1 FROM threads WHERE id = NEW.thread_id)
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'compaction source scope is invalid');
+            END;
+
+            CREATE TRIGGER compactions_no_update
+            BEFORE UPDATE ON compactions
+            BEGIN
+                SELECT RAISE(ABORT, 'compactions are append-only');
+            END;
+
+            CREATE TRIGGER compactions_no_delete
+            BEFORE DELETE ON compactions
+            BEGIN
+                SELECT RAISE(ABORT, 'compactions are append-only');
+            END;
+
+            CREATE TRIGGER context_revisions_memory_sources_guard
+            BEFORE INSERT ON context_revisions
+            WHEN json_type(NEW.source_snapshots_json) != 'array'
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(NEW.source_snapshots_json) AS source
+                    WHERE COALESCE(
+                        json_type(
+                            NEW.source_snapshots_json,
+                            '$[' || CAST(source.key AS INTEGER) || ']'
+                        ),
+                        ''
+                    ) != 'object'
+                        OR (
+                            SELECT COUNT(*)
+                            FROM json_each(
+                                CASE
+                                    WHEN json_type(
+                                        NEW.source_snapshots_json,
+                                        '$[' || CAST(source.key AS INTEGER) || ']'
+                                    ) = 'object'
+                                    THEN source.value
+                                    ELSE '{}'
+                                END
+                            )
+                        ) != 4
+                        OR EXISTS (
+                            SELECT 1
+                            FROM json_each(
+                                CASE
+                                    WHEN json_type(
+                                        NEW.source_snapshots_json,
+                                        '$[' || CAST(source.key AS INTEGER) || ']'
+                                    ) = 'object'
+                                    THEN source.value
+                                    ELSE '{}'
+                                END
+                            ) AS field
+                            WHERE field.key NOT IN (
+                                'source_type', 'source_id', 'cursor', 'content_hash'
+                            )
+                        )
+                        OR COALESCE(
+                            json_type(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].source_type'
+                            ),
+                            ''
+                        ) != 'text'
+                        OR json_extract(
+                            NEW.source_snapshots_json,
+                            '$[' || CAST(source.key AS INTEGER) || '].source_type'
+                        ) NOT IN (
+                            'session', 'agent', 'thread', 'item', 'artifact', 'memory',
+                            'tool_schema', 'compaction'
+                        )
+                        OR COALESCE(
+                            json_type(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].source_id'
+                            ),
+                            ''
+                        ) != 'text'
+                        OR length(
+                            json_extract(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].source_id'
+                            )
+                        ) NOT BETWEEN 1 AND 300
+                        OR COALESCE(
+                            json_type(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].cursor'
+                            ),
+                            ''
+                        ) NOT IN (
+                            'null', 'integer'
+                        )
+                        OR (
+                            json_type(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].cursor'
+                            ) = 'integer'
+                            AND json_extract(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].cursor'
+                            ) < 1
+                        )
+                        OR COALESCE(
+                            json_type(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].content_hash'
+                            ),
+                            ''
+                        ) != 'text'
+                        OR length(
+                            json_extract(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].content_hash'
+                            )
+                        ) != 64
+                        OR json_extract(
+                            NEW.source_snapshots_json,
+                            '$[' || CAST(source.key AS INTEGER) || '].content_hash'
+                        ) GLOB '*[^0-9a-f]*'
+                )
+                OR json_type(NEW.memory_refs_json) != 'array'
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(NEW.memory_refs_json) AS memory_ref
+                    WHERE COALESCE(
+                        json_type(
+                            NEW.memory_refs_json,
+                            '$[' || CAST(memory_ref.key AS INTEGER) || ']'
+                        ),
+                        ''
+                    ) != 'text'
+                        OR length(memory_ref.value) NOT BETWEEN 1 AND 300
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(NEW.memory_refs_json) AS first_ref
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM json_each(NEW.memory_refs_json) AS later_ref
+                        WHERE later_ref.key > first_ref.key
+                            AND later_ref.value = first_ref.value
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(NEW.source_snapshots_json) AS first_source
+                    WHERE json_extract(
+                        NEW.source_snapshots_json,
+                        '$[' || CAST(first_source.key AS INTEGER) || '].source_type'
+                    ) = 'memory'
+                        AND EXISTS (
+                            SELECT 1
+                            FROM json_each(NEW.source_snapshots_json) AS later_source
+                            WHERE later_source.key > first_source.key
+                                AND json_extract(
+                                    NEW.source_snapshots_json,
+                                    '$[' || CAST(later_source.key AS INTEGER) || '].source_type'
+                                ) = 'memory'
+                                AND json_extract(
+                                    NEW.source_snapshots_json,
+                                    '$[' || CAST(later_source.key AS INTEGER) || '].source_id'
+                                ) = json_extract(
+                                    NEW.source_snapshots_json,
+                                    '$[' || CAST(first_source.key AS INTEGER) || '].source_id'
+                                )
+                        )
+                )
+                OR json_array_length(NEW.memory_refs_json) != (
+                    SELECT COUNT(
+                        DISTINCT json_extract(
+                            NEW.source_snapshots_json,
+                            '$[' || CAST(source.key AS INTEGER) || '].source_id'
+                        )
+                    )
+                    FROM json_each(NEW.source_snapshots_json) AS source
+                    WHERE json_extract(
+                        NEW.source_snapshots_json,
+                        '$[' || CAST(source.key AS INTEGER) || '].source_type'
+                    ) = 'memory'
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(NEW.memory_refs_json) AS memory_ref
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(NEW.source_snapshots_json) AS source
+                        WHERE json_extract(
+                            NEW.source_snapshots_json,
+                            '$[' || CAST(source.key AS INTEGER) || '].source_type'
+                        ) = 'memory'
+                            AND json_extract(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].source_id'
+                            ) = memory_ref.value
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(NEW.source_snapshots_json) AS source
+                    WHERE json_extract(
+                        NEW.source_snapshots_json,
+                        '$[' || CAST(source.key AS INTEGER) || '].source_type'
+                    ) = 'memory'
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM json_each(NEW.memory_refs_json) AS memory_ref
+                            WHERE memory_ref.value = json_extract(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].source_id'
+                            )
+                        )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(NEW.memory_refs_json) AS memory_ref
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(NEW.source_snapshots_json) AS source
+                        WHERE json_extract(
+                            NEW.source_snapshots_json,
+                            '$[' || CAST(source.key AS INTEGER) || '].source_type'
+                        ) = 'memory'
+                            AND json_extract(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].source_id'
+                            ) = memory_ref.value
+                            AND (
+                                SELECT COUNT(
+                                    DISTINCT json_extract(
+                                        NEW.source_snapshots_json,
+                                        '$[' || CAST(previous.key AS INTEGER) || '].source_id'
+                                    )
+                                )
+                                FROM json_each(NEW.source_snapshots_json) AS previous
+                                WHERE previous.key < source.key
+                                    AND json_extract(
+                                        NEW.source_snapshots_json,
+                                        '$[' || CAST(previous.key AS INTEGER) || '].source_type'
+                                    ) = 'memory'
+                            ) = memory_ref.key
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(NEW.source_snapshots_json) AS source
+                    WHERE json_extract(
+                        NEW.source_snapshots_json,
+                        '$[' || CAST(source.key AS INTEGER) || '].source_type'
+                    ) = 'memory'
+                        AND (
+                            json_type(
+                                NEW.source_snapshots_json,
+                                '$[' || CAST(source.key AS INTEGER) || '].cursor'
+                            ) != 'integer'
+                            OR NOT EXISTS (
+                                SELECT 1
+                                FROM memories AS m
+                                JOIN memory_versions AS mv
+                                    ON mv.memory_id = m.id
+                                    AND mv.version = json_extract(
+                                        NEW.source_snapshots_json,
+                                        '$[' || CAST(source.key AS INTEGER) || '].cursor'
+                                    )
+                                JOIN sessions AS s ON s.id = NEW.session_id
+                                WHERE m.id = json_extract(
+                                        NEW.source_snapshots_json,
+                                        '$[' || CAST(source.key AS INTEGER) || '].source_id'
+                                    )
+                                    AND m.current_version = mv.version
+                                    AND mv.status = 'active'
+                                    AND mv.body_hash = json_extract(
+                                        NEW.source_snapshots_json,
+                                        '$[' || CAST(source.key AS INTEGER) || '].content_hash'
+                                    )
+                                    AND json_valid(mv.role_scope)
+                                    AND json_type(mv.role_scope) = 'array'
+                                    AND (
+                                        SELECT CASE mv.kind
+                                            WHEN 'working' THEN instr(value, ' working ') > 0
+                                                OR instr(value, ' session ') > 0
+                                                OR instr(value, ' all ') > 0
+                                                OR instr(value, ' * ') > 0
+                                            WHEN 'episodic' THEN instr(value, ' episodic ') > 0
+                                                OR instr(value, ' episode ') > 0
+                                                OR instr(value, ' all ') > 0
+                                                OR instr(value, ' * ') > 0
+                                            WHEN 'project' THEN instr(value, ' project ') > 0
+                                                OR instr(value, ' project_knowledge ') > 0
+                                                OR instr(value, ' all ') > 0
+                                                OR instr(value, ' * ') > 0
+                                            ELSE 0
+                                        END
+                                        FROM (
+                                            SELECT ' ' || replace(
+                                                replace(
+                                                    replace(
+                                                        replace(
+                                                            replace(
+                                                                replace(scope, '[', ' '),
+                                                                ']', ' '
+                                                            ),
+                                                            ',', ' '
+                                                        ),
+                                                        ';', ' '
+                                                    ),
+                                                    ':', ' '
+                                                ),
+                                                '=', ' '
+                                            ) || ' ' AS value
+                                            FROM (
+                                                SELECT CASE
+                                                    WHEN instr(scope, 'read') > 0 THEN substr(
+                                                        scope,
+                                                        instr(scope, 'read') + 4,
+                                                        CASE
+                                                            WHEN instr(scope, 'write') >
+                                                                instr(scope, 'read')
+                                                            THEN instr(scope, 'write') -
+                                                                instr(scope, 'read') - 4
+                                                            ELSE length(scope)
+                                                        END
+                                                    )
+                                                    ELSE scope
+                                                END AS scope
+                                                FROM (
+                                                    SELECT lower(trim(json_extract(
+                                                        s.body,
+                                                        '$.role_snapshot.memory_scope'
+                                                    ))) AS scope
+                                                ) AS raw_scope
+                                            ) AS parsed_scope
+                                        ) AS normalized
+                                    )
+                                    AND (
+                                        mv.kind != 'working'
+                                        OR mv.source_session_id = NEW.session_id
+                                    )
+                                    AND (
+                                        mv.kind != 'project'
+                                        OR (
+                                            NEW.workspace_ref IS NOT NULL
+                                            AND mv.project_scope = NEW.workspace_ref
+                                        )
+                                    )
+                                    AND (
+                                        json_array_length(mv.role_scope) = 0
+                                        OR EXISTS (
+                                            SELECT 1
+                                            FROM json_each(mv.role_scope) AS allowed
+                                            WHERE allowed.value IN (
+                                                json_extract(s.body, '$.role_snapshot.role_id'),
+                                                json_extract(s.body, '$.role_snapshot.role_name'),
+                                                '*'
+                                            )
+                                        )
+                                    )
+                            )
+                        )
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'ContextRevision Memory source snapshot is invalid');
+            END;
+
+            CREATE TRIGGER context_revisions_scope_guard
+            BEFORE INSERT ON context_revisions
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM agents
+                    WHERE id = NEW.agent_id AND session_id = NEW.session_id
+                )
+                OR (
+                    NEW.thread_id IS NOT NULL
+                    AND NEW.workspace_ref IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM threads
+                        WHERE id = NEW.thread_id
+                            AND workspace_ref = NEW.workspace_ref
+                    )
+                )
+                OR (
+                    NEW.compaction_id IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM compactions
+                        WHERE id = NEW.compaction_id
+                            AND session_id = NEW.session_id
+                            AND agent_id = NEW.agent_id
+                            AND thread_id IS NEW.thread_id
+                    )
+                )
+                OR NEW.prompt_layout_version != 'phase1b.v1'
+                OR (
+                    (NEW.source_cursor_start IS NULL)
+                    != (NEW.source_cursor_end IS NULL)
+                )
+                OR (
+                    NEW.source_cursor_start IS NULL
+                    AND NEW.source_cursor_namespace IS NOT NULL
+                )
+                OR (
+                    NEW.source_cursor_start IS NOT NULL
+                    AND COALESCE(NEW.source_cursor_namespace, '') != 'items.sequence'
+                )
+                OR (
+                    NEW.thread_id IS NULL
+                    AND (
+                        NEW.source_cursor_start IS NOT NULL
+                        OR NEW.source_cursor_end IS NOT NULL
+                        OR json_array_length(NEW.source_item_ids_json) != 0
+                    )
+                )
+                OR (
+                    NEW.source_cursor_start IS NOT NULL
+                    AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_start
+                                AND thread_id = NEW.thread_id
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_end
+                                AND thread_id = NEW.thread_id
+                        )
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.source_item_ids_json) AS item_id
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM items
+                        WHERE id = item_id.value AND thread_id = NEW.thread_id
+                    )
+                )
+                OR (
+                    NEW.compaction_id IS NULL
+                    AND json_array_length(NEW.compaction_refs_json) != 0
+                )
+                OR (
+                    NEW.compaction_id IS NOT NULL
+                    AND (
+                        json_array_length(NEW.compaction_refs_json) != 1
+                        OR json_extract(NEW.compaction_refs_json, '$[0]') != NEW.compaction_id
+                    )
+                )
+                OR json_type(NEW.memory_refs_json) != 'array'
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.memory_refs_json) AS memory_ref
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM memories WHERE id = memory_ref.value
+                    )
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'ContextRevision source scope is invalid');
+            END;
+
+            CREATE TRIGGER context_revisions_no_update
+            BEFORE UPDATE ON context_revisions
+            BEGIN
+                SELECT RAISE(ABORT, 'ContextRevisions are immutable');
+            END;
+
+            CREATE TRIGGER context_revisions_no_delete
+            BEFORE DELETE ON context_revisions
+            BEGIN
+                SELECT RAISE(ABORT, 'ContextRevisions are immutable');
+            END;
+
+            CREATE TRIGGER prompt_blocks_position_guard
+            BEFORE INSERT ON prompt_blocks
+            WHEN NEW.position != (
+                SELECT COALESCE(MAX(position), 0) + 1
+                FROM prompt_blocks WHERE revision_id = NEW.revision_id
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Prompt Block positions must be contiguous');
+            END;
+
+            CREATE TRIGGER prompt_blocks_source_refs_guard
+            BEFORE INSERT ON prompt_blocks
+            WHEN json_type(NEW.source_refs_json) != 'array'
+                OR json_array_length(NEW.source_refs_json) < 1
+                OR (
+                    NEW.block_type = 'compaction'
+                    AND (
+                        json_array_length(NEW.source_refs_json) != 1
+                        OR json_extract(
+                            NEW.source_refs_json, '$[0].source_type'
+                        ) != 'compaction'
+                    )
+                )
+                OR (
+                    NEW.block_type != 'compaction'
+                    AND EXISTS (
+                        SELECT 1 FROM json_each(NEW.source_refs_json) AS compaction_ref
+                        WHERE json_extract(compaction_ref.value, '$.source_type') = 'compaction'
+                    )
+                )
+                OR EXISTS (
+                SELECT 1 FROM json_each(NEW.source_refs_json) AS ref
+                WHERE COALESCE(json_type(ref.value), '') != 'object'
+                    OR (SELECT COUNT(*) FROM json_each(ref.value)) != 4
+                    OR EXISTS (
+                        SELECT 1 FROM json_each(ref.value) AS field
+                        WHERE field.key NOT IN (
+                            'source_type', 'source_id', 'cursor', 'content_hash'
+                        )
+                    )
+                    OR COALESCE(json_type(ref.value, '$.source_type'), '') != 'text'
+                    OR COALESCE(json_type(ref.value, '$.source_id'), '') != 'text'
+                    OR length(json_extract(ref.value, '$.source_id')) NOT BETWEEN 1 AND 300
+                    OR COALESCE(json_type(ref.value, '$.cursor'), '') NOT IN (
+                        'null', 'integer'
+                    )
+                    OR (
+                        json_type(ref.value, '$.cursor') = 'integer'
+                        AND json_extract(ref.value, '$.cursor') < 1
+                    )
+                    OR COALESCE(json_type(ref.value, '$.content_hash'), '') != 'text'
+                    OR length(json_extract(ref.value, '$.content_hash')) != 64
+                    OR json_extract(ref.value, '$.content_hash') GLOB '*[^0-9a-f]*'
+                    OR json_extract(ref.value, '$.source_type') NOT IN (
+                        'session', 'agent', 'thread', 'item', 'artifact', 'memory',
+                        'tool_schema', 'compaction'
+                    )
+                    OR (
+                        json_extract(ref.value, '$.source_type') = 'session'
+                        AND (
+                            json_extract(ref.value, '$.cursor') IS NOT NULL
+                            OR json_extract(ref.value, '$.content_hash') != NEW.content_hash
+                            OR NOT EXISTS (
+                                SELECT 1 FROM context_revisions AS r
+                                WHERE r.id = NEW.revision_id
+                                    AND r.session_id = json_extract(ref.value, '$.source_id')
+                            )
+                        )
+                    )
+                    OR (
+                        json_extract(ref.value, '$.source_type') = 'agent'
+                        AND (
+                            json_extract(ref.value, '$.cursor') IS NOT NULL
+                            OR json_extract(ref.value, '$.content_hash') != NEW.content_hash
+                            OR NOT EXISTS (
+                                SELECT 1 FROM context_revisions AS r
+                                WHERE r.id = NEW.revision_id
+                                    AND r.agent_id = json_extract(ref.value, '$.source_id')
+                            )
+                        )
+                    )
+                    OR (
+                        json_extract(ref.value, '$.source_type') = 'tool_schema'
+                        AND (
+                            json_extract(ref.value, '$.cursor') IS NOT NULL
+                            OR NOT EXISTS (
+                                SELECT 1 FROM context_revisions AS r
+                                WHERE r.id = NEW.revision_id
+                                    AND r.session_id = json_extract(ref.value, '$.source_id')
+                                    AND r.tools_hash =
+                                        json_extract(ref.value, '$.content_hash')
+                            )
+                        )
+                    )
+                    OR (
+                        json_extract(ref.value, '$.source_type') = 'item'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM items AS i
+                            JOIN context_revisions AS r
+                                ON r.id = NEW.revision_id AND r.thread_id = i.thread_id
+                            WHERE i.id = json_extract(ref.value, '$.source_id')
+                                AND i.sequence = json_extract(ref.value, '$.cursor')
+                                AND i.body_hash =
+                                    json_extract(ref.value, '$.content_hash')
+                        )
+                    )
+                    OR (
+                        json_extract(ref.value, '$.source_type') = 'thread'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM threads AS t
+                            JOIN context_revisions AS r
+                                ON r.id = NEW.revision_id AND r.thread_id = t.id
+                            WHERE t.id = json_extract(ref.value, '$.source_id')
+                                AND t.sequence = json_extract(ref.value, '$.cursor')
+                                AND (
+                                    r.workspace_ref IS NULL
+                                    OR t.workspace_ref = r.workspace_ref
+                                )
+                                AND t.body_hash =
+                                    json_extract(ref.value, '$.content_hash')
+                        )
+                    )
+                    OR (
+                        json_extract(ref.value, '$.source_type') = 'artifact'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM artifacts
+                            WHERE id = json_extract(ref.value, '$.source_id')
+                                AND sequence = json_extract(ref.value, '$.cursor')
+                                AND content_hash = json_extract(ref.value, '$.content_hash')
+                                AND sensitivity != 'restricted'
+                        )
+                    )
+                    OR (
+                        json_extract(ref.value, '$.source_type') = 'memory'
+                        AND (
+                            COALESCE(json_type(ref.value, '$.cursor'), '') != 'integer'
+                            OR NOT EXISTS (
+                                SELECT 1
+                                FROM memories AS m
+                                JOIN memory_versions AS mv
+                                    ON mv.memory_id = m.id
+                                    AND mv.version = json_extract(ref.value, '$.cursor')
+                                JOIN context_revisions AS r
+                                    ON r.id = NEW.revision_id
+                                JOIN sessions AS s
+                                    ON s.id = r.session_id
+                                WHERE m.id = json_extract(ref.value, '$.source_id')
+                                    AND m.current_version = mv.version
+                                    AND mv.status = 'active'
+                                    AND mv.body_hash =
+                                        json_extract(ref.value, '$.content_hash')
+                                    AND EXISTS (
+                                        SELECT 1
+                                        FROM json_each(r.memory_refs_json) AS memory_ref
+                                        WHERE memory_ref.value = json_extract(
+                                            ref.value, '$.source_id'
+                                        )
+                                    )
+                                    AND (
+                                        SELECT CASE mv.kind
+                                            WHEN 'working' THEN instr(value, ' working ') > 0
+                                                OR instr(value, ' session ') > 0
+                                                OR instr(value, ' all ') > 0
+                                                OR instr(value, ' * ') > 0
+                                            WHEN 'episodic' THEN instr(value, ' episodic ') > 0
+                                                OR instr(value, ' episode ') > 0
+                                                OR instr(value, ' all ') > 0
+                                                OR instr(value, ' * ') > 0
+                                            WHEN 'project' THEN instr(value, ' project ') > 0
+                                                OR instr(value, ' project_knowledge ') > 0
+                                                OR instr(value, ' all ') > 0
+                                                OR instr(value, ' * ') > 0
+                                            ELSE 0
+                                        END
+                                        FROM (
+                                            SELECT ' ' || replace(
+                                                replace(
+                                                    replace(
+                                                        replace(
+                                                            replace(
+                                                                replace(scope, '[', ' '),
+                                                                ']', ' '
+                                                            ),
+                                                            ',', ' '
+                                                        ),
+                                                        ';', ' '
+                                                    ),
+                                                    ':', ' '
+                                                ),
+                                                '=', ' '
+                                            ) || ' ' AS value
+                                            FROM (
+                                                SELECT CASE
+                                                    WHEN instr(scope, 'read') > 0 THEN substr(
+                                                        scope,
+                                                        instr(scope, 'read') + 4,
+                                                        CASE
+                                                            WHEN instr(scope, 'write') >
+                                                                instr(scope, 'read')
+                                                            THEN instr(scope, 'write') -
+                                                                instr(scope, 'read') - 4
+                                                            ELSE length(scope)
+                                                        END
+                                                    )
+                                                    ELSE scope
+                                                END AS scope
+                                                FROM (
+                                                    SELECT lower(trim(json_extract(
+                                                        s.body,
+                                                        '$.role_snapshot.memory_scope'
+                                                    ))) AS scope
+                                                ) AS raw_scope
+                                            ) AS parsed_scope
+                                        ) AS normalized
+                                    )
+                                    AND (
+                                        mv.kind != 'working'
+                                        OR mv.source_session_id = r.session_id
+                                    )
+                                    AND (
+                                        mv.kind != 'project'
+                                        OR (
+                                            r.workspace_ref IS NOT NULL
+                                            AND mv.project_scope = r.workspace_ref
+                                        )
+                                    )
+                                    AND (
+                                        json_array_length(mv.role_scope) = 0
+                                        OR EXISTS (
+                                            SELECT 1 FROM json_each(mv.role_scope) AS allowed
+                                            WHERE allowed.value IN (
+                                                json_extract(s.body, '$.role_snapshot.role_id'),
+                                                json_extract(s.body, '$.role_snapshot.role_name'),
+                                                '*'
+                                            )
+                                        )
+                                    )
+                            )
+                        )
+                    )
+                    OR (
+                        json_extract(ref.value, '$.source_type') = 'compaction'
+                        AND (
+                            json_extract(ref.value, '$.cursor') IS NOT NULL
+                            OR NOT EXISTS (
+                                SELECT 1
+                                FROM compactions AS c
+                                JOIN context_revisions AS r
+                                    ON r.id = NEW.revision_id
+                                    AND r.compaction_id = c.id
+                                    AND r.session_id = c.session_id
+                                    AND r.agent_id = c.agent_id
+                                    AND r.thread_id IS c.thread_id
+                                WHERE c.id = json_extract(ref.value, '$.source_id')
+                                    AND c.content_hash =
+                                        json_extract(ref.value, '$.content_hash')
+                            )
+                        )
+                    )
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Prompt Block source reference is invalid');
+            END;
+
+            CREATE TRIGGER prompt_blocks_no_update
+            BEFORE UPDATE ON prompt_blocks
+            BEGIN
+                SELECT RAISE(ABORT, 'Prompt Blocks are immutable');
+            END;
+
+            CREATE TRIGGER prompt_blocks_no_delete
+            BEFORE DELETE ON prompt_blocks
+            BEGIN
+                SELECT RAISE(ABORT, 'Prompt Blocks are immutable');
+            END;
+
+            CREATE TRIGGER reference_bindings_position_guard
+            BEFORE INSERT ON reference_bindings
+            WHEN NEW.position != (
+                SELECT COALESCE(MAX(position), 0) + 1
+                FROM reference_bindings WHERE revision_id = NEW.revision_id
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Reference Binding positions must be contiguous');
+            END;
+
+            CREATE TRIGGER reference_bindings_target_guard
+            BEFORE INSERT ON reference_bindings
+            WHEN (
+                    NEW.ref_type = 'thread'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM context_revisions
+                        WHERE id = NEW.revision_id AND thread_id = NEW.resolved_target
+                    )
+                )
+                OR (
+                    NEW.ref_type = 'item'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM items AS i
+                        JOIN context_revisions AS r
+                            ON r.id = NEW.revision_id AND r.thread_id = i.thread_id
+                        WHERE i.id = NEW.resolved_target
+                    )
+                )
+                OR (
+                    NEW.ref_type = 'artifact'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM artifacts
+                        WHERE id = NEW.resolved_target
+                            AND sensitivity != 'restricted'
+                            AND (
+                                NEW.include_mode = 'metadata'
+                                OR sensitivity = 'normal'
+                            )
+                    )
+                )
+                OR (
+                    NEW.ref_type = 'memory'
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM context_revisions AS r
+                        JOIN prompt_blocks AS b ON b.revision_id = r.id
+                        CROSS JOIN json_each(b.source_refs_json) AS source
+                        JOIN memories AS m
+                            ON m.id = json_extract(source.value, '$.source_id')
+                        JOIN memory_versions AS mv
+                            ON mv.memory_id = m.id
+                            AND mv.version = json_extract(source.value, '$.cursor')
+                        JOIN sessions AS s ON s.id = r.session_id
+                        WHERE r.id = NEW.revision_id
+                            AND json_extract(source.value, '$.source_type') = 'memory'
+                            AND json_extract(source.value, '$.source_id') = NEW.resolved_target
+                            AND json_extract(source.value, '$.content_hash') =
+                                NEW.source_snapshot_hash
+                            AND json_type(source.value, '$.cursor') = 'integer'
+                            AND EXISTS (
+                                SELECT 1
+                                FROM json_each(r.memory_refs_json) AS memory_ref
+                                WHERE memory_ref.value = NEW.resolved_target
+                            )
+                            AND m.current_version = mv.version
+                            AND mv.status = 'active'
+                            AND mv.body_hash = NEW.source_snapshot_hash
+                            AND (
+                                SELECT CASE mv.kind
+                                    WHEN 'working' THEN instr(value, ' working ') > 0
+                                        OR instr(value, ' session ') > 0
+                                        OR instr(value, ' all ') > 0
+                                        OR instr(value, ' * ') > 0
+                                    WHEN 'episodic' THEN instr(value, ' episodic ') > 0
+                                        OR instr(value, ' episode ') > 0
+                                        OR instr(value, ' all ') > 0
+                                        OR instr(value, ' * ') > 0
+                                    WHEN 'project' THEN instr(value, ' project ') > 0
+                                        OR instr(value, ' project_knowledge ') > 0
+                                        OR instr(value, ' all ') > 0
+                                        OR instr(value, ' * ') > 0
+                                    ELSE 0
+                                END
+                                FROM (
+                                    SELECT ' ' || replace(
+                                        replace(
+                                            replace(
+                                                replace(
+                                                    replace(
+                                                        replace(scope, '[', ' '),
+                                                        ']', ' '
+                                                    ),
+                                                    ',', ' '
+                                                ),
+                                                ';', ' '
+                                            ),
+                                            ':', ' '
+                                        ),
+                                        '=', ' '
+                                    ) || ' ' AS value
+                                    FROM (
+                                        SELECT CASE
+                                            WHEN instr(scope, 'read') > 0 THEN substr(
+                                                scope,
+                                                instr(scope, 'read') + 4,
+                                                CASE
+                                                    WHEN instr(scope, 'write') >
+                                                        instr(scope, 'read')
+                                                    THEN instr(scope, 'write') -
+                                                        instr(scope, 'read') - 4
+                                                    ELSE length(scope)
+                                                END
+                                            )
+                                            ELSE scope
+                                        END AS scope
+                                        FROM (
+                                            SELECT lower(trim(json_extract(
+                                                s.body,
+                                                '$.role_snapshot.memory_scope'
+                                            ))) AS scope
+                                        ) AS raw_scope
+                                    ) AS parsed_scope
+                                ) AS normalized
+                            )
+                            AND (
+                                mv.kind != 'working'
+                                OR mv.source_session_id = r.session_id
+                            )
+                            AND (
+                                mv.kind != 'project'
+                                OR (
+                                    r.workspace_ref IS NOT NULL
+                                    AND mv.project_scope = r.workspace_ref
+                                )
+                            )
+                            AND (
+                                json_array_length(mv.role_scope) = 0
+                                OR EXISTS (
+                                    SELECT 1 FROM json_each(mv.role_scope) AS allowed
+                                    WHERE allowed.value IN (
+                                        json_extract(s.body, '$.role_snapshot.role_id'),
+                                        json_extract(s.body, '$.role_snapshot.role_name'),
+                                        '*'
+                                    )
+                                )
+                            )
+                    )
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'Context reference target is invalid');
+            END;
+
+            CREATE TRIGGER reference_bindings_no_update
+            BEFORE UPDATE ON reference_bindings
+            BEGIN
+                SELECT RAISE(ABORT, 'Reference Bindings are immutable');
+            END;
+
+            CREATE TRIGGER reference_bindings_no_delete
+            BEFORE DELETE ON reference_bindings
+            BEGIN
+                SELECT RAISE(ABORT, 'Reference Bindings are immutable');
+            END;
+            """,
+        )
+
+    def _downgrade_v6(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM compactions)
+                + (SELECT COUNT(*) FROM context_revisions)
+                + (SELECT COUNT(*) FROM prompt_blocks)
+                + (SELECT COUNT(*) FROM reference_bindings) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back Phase 1B tables while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER reference_bindings_no_delete;
+            DROP TRIGGER reference_bindings_no_update;
+            DROP TRIGGER reference_bindings_target_guard;
+            DROP TRIGGER reference_bindings_position_guard;
+            DROP TRIGGER prompt_blocks_no_delete;
+            DROP TRIGGER prompt_blocks_no_update;
+            DROP TRIGGER prompt_blocks_source_refs_guard;
+            DROP TRIGGER prompt_blocks_position_guard;
+            DROP TRIGGER context_revisions_no_delete;
+            DROP TRIGGER context_revisions_no_update;
+            DROP TRIGGER context_revisions_memory_sources_guard;
+            DROP TRIGGER context_revisions_scope_guard;
+            DROP TRIGGER compactions_no_delete;
+            DROP TRIGGER compactions_no_update;
+            DROP TRIGGER compactions_scope_guard;
+            DROP INDEX idx_reference_bindings_target;
+            DROP TABLE reference_bindings;
+            DROP INDEX idx_prompt_blocks_revision_position;
+            DROP TABLE prompt_blocks;
+            DROP INDEX idx_context_revisions_thread_sequence;
+            DROP INDEX idx_context_revisions_session_sequence;
+            DROP TABLE context_revisions;
+            DROP INDEX idx_compactions_thread_sequence;
+            DROP INDEX idx_compactions_agent_sequence;
+            DROP TABLE compactions;
+            """,
+        )
+        for table in ("memory_versions", "threads", "items"):
+            connection.execute(f'ALTER TABLE "{table}" DROP COLUMN body_hash')
+
     def _downgrade_v3(self, connection: sqlite3.Connection) -> None:
         populated = connection.execute(
             """
@@ -3274,6 +4926,7 @@ class SQLiteStore:
             model_id=profile.model_id,
             base_url=profile.base_url,
             secret_ref=profile.secret_ref,
+            context_window=profile.context_window,
             input_usd_per_million_tokens=profile.input_usd_per_million_tokens,
             output_usd_per_million_tokens=profile.output_usd_per_million_tokens,
             effort=selected_effort,
@@ -3418,23 +5071,47 @@ class SQLiteStore:
             for legacy_ref in thread.legacy_refs:
                 self._validate_legacy_ref(connection, legacy_ref)
             try:
-                cursor = connection.execute(
-                    """
-                    INSERT INTO threads(
-                        id, parent_thread_id, workspace_ref, status, body,
-                        created_at, updated_at, archived_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
+                body = thread.model_dump_json()
+                thread_columns = {
+                    str(row["name"])
+                    for row in connection.execute('PRAGMA table_info("threads")').fetchall()
+                }
+                if "body_hash" in thread_columns:
+                    fields = (
+                        "id, parent_thread_id, workspace_ref, status, body, body_hash, "
+                        "created_at, updated_at, archived_at"
+                    )
+                    values: tuple[Any, ...]
+                    values = (
                         thread.id,
                         thread.parent_thread_id,
                         thread.workspace_ref,
                         thread.status.value,
-                        thread.model_dump_json(),
+                        body,
+                        hashlib.sha256(body.encode("utf-8")).hexdigest(),
                         thread.created_at.isoformat(),
                         thread.updated_at.isoformat(),
                         thread.archived_at.isoformat() if thread.archived_at is not None else None,
-                    ),
+                    )
+                else:
+                    fields = (
+                        "id, parent_thread_id, workspace_ref, status, body, "
+                        "created_at, updated_at, archived_at"
+                    )
+                    values = (
+                        thread.id,
+                        thread.parent_thread_id,
+                        thread.workspace_ref,
+                        thread.status.value,
+                        body,
+                        thread.created_at.isoformat(),
+                        thread.updated_at.isoformat(),
+                        thread.archived_at.isoformat() if thread.archived_at is not None else None,
+                    )
+                placeholders = ", ".join("?" for _ in values)
+                cursor = connection.execute(
+                    f"INSERT INTO threads({fields}) VALUES ({placeholders})",
+                    values,
                 ).lastrowid
                 if cursor is None:
                     raise RuntimeError("thread insert did not produce a cursor")
@@ -3470,6 +5147,59 @@ class SQLiteStore:
             if row is None:
                 raise NotFoundError(f"thread not found: {thread_id}")
             return self._thread_from_row(connection, row)
+
+    def context_source_body_hash(
+        self,
+        source_type: ContextSourceType,
+        source_id: str,
+        *,
+        cursor: int | None,
+    ) -> str:
+        """Return the hash of the exact canonical JSON body used by provenance."""
+
+        if source_type not in {
+            ContextSourceType.THREAD,
+            ContextSourceType.ITEM,
+            ContextSourceType.MEMORY,
+        }:
+            raise ValueError("only canonical body Context sources have a body hash")
+        with self._connect() as connection:
+            if source_type is ContextSourceType.THREAD:
+                row = connection.execute(
+                    "SELECT body FROM threads WHERE id = ? AND sequence = ?",
+                    (source_id, cursor),
+                ).fetchone()
+            elif source_type is ContextSourceType.ITEM:
+                row = connection.execute(
+                    "SELECT body FROM items WHERE id = ? AND sequence = ?",
+                    (source_id, cursor),
+                ).fetchone()
+            else:
+                if cursor is None:
+                    row = connection.execute(
+                        """
+                        SELECT mv.body
+                        FROM memories AS m
+                        JOIN memory_versions AS mv
+                            ON mv.memory_id = m.id AND mv.version = m.current_version
+                        WHERE m.id = ? AND mv.status = 'active'
+                        """,
+                        (source_id,),
+                    ).fetchone()
+                else:
+                    row = connection.execute(
+                        """
+                        SELECT mv.body
+                        FROM memories AS m
+                        JOIN memory_versions AS mv
+                            ON mv.memory_id = m.id AND mv.version = ?
+                        WHERE m.id = ?
+                        """,
+                        (cursor, source_id),
+                    ).fetchone()
+        if row is None:
+            raise NotFoundError("canonical Context source body not found")
+        return hashlib.sha256(str(row["body"]).encode("utf-8")).hexdigest()
 
     def list_threads(
         self,
@@ -3559,24 +5289,50 @@ class SQLiteStore:
                 }
             )
             try:
-                connection.execute(
-                    """
-                    UPDATE threads
-                    SET status = ?, body = ?, updated_at = ?, archived_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        updated.status.value,
-                        updated.model_dump_json(),
-                        updated.updated_at.isoformat(),
+                body = updated.model_dump_json()
+                thread_columns = {
+                    str(item["name"])
+                    for item in connection.execute('PRAGMA table_info("threads")').fetchall()
+                }
+                if "body_hash" in thread_columns:
+                    connection.execute(
+                        """
+                        UPDATE threads
+                        SET status = ?, body = ?, body_hash = ?, updated_at = ?, archived_at = ?
+                        WHERE id = ?
+                        """,
                         (
-                            updated.archived_at.isoformat()
-                            if updated.archived_at is not None
-                            else None
+                            updated.status.value,
+                            body,
+                            hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                            updated.updated_at.isoformat(),
+                            (
+                                updated.archived_at.isoformat()
+                                if updated.archived_at is not None
+                                else None
+                            ),
+                            thread_id,
                         ),
-                        thread_id,
-                    ),
-                )
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE threads
+                        SET status = ?, body = ?, updated_at = ?, archived_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            updated.status.value,
+                            body,
+                            updated.updated_at.isoformat(),
+                            (
+                                updated.archived_at.isoformat()
+                                if updated.archived_at is not None
+                                else None
+                            ),
+                            thread_id,
+                        ),
+                    )
             except sqlite3.IntegrityError as exc:
                 raise ConflictError("invalid thread status transition") from exc
             return updated
@@ -3662,21 +5418,41 @@ class SQLiteStore:
             )
             persisted = Item.model_validate({**item.model_dump(), "position": position})
             try:
-                cursor = connection.execute(
-                    """
-                    INSERT INTO items(
-                        id, thread_id, turn_id, position, item_type, body, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
+                body = persisted.model_dump_json()
+                item_columns = {
+                    str(row["name"])
+                    for row in connection.execute('PRAGMA table_info("items")').fetchall()
+                }
+                if "body_hash" in item_columns:
+                    fields = (
+                        "id, thread_id, turn_id, position, item_type, body, body_hash, created_at"
+                    )
+                    values: tuple[Any, ...]
+                    values = (
                         persisted.id,
                         persisted.thread_id,
                         persisted.turn_id,
                         position,
                         persisted.item_type.value,
-                        persisted.model_dump_json(),
+                        body,
+                        hashlib.sha256(body.encode("utf-8")).hexdigest(),
                         persisted.created_at.isoformat(),
-                    ),
+                    )
+                else:
+                    fields = "id, thread_id, turn_id, position, item_type, body, created_at"
+                    values = (
+                        persisted.id,
+                        persisted.thread_id,
+                        persisted.turn_id,
+                        position,
+                        persisted.item_type.value,
+                        body,
+                        persisted.created_at.isoformat(),
+                    )
+                placeholders = ", ".join("?" for _ in values)
+                cursor = connection.execute(
+                    f"INSERT INTO items({fields}) VALUES ({placeholders})",
+                    values,
                 ).lastrowid
             except sqlite3.IntegrityError as exc:
                 raise ConflictError("item identity, position, or reference is invalid") from exc
@@ -4113,6 +5889,1118 @@ class SQLiteStore:
             and existing.retention_policy_ref == requested.retention_policy_ref
             and existing_sources == requested_sources
         )
+
+    # Phase 1B immutable Context evidence and append-only Compaction.
+
+    @staticmethod
+    def _validate_context_revision_item_evidence(
+        connection: sqlite3.Connection,
+        revision: ContextRevision,
+    ) -> None:
+        if revision.source_cursor_start is not None:
+            assert revision.source_cursor_end is not None
+            for cursor in {revision.source_cursor_start, revision.source_cursor_end}:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM items WHERE sequence = ? AND thread_id = ?",
+                        (cursor, revision.thread_id),
+                    ).fetchone()
+                    is None
+                ):
+                    raise ConflictError("ContextRevision Item cursor coverage is invalid")
+        for item_id in revision.source_item_ids:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM items WHERE id = ? AND thread_id = ?",
+                    (item_id, revision.thread_id),
+                ).fetchone()
+                is None
+            ):
+                raise ConflictError("ContextRevision source Item is outside its Thread")
+
+    @staticmethod
+    def _validate_memory_source_ref(
+        connection: sqlite3.Connection,
+        revision: ContextRevision,
+        source: ContextSourceRef,
+        *,
+        current_sources: bool,
+    ) -> None:
+        """Validate one versioned Memory against the frozen run scope.
+
+        A write may only reference the active head.  A historical read uses
+        the exact version and hash captured by the revision, so a later head
+        update or deactivation cannot invalidate an already persisted prompt.
+        Scope checks remain fail-closed in both cases.
+        """
+
+        if source.cursor is None:
+            raise ConflictError("Prompt Block Memory source is invalid: version is required")
+        row = connection.execute(
+            """
+            SELECT m.current_version, mv.body, mv.version, mv.status,
+                   s.body AS session_body
+            FROM memories AS m
+            JOIN memory_versions AS mv
+                ON mv.memory_id = m.id AND mv.version = ?
+            JOIN sessions AS s ON s.id = ?
+            WHERE m.id = ?
+            """,
+            (source.cursor, revision.session_id, source.source_id),
+        ).fetchone()
+        if row is None:
+            raise ConflictError("Prompt Block Memory source version is invalid")
+        if current_sources and (
+            int(row["current_version"]) != int(row["version"])
+            or row["status"] != MemoryStatus.ACTIVE.value
+        ):
+            raise ConflictError("Prompt Block Memory source is not the active head")
+        memory = Memory.model_validate_json(row["body"])
+        if (
+            memory.id != source.source_id
+            or memory.version != int(source.cursor)
+            or hashlib.sha256(str(row["body"]).encode("utf-8")).hexdigest() != source.content_hash
+        ):
+            raise ConflictError("Prompt Block Memory source hash is invalid")
+        try:
+            session = Session.model_validate_json(row["session_body"])
+            allowed = parse_memory_scope(session.role_snapshot.memory_scope).can_read(memory.kind)
+        except (TypeError, ValueError) as exc:
+            raise ConflictError("Prompt Block Memory scope snapshot is invalid") from exc
+        if not allowed:
+            raise ConflictError("Prompt Block Memory scope is not allowed for this role")
+        if memory.kind is MemoryKind.WORKING and memory.source_session_id != revision.session_id:
+            raise ConflictError("Prompt Block Working Memory belongs to another Session")
+        if memory.kind is MemoryKind.PROJECT and (
+            revision.workspace_ref is None or memory.project_scope != revision.workspace_ref
+        ):
+            raise ConflictError("Prompt Block Project Memory belongs to another Workspace")
+        if memory.role_scope and not (
+            set(memory.role_scope).intersection(
+                {session.role_snapshot.role_id, session.role_snapshot.role_name, "*"}
+            )
+        ):
+            raise ConflictError("Prompt Block Memory role scope does not include this role")
+
+    @staticmethod
+    def _context_memory_source_refs(revision: ContextRevision) -> tuple[ContextSourceRef, ...]:
+        return tuple(
+            source
+            for block in revision.blocks
+            for source in block.source_refs
+            if source.source_type is ContextSourceType.MEMORY
+        )
+
+    @staticmethod
+    def _validate_context_reference_bindings(
+        connection: sqlite3.Connection,
+        revision: ContextRevision,
+        *,
+        current_sources: bool,
+    ) -> None:
+        """Bind Memory references to the exact PromptBlock source snapshot."""
+
+        memory_sources = SQLiteStore._context_memory_source_refs(revision)
+        expected_memory_refs = tuple(dict.fromkeys(source.source_id for source in memory_sources))
+        if revision.memory_refs != expected_memory_refs:
+            raise ConflictError(
+                "ContextRevision memory_refs do not match Prompt Block Memory evidence"
+            )
+        for binding in revision.reference_bindings:
+            if binding.ref_type is not ContextReferenceType.MEMORY:
+                continue
+            matching_sources = tuple(
+                source
+                for source in memory_sources
+                if source.source_id == binding.resolved_target
+                and source.content_hash == binding.source_snapshot_hash
+            )
+            if len(matching_sources) != 1:
+                raise ConflictError("Reference Binding Memory source is invalid")
+            SQLiteStore._validate_memory_source_ref(
+                connection,
+                revision,
+                matching_sources[0],
+                current_sources=current_sources,
+            )
+
+    @staticmethod
+    def _validate_context_source_refs(
+        connection: sqlite3.Connection,
+        revision: ContextRevision,
+        *,
+        pending_compaction: Compaction | None = None,
+        current_sources: bool = True,
+    ) -> None:
+        for block in revision.blocks:
+            if not block.source_refs:
+                raise ConflictError("Prompt Block requires typed source evidence")
+            for source in block.source_refs:
+                if source.source_type is ContextSourceType.SESSION:
+                    if (
+                        source.source_id != revision.session_id
+                        or source.cursor is not None
+                        or source.content_hash != block.content_hash
+                    ):
+                        raise ConflictError("Prompt Block Session source is invalid")
+                elif source.source_type is ContextSourceType.AGENT:
+                    if (
+                        source.source_id != revision.agent_id
+                        or source.cursor is not None
+                        or source.content_hash != block.content_hash
+                    ):
+                        raise ConflictError("Prompt Block Agent source is invalid")
+                elif source.source_type is ContextSourceType.TOOL_SCHEMA:
+                    tools_json = json.dumps(
+                        [tool.model_dump(mode="json") for tool in revision.tools],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    if (
+                        source.source_id != revision.session_id
+                        or source.cursor is not None
+                        or source.content_hash
+                        != hashlib.sha256(tools_json.encode("utf-8")).hexdigest()
+                    ):
+                        raise ConflictError("Prompt Block Tool Schema source is invalid")
+                elif source.source_type is ContextSourceType.ITEM:
+                    row = connection.execute(
+                        "SELECT * FROM items WHERE id = ? AND sequence = ? AND thread_id = ?",
+                        (source.source_id, source.cursor, revision.thread_id),
+                    ).fetchone()
+                    if row is None:
+                        raise ConflictError("Prompt Block Item source is invalid")
+                    if (
+                        hashlib.sha256(str(row["body"]).encode("utf-8")).hexdigest()
+                        != source.content_hash
+                    ):
+                        raise ConflictError("Prompt Block Item source hash is invalid")
+                elif source.source_type is ContextSourceType.THREAD:
+                    row = connection.execute(
+                        "SELECT body, workspace_ref FROM threads WHERE id = ? AND sequence = ?",
+                        (source.source_id, source.cursor),
+                    ).fetchone()
+                    if row is None or source.source_id != revision.thread_id:
+                        raise ConflictError("Prompt Block Thread source is invalid")
+                    if revision.workspace_ref is not None and (
+                        row["workspace_ref"] != revision.workspace_ref
+                    ):
+                        raise ConflictError("Prompt Block Thread workspace scope is invalid")
+                    if current_sources and (
+                        hashlib.sha256(str(row["body"]).encode("utf-8")).hexdigest()
+                        != source.content_hash
+                    ):
+                        raise ConflictError("Prompt Block Thread source hash is invalid")
+                elif source.source_type is ContextSourceType.ARTIFACT:
+                    if (
+                        connection.execute(
+                            """
+                            SELECT 1 FROM artifacts
+                            WHERE id = ? AND sequence = ? AND content_hash = ?
+                                AND sensitivity != 'restricted'
+                            """,
+                            (source.source_id, source.cursor, source.content_hash),
+                        ).fetchone()
+                        is None
+                    ):
+                        raise ConflictError("Prompt Block Artifact source is invalid")
+                elif source.source_type is ContextSourceType.MEMORY:
+                    SQLiteStore._validate_memory_source_ref(
+                        connection,
+                        revision,
+                        source,
+                        current_sources=current_sources,
+                    )
+                elif source.source_type is ContextSourceType.COMPACTION:
+                    valid_pending = (
+                        pending_compaction is not None
+                        and pending_compaction.id == source.source_id
+                        and pending_compaction.id == revision.compaction_id
+                        and pending_compaction.session_id == revision.session_id
+                        and pending_compaction.agent_id == revision.agent_id
+                        and pending_compaction.thread_id == revision.thread_id
+                        and pending_compaction.content_hash == source.content_hash
+                    )
+                    valid_persisted = connection.execute(
+                        """
+                        SELECT 1 FROM compactions
+                        WHERE id = ? AND id = ? AND session_id = ? AND agent_id = ?
+                            AND thread_id IS ? AND content_hash = ?
+                        """,
+                        (
+                            source.source_id,
+                            revision.compaction_id,
+                            revision.session_id,
+                            revision.agent_id,
+                            revision.thread_id,
+                            source.content_hash,
+                        ),
+                    ).fetchone()
+                    if source.cursor is not None or not (valid_pending or valid_persisted):
+                        raise ConflictError("Prompt Block Compaction source is invalid")
+                else:
+                    raise ConflictError("Prompt Block source type is invalid")
+
+    @staticmethod
+    def _validate_thread_item_compaction_evidence(
+        connection: sqlite3.Connection,
+        compaction: Compaction,
+    ) -> None:
+        if not compaction.covered_item_refs:
+            raise ConflictError("Thread Item Compaction requires exact Item evidence")
+        if any(
+            source.source_type is not ContextSourceType.ITEM or source.cursor is None
+            for source in compaction.covered_item_refs
+        ):
+            raise ConflictError("Thread Item Compaction evidence must use Item cursors")
+        item_ids = [source.source_id for source in compaction.covered_item_refs]
+        item_cursors = [source.cursor for source in compaction.covered_item_refs]
+        if len(item_ids) != len(set(item_ids)) or any(
+            current is None or previous is None or current <= previous
+            for previous, current in zip(item_cursors, item_cursors[1:], strict=False)
+        ):
+            raise ConflictError(
+                "Thread Item Compaction evidence must be unique and strictly ordered"
+            )
+        if (
+            item_cursors[0] != compaction.source_cursor_start
+            or item_cursors[-1] != compaction.source_cursor_end
+        ):
+            raise ConflictError("Thread Item Compaction range does not match its evidence")
+        digest = hashlib.sha256()
+        for source in compaction.covered_item_refs:
+            row = connection.execute(
+                "SELECT * FROM items WHERE id = ? AND sequence = ? AND thread_id = ?",
+                (source.source_id, source.cursor, compaction.thread_id),
+            ).fetchone()
+            if row is None:
+                raise ConflictError("Thread Item Compaction evidence is outside its Thread")
+            item_hash = hashlib.sha256(str(row["body"]).encode("utf-8")).hexdigest()
+            if item_hash != source.content_hash:
+                raise ConflictError("Thread Item Compaction evidence hash is invalid")
+            digest.update(
+                json.dumps(
+                    {
+                        "id": source.source_id,
+                        "cursor": source.cursor,
+                        "content_hash": source.content_hash,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            digest.update(b"\n")
+        if digest.hexdigest() != compaction.source_snapshot_hash:
+            raise ConflictError("Thread Item Compaction snapshot hash is invalid")
+
+    @staticmethod
+    def _validate_persisted_compaction_evidence(
+        connection: sqlite3.Connection,
+        compaction: Compaction,
+    ) -> None:
+        if compaction.source_type is CompactionSourceType.THREAD_ITEMS:
+            SQLiteStore._validate_thread_item_compaction_evidence(connection, compaction)
+            return
+        if compaction.covered_item_refs:
+            raise ConflictError("ContextRevision Compaction cannot claim Item evidence")
+        if compaction_coverage_hash(compaction.summary) != compaction.source_snapshot_hash:
+            raise ConflictError("Compaction source hash does not match its coverage evidence")
+        for cursor in {compaction.source_cursor_start, compaction.source_cursor_end}:
+            if (
+                connection.execute(
+                    """
+                    SELECT 1 FROM context_revisions
+                    WHERE sequence = ? AND session_id = ? AND agent_id = ?
+                        AND thread_id IS ?
+                    """,
+                    (
+                        cursor,
+                        compaction.session_id,
+                        compaction.agent_id,
+                        compaction.thread_id,
+                    ),
+                ).fetchone()
+                is None
+            ):
+                raise ConflictError("Compaction ContextRevision cursor coverage is invalid")
+
+    def append_context_revision(
+        self,
+        revision: ContextRevision,
+        *,
+        compaction: Compaction | None = None,
+    ) -> ContextRevision:
+        if revision.cursor is not None:
+            raise ValueError("a new ContextRevision cannot provide a cursor")
+        frozen_layout = PromptLayout()
+        if revision.prompt_layout != frozen_layout:
+            raise ValueError("Phase 1B only accepts the frozen PromptLayout")
+        actual_block_types = tuple(block.block_type for block in revision.blocks)
+        expected_block_types = tuple(
+            block_type
+            for block_type in frozen_layout.block_order
+            if block_type in actual_block_types
+        )
+        if (
+            len(actual_block_types) != len(set(actual_block_types))
+            or actual_block_types != expected_block_types
+        ):
+            raise ValueError("Prompt blocks do not follow the frozen PromptLayout")
+        if not {
+            PromptBlockType.ROLE_INSTRUCTIONS,
+            PromptBlockType.TOOL_SCHEMA,
+            PromptBlockType.CONVERSATION,
+        }.issubset(actual_block_types):
+            raise ValueError("ContextRevision is missing required base Prompt Blocks")
+        expected_snapshots: list[ContextSourceRef] = []
+        seen_snapshots: set[tuple[ContextSourceType, str, int | None, str]] = set()
+        for block in revision.blocks:
+            for source in block.source_refs:
+                key = (source.source_type, source.source_id, source.cursor, source.content_hash)
+                if key in seen_snapshots:
+                    continue
+                seen_snapshots.add(key)
+                expected_snapshots.append(source)
+        # ``model_copy(update={"blocks": ...})`` is intentionally supported
+        # by callers constructing a candidate revision.  Rebind this
+        # denormalized field from the candidate blocks before Store validation;
+        # the persisted row still gets an immutable snapshot that readback can
+        # compare against the stored Prompt Blocks.
+        if revision.source_snapshots != tuple(expected_snapshots):
+            revision = revision.model_copy(update={"source_snapshots": tuple(expected_snapshots)})
+        compaction_blocks = [
+            block for block in revision.blocks if block.block_type is PromptBlockType.COMPACTION
+        ]
+        compaction_sources = [
+            source
+            for block in revision.blocks
+            for source in block.source_refs
+            if source.source_type is ContextSourceType.COMPACTION
+        ]
+        if revision.compaction_id is None:
+            if compaction_blocks or compaction_sources:
+                raise ConflictError("Prompt Block Compaction source is invalid: detached evidence")
+        elif (
+            len(compaction_blocks) != 1
+            or len(compaction_sources) != 1
+            or compaction_sources[0].source_id != revision.compaction_id
+        ):
+            raise ConflictError("Prompt Block Compaction source is invalid: evidence is incomplete")
+        expected_compaction_refs = (
+            () if revision.compaction_id is None else (revision.compaction_id,)
+        )
+        if revision.compaction_refs != expected_compaction_refs:
+            raise ConflictError("ContextRevision compaction_refs do not match compaction_id")
+        if (revision.source_cursor_start is None) != (revision.source_cursor_end is None):
+            raise ValueError("ContextRevision source cursor range must be complete")
+        if revision.thread_id is None and (
+            revision.source_cursor_start is not None
+            or revision.source_cursor_end is not None
+            or revision.source_item_ids
+        ):
+            raise ValueError("ContextRevision without a Thread cannot claim Item evidence")
+        expected_cursor_namespace = (
+            "items.sequence" if revision.source_cursor_start is not None else None
+        )
+        if revision.source_cursor_namespace != expected_cursor_namespace:
+            raise ValueError("ContextRevision Item cursor namespace is invalid")
+        if (revision.compaction_id is None) != (compaction is None):
+            raise ValueError("ContextRevision Compaction evidence is incomplete")
+        if compaction is not None:
+            if compaction.cursor is not None:
+                raise ValueError("a new Compaction cannot provide a cursor")
+            if compaction.id != revision.compaction_id:
+                raise ValueError("ContextRevision references a different Compaction")
+            if (
+                compaction.session_id != revision.session_id
+                or compaction.agent_id != revision.agent_id
+                or compaction.thread_id != revision.thread_id
+            ):
+                raise ValueError("ContextRevision and Compaction scopes differ")
+            summary_json = compaction.summary.model_dump_json()
+            if hashlib.sha256(summary_json.encode("utf-8")).hexdigest() != compaction.content_hash:
+                raise ValueError("Compaction content hash does not match its summary")
+            if (
+                compaction.source_type is CompactionSourceType.CONTEXT_REVISIONS
+                and compaction_coverage_hash(compaction.summary) != compaction.source_snapshot_hash
+            ):
+                raise ValueError("Compaction source hash does not match its coverage evidence")
+        for block in revision.blocks:
+            if hashlib.sha256(block.content.encode("utf-8")).hexdigest() != block.content_hash:
+                raise ValueError("Prompt Block content hash does not match its content")
+
+        messages_json = json.dumps(
+            [message.model_dump(mode="json") for message in revision.messages],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tools_json = json.dumps(
+            [tool.model_dump(mode="json") for tool in revision.tools],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        tool_result_stubs_json = json.dumps(
+            [stub.model_dump(mode="json") for stub in revision.tool_result_stubs],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        message_ids_json = json.dumps(revision.message_ids, separators=(",", ":"))
+        source_item_ids_json = json.dumps(revision.source_item_ids, separators=(",", ":"))
+        artifact_refs_json = json.dumps(revision.artifact_refs, separators=(",", ":"))
+        memory_refs_json = json.dumps(revision.memory_refs, separators=(",", ":"))
+        compaction_refs_json = json.dumps(revision.compaction_refs, separators=(",", ":"))
+        for stub in revision.tool_result_stubs:
+            matching_messages = [
+                message
+                for message in revision.messages
+                if message.role.value == "tool" and message.tool_call_id == stub.tool_call_id
+            ]
+            if not matching_messages or not any(
+                stub.artifact_id in (message.content or "")
+                and stub.content_hash in (message.content or "")
+                for message in matching_messages
+            ):
+                raise ValueError("Tool Result Stub is detached from its Provider input message")
+        watermark = revision.watermark
+        if watermark.estimation_method is None:
+            raise ValueError("Context token estimates require an estimation method")
+        if (
+            watermark.pre_compaction_token_estimate is None
+            or watermark.input_token_estimate is None
+        ):
+            raise ValueError(
+                "ContextRevision token estimates must be explicit or unknown, not zero-filled"
+            )
+        if watermark.tool_schema_token_estimate is None:
+            raise ValueError("tool schema token estimate is required")
+
+        with self._connect() as connection:
+            self._validate_context_source_refs(
+                connection,
+                revision,
+                pending_compaction=compaction,
+            )
+            self._validate_context_reference_bindings(
+                connection,
+                revision,
+                current_sources=True,
+            )
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing_row = connection.execute(
+                    """
+                    SELECT * FROM context_revisions
+                    WHERE agent_id = ? AND request_ordinal = ?
+                    """,
+                    (revision.agent_id, revision.request_ordinal),
+                ).fetchone()
+                if existing_row is not None:
+                    existing = self._context_revision_from_row(connection, existing_row)
+                    existing_compaction: Compaction | None = None
+                    if existing.compaction_id is not None:
+                        existing_compaction_row = connection.execute(
+                            "SELECT * FROM compactions WHERE id = ?",
+                            (existing.compaction_id,),
+                        ).fetchone()
+                        assert existing_compaction_row is not None
+                        existing_compaction = self._compaction_from_row(existing_compaction_row)
+                    if (
+                        existing.id == revision.id
+                        and self._context_revision_semantic_payload(existing)
+                        == self._context_revision_semantic_payload(revision)
+                        and self._compaction_semantic_payload(existing_compaction)
+                        == self._compaction_semantic_payload(compaction)
+                    ):
+                        return existing
+                    raise ConflictError(
+                        "ContextRevision request ordinal already has different evidence"
+                    )
+                self._validate_context_revision_item_evidence(connection, revision)
+                self._validate_context_source_refs(
+                    connection,
+                    revision,
+                    pending_compaction=compaction,
+                )
+                self._validate_context_reference_bindings(
+                    connection,
+                    revision,
+                    current_sources=True,
+                )
+                if compaction is not None:
+                    existing_compaction_row = connection.execute(
+                        "SELECT * FROM compactions WHERE id = ?",
+                        (compaction.id,),
+                    ).fetchone()
+                    if existing_compaction_row is not None:
+                        existing_compaction = self._compaction_from_row(existing_compaction_row)
+                        if self._compaction_semantic_payload(
+                            existing_compaction
+                        ) != self._compaction_semantic_payload(compaction):
+                            raise ConflictError(
+                                "Compaction identity already has different evidence"
+                            )
+                        # A deterministic THREAD_ITEMS Compaction may be
+                        # referenced by multiple immutable ContextRevisions.
+                        # Revalidate the existing row under this transaction,
+                        # then reuse it instead of violating the unique ID.
+                        self._validate_persisted_compaction_evidence(
+                            connection,
+                            existing_compaction,
+                        )
+                        compaction = existing_compaction
+                    else:
+                        covered_item_refs_json = json.dumps(
+                            [ref.model_dump(mode="json") for ref in compaction.covered_item_refs],
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        if compaction.source_type is CompactionSourceType.CONTEXT_REVISIONS:
+                            for source_cursor in {
+                                compaction.source_cursor_start,
+                                compaction.source_cursor_end,
+                            }:
+                                if (
+                                    connection.execute(
+                                        """
+                                    SELECT 1 FROM context_revisions
+                                    WHERE sequence = ? AND session_id = ? AND agent_id = ?
+                                        AND thread_id IS ? AND request_ordinal < ?
+                                    """,
+                                        (
+                                            source_cursor,
+                                            revision.session_id,
+                                            revision.agent_id,
+                                            revision.thread_id,
+                                            revision.request_ordinal,
+                                        ),
+                                    ).fetchone()
+                                    is None
+                                ):
+                                    raise ConflictError(
+                                        "Compaction ContextRevision cursor coverage is invalid"
+                                    )
+                        else:
+                            self._validate_thread_item_compaction_evidence(connection, compaction)
+                        summary_json = compaction.summary.model_dump_json()
+                        compaction_cursor = connection.execute(
+                            """
+                            INSERT INTO compactions(
+                                id, session_id, agent_id, thread_id, source_type,
+                                source_cursor_start, source_cursor_end, source_snapshot_hash,
+                                summary_json, content_hash, covered_item_refs_json, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                compaction.id,
+                                compaction.session_id,
+                                compaction.agent_id,
+                                compaction.thread_id,
+                                compaction.source_type.value,
+                                compaction.source_cursor_start,
+                                compaction.source_cursor_end,
+                                compaction.source_snapshot_hash,
+                                summary_json,
+                                compaction.content_hash,
+                                covered_item_refs_json,
+                                compaction.created_at.isoformat(),
+                            ),
+                        ).lastrowid
+                        if compaction_cursor is None:
+                            raise RuntimeError("Compaction insert did not produce a cursor")
+
+                for stub in revision.tool_result_stubs:
+                    artifact_row = connection.execute(
+                        """
+                        SELECT id FROM artifacts
+                        WHERE id = ? AND content_hash = ? AND size_bytes = ?
+                            AND sensitivity = 'normal'
+                        """,
+                        (stub.artifact_id, stub.content_hash, stub.stored_size),
+                    ).fetchone()
+                    if artifact_row is None:
+                        raise ConflictError(
+                            "Tool Result Stub Artifact is missing, sensitive, or inconsistent"
+                        )
+
+                cursor = connection.execute(
+                    """
+                    INSERT INTO context_revisions(
+                        id, session_id, agent_id, thread_id, workspace_ref,
+                        request_ordinal, model_id,
+                        prompt_layout_version, context_window, reserved_output_tokens,
+                        tool_schema_token_estimate, safety_margin_tokens,
+                        available_input_tokens, pre_compaction_token_estimate,
+                        input_token_estimate, estimation_method, watermark_state,
+                        compaction_id, messages_json, tools_json,
+                        tools_hash, tool_result_stubs_json, message_ids_json, source_item_ids_json,
+                        artifact_refs_json, memory_refs_json, compaction_refs_json,
+                        source_snapshots_json,
+                        token_estimate, source_cursor_start, source_cursor_end,
+                        source_cursor_namespace, created_at
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        revision.id,
+                        revision.session_id,
+                        revision.agent_id,
+                        revision.thread_id,
+                        revision.workspace_ref,
+                        revision.request_ordinal,
+                        revision.model_id,
+                        revision.prompt_layout.version,
+                        watermark.context_window,
+                        watermark.reserved_output_tokens,
+                        watermark.tool_schema_token_estimate,
+                        watermark.safety_margin_tokens,
+                        watermark.available_input_tokens,
+                        watermark.pre_compaction_token_estimate,
+                        watermark.input_token_estimate,
+                        watermark.estimation_method,
+                        watermark.state.value,
+                        revision.compaction_id,
+                        messages_json,
+                        tools_json,
+                        hashlib.sha256(tools_json.encode("utf-8")).hexdigest(),
+                        tool_result_stubs_json,
+                        message_ids_json,
+                        source_item_ids_json,
+                        artifact_refs_json,
+                        memory_refs_json,
+                        compaction_refs_json,
+                        json.dumps(
+                            [ref.model_dump(mode="json") for ref in revision.source_snapshots],
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        revision.token_estimate,
+                        revision.source_cursor_start,
+                        revision.source_cursor_end,
+                        revision.source_cursor_namespace,
+                        revision.created_at.isoformat(),
+                    ),
+                ).lastrowid
+                if cursor is None:
+                    raise RuntimeError("ContextRevision insert did not produce a cursor")
+                for block in revision.blocks:
+                    connection.execute(
+                        """
+                        INSERT INTO prompt_blocks(
+                            revision_id, position, id, block_type, content, content_hash,
+                            source_refs_json, stable_until, visibility, token_estimate,
+                            cache_eligible
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            revision.id,
+                            block.position,
+                            block.id,
+                            block.block_type.value,
+                            block.content,
+                            block.content_hash,
+                            json.dumps(
+                                [ref.model_dump(mode="json") for ref in block.source_refs],
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            None if block.stable_until is None else block.stable_until.isoformat(),
+                            block.visibility.value,
+                            block.token_estimate,
+                            int(block.cache_eligible),
+                        ),
+                    )
+                for binding in revision.reference_bindings:
+                    connection.execute(
+                        """
+                        INSERT INTO reference_bindings(
+                            revision_id, position, id, ref_type, user_text,
+                            resolved_target, source_snapshot_hash, include_mode,
+                            max_tokens, visibility, resolved_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            revision.id,
+                            binding.position,
+                            binding.id,
+                            binding.ref_type.value,
+                            binding.user_text,
+                            binding.resolved_target,
+                            binding.source_snapshot_hash,
+                            binding.include_mode.value,
+                            binding.max_tokens,
+                            binding.visibility.value,
+                            binding.resolved_at.isoformat(),
+                        ),
+                    )
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("ContextRevision scope, order, or identity is invalid") from exc
+            row = connection.execute(
+                "SELECT * FROM context_revisions WHERE id = ?", (revision.id,)
+            ).fetchone()
+            assert row is not None
+            return self._context_revision_from_row(connection, row)
+
+    def get_context_revision(self, revision_id: str) -> ContextRevision:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM context_revisions WHERE id = ?", (revision_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"ContextRevision not found: {revision_id}")
+            return self._context_revision_from_row(connection, row)
+
+    def list_context_revisions(
+        self,
+        session_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[ContextRevision]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        with self._connect() as connection:
+            if (
+                connection.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+                is None
+            ):
+                raise NotFoundError(f"session not found: {session_id}")
+            rows = connection.execute(
+                """
+                SELECT * FROM context_revisions
+                WHERE session_id = ? AND sequence > ?
+                ORDER BY sequence LIMIT ?
+                """,
+                (session_id, cursor, page_limit),
+            ).fetchall()
+            return [self._context_revision_from_row(connection, row) for row in rows]
+
+    def context_revision_cursor_bounds(
+        self,
+        agent_id: str,
+        *,
+        before_request_ordinal: int,
+    ) -> tuple[int, int] | None:
+        if before_request_ordinal < 1:
+            raise ValueError("before_request_ordinal must be positive")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT MIN(sequence) AS cursor_start, MAX(sequence) AS cursor_end
+                FROM context_revisions
+                WHERE agent_id = ? AND request_ordinal < ?
+                """,
+                (agent_id, before_request_ordinal),
+            ).fetchone()
+        assert row is not None
+        if row["cursor_start"] is None or row["cursor_end"] is None:
+            return None
+        return int(row["cursor_start"]), int(row["cursor_end"])
+
+    def get_compaction(self, compaction_id: str) -> Compaction:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM compactions WHERE id = ?", (compaction_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"Compaction not found: {compaction_id}")
+            compaction = self._compaction_from_row(row)
+            self._validate_persisted_compaction_evidence(connection, compaction)
+            return compaction
+
+    @staticmethod
+    def _compaction_from_row(row: sqlite3.Row) -> Compaction:
+        summary_json = str(row["summary_json"])
+        if hashlib.sha256(summary_json.encode("utf-8")).hexdigest() != row["content_hash"]:
+            raise ConflictError("Compaction content hash verification failed")
+        return Compaction(
+            id=row["id"],
+            cursor=int(row["sequence"]),
+            session_id=row["session_id"],
+            agent_id=row["agent_id"],
+            thread_id=row["thread_id"],
+            source_type=row["source_type"],
+            source_cursor_start=int(row["source_cursor_start"]),
+            source_cursor_end=int(row["source_cursor_end"]),
+            source_snapshot_hash=row["source_snapshot_hash"],
+            summary=CompactionSummary.model_validate_json(summary_json),
+            content_hash=row["content_hash"],
+            covered_item_refs=tuple(
+                ContextSourceRef.model_validate(item)
+                for item in json.loads(row["covered_item_refs_json"])
+            ),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _context_revision_semantic_payload(revision: ContextRevision) -> dict[str, Any]:
+        return {
+            "session_id": revision.session_id,
+            "agent_id": revision.agent_id,
+            "thread_id": revision.thread_id,
+            "workspace_ref": revision.workspace_ref,
+            "request_ordinal": revision.request_ordinal,
+            "model_id": revision.model_id,
+            "prompt_layout": revision.prompt_layout.model_dump(mode="json"),
+            "messages": [message.model_dump(mode="json") for message in revision.messages],
+            "tools": [tool.model_dump(mode="json") for tool in revision.tools],
+            "blocks": [
+                {
+                    "position": block.position,
+                    "block_type": block.block_type.value,
+                    "content": block.content,
+                    "content_hash": block.content_hash,
+                    "source_refs": [source.model_dump(mode="json") for source in block.source_refs],
+                    "stable_until": block.stable_until,
+                    "visibility": block.visibility.value,
+                    "token_estimate": block.token_estimate,
+                    "cache_eligible": block.cache_eligible,
+                }
+                for block in revision.blocks
+            ],
+            "reference_bindings": [
+                {
+                    "position": binding.position,
+                    "ref_type": binding.ref_type.value,
+                    "user_text": binding.user_text,
+                    "resolved_target": binding.resolved_target,
+                    "source_snapshot_hash": binding.source_snapshot_hash,
+                    "include_mode": binding.include_mode.value,
+                    "max_tokens": binding.max_tokens,
+                    "visibility": binding.visibility.value,
+                }
+                for binding in revision.reference_bindings
+            ],
+            "tool_result_stubs": [
+                stub.model_dump(mode="json") for stub in revision.tool_result_stubs
+            ],
+            "watermark": revision.watermark.model_dump(mode="json"),
+            "has_compaction": revision.compaction_id is not None,
+            "message_ids": revision.message_ids,
+            "source_item_ids": revision.source_item_ids,
+            "artifact_refs": revision.artifact_refs,
+            "memory_refs": revision.memory_refs,
+            "compaction_refs": revision.compaction_refs,
+            "source_snapshots": [
+                source.model_dump(mode="json") for source in revision.source_snapshots
+            ],
+            "token_estimate": revision.token_estimate,
+            "source_cursor_start": revision.source_cursor_start,
+            "source_cursor_end": revision.source_cursor_end,
+            "source_cursor_namespace": revision.source_cursor_namespace,
+        }
+
+    @staticmethod
+    def _compaction_semantic_payload(compaction: Compaction | None) -> dict[str, Any] | None:
+        if compaction is None:
+            return None
+        return {
+            "session_id": compaction.session_id,
+            "agent_id": compaction.agent_id,
+            "thread_id": compaction.thread_id,
+            "source_type": compaction.source_type.value,
+            "source_cursor_start": compaction.source_cursor_start,
+            "source_cursor_end": compaction.source_cursor_end,
+            "source_snapshot_hash": compaction.source_snapshot_hash,
+            "summary": compaction.summary.model_dump(mode="json"),
+            "content_hash": compaction.content_hash,
+            "covered_item_refs": [
+                ref.model_dump(mode="json") for ref in compaction.covered_item_refs
+            ],
+        }
+
+    @staticmethod
+    def _context_revision_from_row(
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+    ) -> ContextRevision:
+        block_rows = connection.execute(
+            "SELECT * FROM prompt_blocks WHERE revision_id = ? ORDER BY position",
+            (row["id"],),
+        ).fetchall()
+        blocks: list[PromptBlock] = []
+        for block_row in block_rows:
+            content = str(block_row["content"])
+            if hashlib.sha256(content.encode("utf-8")).hexdigest() != block_row["content_hash"]:
+                raise ConflictError("Prompt Block content hash verification failed")
+            blocks.append(
+                PromptBlock(
+                    id=block_row["id"],
+                    revision_id=row["id"],
+                    position=int(block_row["position"]),
+                    block_type=block_row["block_type"],
+                    content=content,
+                    content_hash=block_row["content_hash"],
+                    source_refs=tuple(
+                        ContextSourceRef.model_validate(item)
+                        for item in json.loads(block_row["source_refs_json"])
+                    ),
+                    stable_until=block_row["stable_until"],
+                    visibility=block_row["visibility"],
+                    token_estimate=(
+                        None
+                        if block_row["token_estimate"] is None
+                        else int(block_row["token_estimate"])
+                    ),
+                    cache_eligible=bool(block_row["cache_eligible"]),
+                )
+            )
+        required_block_types = {
+            PromptBlockType.ROLE_INSTRUCTIONS,
+            PromptBlockType.TOOL_SCHEMA,
+            PromptBlockType.CONVERSATION,
+        }
+        actual_block_types = tuple(block.block_type for block in blocks)
+        if not blocks or not required_block_types.issubset(actual_block_types):
+            raise ConflictError("ContextRevision is missing required Prompt Blocks")
+        binding_rows = connection.execute(
+            "SELECT * FROM reference_bindings WHERE revision_id = ? ORDER BY position",
+            (row["id"],),
+        ).fetchall()
+        bindings = tuple(
+            ReferenceBinding(
+                id=binding["id"],
+                revision_id=row["id"],
+                position=int(binding["position"]),
+                ref_type=binding["ref_type"],
+                user_text=binding["user_text"],
+                resolved_target=binding["resolved_target"],
+                source_snapshot_hash=binding["source_snapshot_hash"],
+                include_mode=binding["include_mode"],
+                max_tokens=(None if binding["max_tokens"] is None else int(binding["max_tokens"])),
+                visibility=binding["visibility"],
+                resolved_at=binding["resolved_at"],
+            )
+            for binding in binding_rows
+        )
+        messages = tuple(Message.model_validate(item) for item in json.loads(row["messages_json"]))
+        tools = tuple(ToolDefinition.model_validate(item) for item in json.loads(row["tools_json"]))
+        tool_result_stubs = tuple(
+            ToolResultStub.model_validate(item)
+            for item in json.loads(row["tool_result_stubs_json"])
+        )
+        stored_source_snapshots = tuple(
+            ContextSourceRef.model_validate(item)
+            for item in json.loads(row["source_snapshots_json"])
+        )
+        stored_compaction_refs = tuple(json.loads(row["compaction_refs_json"]))
+        compaction_id = row["compaction_id"]
+        compaction_blocks = [
+            block for block in blocks if block.block_type is PromptBlockType.COMPACTION
+        ]
+        compaction_sources = [
+            source
+            for block in blocks
+            for source in block.source_refs
+            if source.source_type is ContextSourceType.COMPACTION
+        ]
+        expected_compaction_refs = () if compaction_id is None else (compaction_id,)
+        if stored_compaction_refs != expected_compaction_refs:
+            raise ConflictError("ContextRevision compaction_refs verification failed")
+        if compaction_id is None:
+            if compaction_blocks or compaction_sources:
+                raise ConflictError("ContextRevision has detached Compaction Prompt evidence")
+        elif (
+            len(compaction_blocks) != 1
+            or len(compaction_sources) != 1
+            or compaction_sources[0].source_id != compaction_id
+        ):
+            raise ConflictError("ContextRevision Compaction Prompt evidence is incomplete")
+        watermark = ContextWatermark(
+            state=ContextWatermarkState(row["watermark_state"]),
+            context_window=(None if row["context_window"] is None else int(row["context_window"])),
+            reserved_output_tokens=(
+                None
+                if row["reserved_output_tokens"] is None
+                else int(row["reserved_output_tokens"])
+            ),
+            tool_schema_token_estimate=int(row["tool_schema_token_estimate"]),
+            safety_margin_tokens=(
+                None if row["safety_margin_tokens"] is None else int(row["safety_margin_tokens"])
+            ),
+            available_input_tokens=(
+                None
+                if row["available_input_tokens"] is None
+                else int(row["available_input_tokens"])
+            ),
+            pre_compaction_token_estimate=int(row["pre_compaction_token_estimate"]),
+            input_token_estimate=int(row["input_token_estimate"]),
+            estimation_method=row["estimation_method"],
+        )
+        revision = ContextRevision(
+            id=row["id"],
+            cursor=int(row["sequence"]),
+            session_id=row["session_id"],
+            agent_id=row["agent_id"],
+            thread_id=row["thread_id"],
+            workspace_ref=row["workspace_ref"],
+            request_ordinal=int(row["request_ordinal"]),
+            model_id=row["model_id"],
+            prompt_layout=PromptLayout(version=row["prompt_layout_version"]),
+            messages=messages,
+            tools=tools,
+            blocks=tuple(blocks),
+            reference_bindings=bindings,
+            tool_result_stubs=tool_result_stubs,
+            watermark=watermark,
+            compaction_id=row["compaction_id"],
+            message_ids=tuple(json.loads(row["message_ids_json"])),
+            source_item_ids=tuple(json.loads(row["source_item_ids_json"])),
+            artifact_refs=tuple(json.loads(row["artifact_refs_json"])),
+            memory_refs=tuple(json.loads(row["memory_refs_json"])),
+            compaction_refs=stored_compaction_refs,
+            source_snapshots=stored_source_snapshots,
+            token_estimate=int(row["token_estimate"]),
+            source_cursor_start=(
+                None if row["source_cursor_start"] is None else int(row["source_cursor_start"])
+            ),
+            source_cursor_end=(
+                None if row["source_cursor_end"] is None else int(row["source_cursor_end"])
+            ),
+            source_cursor_namespace=row["source_cursor_namespace"],
+            created_at=row["created_at"],
+        )
+        SQLiteStore._validate_context_source_refs(
+            connection,
+            revision,
+            current_sources=False,
+        )
+        SQLiteStore._validate_context_reference_bindings(
+            connection,
+            revision,
+            current_sources=False,
+        )
+        expected_source_snapshots: list[ContextSourceRef] = []
+        seen_source_snapshots: set[tuple[ContextSourceType, str, int | None, str]] = set()
+        for block in blocks:
+            for source in block.source_refs:
+                key = (source.source_type, source.source_id, source.cursor, source.content_hash)
+                if key in seen_source_snapshots:
+                    continue
+                seen_source_snapshots.add(key)
+                expected_source_snapshots.append(source)
+        if stored_source_snapshots != tuple(expected_source_snapshots):
+            raise ConflictError("ContextRevision source snapshots verification failed")
+        if revision.compaction_id is not None:
+            compaction_row = connection.execute(
+                "SELECT * FROM compactions WHERE id = ?", (revision.compaction_id,)
+            ).fetchone()
+            if compaction_row is None:
+                raise ConflictError("ContextRevision Compaction evidence is missing")
+            compaction = SQLiteStore._compaction_from_row(compaction_row)
+            SQLiteStore._validate_persisted_compaction_evidence(connection, compaction)
+        SQLiteStore._validate_context_revision_item_evidence(connection, revision)
+        return revision
 
     # Phase 0 durable Workflow coordinator and Session execution leases
 
@@ -6473,18 +9361,22 @@ class SQLiteStore:
 
     @staticmethod
     def _insert_memory_version(connection: sqlite3.Connection, memory: Memory) -> None:
-        connection.execute(
-            """
-            INSERT INTO memory_versions(
-                memory_id, version, body, kind, content, project_scope,
-                role_scope, source_session_id, source_task, confidence,
-                status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
+        body = memory.model_dump_json()
+        columns = {
+            str(row["name"])
+            for row in connection.execute('PRAGMA table_info("memory_versions")').fetchall()
+        }
+        if "body_hash" in columns:
+            fields = (
+                "memory_id, version, body, body_hash, kind, content, project_scope, "
+                "role_scope, source_session_id, source_task, confidence, status, created_at"
+            )
+            values: tuple[Any, ...]
+            values = (
                 memory.id,
                 memory.version,
-                memory.model_dump_json(),
+                body,
+                hashlib.sha256(body.encode("utf-8")).hexdigest(),
                 memory.kind.value,
                 memory.content,
                 memory.project_scope,
@@ -6494,7 +9386,30 @@ class SQLiteStore:
                 memory.confidence,
                 memory.status.value,
                 memory.created_at.isoformat(),
-            ),
+            )
+        else:
+            fields = (
+                "memory_id, version, body, kind, content, project_scope, role_scope, "
+                "source_session_id, source_task, confidence, status, created_at"
+            )
+            values = (
+                memory.id,
+                memory.version,
+                body,
+                memory.kind.value,
+                memory.content,
+                memory.project_scope,
+                json.dumps(list(memory.role_scope), ensure_ascii=False, separators=(",", ":")),
+                memory.source_session_id,
+                memory.source_task,
+                memory.confidence,
+                memory.status.value,
+                memory.created_at.isoformat(),
+            )
+        placeholders = ", ".join("?" for _ in values)
+        connection.execute(
+            f"INSERT INTO memory_versions({fields}) VALUES ({placeholders})",
+            values,
         )
         connection.execute(
             """
