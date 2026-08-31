@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,15 @@ from operant.domain.context import (
 )
 from operant.domain.memory import Memory, MemoryKind, MemoryStatus
 from operant.domain.messages import Message, MessageRole
-from operant.domain.models import AgentInstance, Budget, ModelProfile, RolePreset, Session, new_id
+from operant.domain.models import (
+    AgentInstance,
+    Budget,
+    ModelProfile,
+    RolePreset,
+    Session,
+    new_id,
+    utc_now,
+)
 from operant.domain.threads import (
     Artifact,
     ConversationThread,
@@ -343,9 +352,9 @@ def test_v1_through_v5_upgrade_to_v6_preserves_rows(
     store.initialize()
     store.initialize()
 
-    assert store.schema_version() == 6
+    assert store.schema_version() == 7
     assert store.get_model_profile(profile.id) == profile
-    applied_v6 = store.list_applied_migrations()[-1]
+    applied_v6 = store.list_applied_migrations()[-2]
     assert applied_v6["name"] == "phase1b_context_composer"
     assert applied_v6["checksum"] == SQLiteStore._FROZEN_MIGRATION_CHECKSUMS[6]
     manifest = store._migration_manifest(6)
@@ -381,6 +390,38 @@ def test_unrecognized_v6_preview_history_is_rejected_instead_of_adopted(tmp_path
         )
 
 
+def test_v7_legacy_policy_projection_groups_multiple_artifacts(tmp_path: Path) -> None:
+    database = tmp_path / "shared-legacy-policy.sqlite3"
+    store = SQLiteStore(database)
+    assert store.migrate(6) == 6
+    created_at = utc_now()
+    for index, content_hash in enumerate(("a" * 64, "b" * 64)):
+        artifact = Artifact(
+            id=f"artifact-shared-policy-{index}",
+            content_hash=content_hash,
+            media_type="text/plain",
+            size_bytes=1,
+            retention_policy_ref="shared-legacy-policy",
+            created_at=created_at + timedelta(seconds=index),
+        )
+        store.register_artifact(
+            artifact,
+            storage_key=f"sha256/{content_hash[:2]}/{content_hash[2:4]}/{content_hash}",
+        )
+
+    assert store.migrate(7) == 7
+    with sqlite3.connect(database) as connection:
+        policy_rows = connection.execute("SELECT id, created_at FROM retention_policies").fetchall()
+        state_rows = connection.execute(
+            "SELECT artifact_id, lifecycle FROM artifact_retention_states ORDER BY artifact_id"
+        ).fetchall()
+    assert policy_rows == [("shared-legacy-policy", created_at.isoformat())]
+    assert state_rows == [
+        ("artifact-shared-policy-0", "active"),
+        ("artifact-shared-policy-1", "active"),
+    ]
+
+
 def test_v6_failure_is_atomic_and_empty_rollback_is_explicit(tmp_path: Path) -> None:
     database = tmp_path / "atomic.sqlite3"
     SQLiteStore(database).migrate(5)
@@ -411,7 +452,7 @@ def test_v6_failure_is_atomic_and_empty_rollback_is_explicit(tmp_path: Path) -> 
     empty = SQLiteStore(tmp_path / "empty.sqlite3")
     empty.initialize()
     assert empty.rollback(5, isolated=True) == 5
-    assert empty.migrate() == 6
+    assert empty.migrate() == 7
 
 
 def test_concurrent_v6_initialization_and_context_request_identity(tmp_path: Path) -> None:
@@ -419,7 +460,7 @@ def test_concurrent_v6_initialization_and_context_request_identity(tmp_path: Pat
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         versions = list(executor.map(lambda _value: SQLiteStore(database).migrate(), range(3)))
-    assert versions == [6, 6, 6]
+    assert versions == [7, 7, 7]
 
     store = SQLiteStore(database)
     _profile, _role, session, agent = _scope(store)

@@ -63,6 +63,8 @@ class ModelUsage(BaseModel):
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
+    cache_read_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
 
 
 class ModelResponse(BaseModel):
@@ -72,6 +74,7 @@ class ModelResponse(BaseModel):
     tool_calls: tuple[ToolCall, ...] = ()
     finish_reason: str | None = None
     usage: ModelUsage | None = None
+    provider_request_id: str | None = Field(default=None, max_length=300)
 
 
 class ProviderEvent(BaseModel):

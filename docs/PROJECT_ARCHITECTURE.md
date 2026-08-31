@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-08-30
+> 最后更新：2026-08-31
 >
-> 对应版本：Operant 2.0 Phase 1B Context Composer 与追加式 Compaction
+> 对应版本：Operant 2.0 Phase 1C Artifact、Retention 与 CacheObservation
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -48,6 +48,14 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   System Event 八类类型化 Item；
 - 内容寻址 Artifact Store：SHA-256、media type、size、sensitivity、source refs、retention policy ref，
   原子写入、并发去重、读取校验和路径/软链接边界；公开领域对象与 API 不暴露 storage key 或本地路径；
+- Artifact 内容通过短时、对象级、操作级 capability 执行完整性校验后的脱敏文本读取、原文下载和
+  绑定 Workspace 目录身份的显式导出；HTTP 不签发 capability，物理修改还要求独立 trusted bootstrap；
+- 对象级 Artifact Retention Policy、Pin、归档、宽限期、计划删除、可恢复 Trash、恢复和显式物理删除；
+  Canonical History、Approval/Audit/Memory、可恢复执行与未知副作用证据作为保守删除阻断项；
+- Artifact Store 与 SQLite 引用的零写审计，识别孤儿、缺失、损坏、非安全对象和已删除内容残留；
+  修复只接受重新核验后仍成立的精确 finding，并继续使用 M0 Receipt/Action Hash/人工核对边界；
+- Provider `CacheObservation` 只追加记录 hit/miss/unknown、显式 Token、请求/前缀 hash 和失效原因，
+  不复制 Provider Cache；缺失 usage 保持 unknown，不按 0 处理；
 - 每次模型请求前生成不可变 `ContextRevision`，保存实际发送的安全 Message/Tool 快照、版本化
   `PromptLayout`、有序 `PromptBlock`、类型化 Reference Binding、动态 Context Watermark 与来源证据；
 - 追加式 Compaction 与可恢复 Tool Result Stub：压缩记录只覆盖同 Agent 已提交的 ContextRevision
@@ -56,7 +64,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - Phase 1B 最小类型化引用：Thread、同 Thread Item、普通 Artifact 和当前 Session/Workspace 可读的
   active Memory；引用在 Provider 调用前完成作用域、敏感级别、完整性与 redaction 校验；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1/v2/v3/v4/v5/v6 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1/v2/v3/v4/v5/v6/v7 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -107,7 +115,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - Web 身份认证、设备配对和远程访问控制；
 - 通用 Graph Runtime、Definition Compiler、Team/Mailbox 和智能创建；
 - 类型化 TypeScript/Python Client SDK、React GUI/PWA、Textual TUI 和 Tauri 桌面壳；
-- 复杂 `@` 引用、Prompt Provider cache 执行/观测，以及通用 Artifact 内容下载/导出接口；
+- 复杂 `@` 引用、Provider Cache 的执行/复制，以及面向非可信 HTTP 客户端的 Artifact capability 签发；
 - Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
 
 ## 3. 总体架构
@@ -185,11 +193,13 @@ operant/
 │   │   ├── evaluation.py         # Suite/Case/Variant/Run/Result、快照、指标和失败分类
 │   │   ├── memory.py             # 三类 Memory、作用域和激活规则
 │   │   ├── models.py             # Model、Role、Snapshot、Session、Agent、Event
-│   │   ├── messages.py           # 模型消息、Tool Call、Provider Event
-│   │   ├── threads.py            # Thread、Turn、八类 Item 与 Artifact metadata
+│   │   ├── messages.py           # 模型消息、Tool Call、Provider usage/cache facts
+│   │   ├── threads.py            # Thread/Item、Artifact、Retention 与 CacheObservation
 │   │   └── workflow.py           # WorkflowRun、状态、阶段和任务事件
 │   ├── artifacts/
-│   │   └── store.py              # 内容寻址 blob、原子发布、校验与路径边界
+│   │   ├── capability.py         # 短时对象/操作/敏感级别权限票据
+│   │   ├── export.py             # Workspace 目录身份绑定的不覆盖显式导出
+│   │   └── store.py              # 内容寻址 blob、审计枚举、原子发布/删除与路径边界
 │   ├── persistence/
 │   │   └── sqlite.py             # Registry、Session、Agent、Event Store
 │   ├── providers/
@@ -470,6 +480,28 @@ Layout 或 Compaction；后续派生摘要不得删除或原地改写这些原�
 注册不可变 metadata 与 source refs；同 hash 但 media type、sensitivity、retention 或来源不同会冲突，
 不会静默降低敏感级别。单件 GET 重新校验 blob，列表只返回 metadata，Phase 1A 不提供内容下载接口。
 
+Phase 1C 在该存储边界上增加显式内容访问。读取、下载和导出都要求由可信嵌入方签发的短时 HMAC
+capability，票据绑定 Artifact、操作、敏感级别，导出还绑定绝对 Workspace root、相对目标和当时的
+目录 inode 链；HTTP API 本身不能签发票据。文本读取只返回经过 bounded redaction 的 UTF-8 内容，
+原文下载使用固定安全文件名和 `nosniff`，导出只能在已存在的受控 Workspace 子目录以 no-follow、
+不覆盖方式原子发布，响应不返回真实路径。Blob 缺失或 hash/size 不符时 fail closed；只有 Retention
+状态已明确进入 `deleted` 才返回“内容已删除”，普通缺失仍是需要人工核对的完整性故障。
+
+`RetentionPolicy` 当前只作用于 Artifact，策略不可改写，保存宽限期和是否允许物理删除；每个 Artifact
+有独立的 `ArtifactRetentionState`。状态按 active/archived → deletion_scheduled → trashed → deleted
+推进，Pin 会阻止进入删除链，计划删除保留明确到期时间，scheduled/trashed 可恢复到 active。状态写入
+使用 `updated_at` compare-and-swap，并同步追加审计事件。物理删除默认关闭；启用后仍需独立 trusted
+bootstrap 换取最长 300 秒、精确对象/动作的 capability，并要求 trashed、策略允许且没有 Canonical
+History、Context/Compaction、Approval/Audit/Memory、可恢复执行或未知副作用证据。unlink 已完成但
+SQLite 终态未提交时，Command 保持 `manual_reconcile_required`，只能凭原 Command ID/Action Hash、
+Blob 已缺失事实和独立 reconcile capability 显式收口，不自动重放删除。
+
+`GET /v1/artifact-audits` 只读比较 SQLite hash/size/lifecycle 与固定内容树，不创建不存在的 Store
+目录，也不写审计表；结果只含 path-free finding。它区分孤儿 Blob、引用缺失、内容损坏、非安全对象和
+deleted 状态仍残留 Blob。孤儿修复必须携带精确 content hash + finding hash，在跨进程 mutation lock
+内重新审计后才删除；修复本身使用 Receipt，并只追加安全审计事实。所有自动化测试只操作临时 Store，
+本阶段没有对真实 `.operant/` 数据执行清理。
+
 ### ContextRevision、PromptLayout 与 Compaction
 
 `PersistentContextComposer` 在每次模型请求前运行。它只使用 Session 的不可变 `RoleSnapshot`、当前
@@ -491,8 +523,10 @@ Compaction、Conversation。SQLite 保存完整布局版本和 block order，持
 一致，查询/重放不会把自定义布局静默恢复为默认值。每个 Revision 必须包含且只能按布局排列
 Role Instructions、Tool Schema 和 Conversation 三个基础 Block，Explicit References 与 Compaction
 按需出现；空工具集合仍以 `[]` 的 Tool Schema Block 保存。每个 Block 保存位置、类型、内容 hash、
-类型化 source refs、visibility、Token 估算和 cache eligibility；cache eligibility 只是解释性事实，
-当前没有实现 Provider cache 写入、命中裁决或 `CacheObservation`。
+类型化 source refs、visibility、Token 估算和 cache eligibility；cache eligibility 仍只是解释性事实，
+不控制 Provider Cache。Runtime 会把 Provider 明确返回的 cached/read/write Token、请求 ID 和稳定前缀
+hash 另存为只追加 `CacheObservation`；显式正数为 hit、显式 0 为 miss，字段缺失为 unknown。该记录
+不保存 prompt、response、原始 cache key、凭据或 Provider Cache 正文，也不声称能裁决或复制缓存。
 
 Context Watermark 由冻结的 `context_window`、本轮预留输出 Token、工具 schema 估算和动态安全余量计算，
 状态为 Green/Yellow/Red/Emergency/Unknown。阈值是可验证的 Policy 比例，不在 Runtime 中写死固定
@@ -516,8 +550,8 @@ Thread 必须绑定当前解析后的 Workspace；Item 必须属于所选 Thread
 普通 UTF-8 内容，restricted 拒绝、sensitive 不允许 inline；Memory 必须 active 且通过既有 Session/
 Workspace/Role scope 判权。Thread inline 使用累计 UTF-8 字节和 Token 上限的分页式选择，超限时进入
 可核验的 `THREAD_ITEMS` Compaction 或明确失败，不会先把整个 Thread 读入内存。引用正文作为不可信
-User 数据放入独立 Block，不获得 System 权限。复杂 `@` 解析、跨项目授权策略、任意 Artifact 下载和
-父 Thread 全文继承均不属于本阶段。
+User 数据放入独立 Block，不获得 System 权限。复杂 `@` 解析、跨项目授权策略、客户端 capability
+签发和父 Thread 全文继承均不属于本阶段。
 
 Memory provenance 在写入时把当前 active/head、不可变版本、hash 和 Session/Workspace/Role scope
 冻结为 source snapshot；Prompt Block、Reference Binding 与 `memory_refs` 必须引用同一规范集合。
@@ -917,6 +951,10 @@ SQLiteStore 当前创建以下表：
 | `artifact_blobs` | 保存内部 content hash、受控 storage key、size；不进入公开领域/API |
 | `artifacts` | 保存 content hash 唯一的公开 Artifact metadata |
 | `artifact_source_refs` | 保存 Artifact 的有序、不可变来源关联 |
+| `retention_policies` | 保存不可变的对象类型、宽限期和物理删除许可 |
+| `artifact_retention_states` | 保存 Artifact 的 Pin、归档、计划删除、Trash 和删除投影 |
+| `artifact_retention_audit_events` | 保存状态变更、显式修复和人工核对的只追加安全事实 |
+| `cache_observations` | 保存 Provider 明确返回的缓存命中、Token、hash 和失效事实 |
 | `compactions` | 保存只追加的结构化摘要、覆盖 Cursor 和 Canonical History 外的派生证据 |
 | `context_revisions` | 保存每次 Provider 请求的不可变安全输入、Watermark、布局版本与 Compaction 关联 |
 | `prompt_blocks` | 保存 ContextRevision 内有序、不可变的 Prompt Block 与来源 hash |
@@ -931,6 +969,7 @@ SQLiteStore 当前创建以下表：
 4. v4：Session run lease 与 Workflow coordinator execution lease；
 5. v5：Thread/Turn/Item Canonical History、显式 legacy mapping 与内容寻址 Artifact metadata。
 6. v6：ContextRevision、PromptBlock、ReferenceBinding 与追加式 Compaction。
+7. v7：Artifact Retention Policy/状态/审计与 Provider CacheObservation。
 
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
@@ -941,6 +980,12 @@ extra 或错序在 Revision INSERT 阶段直接拒绝，不会留下可写不可
 coverage 还核对精确 Item 集合、顺序、范围和 digest。相关 trigger 使用 Store 注册的确定性
 `sha256_text` 与 `thread_item_refs_sha256` 函数；未注册这些函数的裸 SQLite 写入会失败关闭，不能绕过
 正式 Store 写入边界。
+
+v7 为每个既有 Artifact 建立 active Retention projection；相同 legacy `retention_policy_ref` 只生成一条
+默认宽限期 24 小时且禁止物理删除的保守 Policy，不改变 Artifact metadata、Session/Workflow、Receipt、
+Approval、Event 或 Canonical History。Policy、Retention Audit 与 CacheObservation 只追加；状态表是
+唯一可按 CAS 更新的 projection。v1—v6 升级、重复/并发初始化和 v7 中途失败均在 Migration 单事务中
+保留原数据或完整回滚。
 
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
@@ -954,8 +999,9 @@ preview 收编、逐步升级、每步 manifest 复验和历史写入全部位�
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
 随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
-回滚 v6 要求全部 Phase 1B 表为空，回滚 v5 要求全部 Phase 1A 表为空，回滚 v4 要求两张 execution
+v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+回滚 v7 要求全部 Phase 1C 投影、审计和 Observation 表为空，回滚 v6 要求全部 Phase 1B 表为空，
+回滚 v5 要求全部 Phase 1A 表为空，回滚 v4 要求两张 execution
 lease 表为空，继续回滚 v3 还要求
 Tool/Command Receipt、审批/审计和
 Evaluation Event 等全部 M0 表为空。v1、v2 不可 downgrade，生产数据迁移不是通用双向回滚机制。
@@ -1081,6 +1127,15 @@ workspace 绝对路径。
 | `POST` | `/v1/threads/{id}/turns/{turn_id}/items` | 追加类型化 Canonical Item |
 | `GET/POST` | `/v1/artifacts` | 查询 metadata 或原子写入并注册 Artifact |
 | `GET` | `/v1/artifacts/{id}` | 校验 blob 后返回 metadata，不返回正文/路径 |
+| `GET` | `/v1/artifacts/{id}/content` | 持 capability 校验并读取脱敏文本，不返回 storage path |
+| `GET` | `/v1/artifacts/{id}/download` | 持独立 capability 下载校验后的原始 bytes |
+| `POST` | `/v1/artifacts/{id}/export` | 持目标目录身份绑定 capability 显式导出且不覆盖 |
+| `GET` | `/v1/artifacts/{id}/retention` | 查询对象级 Retention/Pin/归档/删除投影 |
+| `POST` | `/v1/artifacts/{id}/retention/{action}` | Pin、归档、计划删除、Trash、恢复或显式物理删除/核对 |
+| `POST` | `/v1/retention-policies` | 创建不可变 Artifact Retention Policy |
+| `GET` | `/v1/artifact-audits` | 零写审计 Blob、引用、损坏和非安全对象 |
+| `POST` | `/v1/artifact-repairs/orphan-blob` | 重新核验 finding 后显式修复一个孤儿 Blob |
+| `GET` | `/v1/cache-observations` | 按 Cursor 查询不含正文/原始 cache key 的 Provider 缓存事实 |
 | `POST` | `/v1/workflows/coding/runs` | 运行角色驱动的多 Agent Workflow 并返回 SSE |
 | `POST/GET` | `/v1/tasks` | 运行 Workflow，或查询已持久化任务 |
 | `GET` | `/v1/tasks/{id}` | 查询任务状态、阶段和角色选择 |
@@ -1339,6 +1394,14 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
   以及路径穿越、逐组件软链接、大小写别名、非普通文件和 inode 替换拒绝；
 - Thread/Artifact 修改 Command 的 M0 Receipt 重放、Action Hash 冲突、UTF-8 字节限额、metadata-only
   响应和本地路径/正文不泄露；
+- v1/v2/v3/v4/v5/v6 → v7 保留数据升级、相同 legacy Policy 分组、重复/并发初始化、失败事务完整回滚、
+  非空受限 downgrade、冻结 manifest/checksum 与 schema drift 拒绝；
+- Artifact capability 的敏感级别、对象/动作/到期/导出目录 inode 绑定，脱敏文本读取、原文下载、
+  不覆盖导出和 M0 幂等重放；Retention Pin/归档/宽限期/计划删除/Trash/恢复、CAS 并发冲突、保护引用；
+- 物理删除默认关闭、短时 trusted 授权、unlink 后数据库失败进入人工核对、原 Command/Action Hash +
+  缺失 Blob 的显式收口，不自动重放未知删除；
+- Artifact 审计严格零写、孤儿/缺失/损坏/非安全/删除残留分类、path-free finding、过期 finding 拒绝和
+  单对象显式修复；CacheObservation hit/miss/unknown、缺失 usage 保持 null、脱敏、只追加 Cursor 分页；
 - v1/v2/v3/v4/v5 → v6 升级、重复/并发初始化、事务失败原子回滚、空表受限 downgrade、append-only
   trigger、完整 PromptLayout/必需 Block 回放、全部类型化来源的实体/scope/version/hash 防伪、Memory
   Block/Binding/snapshot/ref 集合一致性、同 Agent request ordinal 并发幂等和 Cursor namespace；
@@ -1364,6 +1427,12 @@ uv run mypy src
 uv run pytest
 git diff --check
 ```
+
+2026-08-31 的 Phase 1C 后端底座只使用隔离数据库与临时 Artifact Store，覆盖 v1—v6 升级、能力票据、
+目录身份替换、Retention CAS/宽限期、物理删除中断、人工核对、孤儿/缺失/损坏/非安全审计、显式修复
+和 Cache usage unknown：完整 pytest 为 336 通过、1 个条件性 Docker 测试跳过，并保留 1 个上游
+Starlette TestClient 弃用警告；Ruff format/check、mypy、`uv lock --check` 和 `git diff --check` 通过。
+未对真实 `.operant/` 执行清理，未设置真实 Provider，也未做高并发吞吐基准；Docker skip 不视为容器验收。
 
 2026-08-30 的 Phase 1B 后端底座使用隔离 v1/v2/v3/v4/v5 数据库、并发请求、伪造关联、敏感内容和
 Artifact 故障探针：完整 pytest 为 328 通过、1 个条件性 Docker 测试跳过，并保留 1 个上游 Starlette
@@ -1447,7 +1516,7 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-5. 已有 v1/v2/v3/v4/v5/v6 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
+5. 已有 v1/v2/v3/v4/v5/v6/v7 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
    但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
    Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
 6. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，但不支持任意模型流位置续传；SSE 断线
@@ -1463,16 +1532,17 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 10. 通用 Graph Runtime、Definition/Revision、Team/Mailbox、React GUI/PWA、TUI、Tauri、Remote
     Control、Host Connector、自托管 Relay、Remote Gateway 和 Remote Execution Target 均未实现；
     当前 `/web` 与 `/v1/*` 不能作为这些目标能力的实现证据，也不得直接暴露到公网。
-11. Session/Workflow/Evaluation 事件、Thread Canonical History、Artifact、Tool/Command Receipt 和
-    Approval Audit 当前没有已执行的对象级清理策略，会随运行持续增长；Artifact Store 崩溃时也可能
-    留下未被 SQLite metadata 引用的临时/已发布 blob。Phase 1A 只保存 retention policy ref，不执行
-    删除；不得把容量治理或自动清扫写成已解决。
+11. Artifact 已有对象级 Retention、Pin、宽限期、Trash、只读审计和显式孤儿修复，但
+    Session/Workflow/Evaluation 事件、Thread Canonical History、Tool/Command Receipt、Approval Audit、
+    Memory 和 Context/Compaction 仍没有清理执行器，会随运行持续增长；Artifact 也没有后台自动清扫，
+    真实物理删除必须另行启用并显式授权，不能把当前能力描述为全局容量治理。
 12. Thread/Turn/Item 与 Artifact 已建立持久底座，Context Composer 可显式绑定新 Thread 与最小引用，
     但尚未把既有 Session/Workflow 自动投影为 Canonical History；旧数据仍只支持显式 legacy mapping，
-    不能伪称已转换。复杂 `@` 解析、通用 Artifact 下载/导出、完整 sensitivity 授权策略、Provider
-    cache 执行与 CacheObservation 仍未实现。
+    不能伪称已转换。复杂 `@` 解析、跨项目 sensitivity 授权策略和面向非可信 HTTP 客户端的
+    capability 签发仍未实现。当前只记录 Provider CacheObservation，不执行、复制或裁决 Provider Cache。
 13. ContextRevision 为了审计和精确解释当前保存 bounded-redacted Provider 输入，Compaction 与 Tool
-    Result Artifact 也会持续增长；还没有对象级 retention 执行、语义摘要质量评测或吞吐基准。Composer
+    Result Artifact 也会持续增长；Artifact 之外还没有对象级 retention 执行，也没有语义摘要质量评测
+    或吞吐基准。Composer
     与 SQLite/Artifact Store 使用同步本地 I/O，超大引用和高并发规模需要后续性能评估。
 
 ## 19. 文档维护规则
@@ -1504,6 +1574,22 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-08-31
+
+- 新增短时对象/操作/敏感级别 Artifact capability：完整性校验后的脱敏文本读取、固定安全文件名原文
+  下载，以及绑定 Workspace root/父目录 inode 链的不覆盖原子导出；HTTP 不签发 capability，不返回
+  storage key、本地路径或未授权正文；
+- 新增 Artifact Retention Policy、Pin、归档、宽限期、计划删除、可恢复 Trash/恢复、保护引用扫描和
+  CAS 状态推进。物理删除默认关闭并要求独立 trusted bootstrap + 短时 capability；unlink 后状态未知
+  进入 M0 人工核对，凭原 Command ID/Action Hash 和 Blob 已缺失事实显式收口，不自动重放；
+- 新增严格零写 Artifact 审计与显式孤儿修复，识别 orphan/missing/corrupt/unsafe/purged residue，修复前
+  在跨进程 mutation lock 内复核精确 finding；自动化验证只使用临时 Store，没有清理真实 `.operant/`；
+- 新增只追加 CacheObservation，记录 Provider 明确返回的 hit/miss/unknown、可选 Token、请求/前缀 hash
+  与失效原因；缺失 usage 保持 unknown，不保存 prompt、response、原始 cache key 或 Provider Cache；
+- 新增冻结 manifest/checksum 的 SQLite v7、保守 legacy Policy/active projection 回填、只追加审计和
+  CacheObservation、受限空数据 rollback，并覆盖 v1—v6 升级、事务失败、并发、权限、完整性、
+  幂等、未知删除与恢复边界；未实现 Graph/Team/Remote/Relay/GUI/TUI/Tauri、复杂 `@` 或客户端生成。
 
 ### 2026-08-30
 

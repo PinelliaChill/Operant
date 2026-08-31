@@ -229,6 +229,7 @@ class AgentLoop:
                     None if completed.usage is None else completed.usage.model_dump(mode="json")
                 ),
                 "duration_ms": self._elapsed_ms(model_started),
+                "provider_request_id": completed.provider_request_id,
             }
             if context_revision_id is not None:
                 completed_payload["context_revision_id"] = context_revision_id

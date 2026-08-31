@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 import re
 import secrets
 import stat
+import threading
 from collections.abc import Iterable, Iterator
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -20,6 +22,8 @@ _DEFAULT_CHUNK_SIZE: Final = 1024 * 1024
 _DIRECTORY_OPEN_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _FILE_READ_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 _FILE_WRITE_FLAGS: Final = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+_PROCESS_MUTATION_LOCKS: dict[str, threading.RLock] = {}
+_PROCESS_MUTATION_LOCKS_GUARD = threading.Lock()
 
 
 class ArtifactStoreError(RuntimeError):
@@ -42,6 +46,14 @@ class ArtifactNotFoundError(ArtifactStoreError):
     """No regular blob exists for the requested content hash."""
 
 
+class ArtifactContentDeletedError(ArtifactNotFoundError):
+    """The retention authority confirms that Artifact content was deleted."""
+
+
+class ArtifactExportOutcomeUnknownError(ArtifactStoreError):
+    """An export may have published before its final boundary check failed."""
+
+
 class ArtifactCorruptionError(ArtifactStoreError):
     """A stored blob does not match its authoritative hash and size."""
 
@@ -57,6 +69,15 @@ class StoredBlob:
     content_hash: str
     size_bytes: int
     storage_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class BlobInventoryRecord:
+    """Path-free result of enumerating the managed content-addressed tree."""
+
+    content_hash: str | None
+    size_bytes: int | None
+    unsafe: bool = False
 
 
 class ArtifactStore:
@@ -93,6 +114,10 @@ class ArtifactStore:
         self._root_fd = -1
         self._hash_root_fd = -1
         self._temp_fd = -1
+        with _PROCESS_MUTATION_LOCKS_GUARD:
+            self._mutation_lock = _PROCESS_MUTATION_LOCKS.setdefault(
+                str(configured_root), threading.RLock()
+            )
         self._initialize()
 
     def __enter__(self) -> ArtifactStore:
@@ -204,6 +229,110 @@ class ArtifactStore:
         """Raise a stable error unless the blob matches both metadata fields."""
 
         self._inspect(content_hash, size_bytes, return_content=False)
+
+    @contextmanager
+    def mutation_guard(self) -> Iterator[None]:
+        """Serialize publish/register/repair across local threads and processes."""
+
+        with self._mutation_lock:
+            self._validate_managed_roots()
+            try:
+                fcntl.flock(self._root_fd, fcntl.LOCK_EX)
+                self._validate_managed_roots()
+                yield
+                self._validate_managed_roots()
+            except ArtifactStoreError:
+                raise
+            except OSError:
+                raise ArtifactStoreError("artifact mutation lock failed safely") from None
+            finally:
+                with suppress(OSError):
+                    fcntl.flock(self._root_fd, fcntl.LOCK_UN)
+
+    def inventory(self) -> tuple[BlobInventoryRecord, ...]:
+        """Read the fixed two-level hash tree without following links."""
+
+        self._validate_managed_roots()
+        records: list[BlobInventoryRecord] = []
+        try:
+            first_names = os.listdir(self._hash_root_fd)
+        except OSError:
+            raise ArtifactSecurityError("artifact storage boundary violation") from None
+        for first_name in sorted(first_names):
+            first_fd = -1
+            try:
+                if re.fullmatch(r"[0-9a-f]{2}", first_name) is None:
+                    records.append(BlobInventoryRecord(None, None, unsafe=True))
+                    continue
+                first_fd = _open_existing_directory(self._hash_root_fd, first_name)
+                for second_name in sorted(os.listdir(first_fd)):
+                    second_fd = -1
+                    try:
+                        if re.fullmatch(r"[0-9a-f]{2}", second_name) is None:
+                            records.append(BlobInventoryRecord(None, None, unsafe=True))
+                            continue
+                        second_fd = _open_existing_directory(first_fd, second_name)
+                        for name in sorted(os.listdir(second_fd)):
+                            try:
+                                status = os.stat(name, dir_fd=second_fd, follow_symlinks=False)
+                            except OSError:
+                                records.append(BlobInventoryRecord(None, None, unsafe=True))
+                                continue
+                            if (
+                                _CONTENT_HASH_PATTERN.fullmatch(name) is None
+                                or name[:2] != first_name
+                                or name[2:4] != second_name
+                                or not stat.S_ISREG(status.st_mode)
+                            ):
+                                records.append(BlobInventoryRecord(None, None, unsafe=True))
+                                continue
+                            records.append(
+                                BlobInventoryRecord(name, int(status.st_size), unsafe=False)
+                            )
+                    except ArtifactStoreError:
+                        records.append(BlobInventoryRecord(None, None, unsafe=True))
+                    except OSError:
+                        records.append(BlobInventoryRecord(None, None, unsafe=True))
+                    finally:
+                        if second_fd >= 0:
+                            os.close(second_fd)
+            except ArtifactStoreError:
+                records.append(BlobInventoryRecord(None, None, unsafe=True))
+            except OSError:
+                records.append(BlobInventoryRecord(None, None, unsafe=True))
+            finally:
+                if first_fd >= 0:
+                    os.close(first_fd)
+        self._validate_managed_roots()
+        return tuple(records)
+
+    def delete_verified(self, content_hash: str, size_bytes: int) -> None:
+        """Unlink one exact verified blob; callers must enforce retention authority."""
+
+        validated_hash = _validate_content_hash(content_hash)
+        first_fd, second_fd = self._open_shards(validated_hash, create=False)
+        try:
+            before = os.stat(validated_hash, dir_fd=second_fd, follow_symlinks=False)
+            self._verify_target(
+                second_fd,
+                validated_hash,
+                self._validate_size(size_bytes),
+                return_content=False,
+            )
+            rebound = os.stat(validated_hash, dir_fd=second_fd, follow_symlinks=False)
+            if not stat.S_ISREG(rebound.st_mode) or not _same_object(before, rebound):
+                raise ArtifactSecurityError("artifact storage boundary violation")
+            try:
+                os.unlink(validated_hash, dir_fd=second_fd)
+                os.fsync(second_fd)
+            except FileNotFoundError:
+                raise ArtifactNotFoundError("artifact blob not found") from None
+            except OSError:
+                raise ArtifactStoreError("artifact deletion failed safely") from None
+        finally:
+            os.close(second_fd)
+            os.close(first_fd)
+        self._validate_managed_roots()
 
     def _initialize(self) -> None:
         try:

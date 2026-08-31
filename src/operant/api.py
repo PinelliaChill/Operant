@@ -29,7 +29,10 @@ from operant.application.evaluation import EvaluationRunner
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
 from operant.artifacts import (
+    ArtifactCapabilityError,
+    ArtifactContentDeletedError,
     ArtifactCorruptionError,
+    ArtifactExportOutcomeUnknownError,
     ArtifactNotFoundError,
     ArtifactSecurityError,
     ArtifactStoreError,
@@ -56,6 +59,7 @@ from operant.domain.threads import (
     ConversationThread,
     Item,
     ItemPayload,
+    RetentionPolicy,
     ThreadLegacyRef,
     ThreadStatus,
     Turn,
@@ -455,6 +459,51 @@ class CreateArtifactRequest(BaseModel):
         return content
 
 
+class ExportArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_root: str = Field(min_length=1, max_length=4_096)
+    relative_path: str = Field(min_length=1, max_length=1_024)
+
+    @field_validator("workspace_root")
+    @classmethod
+    def validate_workspace_root(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("workspace_root must be absolute")
+        return value
+
+
+class CreateRetentionPolicyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=300)
+    grace_period_seconds: int = Field(default=86_400, ge=0, le=31_536_000)
+    allow_physical_delete: bool = False
+
+    def to_domain(self) -> RetentionPolicy:
+        return RetentionPolicy(**self.model_dump())
+
+
+class RepairOrphanBlobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    finding_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ReconcilePhysicalDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prior_command_id: str = Field(min_length=1, max_length=300)
+    prior_action_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SetArtifactPinRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pinned: bool
+
+
 def _safe_evaluation_result_payload(result: EvaluationResult) -> dict[str, Any]:
     """Return a result suitable for CLI/API export, never its local workspace path."""
 
@@ -463,6 +512,14 @@ def _safe_evaluation_result_payload(result: EvaluationResult) -> dict[str, Any]:
     if isinstance(artifact_workspace, dict):
         artifact_workspace.pop("local_workspace_path", None)
     return payload
+
+
+def _artifact_capability_from_request(request: Request) -> str:
+    authorization = request.headers.get("Authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if scheme != "Artifact" or not separator or not token or len(token) > 4_096:
+        raise HTTPException(status_code=403, detail="Artifact capability is required")
+    return token
 
 
 def _safe_evaluation_error_type(exc: Exception) -> str:
@@ -677,7 +734,7 @@ def _is_event_cursor_query_route(method: str, path: str) -> bool:
         or (path.startswith("/v1/threads/") and path.endswith("/items"))
         or (path.startswith("/v1/threads/") and path.endswith("/turns"))
         or (path == "/v1/threads")
-        or (path == "/v1/artifacts")
+        or (path in {"/v1/artifacts", "/v1/cache-observations"})
         or (path.startswith("/v1/threads/") and path.endswith("/items/stream"))
         or (
             path.startswith("/v1/evaluations/runs/")
@@ -904,6 +961,9 @@ def create_app(
     *,
     artifact_root: str | Path | None = None,
     artifact_max_size_bytes: int = MAX_ARTIFACT_UPLOAD_BYTES,
+    artifact_capability_secret: bytes | None = None,
+    physical_delete_enabled: bool = False,
+    physical_delete_authorization: str | None = None,
 ) -> FastAPI:
     load_local_env()
     store = SQLiteStore(db_path or database_path())
@@ -917,6 +977,9 @@ def create_app(
         OpenAICompatibleProvider(),
         artifact_root=configured_artifact_root,
         artifact_max_size_bytes=artifact_max_size_bytes,
+        artifact_capability_secret=artifact_capability_secret,
+        physical_delete_enabled=physical_delete_enabled,
+        physical_delete_authorization=physical_delete_authorization,
     )
     service.initialize()
     workflow = SequentialCodingWorkflow(service)
@@ -926,6 +989,7 @@ def create_app(
         version="0.1.0",
     )
     app.router.add_event_handler("shutdown", service.close)
+    app.state.operant_service = service
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_request: Request, exc: HTTPException) -> JSONResponse:
@@ -1657,6 +1721,237 @@ def create_app(
         except ArtifactStoreError as exc:
             raise HTTPException(status_code=500, detail="artifact storage failed safely") from exc
         return JSONResponse(content=artifact.model_dump(mode="json"))
+
+    @app.get("/v1/artifacts/{artifact_id}/content")
+    async def read_artifact_content(artifact_id: str, request: Request) -> Response:
+        try:
+            payload = service.read_artifact_text(
+                artifact_id,
+                capability=_artifact_capability_from_request(request),
+            )
+        except ArtifactCapabilityError as exc:
+            raise HTTPException(status_code=403, detail="Artifact access is denied") from exc
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Artifact not found") from exc
+        except ArtifactContentDeletedError:
+            return protocol_response(
+                status_code=410,
+                code="artifact_content_deleted",
+                message="Artifact content was explicitly deleted",
+            )
+        except (ArtifactCorruptionError, ArtifactNotFoundError, ArtifactSecurityError):
+            return protocol_response(
+                status_code=409,
+                code="artifact_integrity_failed",
+                message="Artifact content failed integrity verification",
+                recovery=RecoveryAction.MANUAL_RECONCILE,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content=payload)
+
+    @app.get("/v1/artifacts/{artifact_id}/download")
+    async def download_artifact(artifact_id: str, request: Request) -> Response:
+        try:
+            artifact, content = service.download_artifact(
+                artifact_id,
+                capability=_artifact_capability_from_request(request),
+            )
+        except ArtifactCapabilityError as exc:
+            raise HTTPException(status_code=403, detail="Artifact access is denied") from exc
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Artifact not found") from exc
+        except ArtifactContentDeletedError:
+            return protocol_response(
+                status_code=410,
+                code="artifact_content_deleted",
+                message="Artifact content was explicitly deleted",
+            )
+        except (ArtifactCorruptionError, ArtifactNotFoundError, ArtifactSecurityError):
+            return protocol_response(
+                status_code=409,
+                code="artifact_integrity_failed",
+                message="Artifact content failed integrity verification",
+                recovery=RecoveryAction.MANUAL_RECONCILE,
+            )
+        return Response(
+            content=content,
+            media_type=artifact.media_type,
+            headers={
+                "Content-Disposition": 'attachment; filename="artifact.bin"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post("/v1/artifacts/{artifact_id}/export")
+    async def export_artifact(
+        artifact_id: str,
+        export_request: ExportArtifactRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        try:
+            return service.export_artifact(
+                artifact_id,
+                capability=_artifact_capability_from_request(request),
+                workspace_root=export_request.workspace_root,
+                relative_path=export_request.relative_path,
+            )
+        except ArtifactCapabilityError as exc:
+            raise HTTPException(status_code=403, detail="Artifact access is denied") from exc
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Artifact not found") from exc
+        except ArtifactExportOutcomeUnknownError:
+            raise
+        except (
+            ArtifactContentDeletedError,
+            ArtifactCorruptionError,
+            ArtifactNotFoundError,
+            ArtifactSecurityError,
+        ) as exc:
+            raise HTTPException(status_code=409, detail="Artifact export failed safely") from exc
+        except ArtifactStoreError as exc:
+            raise HTTPException(status_code=500, detail="Artifact export failed safely") from exc
+
+    @app.get("/v1/artifacts/{artifact_id}/retention")
+    async def get_artifact_retention(artifact_id: str) -> dict[str, Any]:
+        try:
+            state = service.get_artifact_retention_state(artifact_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return state.model_dump(mode="json")
+
+    def retention_response(action: Any) -> dict[str, Any]:
+        try:
+            state = action()
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ArtifactCapabilityError, PermissionError) as exc:
+            raise HTTPException(status_code=403, detail="Artifact action is denied") from exc
+        return cast(dict[str, Any], state.model_dump(mode="json"))
+
+    @app.post("/v1/artifacts/{artifact_id}/retention/pin")
+    async def set_artifact_pin(
+        artifact_id: str,
+        pin_request: SetArtifactPinRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        capability = _artifact_capability_from_request(request)
+        return retention_response(
+            lambda: service.set_artifact_pin(
+                artifact_id,
+                pinned=pin_request.pinned,
+                capability=capability,
+            )
+        )
+
+    @app.post("/v1/artifacts/{artifact_id}/retention/archive")
+    async def archive_artifact(artifact_id: str, request: Request) -> dict[str, Any]:
+        capability = _artifact_capability_from_request(request)
+        return retention_response(
+            lambda: service.archive_artifact(artifact_id, capability=capability)
+        )
+
+    @app.post("/v1/artifacts/{artifact_id}/retention/schedule-deletion")
+    async def schedule_artifact_deletion(
+        artifact_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        capability = _artifact_capability_from_request(request)
+        return retention_response(
+            lambda: service.schedule_artifact_deletion(
+                artifact_id,
+                capability=capability,
+            )
+        )
+
+    @app.post("/v1/artifacts/{artifact_id}/retention/trash")
+    async def trash_artifact(artifact_id: str, request: Request) -> dict[str, Any]:
+        capability = _artifact_capability_from_request(request)
+        return retention_response(
+            lambda: service.trash_artifact(artifact_id, capability=capability)
+        )
+
+    @app.post("/v1/artifacts/{artifact_id}/retention/restore")
+    async def restore_artifact(artifact_id: str, request: Request) -> dict[str, Any]:
+        capability = _artifact_capability_from_request(request)
+        return retention_response(
+            lambda: service.restore_artifact(artifact_id, capability=capability)
+        )
+
+    @app.post("/v1/artifacts/{artifact_id}/retention/physical-delete")
+    async def physically_delete_artifact(
+        artifact_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        capability = _artifact_capability_from_request(request)
+        return retention_response(
+            lambda: service.physically_delete_artifact(
+                artifact_id,
+                capability=capability,
+            )
+        )
+
+    @app.post("/v1/artifacts/{artifact_id}/retention/reconcile-physical-delete")
+    async def reconcile_physically_deleted_artifact(
+        artifact_id: str,
+        reconcile_request: ReconcilePhysicalDeleteRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        capability = _artifact_capability_from_request(request)
+        return retention_response(
+            lambda: service.reconcile_physically_deleted_artifact(
+                artifact_id,
+                prior_command_id=reconcile_request.prior_command_id,
+                prior_action_hash=reconcile_request.prior_action_hash,
+                capability=capability,
+            )
+        )
+
+    @app.post("/v1/artifact-repairs/orphan-blob")
+    async def repair_orphan_blob(
+        repair_request: RepairOrphanBlobRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        try:
+            result = service.repair_orphan_blob(
+                content_hash=repair_request.content_hash,
+                finding_hash=repair_request.finding_hash,
+                capability=_artifact_capability_from_request(request),
+            )
+        except ArtifactCapabilityError as exc:
+            raise HTTPException(status_code=403, detail="Artifact repair is denied") from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return result.model_dump(mode="json")
+
+    @app.post("/v1/retention-policies", status_code=201)
+    async def create_retention_policy(
+        request: CreateRetentionPolicyRequest,
+    ) -> dict[str, Any]:
+        try:
+            policy = service.create_retention_policy(request.to_domain())
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return policy.model_dump(mode="json")
+
+    @app.get("/v1/artifact-audits")
+    async def audit_artifacts() -> dict[str, Any]:
+        return service.audit_artifacts().model_dump(mode="json")
+
+    @app.get("/v1/cache-observations")
+    async def list_cache_observations(
+        context_revision_id: str | None = None,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        observations = service.list_cache_observations(
+            context_revision_id=context_revision_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+        return [observation.model_dump(mode="json") for observation in observations]
 
     @app.post("/v1/sessions", status_code=201)
     async def create_session(
