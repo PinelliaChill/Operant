@@ -37,6 +37,7 @@ from operant.artifacts import (
     ArtifactValidationError,
 )
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
+from operant.domain.context import ContextRevision, ReferenceRequest
 from operant.domain.evaluation import EvaluationResult, EvaluationRunEvent, EvaluationSuite
 from operant.domain.memory import MemoryKind
 from operant.domain.models import (
@@ -299,6 +300,8 @@ class RunSessionRequest(BaseModel):
 
     message: str = Field(min_length=1)
     workspace: str = Field(min_length=1)
+    thread_id: str | None = Field(default=None, min_length=1, max_length=300)
+    references: tuple[ReferenceRequest, ...] = Field(default=(), max_length=50)
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -472,6 +475,76 @@ def _safe_evaluation_error_type(exc: Exception) -> str:
     if isinstance(exc, OSError):
         return "io_error"
     return "runner_error"
+
+
+def _context_revision_evidence(revision: ContextRevision) -> dict[str, Any]:
+    """Expose explainability metadata without returning prompt or Tool content."""
+
+    return {
+        "id": revision.id,
+        "cursor": revision.cursor,
+        "session_id": revision.session_id,
+        "agent_id": revision.agent_id,
+        "agent_instance_id": revision.agent_instance_id,
+        "thread_id": revision.thread_id,
+        "request_ordinal": revision.request_ordinal,
+        "model_id": revision.model_id,
+        "prompt_layout": revision.prompt_layout.model_dump(mode="json"),
+        "prompt_layout_version": revision.prompt_layout_version,
+        "message_count": len(revision.messages),
+        "message_ids": list(revision.message_ids),
+        "tool_count": len(revision.tools),
+        "blocks": [
+            {
+                "id": block.id,
+                "position": block.position,
+                "block_type": block.block_type.value,
+                "content_hash": block.content_hash,
+                "source_refs": [source.model_dump(mode="json") for source in block.source_refs],
+                "stable_until": block.stable_until,
+                "visibility": block.visibility.value,
+                "token_estimate": block.token_estimate,
+                "cache_eligible": block.cache_eligible,
+            }
+            for block in revision.blocks
+        ],
+        "reference_bindings": [
+            {
+                "id": binding.id,
+                "position": binding.position,
+                "ref_type": binding.ref_type.value,
+                "resolved_target": binding.resolved_target,
+                "source_snapshot_hash": binding.source_snapshot_hash,
+                "include_mode": binding.include_mode.value,
+                "max_tokens": binding.max_tokens,
+                "visibility": binding.visibility.value,
+                "resolved_at": binding.resolved_at,
+            }
+            for binding in revision.reference_bindings
+        ],
+        "tool_result_stubs": [
+            {
+                "artifact_id": stub.artifact_id,
+                "tool_call_id": stub.tool_call_id,
+                "content_hash": stub.content_hash,
+                "original_size": stub.original_size,
+                "stored_size": stub.stored_size,
+                "fetch_capability": stub.fetch_capability,
+            }
+            for stub in revision.tool_result_stubs
+        ],
+        "watermark": revision.watermark.model_dump(mode="json"),
+        "compaction_id": revision.compaction_id,
+        "source_item_ids": list(revision.source_item_ids),
+        "artifact_refs": list(revision.artifact_refs),
+        "memory_refs": list(revision.memory_refs),
+        "compaction_refs": list(revision.compaction_refs),
+        "token_estimate": revision.token_estimate,
+        "source_cursor_start": revision.source_cursor_start,
+        "source_cursor_end": revision.source_cursor_end,
+        "source_cursor_namespace": revision.source_cursor_namespace,
+        "created_at": revision.created_at,
+    }
 
 
 def _sse_event(
@@ -1625,6 +1698,33 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [event.model_dump(mode="json") for event in events]
 
+    @app.get("/v1/sessions/{session_id}/context-revisions")
+    async def list_context_revisions(
+        session_id: str,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        try:
+            revisions = service.list_context_revisions(
+                session_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return [_context_revision_evidence(revision) for revision in revisions]
+
+    @app.get("/v1/sessions/{session_id}/context-revisions/{revision_id}")
+    async def get_context_revision(
+        session_id: str,
+        revision_id: str,
+    ) -> dict[str, Any]:
+        try:
+            revision = service.get_context_revision(session_id, revision_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _context_revision_evidence(revision)
+
     @app.post("/v1/sessions/{session_id}/runs")
     async def run_session(
         session_id: str,
@@ -1705,6 +1805,8 @@ def create_app(
                     session_id,
                     user_message=request.message,
                     workspace=request.workspace,
+                    thread_id=request.thread_id,
+                    references=request.references,
                     _admission_granted=True,
                 ):
                     yield _sse_event(

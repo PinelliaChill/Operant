@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-08-28
+> 最后更新：2026-08-30
 >
-> 对应版本：Operant 2.0 Phase 1A Thread、Turn、Item 与 Artifact 后端底座
+> 对应版本：Operant 2.0 Phase 1B Context Composer 与追加式 Compaction
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -48,8 +48,15 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   System Event 八类类型化 Item；
 - 内容寻址 Artifact Store：SHA-256、media type、size、sensitivity、source refs、retention policy ref，
   原子写入、并发去重、读取校验和路径/软链接边界；公开领域对象与 API 不暴露 storage key 或本地路径；
+- 每次模型请求前生成不可变 `ContextRevision`，保存实际发送的安全 Message/Tool 快照、版本化
+  `PromptLayout`、有序 `PromptBlock`、类型化 Reference Binding、动态 Context Watermark 与来源证据；
+- 追加式 Compaction 与可恢复 Tool Result Stub：压缩记录只覆盖同 Agent 已提交的 ContextRevision
+  Cursor，或同 Thread 中按真实 `items.sequence` 精确列出的 Canonical Item；不删除或改写 Canonical
+  History；大 Tool Result 先进入内容寻址 Artifact，再向模型提供安全 Stub；
+- Phase 1B 最小类型化引用：Thread、同 Thread Item、普通 Artifact 和当前 Session/Workspace 可读的
+  active Memory；引用在 Provider 调用前完成作用域、敏感级别、完整性与 redaction 校验；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1/v2/v3/v4/v5 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1/v2/v3/v4/v5/v6 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -100,7 +107,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - Web 身份认证、设备配对和远程访问控制；
 - 通用 Graph Runtime、Definition Compiler、Team/Mailbox 和智能创建；
 - 类型化 TypeScript/Python Client SDK、React GUI/PWA、Textual TUI 和 Tauri 桌面壳；
-- Context Composer、PromptLayout、Compaction、复杂 `@` 引用和 Artifact 内容下载/导出接口；
+- 复杂 `@` 引用、Prompt Provider cache 执行/观测，以及通用 Artifact 内容下载/导出接口；
 - Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
 
 ## 3. 总体架构
@@ -214,6 +221,7 @@ Domain 定义数据和约束，不依赖 FastAPI、Typer、SQLite 或具体模�
 
 - `src/operant/domain/models.py`
 - `src/operant/domain/messages.py`
+- `src/operant/domain/context.py`
 - `src/operant/domain/memory.py`
 - `src/operant/domain/workflow.py`
 - `src/operant/domain/evaluation.py`
@@ -232,6 +240,8 @@ Application Service 负责用例编排：
 - 将 RuntimeEvent 写入 SQLite 并回填持久 Cursor；
 - 创建、归档和查询 Thread，追加 Turn/Item，并提供 Thread 内稳定分页与只读 SSE 回放；
 - 先原子发布 Artifact blob，再事务注册不可变 metadata/source refs；单件查询执行完整 hash/size 校验；
+- 在每次 Provider 请求前解析显式引用、构造动态 Watermark、必要时先折叠 Tool Result 再追加
+  Compaction，并原子保存与实际 Provider 输入一致的 `ContextRevision`/Prompt 证据；
 - 为副作用 Tool Call 注入持久化 Action Gateway，管理 Receipt、精确 Action Hash 与审批记录；
 - 根据最终事件更新 Agent 状态；
 - 持久化 Workflow 事件、推进任务状态并支持阶段边界恢复；
@@ -460,6 +470,60 @@ Layout 或 Compaction；后续派生摘要不得删除或原地改写这些原�
 注册不可变 metadata 与 source refs；同 hash 但 media type、sensitivity、retention 或来源不同会冲突，
 不会静默降低敏感级别。单件 GET 重新校验 blob，列表只返回 metadata，Phase 1A 不提供内容下载接口。
 
+### ContextRevision、PromptLayout 与 Compaction
+
+`PersistentContextComposer` 在每次模型请求前运行。它只使用 Session 的不可变 `RoleSnapshot`、当前
+Agent 消息、工具 schema、显式类型化引用和已经提交的派生记录；不会自动继承父 Thread 正文，也不会
+把旧 Session/Workflow 猜测性补写为 Thread。`RoleSnapshot.context_window` 在 Session 创建时冻结；
+legacy Snapshot 缺少该值时保持 unknown，不再读取后来修改的 Model Profile。
+
+每个 `ContextRevision` 由 `agent_id + request_ordinal` 唯一标识，保存实际发送给 Provider 的安全
+Message/Tool 快照、`PromptLayout` 版本、有序 `PromptBlock`、Reference Binding、Tool Result Stub、
+Watermark、冻结 Workspace、来源 ID/Cursor/version/hash 快照和可选 Compaction ID。Composer 在 Provider 调用和持久化之前对
+同一份 payload 做 bounded redaction；工具 schema 也按敏感键和值共同清洗，因此可解释证据与 Provider
+输入一致。公开 Query 只返回 hash、计数、来源、Watermark 和布局 metadata；Tool Result Stub 也只返回
+Artifact/Tool Call ID、hash、大小和 fetch capability，不返回内部摘要、prompt 正文、工具参数或本地
+Artifact 路径。Revision 在 Provider 失败时仍保留，用于说明失败请求；`model.completed` 事件只新增
+可选 `context_revision_id`，既有事件顺序不变。
+
+`PromptLayout phase1b.v1` 物理排序为 Role Instructions、Tool Schema、Explicit References、
+Compaction、Conversation。SQLite 保存完整布局版本和 block order，持久化前校验实际 Block 顺序与布局
+一致，查询/重放不会把自定义布局静默恢复为默认值。每个 Revision 必须包含且只能按布局排列
+Role Instructions、Tool Schema 和 Conversation 三个基础 Block，Explicit References 与 Compaction
+按需出现；空工具集合仍以 `[]` 的 Tool Schema Block 保存。每个 Block 保存位置、类型、内容 hash、
+类型化 source refs、visibility、Token 估算和 cache eligibility；cache eligibility 只是解释性事实，
+当前没有实现 Provider cache 写入、命中裁决或 `CacheObservation`。
+
+Context Watermark 由冻结的 `context_window`、本轮预留输出 Token、工具 schema 估算和动态安全余量计算，
+状态为 Green/Yellow/Red/Emergency/Unknown。阈值是可验证的 Policy 比例，不在 Runtime 中写死固定
+60/80 水位。context window 或输出预留未知时，容量和状态保持 unknown，绝不按 0 处理。Yellow 以上
+优先把超过动态阈值的 Tool Result 写成普通敏感级别的内容寻址 Artifact，并替换为含 Artifact ID、
+Tool Call ID、hash、原始/存储大小、摘要和显式 fetch capability 的 Stub；相同正文可跨 Agent/Session
+去重，但已存在的 sensitive/restricted 同 hash Artifact 不会被降级复用。
+
+Red/Emergency 在 Tool Result 折叠后仍超水位时，才追加结构化 `Compaction`。摘要保存目标、约束、
+决定、完成/待办/失败、Workspace、Artifact/Memory、Approval、外部副作用、人工核对项和下一步，且
+所有动态字段先经过同一 redaction。已有 Agent 对话只允许覆盖同 Session、同 Agent、同 Thread scope
+中已经提交的 ContextRevision Cursor；首次携带过大 Thread 引用时可生成 `THREAD_ITEMS` Compaction，
+但必须精确记录同 Thread Canonical Item 的 ID、真实 `items.sequence`、canonical body hash、严格递增
+顺序、首尾范围和稳定 coverage digest；Compaction ID 由完整不可变证据确定性派生，同证据并发复用
+同一记录，不同证据仍冲突。Compaction、Revision、Prompt Block 和 Binding 全部只追加，
+SQLite trigger 禁止 UPDATE/DELETE。Compaction 是派生证据，不删除、覆盖或改写 Thread/Turn/Item
+Canonical History；没有合法 coverage 时不能伪造 Compaction，安全缩减后仍为 Emergency 则明确失败。
+
+Phase 1B 的显式引用只支持 `thread`、`item`、`artifact`、`memory` 和 `inline`/`metadata` 两种模式。
+Thread 必须绑定当前解析后的 Workspace；Item 必须属于所选 Thread；Artifact inline 只允许校验通过的
+普通 UTF-8 内容，restricted 拒绝、sensitive 不允许 inline；Memory 必须 active 且通过既有 Session/
+Workspace/Role scope 判权。Thread inline 使用累计 UTF-8 字节和 Token 上限的分页式选择，超限时进入
+可核验的 `THREAD_ITEMS` Compaction 或明确失败，不会先把整个 Thread 读入内存。引用正文作为不可信
+User 数据放入独立 Block，不获得 System 权限。复杂 `@` 解析、跨项目授权策略、任意 Artifact 下载和
+父 Thread 全文继承均不属于本阶段。
+
+Memory provenance 在写入时把当前 active/head、不可变版本、hash 和 Session/Workspace/Role scope
+冻结为 source snapshot；Prompt Block、Reference Binding 与 `memory_refs` 必须引用同一规范集合。
+Memory 后续增加版本或停用不会破坏旧 Revision 回读，但旧版本不能被用于新的 Revision。Thread 状态
+从 active 进入 completed/archived 同样不否定已经冻结的旧证据；新写入仍按当前实体和 scope 校验。
+
 ### Action Receipt、Command Receipt 与 Approval
 
 `ToolActionReceipt` 是 Agent 副作用工具的持久化防重记录。当前覆盖 `apply_patch` 与
@@ -607,20 +671,25 @@ sequenceDiagram
 
 Loop 的关键规则：
 
-1. 先加入 System Message 和 User Message；
-2. 将 Snapshot 允许的工具 schema 发送给模型；
-3. 收集流式文本和 Tool Call；
-4. 对 `apply_patch`、`run_command` 先通过 Action Gateway 规范化并预留 Receipt；相同 Tool Call 与
+1. 收集 System/User/后续 Tool Message 和 Snapshot 允许的工具 schema；
+2. 用 Context Composer 解析显式引用、计算动态 Watermark，必要时折叠 Tool Result 或追加 Compaction；
+3. 在 Provider 调用前持久化实际安全输入的不可变 ContextRevision；
+4. 收集流式文本和 Tool Call；
+5. 对 `apply_patch`、`run_command` 先通过 Action Gateway 规范化并预留 Receipt；相同 Tool Call 与
    Action Hash 直接重放已知结果，只执行一次副作用；
-5. 新动作才实际执行工具，并在结果返回模型前把成功或失败原子写入 Receipt；
-6. 测试命令返回非零退出码时，提取失败摘要和稳定错误签名，写回 Tool Result；
-7. 把 Tool Result 追加为 `tool` 消息；
-8. 连续达到 `max_consecutive_test_failures` 次相同测试失败时，产生 `agent.no_progress` 并停止；
-9. 继续调用模型；
-10. 没有 Tool Call 时结束；
-11. 高风险命令先持久化审批请求；批准后再次校验精确 Action Hash，再执行原动作；
-12. 在模型返回后的任何 Tool Receipt/审批/执行之前核对累计 Token、精确费用和 Tool Call 预算；
-13. 达到 `max_turns` 或任一硬预算时强制停止。
+6. 新动作才实际执行工具，并在结果返回模型前把成功或失败原子写入 Receipt；
+7. 测试命令返回非零退出码时，提取失败摘要和稳定错误签名，写回 Tool Result；
+8. 把 Tool Result 追加为 `tool` 消息；
+9. 连续达到 `max_consecutive_test_failures` 次相同测试失败时，产生 `agent.no_progress` 并停止；
+10. 继续调用模型，并为下一次请求生成新的 ContextRevision；
+11. 没有 Tool Call 时结束；
+12. 高风险命令先持久化审批请求；批准后再次校验精确 Action Hash，再执行原动作；
+13. 在模型返回后的任何 Tool Receipt/审批/执行之前核对累计 Token、精确费用和 Tool Call 预算；
+14. 达到 `max_turns` 或任一硬预算时强制停止。
+
+如果 Agent Factory 在 Agent 行创建前失败，Service 会释放 Session lease，并写入不绑定虚假 Agent 的
+`session.run_failed` 事件（`agent_id = null`）；后续修复 Factory 后可重新运行同一 Session。Agent 行已
+创建后的 Composer/Runtime 初始化失败仍写真实 `agent.failed`，两种失败事实不会混淆。
 
 `ApplicationService` 以 Snapshot 的 `timeout_seconds` 为整次运行设置绝对截止时间，并可通过
 取消信号中止正在等待的模型流。`max_output_tokens` 是整个 Agent run 的累计 completion Token 上限，
@@ -656,7 +725,8 @@ prompt 与 completion usage 都已知时才累计；不会用 total Token 反推
 
 Application Service 会把 RuntimeEvent 转换为持久化 Event，关联 Session 和 AgentInstance。
 `agent.started` 的 Event payload 还包含角色版本、模型、Provider 和 effort，使审计可区分每次
-模型调用来源。Provider 返回 usage 时，`model.completed` 保存 Token 统计；模型、工具和 Agent
+模型调用来源。Provider 返回 usage 时，`model.completed` 保存 Token 统计和可选
+`context_revision_id`；模型、工具和 Agent
 终态事件保存单调时钟耗时。上游不返回 usage 时字段保持未知，不伪装为 0；Trace 对 prompt、completion
 和 total 三个计数分别传播 unknown，任何分量未知都不会把对应聚合改写为零或从其他分量反推。
 
@@ -847,6 +917,10 @@ SQLiteStore 当前创建以下表：
 | `artifact_blobs` | 保存内部 content hash、受控 storage key、size；不进入公开领域/API |
 | `artifacts` | 保存 content hash 唯一的公开 Artifact metadata |
 | `artifact_source_refs` | 保存 Artifact 的有序、不可变来源关联 |
+| `compactions` | 保存只追加的结构化摘要、覆盖 Cursor 和 Canonical History 外的派生证据 |
+| `context_revisions` | 保存每次 Provider 请求的不可变安全输入、Watermark、布局版本与 Compaction 关联 |
+| `prompt_blocks` | 保存 ContextRevision 内有序、不可变的 Prompt Block 与来源 hash |
+| `reference_bindings` | 保存显式 Thread/Item/Artifact/Memory 引用的解析快照与权限结果 |
 
 当前使用 Python 标准库 `sqlite3`，每个 Store 操作创建独立连接，并启用外键约束。写操作使用
 事务；异常时回滚。Migration 使用 `BEGIN IMMEDIATE`，当前版本为：
@@ -856,6 +930,17 @@ SQLiteStore 当前创建以下表：
 3. v3：M0 Tool/REST Receipt、持久 Approval/Audit、Evaluation Event 和 Cursor 索引；
 4. v4：Session run lease 与 Workflow coordinator execution lease；
 5. v5：Thread/Turn/Item Canonical History、显式 legacy mapping 与内容寻址 Artifact metadata。
+6. v6：ContextRevision、PromptBlock、ReferenceBinding 与追加式 Compaction。
+
+v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
+的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
+Tool Schema 与 Compaction 在写入时核对实体、scope、Cursor/version 和 canonical/stored hash，回读按
+冻结 snapshot 复核自身完整性，不因 Thread 状态或 Memory head 后续变化否定旧证据。Memory 的 Block、
+Binding、source snapshot 与 `memory_refs_json` 还必须是同一规范集合；foreign、duplicate、missing、
+extra 或错序在 Revision INSERT 阶段直接拒绝，不会留下可写不可读的脏记录。`THREAD_ITEMS`
+coverage 还核对精确 Item 集合、顺序、范围和 digest。相关 trigger 使用 Store 注册的确定性
+`sha256_text` 与 `thread_item_refs_sha256` 函数；未注册这些函数的裸 SQLite 写入会失败关闭，不能绕过
+正式 Store 写入边界。
 
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
@@ -869,8 +954,9 @@ preview 收编、逐步升级、每步 manifest 复验和历史写入全部位�
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
 随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
-回滚 v5 要求全部 Phase 1A 表为空，回滚 v4 要求两张 execution lease 表为空，继续回滚 v3 还要求
+v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+回滚 v6 要求全部 Phase 1B 表为空，回滚 v5 要求全部 Phase 1A 表为空，回滚 v4 要求两张 execution
+lease 表为空，继续回滚 v3 还要求
 Tool/Command Receipt、审批/审计和
 Evaluation Event 等全部 M0 表为空。v1、v2 不可 downgrade，生产数据迁移不是通用双向回滚机制。
 
@@ -980,7 +1066,9 @@ workspace 绝对路径。
 | `POST` | `/v1/sessions` | 创建 Session |
 | `GET` | `/v1/sessions/{id}` | 查询 Session 和 Snapshot |
 | `GET` | `/v1/sessions/{id}/events` | 查询持久化事件 |
-| `POST` | `/v1/sessions/{id}/runs` | 运行 Agent 并返回 SSE |
+| `GET` | `/v1/sessions/{id}/context-revisions` | 按 Cursor 查询不含 prompt 正文的 ContextRevision 证据 |
+| `GET` | `/v1/sessions/{id}/context-revisions/{revision_id}` | 查询单个 metadata-only ContextRevision 证据 |
+| `POST` | `/v1/sessions/{id}/runs` | 运行 Agent 并返回 SSE；可选绑定 Thread 和最小类型化引用 |
 | `POST` | `/v1/sessions/{id}/cancel` | 取消运行中的 Session |
 | `GET` | `/v1/sessions/{id}/approvals` | 查询待审批工具调用 |
 | `POST` | `/v1/sessions/{id}/approvals/{tool_call_id}` | 提交审批决定 |
@@ -1251,6 +1339,18 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
   以及路径穿越、逐组件软链接、大小写别名、非普通文件和 inode 替换拒绝；
 - Thread/Artifact 修改 Command 的 M0 Receipt 重放、Action Hash 冲突、UTF-8 字节限额、metadata-only
   响应和本地路径/正文不泄露；
+- v1/v2/v3/v4/v5 → v6 升级、重复/并发初始化、事务失败原子回滚、空表受限 downgrade、append-only
+  trigger、完整 PromptLayout/必需 Block 回放、全部类型化来源的实体/scope/version/hash 防伪、Memory
+  Block/Binding/snapshot/ref 集合一致性、同 Agent request ordinal 并发幂等和 Cursor namespace；
+- 每轮 Provider 输入与持久 ContextRevision 精确一致、Snapshot context window 冻结、unknown 容量/
+  输出预留不按 0、父 Thread 不继承正文、Thread/Item/Artifact/Memory 引用判权和敏感数据 redaction；
+- 动态 Watermark、首次 Emergency 不伪造 Compaction、追加式摘要不改 Canonical Item、首轮大 Thread
+  的精确 `THREAD_ITEMS` coverage/hash/顺序/range/digest 与确定性并发复用、大 Tool Result Artifact Stub 可恢复、跨
+  Agent/Session 去重、敏感 hash 降级拒绝和 Artifact 写失败不留部分 Revision；
+- Agent 创建前 Factory 失败写 `session.run_failed(agent_id=null)`、释放 lease 且可重新运行；Agent 已
+  创建后的 Composer 初始化失败写真实 `agent.failed`；
+- 既有 Session run body/SSE 事件顺序兼容，Context Revision Query 只返回 hash/计数/Watermark/来源，
+  不返回 prompt、工具参数、Artifact 正文或本地路径；
 - 统一错误信封、校验输入与未知异常不泄密，以及首次非流 Command、REST 4xx/5xx、命令输出、
   Receipt、事件、模型 Tool Result 共用 bounded redaction；短 Bearer、任意/不完整 PEM 私钥块和
   大小写敏感文件名回归。
@@ -1264,6 +1364,11 @@ uv run mypy src
 uv run pytest
 git diff --check
 ```
+
+2026-08-30 的 Phase 1B 后端底座使用隔离 v1/v2/v3/v4/v5 数据库、并发请求、伪造关联、敏感内容和
+Artifact 故障探针：完整 pytest 为 328 通过、1 个条件性 Docker 测试跳过，并保留 1 个上游 Starlette
+TestClient 弃用警告；Ruff format/check、mypy、`uv lock --check` 和 `git diff --check` 通过。未设置
+真实 Provider，也未做高并发吞吐基准；Docker skip 不视为容器验收。
 
 2026-08-28 的 Phase 1A 后端底座使用隔离 v1/v2/v3/v4/preview 数据库、并发进程/线程、受控文件系统
 竞态和临时 `OPERANT_DB_PATH`：完整 pytest 为 237 通过、1 个条件性 Docker 测试跳过，并保留 1 个
@@ -1342,7 +1447,7 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-5. 已有 v1/v2/v3/v4/v5 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
+5. 已有 v1/v2/v3/v4/v5/v6 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
    但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
    Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
 6. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，但不支持任意模型流位置续传；SSE 断线
@@ -1362,9 +1467,13 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
     Approval Audit 当前没有已执行的对象级清理策略，会随运行持续增长；Artifact Store 崩溃时也可能
     留下未被 SQLite metadata 引用的临时/已发布 blob。Phase 1A 只保存 retention policy ref，不执行
     删除；不得把容量治理或自动清扫写成已解决。
-12. Thread/Turn/Item 与 Artifact 已建立持久底座，但尚未接入现有 Session/Workflow 的自动历史投影，
-    也没有 Context Composer、PromptLayout、Compaction、复杂 `@` 引用、Artifact 内容下载/导出或
-    sensitivity 授权策略；旧数据只支持显式 legacy mapping，不能伪称已转换为 Canonical History。
+12. Thread/Turn/Item 与 Artifact 已建立持久底座，Context Composer 可显式绑定新 Thread 与最小引用，
+    但尚未把既有 Session/Workflow 自动投影为 Canonical History；旧数据仍只支持显式 legacy mapping，
+    不能伪称已转换。复杂 `@` 解析、通用 Artifact 下载/导出、完整 sensitivity 授权策略、Provider
+    cache 执行与 CacheObservation 仍未实现。
+13. ContextRevision 为了审计和精确解释当前保存 bounded-redacted Provider 输入，Compaction 与 Tool
+    Result Artifact 也会持续增长；还没有对象级 retention 执行、语义摘要质量评测或吞吐基准。Composer
+    与 SQLite/Artifact Store 使用同步本地 I/O，超大引用和高并发规模需要后续性能评估。
 
 ## 19. 文档维护规则
 
@@ -1395,6 +1504,26 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-08-30
+
+- 新增 `ContextRevision`、版本化 `PromptLayout`/有序 `PromptBlock`、动态 Context Watermark、追加式
+  `Compaction`、Reference Binding 与 Tool Result Stub；每次 Provider 请求前保存与实际安全输入一致的
+  不可变证据，Provider 失败仍可查询，Canonical Thread/Turn/Item 从不被压缩记录删除或改写；
+- Composer 按冻结 context window、输出预留、工具 schema 与动态安全余量计算 Green/Yellow/Red/
+  Emergency/Unknown；缺失容量或预留保持 unknown。大 Tool Result 优先写入内容寻址 Artifact 并提供
+  可恢复 Stub，Red/Emergency 再对已有 Revision 追加结构化摘要，首次请求不伪造 Cursor；
+- 新增 Thread/Item/Artifact/Memory 四类最小显式引用与 inline/metadata 模式，执行 Workspace、归属、
+  sensitivity、Memory scope/version/hash、Artifact 完整性和 redaction 校验；Memory Block、Binding、
+  source snapshot 与 ref 集合保持一致，历史冻结证据不受后续 Thread/Memory 状态变化破坏；不继承父
+  Thread 全文，不实现复杂 `@`；
+- 新增冻结 manifest/checksum 的 SQLite v6、四张只追加表、FK/UNIQUE/CHECK/index/trigger、并发请求
+  幂等、完整 Layout/必需 Block 回放、全部类型化 source ref 的实体/scope/version/hash 防伪、
+  `THREAD_ITEMS` 确定性 ID 与精确 coverage
+  校验、v1—v5 保留数据升级和空表受限 rollback；Session run 仅新增可选 thread/references，
+  `model.completed` 仅新增可选 revision ID，并提供不含 Tool Result 摘要正文的 metadata-only Query；
+- Phase 1B 核心、迁移、并发、安全和旧契约回归已加入自动测试；未实现 Graph、Team、Remote/Relay、
+  GUI/TUI/Tauri、客户端生成、Provider cache 或任意模型流位置恢复，未修改 `clients/`、`sdk/` 和前端文件。
 
 ### 2026-08-28
 

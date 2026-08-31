@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from operant.application.context import PersistentContextComposer
 from operant.application.defaults import default_role_presets
 from operant.application.factory import AgentFactory
 from operant.application.trace import (
@@ -23,6 +24,7 @@ from operant.domain.actions import (
     ToolActionReceipt,
     ToolActionReceiptStatus,
 )
+from operant.domain.context import ContextRevision, ReferenceRequest
 from operant.domain.evaluation import (
     EvaluationResult,
     EvaluationRun,
@@ -410,6 +412,31 @@ class ApplicationService:
         self.get_session(session_id)
         return self.store.list_events(session_id, after_cursor=after_cursor, limit=limit)
 
+    def get_context_revision(
+        self,
+        session_id: str,
+        revision_id: str,
+    ) -> ContextRevision:
+        self.get_session(session_id)
+        revision = self.store.get_context_revision(revision_id)
+        if revision.session_id != session_id:
+            raise NotFoundError(f"ContextRevision not found: {revision_id}")
+        return revision
+
+    def list_context_revisions(
+        self,
+        session_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[ContextRevision]:
+        self.get_session(session_id)
+        return self.store.list_context_revisions(
+            session_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+
     # Canonical Thread history and Artifact metadata
 
     def create_thread(self, thread: ConversationThread) -> ConversationThread:
@@ -546,6 +573,50 @@ class ApplicationService:
                 max_size_bytes=self._artifact_max_size_bytes,
             )
         return self._artifact_store
+
+    def _read_artifact_for_context(self, artifact_id: str) -> bytes:
+        artifact = self.get_artifact(artifact_id)
+        return self._artifact_blob_store().read(
+            artifact.content_hash,
+            artifact.size_bytes,
+        )
+
+    def _write_tool_result_artifact(
+        self,
+        *,
+        content: bytes,
+    ) -> Artifact:
+        content_hash = hashlib.sha256(content).hexdigest()
+
+        def reuse_existing() -> Artifact:
+            existing = self.store.get_artifact_by_hash(content_hash)
+            if existing.sensitivity is not ArtifactSensitivity.NORMAL:
+                raise PermissionError(
+                    "existing sensitive Artifact cannot be reused as a normal Tool Result Stub"
+                )
+            self._artifact_blob_store().verify(existing.content_hash, existing.size_bytes)
+            return existing
+
+        try:
+            return reuse_existing()
+        except NotFoundError:
+            pass
+        try:
+            artifact, _created = self.create_artifact(
+                content=content,
+                media_type="text/plain; charset=utf-8",
+                sensitivity=ArtifactSensitivity.NORMAL,
+                # Artifact metadata is content-hash unique. Keep automatic Tool
+                # Result metadata stable across agents/sessions; each immutable
+                # ContextRevision carries the typed request-local association.
+                source_refs=(),
+                retention_policy_ref="context-tool-result",
+            )
+            return artifact
+        except ConflictError:
+            # Another writer may have registered the hash after our lookup.
+            # Re-read and apply the same sensitivity/integrity gate.
+            return reuse_existing()
 
     # Workflow persistence
 
@@ -1353,6 +1424,8 @@ class ApplicationService:
         approval_callback: ApprovalCallback | None = None,
         workflow_run_id: str | None = None,
         workflow_execution_lease: WorkflowExecutionLease | None = None,
+        thread_id: str | None = None,
+        references: Collection[ReferenceRequest] = (),
         _admission_granted: bool = False,
     ) -> AsyncIterator[RuntimeEvent]:
         session = self.get_session(session_id)
@@ -1400,10 +1473,14 @@ class ApplicationService:
                     },
                 )
                 return
+        agent = None
+        cancellation: asyncio.Event | None = None
+        run_lease: SessionRunLease | None = None
         try:
             lease = self._session_run_leases.get(session.id)
             if lease is None:
                 raise ConflictError("session run admission lease is unavailable")
+            run_lease = lease
             agent = self.factory.create_agent(session.id)
             lease = self.store.bind_session_run_lease_agent(lease, agent.id)
             run_lease = lease
@@ -1415,6 +1492,23 @@ class ApplicationService:
                 workspace,
                 policy=session.role_snapshot.tool_policy,
             )
+            normalized_workspace = str(Path(workspace).resolve())
+            context_composer = PersistentContextComposer(
+                store=self.store,
+                session=session,
+                agent_id=agent.id,
+                workspace=normalized_workspace,
+                thread_id=thread_id,
+                references=tuple(references),
+                memory_resolver=lambda memory_id: self.get_memory(
+                    memory_id,
+                    snapshot=session.role_snapshot,
+                    session_id=session.id,
+                    project_scope=normalized_workspace,
+                ),
+                artifact_reader=self._read_artifact_for_context,
+                artifact_writer=lambda content: self._write_tool_result_artifact(content=content),
+            )
             loop = AgentLoop(
                 self.provider,
                 tools,
@@ -1425,10 +1519,53 @@ class ApplicationService:
                     tools=tools,
                     lease=lease,
                 ),
+                context_composer=context_composer,
             )
-        except BaseException:
-            self.release_session_run(session.id)
+        except Exception as exc:
+            failure_event: RuntimeEvent | None = None
+            try:
+                if agent is not None:
+                    failure_event = self._persist_runtime_event(
+                        session.id,
+                        agent.id,
+                        RuntimeEvent(
+                            event_type="agent.failed",
+                            turn=0,
+                            payload={"error_type": type(exc).__name__},
+                        ),
+                    )
+                    self.store.update_agent_status(agent.id, AgentStatus.FAILED)
+                else:
+                    # AgentFactory failures happen before an Agent row exists.
+                    # Keep the durable fact attached to the Session and leave
+                    # ``agent_id`` null; emitting agent.failed here would claim
+                    # an Agent lifecycle transition that never occurred.
+                    failure_event = self._persist_runtime_event(
+                        session.id,
+                        None,
+                        RuntimeEvent(
+                            event_type="session.run_failed",
+                            turn=0,
+                            payload={"error_type": type(exc).__name__},
+                        ),
+                    )
+            finally:
+                if cancellation is not None and self._cancellations.get(session.id) is cancellation:
+                    self._cancellations.pop(session.id, None)
+                self.release_session_run(session.id, run_lease)
+            if failure_event is not None:
+                yield failure_event
+                return
             raise
+        except BaseException:
+            if cancellation is not None and self._cancellations.get(session.id) is cancellation:
+                self._cancellations.pop(session.id, None)
+            self.release_session_run(session.id, run_lease)
+            raise
+
+        assert agent is not None
+        assert cancellation is not None
+        assert run_lease is not None
 
         async def wait_for_approval(tool_call_id: str, category: str, detail: str) -> bool:
             if approval_callback is not None:
@@ -1674,7 +1811,7 @@ class ApplicationService:
         ]
 
     def _persist_runtime_event(
-        self, session_id: str, agent_id: str, event: RuntimeEvent
+        self, session_id: str, agent_id: str | None, event: RuntimeEvent
     ) -> RuntimeEvent:
         sanitized_event = event.model_copy(update={"payload": redact_public_data(event.payload)})
         persisted = self.store.append_event(

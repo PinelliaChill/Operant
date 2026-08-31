@@ -217,6 +217,9 @@ class RoleSnapshot(BaseModel):
     model_id: str
     base_url: str
     secret_ref: str
+    # Optional for backward-compatible reads of pre-Phase-1B snapshots. New
+    # Sessions freeze the selected ModelProfile value at creation time.
+    context_window: int | None = Field(default=None, ge=1)
     input_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     output_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     effort: Effort
