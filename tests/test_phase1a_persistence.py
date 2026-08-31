@@ -128,7 +128,7 @@ def test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows(
     store.initialize()
     store.initialize()
 
-    assert store.schema_version() == 6
+    assert store.schema_version() == 7
     assert store.get_model_profile(profile.id) == profile
     assert store.list_threads() == []
     assert store.list_artifacts() == []
@@ -164,7 +164,7 @@ def test_v5_migration_failure_is_atomic_and_empty_rollback_is_explicit(
     empty = SQLiteStore(tmp_path / "empty-rollback.sqlite3")
     empty.initialize()
     assert empty.rollback(4, isolated=True) == 4
-    assert empty.migrate() == 6
+    assert empty.migrate() == 7
 
 
 def test_exact_phase1a_preview_adds_reference_guards_and_updates_checksum(
@@ -230,7 +230,7 @@ def test_v4_session_workflow_event_receipt_and_approval_remain_readable(
         )
     )
 
-    assert store.migrate() == 6
+    assert store.migrate() == 7
 
     assert store.get_session(session.id) == session
     assert store.get_agent(agent.id) == agent

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
+import secrets
+import stat
 from collections.abc import AsyncIterator, Collection
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -17,10 +21,21 @@ from operant.application.trace import (
     summarize_workflow_trace,
     workflow_trace_jsonl,
 )
-from operant.artifacts import ArtifactStore
+from operant.artifacts import (
+    ArtifactCapabilityAuthority,
+    ArtifactContentDeletedError,
+    ArtifactCorruptionError,
+    ArtifactNotFoundError,
+    ArtifactSecurityError,
+    ArtifactStore,
+    BlobInventoryRecord,
+    artifact_export_scope_fingerprint,
+    export_artifact_bytes,
+)
 from operant.domain.actions import (
     ApprovalRequest,
     ApprovalStatus,
+    CommandExecutionStatus,
     ToolActionReceipt,
     ToolActionReceiptStatus,
 )
@@ -50,14 +65,24 @@ from operant.domain.models import (
     RoleSnapshot,
     Session,
     new_id,
+    utc_now,
 )
 from operant.domain.threads import (
     Artifact,
+    ArtifactAccessLevel,
+    ArtifactAuditFinding,
+    ArtifactAuditReport,
+    ArtifactRepairResult,
+    ArtifactRetentionState,
     ArtifactSensitivity,
     ArtifactSourceRef,
+    CacheHitStatus,
+    CacheObservation,
     ConversationThread,
     Item,
     ItemPayload,
+    RetentionLifecycle,
+    RetentionPolicy,
     ThreadStatus,
     Turn,
 )
@@ -71,7 +96,7 @@ from operant.persistence.sqlite import (
     SQLiteStore,
     WorkflowExecutionLease,
 )
-from operant.protocol import redact_public_data, redact_public_text
+from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
 from operant.providers.base import ModelProvider
 from operant.runtime.loop import AgentLoop, RuntimeEvent, ToolActionClaim
 from operant.tools.workspace import ApprovalCallback, ToolError, WorkspaceTools
@@ -248,6 +273,9 @@ class ApplicationService:
         artifact_root: str | Path | None = None,
         artifact_max_size_bytes: int = DEFAULT_ARTIFACT_MAX_SIZE_BYTES,
         artifact_store: ArtifactStore | None = None,
+        artifact_capability_secret: bytes | None = None,
+        physical_delete_enabled: bool = False,
+        physical_delete_authorization: str | None = None,
     ) -> None:
         if session_lease_ttl_seconds <= 0:
             raise ValueError("session lease TTL must be positive")
@@ -281,6 +309,17 @@ class ApplicationService:
         if not self._artifact_root.is_absolute():
             raise ValueError("artifact root must be absolute")
         self._artifact_max_size_bytes = artifact_max_size_bytes
+        self._artifact_capabilities = ArtifactCapabilityAuthority(
+            artifact_capability_secret or secrets.token_bytes(32)
+        )
+        self._physical_delete_enabled = physical_delete_enabled
+        self._physical_delete_authorization = physical_delete_authorization
+        if physical_delete_enabled and (
+            physical_delete_authorization is None or len(physical_delete_authorization) < 32
+        ):
+            raise ValueError(
+                "enabled physical Artifact deletion requires a 32-character authorization"
+            )
 
     def initialize(self) -> None:
         self.store.initialize()
@@ -539,8 +578,10 @@ class ApplicationService:
             source_refs=source_refs,
             retention_policy_ref=retention_policy_ref,
         )
-        blob = self._artifact_blob_store().put_bytes(content)
-        return self.store.register_artifact(artifact, storage_key=blob.storage_key)
+        blob_store = self._artifact_blob_store()
+        with blob_store.mutation_guard():
+            blob = blob_store.put_bytes(content)
+            return self.store.register_artifact(artifact, storage_key=blob.storage_key)
 
     def get_artifact(self, artifact_id: str, *, verify: bool = True) -> Artifact:
         artifact = self.store.get_artifact(artifact_id)
@@ -564,6 +605,728 @@ class ApplicationService:
             after_cursor=after_cursor,
             limit=limit,
             sensitivity=sensitivity,
+        )
+
+    def issue_artifact_capability(
+        self,
+        artifact_id: str,
+        *,
+        operation: str,
+        access_level: ArtifactAccessLevel,
+        ttl_seconds: int = 300,
+        workspace_root: str | Path | None = None,
+        relative_path: str | None = None,
+    ) -> str:
+        """Trusted embedding hook; the unauthenticated HTTP API cannot issue grants."""
+
+        artifact = self.store.get_artifact(artifact_id)
+        ranks = {
+            ArtifactAccessLevel.NORMAL: 0,
+            ArtifactAccessLevel.SENSITIVE: 1,
+            ArtifactAccessLevel.RESTRICTED: 2,
+        }
+        required = ArtifactAccessLevel(artifact.sensitivity.value)
+        if ranks[access_level] < ranks[required]:
+            raise PermissionError("requested Artifact capability clearance is insufficient")
+        export_scope_hash: str | None = None
+        if operation == "export":
+            if workspace_root is None or relative_path is None:
+                raise ValueError("export capability requires an exact destination scope")
+            export_scope_hash = self._export_scope_hash(workspace_root, relative_path)
+        elif workspace_root is not None or relative_path is not None:
+            raise ValueError("destination scope is valid only for export capabilities")
+        return self._artifact_capabilities.issue(
+            artifact_id=artifact_id,
+            operation=operation,
+            access_level=access_level,
+            ttl_seconds=ttl_seconds,
+            operation_scope_hash=export_scope_hash,
+        )
+
+    def read_artifact_text(self, artifact_id: str, *, capability: str) -> dict[str, Any]:
+        artifact, content = self._authorized_artifact_content(
+            artifact_id,
+            operation="read",
+            capability=capability,
+        )
+        if not (
+            artifact.media_type.startswith("text/")
+            or artifact.media_type in {"application/json", "application/xml"}
+        ):
+            raise ValueError("Artifact is not a supported textual media type")
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Artifact text is not valid UTF-8") from exc
+        return {
+            "artifact": artifact.model_dump(mode="json"),
+            "content_text": redact_public_text(text),
+            "content_redacted": True,
+        }
+
+    def download_artifact(self, artifact_id: str, *, capability: str) -> tuple[Artifact, bytes]:
+        return self._authorized_artifact_content(
+            artifact_id,
+            operation="download",
+            capability=capability,
+        )
+
+    def export_artifact(
+        self,
+        artifact_id: str,
+        *,
+        capability: str,
+        workspace_root: str | Path,
+        relative_path: str,
+    ) -> dict[str, Any]:
+        scope_hash = self._export_scope_hash(workspace_root, relative_path)
+        artifact, content = self._authorized_artifact_content(
+            artifact_id,
+            operation="export",
+            capability=capability,
+            operation_scope_hash=scope_hash,
+        )
+        export_artifact_bytes(
+            content,
+            workspace_root=workspace_root,
+            relative_path=relative_path,
+            expected_scope_hash=scope_hash,
+        )
+        return {
+            "artifact_id": artifact.id,
+            "content_hash": artifact.content_hash,
+            "size_bytes": artifact.size_bytes,
+            "exported": True,
+        }
+
+    def _authorized_artifact_content(
+        self,
+        artifact_id: str,
+        *,
+        operation: str,
+        capability: str,
+        operation_scope_hash: str | None = None,
+    ) -> tuple[Artifact, bytes]:
+        artifact = self.store.get_artifact(artifact_id)
+        state = self.store.get_artifact_retention_state(artifact_id)
+        if state.lifecycle is RetentionLifecycle.DELETED:
+            raise ArtifactContentDeletedError("Artifact content was explicitly deleted")
+        self._artifact_capabilities.verify(
+            capability,
+            artifact_id=artifact_id,
+            operation=operation,
+            sensitivity=artifact.sensitivity,
+            operation_scope_hash=operation_scope_hash,
+        )
+        content = self._artifact_blob_store().read(
+            artifact.content_hash,
+            artifact.size_bytes,
+        )
+        return artifact, content
+
+    @staticmethod
+    def _export_scope_hash(workspace_root: str | Path, relative_path: str) -> str:
+        return artifact_export_scope_fingerprint(
+            workspace_root=workspace_root,
+            relative_path=relative_path,
+        )
+
+    def create_retention_policy(self, policy: RetentionPolicy) -> RetentionPolicy:
+        return self.store.create_retention_policy(policy)
+
+    def get_artifact_retention_state(self, artifact_id: str) -> ArtifactRetentionState:
+        return self.store.get_artifact_retention_state(artifact_id)
+
+    def set_artifact_pin(
+        self,
+        artifact_id: str,
+        *,
+        pinned: bool,
+        capability: str,
+    ) -> ArtifactRetentionState:
+        self._authorize_retention_mutation(artifact_id, "retention_pin", capability)
+        current = self.store.get_artifact_retention_state(artifact_id)
+        if current.lifecycle not in {RetentionLifecycle.ACTIVE, RetentionLifecycle.ARCHIVED}:
+            raise ConflictError("only active or archived Artifacts may change Pin state")
+        updated = current.model_copy(
+            update={"pinned": pinned, "updated_at": self._next_retention_time(current)}
+        )
+        return self._save_retention_state(
+            current,
+            updated,
+            event_type="retention.pin_changed",
+            action="artifact.pin",
+            fields={"pinned": pinned},
+        )
+
+    def archive_artifact(self, artifact_id: str, *, capability: str) -> ArtifactRetentionState:
+        self._authorize_retention_mutation(artifact_id, "retention_archive", capability)
+        current = self.store.get_artifact_retention_state(artifact_id)
+        if current.lifecycle is RetentionLifecycle.ARCHIVED:
+            return current
+        if current.lifecycle is not RetentionLifecycle.ACTIVE:
+            raise ConflictError("only an active Artifact may be archived")
+        updated = current.model_copy(
+            update={
+                "lifecycle": RetentionLifecycle.ARCHIVED,
+                "updated_at": self._next_retention_time(current),
+            }
+        )
+        return self._save_retention_state(
+            current,
+            updated,
+            event_type="retention.archived",
+            action="artifact.archive",
+        )
+
+    def schedule_artifact_deletion(
+        self,
+        artifact_id: str,
+        *,
+        capability: str,
+    ) -> ArtifactRetentionState:
+        self._authorize_retention_mutation(artifact_id, "retention_schedule", capability)
+        current = self.store.get_artifact_retention_state(artifact_id)
+        if current.lifecycle is RetentionLifecycle.DELETION_SCHEDULED:
+            return current
+        if current.lifecycle not in {RetentionLifecycle.ACTIVE, RetentionLifecycle.ARCHIVED}:
+            raise ConflictError("Artifact cannot be scheduled from its current lifecycle")
+        if current.pinned:
+            raise ConflictError("pinned Artifact cannot be scheduled for deletion")
+        policy = self.store.get_retention_policy(current.policy_ref)
+        now = self._next_retention_time(current)
+        updated = current.model_copy(
+            update={
+                "lifecycle": RetentionLifecycle.DELETION_SCHEDULED,
+                "scheduled_deletion_at": now + timedelta(seconds=policy.grace_period_seconds),
+                "updated_at": now,
+            }
+        )
+        return self._save_retention_state(
+            current,
+            updated,
+            event_type="retention.deletion_scheduled",
+            action="artifact.schedule_deletion",
+        )
+
+    def trash_artifact(self, artifact_id: str, *, capability: str) -> ArtifactRetentionState:
+        self._authorize_retention_mutation(artifact_id, "retention_trash", capability)
+        current = self.store.get_artifact_retention_state(artifact_id)
+        if current.lifecycle is not RetentionLifecycle.DELETION_SCHEDULED:
+            raise ConflictError("Artifact must be scheduled before recoverable trash")
+        now = self._next_retention_time(current)
+        assert current.scheduled_deletion_at is not None
+        if now < current.scheduled_deletion_at:
+            raise ConflictError("Artifact deletion grace period has not elapsed")
+        if self.store.artifact_deletion_blockers(artifact_id):
+            raise ConflictError("Artifact has protected retention references")
+        updated = current.model_copy(
+            update={
+                "lifecycle": RetentionLifecycle.TRASHED,
+                "trashed_at": now,
+                "updated_at": now,
+            }
+        )
+        return self._save_retention_state(
+            current,
+            updated,
+            event_type="retention.trashed",
+            action="artifact.trash",
+        )
+
+    def restore_artifact(self, artifact_id: str, *, capability: str) -> ArtifactRetentionState:
+        self._authorize_retention_mutation(artifact_id, "retention_restore", capability)
+        current = self.store.get_artifact_retention_state(artifact_id)
+        if current.lifecycle not in {
+            RetentionLifecycle.DELETION_SCHEDULED,
+            RetentionLifecycle.TRASHED,
+        }:
+            raise ConflictError("only scheduled or trashed Artifacts may be restored")
+        updated = current.model_copy(
+            update={
+                "lifecycle": RetentionLifecycle.ACTIVE,
+                "scheduled_deletion_at": None,
+                "trashed_at": None,
+                "deleted_at": None,
+                "updated_at": self._next_retention_time(current),
+            }
+        )
+        return self._save_retention_state(
+            current,
+            updated,
+            event_type="retention.restored",
+            action="artifact.restore",
+        )
+
+    def _save_retention_state(
+        self,
+        current: ArtifactRetentionState,
+        updated: ArtifactRetentionState,
+        *,
+        event_type: str,
+        action: str,
+        fields: dict[str, Any] | None = None,
+    ) -> ArtifactRetentionState:
+        action_payload = {"action": action, "artifact_id": current.artifact_id}
+        action_payload.update(fields or {})
+        return self.store.update_artifact_retention_state(
+            updated,
+            expected_updated_at=current.updated_at,
+            event_type=event_type,
+            action_hash=canonical_action_hash(action_payload),
+        )
+
+    def _authorize_retention_mutation(
+        self,
+        artifact_id: str,
+        operation: str,
+        capability: str,
+    ) -> None:
+        artifact = self.store.get_artifact(artifact_id)
+        self._artifact_capabilities.verify(
+            capability,
+            artifact_id=artifact_id,
+            operation=operation,
+            sensitivity=artifact.sensitivity,
+        )
+
+    @staticmethod
+    def _next_retention_time(current: ArtifactRetentionState) -> datetime:
+        now = utc_now()
+        return current.updated_at + timedelta(microseconds=1) if now <= current.updated_at else now
+
+    def audit_artifacts(self) -> ArtifactAuditReport:
+        """Compare verified blobs with SQLite references without writing either side."""
+
+        references = self.store.list_artifact_blob_references()
+        inventory = self._artifact_inventory_read_only()
+        by_hash = {
+            record.content_hash: record
+            for record in inventory
+            if record.content_hash is not None and not record.unsafe
+        }
+        findings: list[ArtifactAuditFinding] = []
+
+        def add_finding(
+            finding_type: Literal[
+                "orphan_blob",
+                "missing_blob",
+                "corrupt_blob",
+                "unsafe_entry",
+                "purged_blob_present",
+            ],
+            *,
+            content_hash: str | None = None,
+            artifact_id: str | None = None,
+            expected_size: int | None = None,
+            observed_size: int | None = None,
+            repairable: bool = False,
+            occurrence: int = 0,
+        ) -> None:
+            fact = {
+                "finding_type": finding_type,
+                "content_hash": content_hash,
+                "artifact_id": artifact_id,
+                "expected_size_bytes": expected_size,
+                "observed_size_bytes": observed_size,
+                "occurrence": occurrence,
+            }
+            findings.append(
+                ArtifactAuditFinding(
+                    finding_type=finding_type,
+                    content_hash=content_hash,
+                    artifact_id=artifact_id,
+                    expected_size_bytes=expected_size,
+                    observed_size_bytes=observed_size,
+                    finding_hash=canonical_action_hash(fact),
+                    repairable=repairable,
+                )
+            )
+
+        for ordinal, record in enumerate(inventory):
+            if record.unsafe:
+                add_finding("unsafe_entry", occurrence=ordinal)
+                continue
+            assert record.content_hash is not None and record.size_bytes is not None
+            reference = references.get(record.content_hash)
+            if reference is None:
+                try:
+                    self._artifact_blob_store().verify(record.content_hash, record.size_bytes)
+                except (ArtifactCorruptionError, ArtifactSecurityError):
+                    add_finding(
+                        "corrupt_blob",
+                        content_hash=record.content_hash,
+                        observed_size=record.size_bytes,
+                    )
+                else:
+                    add_finding(
+                        "orphan_blob",
+                        content_hash=record.content_hash,
+                        observed_size=record.size_bytes,
+                        repairable=True,
+                    )
+            elif reference[2] == RetentionLifecycle.DELETED.value:
+                add_finding(
+                    "purged_blob_present",
+                    content_hash=record.content_hash,
+                    artifact_id=reference[0],
+                    expected_size=reference[1],
+                    observed_size=record.size_bytes,
+                )
+
+        for content_hash, (artifact_id, expected_size, lifecycle) in references.items():
+            if lifecycle == RetentionLifecycle.DELETED.value:
+                continue
+            blob_record = by_hash.get(content_hash)
+            if blob_record is None:
+                add_finding(
+                    "missing_blob",
+                    content_hash=content_hash,
+                    artifact_id=artifact_id,
+                    expected_size=expected_size,
+                )
+                continue
+            try:
+                self._artifact_blob_store().verify(content_hash, expected_size)
+            except (ArtifactCorruptionError, ArtifactNotFoundError, ArtifactSecurityError):
+                add_finding(
+                    "corrupt_blob",
+                    content_hash=content_hash,
+                    artifact_id=artifact_id,
+                    expected_size=expected_size,
+                    observed_size=blob_record.size_bytes,
+                )
+        return ArtifactAuditReport(
+            findings=tuple(findings),
+            scanned_database_references=len(references),
+            scanned_blobs=sum(record.content_hash is not None for record in inventory),
+        )
+
+    def _artifact_inventory_read_only(self) -> tuple[BlobInventoryRecord, ...]:
+        """Inspect an existing store without creating its root or layout."""
+
+        if self._artifact_store is not None:
+            return self._artifact_store.inventory()
+        try:
+            root_status = self._artifact_root.lstat()
+        except FileNotFoundError:
+            return ()
+        except OSError:
+            return (BlobInventoryRecord(None, None, unsafe=True),)
+        if not stat.S_ISDIR(root_status.st_mode):
+            return (BlobInventoryRecord(None, None, unsafe=True),)
+        for name in ("sha256", ".tmp"):
+            try:
+                child_status = (self._artifact_root / name).lstat()
+            except OSError:
+                return (BlobInventoryRecord(None, None, unsafe=True),)
+            if not stat.S_ISDIR(child_status.st_mode):
+                return (BlobInventoryRecord(None, None, unsafe=True),)
+        return self._artifact_blob_store().inventory()
+
+    def repair_orphan_blob(
+        self,
+        *,
+        content_hash: str,
+        finding_hash: str,
+        capability: str,
+    ) -> ArtifactRepairResult:
+        self._authorize_physical_mutation(
+            capability,
+            resource_id=content_hash,
+            operation="repair_orphan",
+            operation_scope_hash=finding_hash,
+        )
+        action_hash = canonical_action_hash(
+            {
+                "action": "artifact.repair.delete_orphan_blob",
+                "content_hash": content_hash,
+                "finding_hash": finding_hash,
+            }
+        )
+        blob_store = self._artifact_blob_store()
+        with blob_store.mutation_guard():
+            finding = next(
+                (
+                    item
+                    for item in self.audit_artifacts().findings
+                    if item.finding_type == "orphan_blob"
+                    and item.content_hash == content_hash
+                    and item.finding_hash == finding_hash
+                    and item.repairable
+                ),
+                None,
+            )
+            if finding is None or finding.observed_size_bytes is None:
+                result = ArtifactRepairResult(
+                    finding_hash=finding_hash,
+                    action="delete_orphan_blob",
+                    repaired=False,
+                    outcome="refused",
+                )
+                self.store.append_artifact_repair_event(
+                    result,
+                    content_hash=content_hash,
+                    action_hash=action_hash,
+                )
+                return result
+            if content_hash in self.store.list_artifact_blob_references():
+                raise ConflictError("Artifact audit finding is stale")
+            blob_store.delete_verified(content_hash, finding.observed_size_bytes)
+            result = ArtifactRepairResult(
+                finding_hash=finding_hash,
+                action="delete_orphan_blob",
+                repaired=True,
+                outcome="completed",
+            )
+            self.store.append_artifact_repair_event(
+                result,
+                content_hash=content_hash,
+                action_hash=action_hash,
+            )
+            return result
+
+    def physically_delete_artifact(
+        self,
+        artifact_id: str,
+        *,
+        capability: str,
+    ) -> ArtifactRetentionState:
+        self._authorize_physical_mutation(
+            capability,
+            resource_id=artifact_id,
+            operation="physical_delete",
+        )
+        blob_store = self._artifact_blob_store()
+        with blob_store.mutation_guard():
+            current = self.store.get_artifact_retention_state(artifact_id)
+            if current.lifecycle is not RetentionLifecycle.TRASHED:
+                raise ConflictError("Artifact must be in recoverable trash before deletion")
+            policy = self.store.get_retention_policy(current.policy_ref)
+            if not policy.allow_physical_delete:
+                raise PermissionError("retention policy forbids physical deletion")
+            if self.store.artifact_deletion_blockers(artifact_id):
+                raise ConflictError("Artifact has protected retention references")
+            artifact = self.store.get_artifact(artifact_id)
+            blob_store.delete_verified(artifact.content_hash, artifact.size_bytes)
+            now = self._next_retention_time(current)
+            updated = current.model_copy(
+                update={
+                    "lifecycle": RetentionLifecycle.DELETED,
+                    "deleted_at": now,
+                    "updated_at": now,
+                }
+            )
+            return self._save_retention_state(
+                current,
+                updated,
+                event_type="retention.physical_delete_completed",
+                action="artifact.physical_delete",
+            )
+
+    def reconcile_physically_deleted_artifact(
+        self,
+        artifact_id: str,
+        *,
+        prior_command_id: str,
+        prior_action_hash: str,
+        capability: str,
+    ) -> ArtifactRetentionState:
+        self._authorize_physical_mutation(
+            capability,
+            resource_id=artifact_id,
+            operation="reconcile_delete",
+            operation_scope_hash=prior_command_id,
+        )
+        receipt = self.store.get_command_execution(prior_command_id)
+        if (
+            receipt.status is not CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED
+            or receipt.action_hash != prior_action_hash
+        ):
+            raise ConflictError("physical deletion receipt is not eligible for reconciliation")
+        current = self.store.get_artifact_retention_state(artifact_id)
+        if current.lifecycle is not RetentionLifecycle.TRASHED:
+            raise ConflictError("only a trashed Artifact can reconcile missing content")
+        policy = self.store.get_retention_policy(current.policy_ref)
+        if not policy.allow_physical_delete or self.store.artifact_deletion_blockers(artifact_id):
+            raise ConflictError("Artifact is not eligible for physical deletion reconciliation")
+        artifact = self.store.get_artifact(artifact_id)
+        try:
+            self._artifact_blob_store().verify(artifact.content_hash, artifact.size_bytes)
+        except ArtifactNotFoundError:
+            pass
+        else:
+            raise ConflictError("Artifact blob still exists; reconciliation is not deletion")
+        now = self._next_retention_time(current)
+        updated = current.model_copy(
+            update={
+                "lifecycle": RetentionLifecycle.DELETED,
+                "deleted_at": now,
+                "updated_at": now,
+            }
+        )
+        return self.store.update_artifact_retention_state(
+            updated,
+            expected_updated_at=current.updated_at,
+            event_type="retention.physical_delete_outcome_unknown",
+            action_hash=canonical_action_hash(
+                {
+                    "action": "artifact.reconcile_physical_delete",
+                    "artifact_id": artifact_id,
+                    "prior_command_id": prior_command_id,
+                }
+            ),
+            outcome="outcome_unknown",
+        )
+
+    def issue_physical_mutation_capability(
+        self,
+        *,
+        bootstrap_authorization: str,
+        operation: str,
+        resource_id: str,
+        operation_scope_hash: str | None = None,
+        ttl_seconds: int = 120,
+    ) -> str:
+        """Trusted hook only; HTTP routes intentionally never issue this capability."""
+
+        if (
+            not self._physical_delete_enabled
+            or self._physical_delete_authorization is None
+            or not hmac.compare_digest(
+                bootstrap_authorization,
+                self._physical_delete_authorization,
+            )
+        ):
+            raise PermissionError("physical Artifact mutation is disabled or unauthorized")
+        if operation not in {"physical_delete", "repair_orphan", "reconcile_delete"}:
+            raise ValueError("unsupported physical Artifact mutation")
+        if not 1 <= ttl_seconds <= 300:
+            raise ValueError("physical Artifact capability TTL must be at most 300 seconds")
+        return self._artifact_capabilities.issue(
+            artifact_id=resource_id,
+            operation=operation,
+            access_level=ArtifactAccessLevel.NORMAL,
+            ttl_seconds=ttl_seconds,
+            operation_scope_hash=operation_scope_hash,
+        )
+
+    def _authorize_physical_mutation(
+        self,
+        capability: str,
+        *,
+        resource_id: str,
+        operation: str,
+        operation_scope_hash: str | None = None,
+    ) -> None:
+        if not self._physical_delete_enabled:
+            raise PermissionError("physical Artifact mutation is disabled")
+        self._artifact_capabilities.verify(
+            capability,
+            artifact_id=resource_id,
+            operation=operation,
+            sensitivity=ArtifactSensitivity.NORMAL,
+            operation_scope_hash=operation_scope_hash,
+        )
+
+    def record_cache_observation(self, observation: CacheObservation) -> CacheObservation:
+        """Persist bounded facts only; content, provider keys, and secrets are absent."""
+
+        sanitized = observation.model_copy(
+            update={
+                "provider": redact_public_text(observation.provider, max_chars=200),
+                "model": redact_public_text(observation.model, max_chars=300),
+                "request_id": (
+                    None
+                    if observation.request_id is None
+                    else redact_public_text(observation.request_id, max_chars=300)
+                ),
+                "cache_scope": (
+                    None
+                    if observation.cache_scope is None
+                    else redact_public_text(observation.cache_scope, max_chars=300)
+                ),
+                "breakpoint_id": (
+                    None
+                    if observation.breakpoint_id is None
+                    else redact_public_text(observation.breakpoint_id, max_chars=300)
+                ),
+            }
+        )
+        return self.store.add_cache_observation(sanitized)
+
+    def list_cache_observations(
+        self,
+        *,
+        context_revision_id: str | None = None,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[CacheObservation]:
+        return self.store.list_cache_observations(
+            context_revision_id=context_revision_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+
+    def _record_runtime_cache_observation(
+        self,
+        session: Session,
+        event: RuntimeEvent,
+    ) -> CacheObservation:
+        usage = event.payload.get("usage")
+        usage_dict = usage if isinstance(usage, dict) else {}
+        cache_read_tokens = usage_dict.get("cache_read_tokens")
+        if not isinstance(cache_read_tokens, int) or isinstance(cache_read_tokens, bool):
+            cache_read_tokens = None
+        hit_status = (
+            CacheHitStatus.UNKNOWN
+            if cache_read_tokens is None
+            else CacheHitStatus.HIT
+            if cache_read_tokens > 0
+            else CacheHitStatus.MISS
+        )
+        revision_id = event.payload.get("context_revision_id")
+        context_revision_id = revision_id if isinstance(revision_id, str) else None
+        stable_prefix_hash: str | None = None
+        if context_revision_id is not None:
+            revision = self.store.get_context_revision(context_revision_id)
+            eligible_hashes = [
+                block.content_hash for block in revision.blocks if block.cache_eligible
+            ]
+            if eligible_hashes:
+                stable_prefix_hash = canonical_action_hash(
+                    {"cache_eligible_prefix": eligible_hashes}
+                )
+
+        def optional_nonnegative_int(name: str) -> int | None:
+            value = usage_dict.get(name)
+            return (
+                value
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                else None
+            )
+
+        request_id = event.payload.get("provider_request_id")
+        return self.record_cache_observation(
+            CacheObservation(
+                provider=type(self.provider).__name__,
+                model=session.role_snapshot.model_id,
+                request_id=request_id if isinstance(request_id, str) else None,
+                context_revision_id=context_revision_id,
+                hit_status=hit_status,
+                prompt_tokens=optional_nonnegative_int("prompt_tokens"),
+                completion_tokens=optional_nonnegative_int("completion_tokens"),
+                cache_read_tokens=cache_read_tokens,
+                cache_write_tokens=optional_nonnegative_int("cache_write_tokens"),
+                stable_prefix_hash=stable_prefix_hash,
+                invalidation_reason=(
+                    None
+                    if hit_status is CacheHitStatus.HIT
+                    else "provider_reported"
+                    if hit_status is CacheHitStatus.MISS
+                    else "unknown"
+                ),
+            )
         )
 
     def _artifact_blob_store(self) -> ArtifactStore:
@@ -1702,6 +2465,20 @@ class ApplicationService:
 
                 runtime_event = self._persist_runtime_event(session.id, agent.id, runtime_event)
                 yield runtime_event
+                if runtime_event.event_type == "model.completed":
+                    try:
+                        self._record_runtime_cache_observation(session, runtime_event)
+                    except Exception as exc:
+                        observation_failure = self._persist_runtime_event(
+                            session.id,
+                            agent.id,
+                            RuntimeEvent(
+                                event_type="cache.observation_failed",
+                                turn=runtime_event.turn,
+                                payload={"error_type": type(exc).__name__},
+                            ),
+                        )
+                        yield observation_failure
         except asyncio.CancelledError:
             final_status = AgentStatus.CANCELLED
             cancel_event = RuntimeEvent(

@@ -40,6 +40,28 @@ class ArtifactSourceType(str, Enum):
     EVALUATION_RUN = "evaluation_run"
 
 
+class ArtifactAccessLevel(str, Enum):
+    """Explicit caller capability used for Artifact content operations."""
+
+    NORMAL = "normal"
+    SENSITIVE = "sensitive"
+    RESTRICTED = "restricted"
+
+
+class RetentionLifecycle(str, Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    DELETION_SCHEDULED = "deletion_scheduled"
+    TRASHED = "trashed"
+    DELETED = "deleted"
+
+
+class CacheHitStatus(str, Enum):
+    HIT = "hit"
+    MISS = "miss"
+    UNKNOWN = "unknown"
+
+
 class ItemType(str, Enum):
     USER_MESSAGE = "user_message"
     AGENT_MESSAGE = "agent_message"
@@ -228,3 +250,133 @@ class Artifact(BaseModel):
         ):
             raise ValueError("artifact source refs must be unique")
         return self
+
+
+class RetentionPolicy(BaseModel):
+    """Named object-level policy. It never performs deletion by itself."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1, max_length=300)
+    object_type: Literal["artifact"] = "artifact"
+    grace_period_seconds: int = Field(default=86_400, ge=0, le=31_536_000)
+    allow_physical_delete: bool = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ArtifactRetentionState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact_id: str = Field(min_length=1, max_length=300)
+    policy_ref: str = Field(min_length=1, max_length=300)
+    lifecycle: RetentionLifecycle = RetentionLifecycle.ACTIVE
+    pinned: bool = False
+    scheduled_deletion_at: datetime | None = None
+    trashed_at: datetime | None = None
+    deleted_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_lifecycle_timestamps(self) -> ArtifactRetentionState:
+        if self.lifecycle is RetentionLifecycle.DELETION_SCHEDULED:
+            if self.scheduled_deletion_at is None:
+                raise ValueError("scheduled deletion requires a due time")
+        elif self.lifecycle is RetentionLifecycle.TRASHED:
+            if self.scheduled_deletion_at is None or self.trashed_at is None:
+                raise ValueError("trashed Artifact requires schedule and trash timestamps")
+        elif self.lifecycle is RetentionLifecycle.DELETED:
+            if (
+                self.scheduled_deletion_at is None
+                or self.trashed_at is None
+                or self.deleted_at is None
+            ):
+                raise ValueError(
+                    "deleted Artifact requires schedule, trash, and deletion timestamps"
+                )
+        elif any(
+            timestamp is not None
+            for timestamp in (self.scheduled_deletion_at, self.trashed_at, self.deleted_at)
+        ):
+            raise ValueError("active or archived Artifact cannot carry deletion timestamps")
+        if self.pinned and self.lifecycle in {
+            RetentionLifecycle.DELETION_SCHEDULED,
+            RetentionLifecycle.TRASHED,
+            RetentionLifecycle.DELETED,
+        }:
+            raise ValueError("a pinned Artifact cannot be in a deletion lifecycle")
+        return self
+
+
+class ArtifactAuditFinding(BaseModel):
+    """Path-free immutable fact found by a read-only blob/database audit."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    finding_type: Literal[
+        "orphan_blob",
+        "missing_blob",
+        "corrupt_blob",
+        "unsafe_entry",
+        "purged_blob_present",
+    ]
+    content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    artifact_id: str | None = Field(default=None, max_length=300)
+    expected_size_bytes: int | None = Field(default=None, ge=0)
+    observed_size_bytes: int | None = Field(default=None, ge=0)
+    finding_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repairable: bool = False
+
+
+class ArtifactAuditReport(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(default_factory=lambda: new_id("artifact_audit"))
+    findings: tuple[ArtifactAuditFinding, ...] = ()
+    scanned_database_references: int = Field(ge=0)
+    scanned_blobs: int = Field(ge=0)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ArtifactRepairResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(default_factory=lambda: new_id("artifact_repair"))
+    finding_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    action: Literal["delete_orphan_blob"]
+    repaired: bool
+    outcome: Literal["completed", "refused", "outcome_unknown"]
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class CacheObservation(BaseModel):
+    """Provider cache facts only; no prompt, response, key, or secret value."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(default_factory=lambda: new_id("cache_observation"))
+    cursor: int | None = Field(default=None, ge=1)
+    provider: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=300)
+    request_id: str | None = Field(default=None, max_length=300)
+    context_revision_id: str | None = Field(default=None, max_length=300)
+    cache_scope: str | None = Field(default=None, max_length=300)
+    breakpoint_id: str | None = Field(default=None, max_length=300)
+    hit_status: CacheHitStatus = CacheHitStatus.UNKNOWN
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    cache_read_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
+    cache_key_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    stable_prefix_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    invalidation_reason: (
+        Literal[
+            "provider_reported",
+            "prefix_changed",
+            "ttl_expired",
+            "model_changed",
+            "scope_changed",
+            "unknown",
+        ]
+        | None
+    ) = None
+    created_at: datetime = Field(default_factory=utc_now)

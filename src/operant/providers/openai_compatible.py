@@ -93,6 +93,7 @@ class OpenAICompatibleProvider:
         tool_buffers: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
         usage: ModelUsage | None = None
+        provider_request_id: str | None = None
 
         try:
             async with (
@@ -115,14 +116,25 @@ class OpenAICompatibleProvider:
                     if data == "[DONE]":
                         break
                     chunk: Any = json.loads(data)
+                    raw_request_id = chunk.get("id") if isinstance(chunk, dict) else None
+                    if isinstance(raw_request_id, str) and len(raw_request_id) <= 300:
+                        provider_request_id = raw_request_id
                     raw_usage = chunk.get("usage") if isinstance(chunk, dict) else None
                     if isinstance(raw_usage, dict):
+                        prompt_details = raw_usage.get("prompt_tokens_details")
+                        details = prompt_details if isinstance(prompt_details, dict) else {}
                         usage = ModelUsage(
                             prompt_tokens=self._nonnegative_int(raw_usage.get("prompt_tokens")),
                             completion_tokens=self._nonnegative_int(
                                 raw_usage.get("completion_tokens")
                             ),
                             total_tokens=self._nonnegative_int(raw_usage.get("total_tokens")),
+                            cache_read_tokens=self._nonnegative_int(details.get("cached_tokens")),
+                            cache_write_tokens=self._nonnegative_int(
+                                details.get("cache_write_tokens")
+                                if "cache_write_tokens" in details
+                                else raw_usage.get("cache_creation_input_tokens")
+                            ),
                         )
                     choices = chunk.get("choices") if isinstance(chunk, dict) else None
                     if not isinstance(choices, list) or not choices:
@@ -158,6 +170,7 @@ class OpenAICompatibleProvider:
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
                 usage=usage,
+                provider_request_id=provider_request_id,
             ),
         )
 

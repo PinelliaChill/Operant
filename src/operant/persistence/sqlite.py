@@ -79,10 +79,14 @@ from operant.domain.threads import (
     ApprovalLinkPayload,
     Artifact,
     ArtifactRefPayload,
+    ArtifactRepairResult,
+    ArtifactRetentionState,
     ArtifactSourceRef,
     ArtifactSourceType,
+    CacheObservation,
     ConversationThread,
     Item,
+    RetentionPolicy,
     ThreadLegacyRef,
     ThreadStatus,
     ToolCallPayload,
@@ -216,6 +220,7 @@ class SQLiteStore:
         4: "dd860b7b4b448ab4296c1e7803a0fcb90a1e5f27015066916cf871e455373f1c",
         5: "dc6ce273aa869446a520af09fb19335369dab273ffd38789d38298356e5d9df6",
         6: "e12f7993df336c97f2a97532615abfcda457bfba4b10d902223634417e59d373",
+        7: "b8516d3a7deec9a93867c45f323992238b17968829001c6af2cf61831fe70df4",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -224,6 +229,7 @@ class SQLiteStore:
         4: "7a787a9ce4262293dfd5a0ad524f7f50c245722abef763a64ea82a2eaed1fc14",
         5: "ec6dad28422980314a01fa56a1a2d28e1b2bee4744eb76d28240124a4a112490",
         6: "5430fb415059679846e3f0c18a3b6c998573a053b81c1b4ce4a67719f6f60f66",
+        7: "15496ba9e4cde4e1dd622abdc141ca2dc63f5b155c3b2eb57a24472c9df3e06b",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -470,6 +476,12 @@ class SQLiteStore:
                 self._upgrade_v6,
                 self._downgrade_v6,
             ),
+            build(
+                7,
+                "phase1c_artifact_retention_cache_observation",
+                self._upgrade_v7,
+                self._downgrade_v7,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -680,6 +692,8 @@ class SQLiteStore:
             self._validate_v5_schema_shape(connection)
         elif migration.version == 6:
             self._validate_v6_schema_shape(connection)
+        elif migration.version == 7:
+            self._validate_v7_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -1090,6 +1104,58 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v7_required_columns() -> dict[str, set[str]]:
+        return {
+            "retention_policies": {
+                "id",
+                "object_type",
+                "grace_period_seconds",
+                "allow_physical_delete",
+                "created_at",
+            },
+            "artifact_retention_states": {
+                "artifact_id",
+                "policy_ref",
+                "lifecycle",
+                "pinned",
+                "scheduled_deletion_at",
+                "trashed_at",
+                "deleted_at",
+                "updated_at",
+            },
+            "artifact_retention_audit_events": {
+                "sequence",
+                "id",
+                "artifact_id",
+                "event_type",
+                "content_hash",
+                "finding_hash",
+                "action_hash",
+                "outcome",
+                "created_at",
+            },
+            "cache_observations": {
+                "sequence",
+                "id",
+                "provider",
+                "model",
+                "request_id",
+                "context_revision_id",
+                "cache_scope",
+                "breakpoint_id",
+                "hit_status",
+                "prompt_tokens",
+                "completion_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "cache_key_hash",
+                "stable_prefix_hash",
+                "invalidation_reason",
+                "created_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -1107,6 +1173,8 @@ class SQLiteStore:
             tables.update(cls._v5_required_columns())
         if version >= 6:
             tables.update(cls._v6_required_columns())
+        if version >= 7:
+            tables.update(cls._v7_required_columns())
         return tables
 
     @staticmethod
@@ -1153,6 +1221,24 @@ class SQLiteStore:
                 ("prompt_blocks", "token_estimate"),
                 ("reference_bindings", "user_text"),
                 ("reference_bindings", "max_tokens"),
+                ("artifact_retention_states", "scheduled_deletion_at"),
+                ("artifact_retention_states", "trashed_at"),
+                ("artifact_retention_states", "deleted_at"),
+                ("artifact_retention_audit_events", "artifact_id"),
+                ("artifact_retention_audit_events", "content_hash"),
+                ("artifact_retention_audit_events", "finding_hash"),
+                ("artifact_retention_audit_events", "action_hash"),
+                ("cache_observations", "request_id"),
+                ("cache_observations", "context_revision_id"),
+                ("cache_observations", "cache_scope"),
+                ("cache_observations", "breakpoint_id"),
+                ("cache_observations", "prompt_tokens"),
+                ("cache_observations", "completion_tokens"),
+                ("cache_observations", "cache_read_tokens"),
+                ("cache_observations", "cache_write_tokens"),
+                ("cache_observations", "cache_key_hash"),
+                ("cache_observations", "stable_prefix_hash"),
+                ("cache_observations", "invalidation_reason"),
             }
         )
 
@@ -1184,6 +1270,13 @@ class SQLiteStore:
                 "token_estimate",
                 "cache_eligible",
                 "max_tokens",
+                "grace_period_seconds",
+                "allow_physical_delete",
+                "pinned",
+                "prompt_tokens",
+                "completion_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
             }
         )
 
@@ -1328,6 +1421,25 @@ class SQLiteStore:
                         if version >= 6
                         else {}
                     ),
+                    **(
+                        {
+                            "retention_policies": [
+                                "object_type = 'artifact'",
+                                "grace_period_seconds BETWEEN 0 AND 31536000",
+                                "allow_physical_delete IN (0, 1)",
+                            ],
+                            "artifact_retention_states": [
+                                "lifecycle IN ('active', 'archived', "
+                                "'deletion_scheduled', 'trashed', 'deleted')",
+                                "pinned IN (0, 1)",
+                            ],
+                            "cache_observations": [
+                                "hit_status IN ('hit', 'miss', 'unknown')",
+                            ],
+                        }
+                        if version >= 7
+                        else {}
+                    ),
                 }
                 if version >= 3
                 else {}
@@ -1363,6 +1475,8 @@ class SQLiteStore:
                 store._upgrade_v5(connection)
             if version >= 6:
                 store._upgrade_v6(connection)
+            if version >= 7:
+                store._upgrade_v7(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -1451,6 +1565,15 @@ class SQLiteStore:
                     "reference_bindings": ("revision_id", "position"),
                 }
             )
+        if version >= 7:
+            contract.update(
+                {
+                    "retention_policies": ("id",),
+                    "artifact_retention_states": ("artifact_id",),
+                    "artifact_retention_audit_events": ("sequence",),
+                    "cache_observations": ("sequence",),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1511,6 +1634,13 @@ class SQLiteStore:
                         ("id",),
                         ("revision_id", "ref_type", "resolved_target"),
                     ),
+                }
+            )
+        if version >= 7:
+            contract.update(
+                {
+                    "artifact_retention_audit_events": (("id",),),
+                    "cache_observations": (("id",),),
                 }
             )
         return contract
@@ -1621,6 +1751,26 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 7:
+            contract.update(
+                {
+                    "artifact_retention_states": (
+                        ("artifact_id", "artifacts", "id", "NO ACTION"),
+                        ("policy_ref", "retention_policies", "id", "NO ACTION"),
+                    ),
+                    "artifact_retention_audit_events": (
+                        ("artifact_id", "artifacts", "id", "NO ACTION"),
+                    ),
+                    "cache_observations": (
+                        (
+                            "context_revision_id",
+                            "context_revisions",
+                            "id",
+                            "NO ACTION",
+                        ),
+                    ),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1708,6 +1858,23 @@ class SQLiteStore:
                     "idx_reference_bindings_target": ("ref_type", "resolved_target"),
                 }
             )
+        if version >= 7:
+            indexes.update(
+                {
+                    "idx_artifact_retention_states_lifecycle_due": (
+                        "lifecycle",
+                        "scheduled_deletion_at",
+                    ),
+                    "idx_artifact_retention_audit_artifact_sequence": (
+                        "artifact_id",
+                        "sequence",
+                    ),
+                    "idx_cache_observations_context_sequence": (
+                        "context_revision_id",
+                        "sequence",
+                    ),
+                }
+            )
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -1793,6 +1960,9 @@ class SQLiteStore:
 
     def _validate_v6_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=6)
+
+    def _validate_v7_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=7)
 
     def _validate_schema_contract(
         self,
@@ -4344,6 +4514,232 @@ class SQLiteStore:
             """,
         )
 
+    def _upgrade_v7(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE retention_policies (
+                id TEXT PRIMARY KEY,
+                object_type TEXT NOT NULL CHECK (object_type = 'artifact'),
+                grace_period_seconds INTEGER NOT NULL CHECK (
+                    grace_period_seconds BETWEEN 0 AND 31536000
+                ),
+                allow_physical_delete INTEGER NOT NULL CHECK (
+                    allow_physical_delete IN (0, 1)
+                ),
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE artifact_retention_states (
+                artifact_id TEXT PRIMARY KEY,
+                policy_ref TEXT NOT NULL,
+                lifecycle TEXT NOT NULL CHECK (
+                    lifecycle IN (
+                        'active', 'archived', 'deletion_scheduled', 'trashed', 'deleted'
+                    )
+                ),
+                pinned INTEGER NOT NULL CHECK (pinned IN (0, 1)),
+                scheduled_deletion_at TEXT,
+                trashed_at TEXT,
+                deleted_at TEXT,
+                updated_at TEXT NOT NULL,
+                CHECK (
+                    (lifecycle IN ('active', 'archived')
+                        AND scheduled_deletion_at IS NULL
+                        AND trashed_at IS NULL
+                        AND deleted_at IS NULL)
+                    OR (lifecycle = 'deletion_scheduled'
+                        AND pinned = 0
+                        AND scheduled_deletion_at IS NOT NULL
+                        AND trashed_at IS NULL
+                        AND deleted_at IS NULL)
+                    OR (lifecycle = 'trashed'
+                        AND pinned = 0
+                        AND scheduled_deletion_at IS NOT NULL
+                        AND trashed_at IS NOT NULL
+                        AND deleted_at IS NULL)
+                    OR (lifecycle = 'deleted'
+                        AND pinned = 0
+                        AND scheduled_deletion_at IS NOT NULL
+                        AND trashed_at IS NOT NULL
+                        AND deleted_at IS NOT NULL)
+                ),
+                FOREIGN KEY (artifact_id) REFERENCES artifacts(id),
+                FOREIGN KEY (policy_ref) REFERENCES retention_policies(id)
+            );
+
+            CREATE INDEX idx_artifact_retention_states_lifecycle_due
+                ON artifact_retention_states(lifecycle, scheduled_deletion_at);
+
+            INSERT INTO retention_policies(
+                id, object_type, grace_period_seconds, allow_physical_delete, created_at
+            )
+            SELECT retention_policy_ref, 'artifact', 86400, 0, MIN(created_at)
+            FROM artifacts GROUP BY retention_policy_ref;
+
+            INSERT INTO artifact_retention_states(
+                artifact_id, policy_ref, lifecycle, pinned, scheduled_deletion_at,
+                trashed_at, deleted_at, updated_at
+            )
+            SELECT id, retention_policy_ref, 'active', 0, NULL, NULL, NULL, created_at
+            FROM artifacts;
+
+            CREATE TABLE artifact_retention_audit_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                artifact_id TEXT,
+                event_type TEXT NOT NULL CHECK (
+                    event_type IN (
+                        'retention.pin_changed', 'retention.archived',
+                        'retention.deletion_scheduled', 'retention.trashed',
+                        'retention.restored', 'retention.physical_delete_completed',
+                        'retention.physical_delete_outcome_unknown',
+                        'artifact.audit.finding', 'artifact.repair.completed',
+                        'artifact.repair.refused', 'artifact.repair.outcome_unknown'
+                    )
+                ),
+                content_hash TEXT CHECK (
+                    content_hash IS NULL OR (
+                        length(content_hash) = 64
+                        AND content_hash NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                finding_hash TEXT CHECK (
+                    finding_hash IS NULL OR (
+                        length(finding_hash) = 64
+                        AND finding_hash NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                action_hash TEXT CHECK (
+                    action_hash IS NULL OR (
+                        length(action_hash) = 64
+                        AND action_hash NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                outcome TEXT NOT NULL CHECK (
+                    outcome IN ('observed', 'completed', 'refused', 'outcome_unknown')
+                ),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts(id)
+            );
+
+            CREATE INDEX idx_artifact_retention_audit_artifact_sequence
+                ON artifact_retention_audit_events(artifact_id, sequence);
+
+            CREATE TABLE cache_observations (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                provider TEXT NOT NULL CHECK (length(provider) BETWEEN 1 AND 200),
+                model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 300),
+                request_id TEXT CHECK (request_id IS NULL OR length(request_id) <= 300),
+                context_revision_id TEXT,
+                cache_scope TEXT CHECK (cache_scope IS NULL OR length(cache_scope) <= 300),
+                breakpoint_id TEXT CHECK (breakpoint_id IS NULL OR length(breakpoint_id) <= 300),
+                hit_status TEXT NOT NULL CHECK (hit_status IN ('hit', 'miss', 'unknown')),
+                prompt_tokens INTEGER CHECK (prompt_tokens IS NULL OR prompt_tokens >= 0),
+                completion_tokens INTEGER CHECK (
+                    completion_tokens IS NULL OR completion_tokens >= 0
+                ),
+                cache_read_tokens INTEGER CHECK (
+                    cache_read_tokens IS NULL OR cache_read_tokens >= 0
+                ),
+                cache_write_tokens INTEGER CHECK (
+                    cache_write_tokens IS NULL OR cache_write_tokens >= 0
+                ),
+                cache_key_hash TEXT CHECK (
+                    cache_key_hash IS NULL OR (
+                        length(cache_key_hash) = 64
+                        AND cache_key_hash NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                stable_prefix_hash TEXT CHECK (
+                    stable_prefix_hash IS NULL OR (
+                        length(stable_prefix_hash) = 64
+                        AND stable_prefix_hash NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                invalidation_reason TEXT CHECK (
+                    invalidation_reason IS NULL OR invalidation_reason IN (
+                        'provider_reported', 'prefix_changed', 'ttl_expired',
+                        'model_changed', 'scope_changed', 'unknown'
+                    )
+                ),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (context_revision_id) REFERENCES context_revisions(id)
+            );
+
+            CREATE INDEX idx_cache_observations_context_sequence
+                ON cache_observations(context_revision_id, sequence);
+
+            CREATE TRIGGER retention_policies_no_update
+            BEFORE UPDATE ON retention_policies
+            BEGIN
+                SELECT RAISE(ABORT, 'retention policies are immutable');
+            END;
+
+            CREATE TRIGGER retention_policies_no_delete
+            BEFORE DELETE ON retention_policies
+            BEGIN
+                SELECT RAISE(ABORT, 'retention policies are immutable');
+            END;
+
+            CREATE TRIGGER artifact_retention_audit_events_no_update
+            BEFORE UPDATE ON artifact_retention_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Artifact retention audit is append-only');
+            END;
+
+            CREATE TRIGGER artifact_retention_audit_events_no_delete
+            BEFORE DELETE ON artifact_retention_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Artifact retention audit is append-only');
+            END;
+
+            CREATE TRIGGER cache_observations_no_update
+            BEFORE UPDATE ON cache_observations
+            BEGIN
+                SELECT RAISE(ABORT, 'CacheObservation is append-only');
+            END;
+
+            CREATE TRIGGER cache_observations_no_delete
+            BEFORE DELETE ON cache_observations
+            BEGIN
+                SELECT RAISE(ABORT, 'CacheObservation is append-only');
+            END;
+            """,
+        )
+
+    def _downgrade_v7(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM retention_policies)
+                + (SELECT COUNT(*) FROM artifact_retention_states)
+                + (SELECT COUNT(*) FROM artifact_retention_audit_events)
+                + (SELECT COUNT(*) FROM cache_observations) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back Phase 1C tables while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER cache_observations_no_delete;
+            DROP TRIGGER cache_observations_no_update;
+            DROP TRIGGER artifact_retention_audit_events_no_delete;
+            DROP TRIGGER artifact_retention_audit_events_no_update;
+            DROP TRIGGER retention_policies_no_delete;
+            DROP TRIGGER retention_policies_no_update;
+            DROP INDEX idx_cache_observations_context_sequence;
+            DROP TABLE cache_observations;
+            DROP INDEX idx_artifact_retention_audit_artifact_sequence;
+            DROP TABLE artifact_retention_audit_events;
+            DROP INDEX idx_artifact_retention_states_lifecycle_due;
+            DROP TABLE artifact_retention_states;
+            DROP TABLE retention_policies;
+            """,
+        )
+
     def _downgrade_v6(self, connection: sqlite3.Connection) -> None:
         populated = connection.execute(
             """
@@ -5543,6 +5939,7 @@ class SQLiteStore:
                     or int(blob_row["size_bytes"]) != artifact.size_bytes
                 ):
                     raise ConflictError("artifact blob metadata is inconsistent")
+                self._ensure_artifact_retention_projection(connection, existing)
                 return existing, False
 
             blob_row = connection.execute(
@@ -5609,7 +6006,9 @@ class SQLiteStore:
                 (artifact.id,),
             ).fetchone()
             assert row is not None
-            return self._artifact_from_row(connection, row), True
+            registered = self._artifact_from_row(connection, row)
+            self._ensure_artifact_retention_projection(connection, registered)
+            return registered, True
 
     def get_artifact(self, artifact_id: str) -> Artifact:
         with self._connect() as connection:
@@ -5666,6 +6065,472 @@ class SQLiteStore:
         if row is None:
             raise NotFoundError("artifact blob metadata not found")
         return {"storage_key": str(row["storage_key"]), "size_bytes": int(row["size_bytes"])}
+
+    @staticmethod
+    def _ensure_artifact_retention_projection(
+        connection: sqlite3.Connection,
+        artifact: Artifact,
+    ) -> None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'artifact_retention_states'"
+            ).fetchone()
+            is None
+        ):
+            return
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO retention_policies(
+                id, object_type, grace_period_seconds, allow_physical_delete, created_at
+            ) VALUES (?, 'artifact', 86400, 0, ?)
+            """,
+            (artifact.retention_policy_ref, artifact.created_at.isoformat()),
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO artifact_retention_states(
+                artifact_id, policy_ref, lifecycle, pinned, scheduled_deletion_at,
+                trashed_at, deleted_at, updated_at
+            ) VALUES (?, ?, 'active', 0, NULL, NULL, NULL, ?)
+            """,
+            (
+                artifact.id,
+                artifact.retention_policy_ref,
+                artifact.created_at.isoformat(),
+            ),
+        )
+
+    def create_retention_policy(self, policy: RetentionPolicy) -> RetentionPolicy:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM retention_policies WHERE id = ?", (policy.id,)
+            ).fetchone()
+            if existing is not None:
+                current = self._retention_policy_from_row(existing)
+                if current != policy:
+                    raise ConflictError("retention policy already exists with another contract")
+                return current
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO retention_policies(
+                        id, object_type, grace_period_seconds,
+                        allow_physical_delete, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        policy.id,
+                        policy.object_type,
+                        policy.grace_period_seconds,
+                        int(policy.allow_physical_delete),
+                        policy.created_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("retention policy is invalid") from exc
+            return policy
+
+    def get_retention_policy(self, policy_id: str) -> RetentionPolicy:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM retention_policies WHERE id = ?", (policy_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"retention policy not found: {policy_id}")
+        return self._retention_policy_from_row(row)
+
+    def get_artifact_retention_state(self, artifact_id: str) -> ArtifactRetentionState:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM artifact_retention_states WHERE artifact_id = ?",
+                (artifact_id,),
+            ).fetchone()
+            if row is None:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM artifacts WHERE id = ?", (artifact_id,)
+                    ).fetchone()
+                    is None
+                ):
+                    raise NotFoundError(f"artifact not found: {artifact_id}")
+                raise ConflictError("Artifact retention projection is missing")
+        return self._artifact_retention_state_from_row(row)
+
+    def update_artifact_retention_state(
+        self,
+        state: ArtifactRetentionState,
+        *,
+        expected_updated_at: datetime,
+        event_type: str,
+        action_hash: str,
+        outcome: str = "completed",
+    ) -> ArtifactRetentionState:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                """
+                UPDATE artifact_retention_states SET
+                    lifecycle = ?, pinned = ?, scheduled_deletion_at = ?,
+                    trashed_at = ?, deleted_at = ?, updated_at = ?
+                WHERE artifact_id = ? AND updated_at = ? AND policy_ref = ?
+                """,
+                (
+                    state.lifecycle.value,
+                    int(state.pinned),
+                    None
+                    if state.scheduled_deletion_at is None
+                    else state.scheduled_deletion_at.isoformat(),
+                    None if state.trashed_at is None else state.trashed_at.isoformat(),
+                    None if state.deleted_at is None else state.deleted_at.isoformat(),
+                    state.updated_at.isoformat(),
+                    state.artifact_id,
+                    expected_updated_at.isoformat(),
+                    state.policy_ref,
+                ),
+            ).rowcount
+            if updated != 1:
+                raise ConflictError("Artifact retention state changed concurrently")
+            artifact = connection.execute(
+                "SELECT content_hash FROM artifacts WHERE id = ?", (state.artifact_id,)
+            ).fetchone()
+            assert artifact is not None
+            self._append_artifact_audit_event_on_connection(
+                connection,
+                artifact_id=state.artifact_id,
+                event_type=event_type,
+                content_hash=str(artifact["content_hash"]),
+                action_hash=action_hash,
+                outcome=outcome,
+            )
+            row = connection.execute(
+                "SELECT * FROM artifact_retention_states WHERE artifact_id = ?",
+                (state.artifact_id,),
+            ).fetchone()
+            assert row is not None
+            return self._artifact_retention_state_from_row(row)
+
+    def artifact_deletion_blockers(self, artifact_id: str) -> tuple[str, ...]:
+        """Return conservative normalized references; unknown evidence fails closed."""
+
+        with self._connect() as connection:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM artifacts WHERE id = ?", (artifact_id,)
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError(f"artifact not found: {artifact_id}")
+            blockers: list[str] = []
+            if (
+                connection.execute(
+                    "SELECT 1 FROM artifact_source_refs WHERE artifact_id = ? LIMIT 1",
+                    (artifact_id,),
+                ).fetchone()
+                is not None
+            ):
+                blockers.append("source_reference")
+            if (
+                connection.execute(
+                    """
+                SELECT 1 FROM items
+                WHERE item_type IN ('artifact_ref', 'tool_result_ref')
+                    AND json_extract(body, '$.payload.artifact_id') = ? LIMIT 1
+                """,
+                    (artifact_id,),
+                ).fetchone()
+                is not None
+            ):
+                blockers.append("canonical_history")
+            if (
+                connection.execute(
+                    """
+                SELECT 1 FROM context_revisions
+                WHERE EXISTS (
+                    SELECT 1 FROM json_each(artifact_refs_json) WHERE value = ?
+                ) OR EXISTS (
+                    SELECT 1 FROM json_each(tool_result_stubs_json)
+                    WHERE json_extract(value, '$.artifact_id') = ?
+                ) LIMIT 1
+                """,
+                    (artifact_id, artifact_id),
+                ).fetchone()
+                is not None
+            ):
+                blockers.append("context_revision")
+            if (
+                connection.execute(
+                    """
+                SELECT 1 FROM compactions, json_tree(compactions.summary_json)
+                WHERE json_tree.type = 'text' AND json_tree.value = ? LIMIT 1
+                """,
+                    (artifact_id,),
+                ).fetchone()
+                is not None
+            ):
+                blockers.append("compaction")
+            if (
+                connection.execute(
+                    """
+                SELECT 1 FROM command_executions
+                WHERE status IN ('in_progress', 'manual_reconcile_required')
+                    AND (
+                        resource_id = ?
+                        OR instr(COALESCE(response_json, ''), ?) > 0
+                    )
+                LIMIT 1
+                """,
+                    (artifact_id, artifact_id),
+                ).fetchone()
+                is not None
+            ):
+                blockers.append("unknown_command_outcome")
+            if (
+                connection.execute(
+                    """
+                SELECT 1 FROM tool_action_receipts
+                WHERE status IN ('in_progress', 'outcome_unknown')
+                    AND instr(COALESCE(result_json, ''), ?) > 0
+                LIMIT 1
+                """,
+                    (artifact_id,),
+                ).fetchone()
+                is not None
+            ):
+                blockers.append("unknown_tool_action_outcome")
+            conservative_scans = (
+                (
+                    "approval",
+                    "approval_requests",
+                    ("detail_summary", "tool_call_id"),
+                ),
+                ("approval_audit", "approval_audit_events", ("body",)),
+                ("session_event", "events", ("body",)),
+                ("session", "sessions", ("body",)),
+                ("agent", "agents", ("body",)),
+                ("workflow_run", "workflow_runs", ("body",)),
+                ("workflow_event", "workflow_run_events", ("body",)),
+                ("evaluation_suite", "evaluation_suites", ("body",)),
+                ("evaluation_run", "evaluation_runs", ("body",)),
+                ("evaluation_result", "evaluation_results", ("body",)),
+                ("evaluation_event", "evaluation_run_events", ("body",)),
+                ("memory", "memory_versions", ("body", "content")),
+            )
+            try:
+                for blocker_name, table, columns in conservative_scans:
+                    predicate = " OR ".join(
+                        f"instr(COALESCE({column}, ''), ?) > 0" for column in columns
+                    )
+                    if (
+                        connection.execute(
+                            f'SELECT 1 FROM "{table}" WHERE {predicate} LIMIT 1',
+                            tuple(artifact_id for _column in columns),
+                        ).fetchone()
+                        is not None
+                    ):
+                        blockers.append(blocker_name)
+            except sqlite3.DatabaseError:
+                blockers.append("reference_scan_failed")
+            blob_row = connection.execute(
+                """
+                SELECT content_hash FROM artifacts WHERE id = ?
+                """,
+                (artifact_id,),
+            ).fetchone()
+            assert blob_row is not None
+            shared_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM artifacts WHERE content_hash = ?",
+                (blob_row["content_hash"],),
+            ).fetchone()
+            if shared_count is None or int(shared_count["count"]) != 1:
+                blockers.append("shared_or_unknown_blob_reference")
+            return tuple(blockers)
+
+    def append_artifact_repair_event(
+        self,
+        result: ArtifactRepairResult,
+        *,
+        content_hash: str,
+        action_hash: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            event_type = f"artifact.repair.{result.outcome}"
+            self._append_artifact_audit_event_on_connection(
+                connection,
+                artifact_id=None,
+                event_type=event_type,
+                content_hash=content_hash,
+                finding_hash=result.finding_hash,
+                action_hash=action_hash,
+                outcome=result.outcome,
+            )
+
+    @staticmethod
+    def _append_artifact_audit_event_on_connection(
+        connection: sqlite3.Connection,
+        *,
+        artifact_id: str | None,
+        event_type: str,
+        outcome: str,
+        content_hash: str | None = None,
+        finding_hash: str | None = None,
+        action_hash: str | None = None,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO artifact_retention_audit_events(
+                id, artifact_id, event_type, content_hash, finding_hash,
+                action_hash, outcome, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id("artifact_audit_event"),
+                artifact_id,
+                event_type,
+                content_hash,
+                finding_hash,
+                action_hash,
+                outcome,
+                utc_now().isoformat(),
+            ),
+        )
+
+    def list_artifact_blob_references(self) -> dict[str, tuple[str, int, str]]:
+        """Return hash -> (artifact id, size, lifecycle) for read-only audit."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT a.content_hash, a.id, a.size_bytes, s.lifecycle
+                FROM artifacts AS a
+                JOIN artifact_retention_states AS s ON s.artifact_id = a.id
+                """
+            ).fetchall()
+        return {
+            str(row["content_hash"]): (
+                str(row["id"]),
+                int(row["size_bytes"]),
+                str(row["lifecycle"]),
+            )
+            for row in rows
+        }
+
+    def add_cache_observation(self, observation: CacheObservation) -> CacheObservation:
+        if observation.cursor is not None:
+            raise ValueError("a new CacheObservation cannot provide a cursor")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                observation.context_revision_id is not None
+                and connection.execute(
+                    "SELECT 1 FROM context_revisions WHERE id = ?",
+                    (observation.context_revision_id,),
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError("CacheObservation ContextRevision not found")
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO cache_observations(
+                        id, provider, model, request_id, context_revision_id,
+                        cache_scope, breakpoint_id, hit_status, prompt_tokens,
+                        completion_tokens, cache_read_tokens, cache_write_tokens,
+                        cache_key_hash, stable_prefix_hash, invalidation_reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        observation.id,
+                        observation.provider,
+                        observation.model,
+                        observation.request_id,
+                        observation.context_revision_id,
+                        observation.cache_scope,
+                        observation.breakpoint_id,
+                        observation.hit_status.value,
+                        observation.prompt_tokens,
+                        observation.completion_tokens,
+                        observation.cache_read_tokens,
+                        observation.cache_write_tokens,
+                        observation.cache_key_hash,
+                        observation.stable_prefix_hash,
+                        observation.invalidation_reason,
+                        observation.created_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("CacheObservation is invalid or already exists") from exc
+            assert cursor is not None
+            return observation.model_copy(update={"cursor": int(cursor)})
+
+    def list_cache_observations(
+        self,
+        *,
+        context_revision_id: str | None = None,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[CacheObservation]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        where = ["sequence > ?"]
+        params: list[Any] = [cursor]
+        if context_revision_id is not None:
+            where.append("context_revision_id = ?")
+            params.append(context_revision_id)
+        params.append(page_limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM cache_observations WHERE {' AND '.join(where)} "
+                "ORDER BY sequence LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._cache_observation_from_row(row) for row in rows]
+
+    @staticmethod
+    def _retention_policy_from_row(row: sqlite3.Row) -> RetentionPolicy:
+        return RetentionPolicy(
+            id=row["id"],
+            object_type=row["object_type"],
+            grace_period_seconds=int(row["grace_period_seconds"]),
+            allow_physical_delete=bool(row["allow_physical_delete"]),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _artifact_retention_state_from_row(row: sqlite3.Row) -> ArtifactRetentionState:
+        return ArtifactRetentionState(
+            artifact_id=row["artifact_id"],
+            policy_ref=row["policy_ref"],
+            lifecycle=row["lifecycle"],
+            pinned=bool(row["pinned"]),
+            scheduled_deletion_at=row["scheduled_deletion_at"],
+            trashed_at=row["trashed_at"],
+            deleted_at=row["deleted_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _cache_observation_from_row(row: sqlite3.Row) -> CacheObservation:
+        return CacheObservation(
+            id=row["id"],
+            cursor=int(row["sequence"]),
+            provider=row["provider"],
+            model=row["model"],
+            request_id=row["request_id"],
+            context_revision_id=row["context_revision_id"],
+            cache_scope=row["cache_scope"],
+            breakpoint_id=row["breakpoint_id"],
+            hit_status=row["hit_status"],
+            prompt_tokens=row["prompt_tokens"],
+            completion_tokens=row["completion_tokens"],
+            cache_read_tokens=row["cache_read_tokens"],
+            cache_write_tokens=row["cache_write_tokens"],
+            cache_key_hash=row["cache_key_hash"],
+            stable_prefix_hash=row["stable_prefix_hash"],
+            invalidation_reason=row["invalidation_reason"],
+            created_at=row["created_at"],
+        )
 
     @staticmethod
     def _validate_cursor_page(after_cursor: int | None, limit: int) -> tuple[int, int]:
