@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -40,6 +41,7 @@ from operant.artifacts import (
     ArtifactValidationError,
 )
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
+from operant.domain.commands import ContextBaselineOperation, SlashCommandKind
 from operant.domain.context import ContextRevision, ReferenceRequest
 from operant.domain.evaluation import EvaluationResult, EvaluationRunEvent, EvaluationSuite
 from operant.domain.memory import MemoryKind
@@ -504,6 +506,59 @@ class SetArtifactPinRequest(BaseModel):
     pinned: bool
 
 
+class InitializeWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace: str = Field(min_length=1, max_length=4_096)
+
+    @field_validator("workspace")
+    @classmethod
+    def require_absolute_workspace(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("workspace must be an absolute path")
+        return value
+
+
+class ContextBaselineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1, max_length=300)
+    thread_id: str = Field(min_length=1, max_length=300)
+    agent_id: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class ReviewCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace: str = Field(min_length=1, max_length=4_096)
+    thread_id: str | None = Field(default=None, min_length=1, max_length=300)
+    reviewer_role_id: str = Field(default="role_reviewer", min_length=1, max_length=300)
+    scope: str = Field(default="working tree", min_length=1, max_length=2_000)
+
+    @field_validator("workspace")
+    @classmethod
+    def require_absolute_workspace(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("workspace must be an absolute path")
+        return value
+
+
+class BTWSidecarRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1, max_length=300)
+    thread_id: str = Field(min_length=1, max_length=300)
+    workspace: str = Field(min_length=1, max_length=4_096)
+    prompt: str = Field(min_length=1, max_length=100_000)
+
+    @field_validator("workspace")
+    @classmethod
+    def require_absolute_workspace(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("workspace must be an absolute path")
+        return value
+
+
 def _safe_evaluation_result_payload(result: EvaluationResult) -> dict[str, Any]:
     """Return a result suitable for CLI/API export, never its local workspace path."""
 
@@ -614,6 +669,19 @@ def _sse_event(
     return f"{event_id}event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _phase1d_audit_payload(event: Any) -> dict[str, Any]:
+    payload = {
+        "cursor": event.cursor,
+        "command_execution_id": event.command_execution_id,
+        "command_kind": event.command_kind.value,
+        "resource_type": event.resource_type,
+        "resource_id": event.resource_id,
+        "created_at": event.created_at.isoformat(),
+    }
+    payload.update(event.detail)
+    return payload
+
+
 MAX_EVENT_CURSOR = 2**63 - 1
 
 
@@ -718,6 +786,14 @@ def _is_sse_replay_route(method: str, path: str) -> bool:
         return True
     if method == "GET" and path.startswith("/v1/threads/") and path.endswith("/items/stream"):
         return True
+    if method == "GET" and path.startswith("/v1/sidecars/btw/") and path.endswith("/events/stream"):
+        return True
+    if (
+        method == "GET"
+        and path.startswith("/v1/command-executions/")
+        and path.endswith("/events/stream")
+    ):
+        return True
     return (
         method == "GET"
         and path.startswith("/v1/evaluations/runs/")
@@ -737,17 +813,78 @@ def _is_event_cursor_query_route(method: str, path: str) -> bool:
         or (path in {"/v1/artifacts", "/v1/cache-observations"})
         or (path.startswith("/v1/threads/") and path.endswith("/items/stream"))
         or (
+            path.startswith("/v1/sidecars/btw/")
+            and (path.endswith("/events") or path.endswith("/events/stream"))
+        )
+        or (
+            path.startswith("/v1/command-executions/")
+            and (path.endswith("/events") or path.endswith("/events/stream"))
+        )
+        or (
             path.startswith("/v1/evaluations/runs/")
             and (path.endswith("/events") or path.endswith("/events/stream"))
         )
     )
 
 
+_FIRST_STREAM_FAILURE_OUTCOMES = {
+    "evaluation.error": (
+        "evaluation_stream_failed",
+        "evaluation stream failed before it was accepted",
+        500,
+        RecoveryAction.MANUAL_RECONCILE,
+    ),
+    "workflow.resume_rejected": (
+        "workflow_resume_rejected",
+        "workflow resume request was rejected",
+        409,
+        RecoveryAction.MANUAL_RECONCILE,
+    ),
+}
+_PHASE1D_STREAM_START_FAILURE_OUTCOMES = {
+    "review.stream_error": {
+        "review_start_not_found": (
+            "review_start_not_found",
+            "Review stream dependencies were not found",
+            404,
+            RecoveryAction.NONE,
+        ),
+        "review_start_validation_failed": (
+            "review_start_validation_failed",
+            "Review stream request is invalid",
+            400,
+            RecoveryAction.NONE,
+        ),
+        "review_start_policy_denied": (
+            "review_start_policy_denied",
+            "Review stream request is not allowed",
+            403,
+            RecoveryAction.NONE,
+        ),
+    },
+    "btw.stream_error": {
+        "btw_start_not_found": (
+            "btw_start_not_found",
+            "BTW Sidecar stream dependencies were not found",
+            404,
+            RecoveryAction.NONE,
+        ),
+        "btw_start_validation_failed": (
+            "btw_start_validation_failed",
+            "BTW Sidecar stream request is invalid",
+            400,
+            RecoveryAction.NONE,
+        ),
+        "btw_start_policy_denied": (
+            "btw_start_policy_denied",
+            "BTW Sidecar stream request is not allowed",
+            403,
+            RecoveryAction.NONE,
+        ),
+    },
+}
 _FAILED_FIRST_STREAM_EVENTS = frozenset(
-    {
-        "evaluation.error",
-        "workflow.resume_rejected",
-    }
+    _FIRST_STREAM_FAILURE_OUTCOMES | _PHASE1D_STREAM_START_FAILURE_OUTCOMES
 )
 _UNKNOWN_FIRST_STREAM_EVENTS = frozenset(
     {
@@ -788,6 +925,46 @@ def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any]] | None:
     return event_type, payload
 
 
+def _phase1d_stream_start_error(kind: str, exc: Exception) -> dict[str, Any]:
+    label = "Review" if kind == "review" else "BTW Sidecar"
+    if isinstance(exc, NotFoundError):
+        suffix = "not_found"
+        message = f"{label} stream dependencies were not found"
+    elif isinstance(exc, PermissionError):
+        suffix = "policy_denied"
+        message = f"{label} stream request is not allowed"
+    else:
+        suffix = "validation_failed"
+        message = f"{label} stream request is invalid"
+    return error_payload(
+        code=f"{kind}_start_{suffix}",
+        message=message,
+        recovery=RecoveryAction.NONE,
+    )
+
+
+def _failed_first_stream_outcome(
+    event_type: str,
+    payload: dict[str, Any],
+) -> tuple[str, str, int, RecoveryAction]:
+    fixed = _FIRST_STREAM_FAILURE_OUTCOMES.get(event_type)
+    if fixed is not None:
+        return fixed
+    variants = _PHASE1D_STREAM_START_FAILURE_OUTCOMES[event_type]
+    error = payload.get("error")
+    error_code = error.get("code") if isinstance(error, dict) else None
+    if isinstance(error_code, str) and error_code in variants:
+        return variants[error_code]
+    prefix = "review" if event_type == "review.stream_error" else "btw"
+    label = "Review" if prefix == "review" else "BTW Sidecar"
+    return (
+        f"{prefix}_start_validation_failed",
+        f"{label} stream request is invalid",
+        400,
+        RecoveryAction.NONE,
+    )
+
+
 def _stream_resource(
     *,
     store: SQLiteStore,
@@ -798,9 +975,13 @@ def _stream_resource(
     cursor = payload.get("cursor")
     durable_cursor = cursor if isinstance(cursor, int) and cursor >= 1 else None
     candidates = (
-        ("workflow", "workflow_run_id", "/v1/tasks/{}/events"),
-        ("evaluation", "evaluation_run_id", "/v1/evaluations/runs/{}/events"),
-        ("session", "session_id", "/v1/sessions/{}/events"),
+        ()
+        if event_type.startswith(("review.", "btw."))
+        else (
+            ("workflow", "workflow_run_id", "/v1/tasks/{}/events"),
+            ("evaluation", "evaluation_run_id", "/v1/evaluations/runs/{}/events"),
+            ("session", "session_id", "/v1/sessions/{}/events"),
+        )
     )
 
     def is_committed(resource_type: str, resource_id: str, cursor: int | None) -> bool:
@@ -837,6 +1018,53 @@ def _stream_resource(
                 durable_cursor
                 if is_committed(resource_type, resource_id, durable_cursor)
                 else None,
+            )
+    if event_type.startswith("btw."):
+        sidecar_run_id = payload.get("sidecar_run_id")
+        if isinstance(sidecar_run_id, str) and 0 < len(sidecar_run_id) <= 300:
+            committed = False
+            if durable_cursor is not None:
+                try:
+                    sidecar_events = store.list_btw_sidecar_events(
+                        sidecar_run_id,
+                        after_cursor=durable_cursor - 1,
+                        limit=1,
+                    )
+                    committed = bool(sidecar_events and sidecar_events[0].cursor == durable_cursor)
+                except (NotFoundError, ValueError):
+                    pass
+            return (
+                "sidecar",
+                sidecar_run_id,
+                f"/v1/sidecars/btw/{quote(sidecar_run_id, safe='')}/events/stream",
+                durable_cursor if committed else None,
+            )
+    if event_type.startswith("review."):
+        review_run_id = payload.get("review_run_id")
+        command_execution_id = payload.get("command_execution_id")
+        if (
+            isinstance(review_run_id, str)
+            and 0 < len(review_run_id) <= 300
+            and isinstance(command_execution_id, str)
+            and 0 < len(command_execution_id) <= 300
+        ):
+            committed = False
+            if durable_cursor is not None:
+                audit_events = store.list_phase1d_command_audit_events(
+                    command_execution_id,
+                    after_cursor=durable_cursor - 1,
+                    limit=1,
+                )
+                committed = bool(
+                    audit_events
+                    and audit_events[0].cursor == durable_cursor
+                    and audit_events[0].resource_id == review_run_id
+                )
+            return (
+                "review",
+                review_run_id,
+                f"/v1/command-executions/{quote(command_execution_id, safe='')}/events/stream",
+                durable_cursor if committed else None,
             )
     if event_type.startswith("agent.") and path.startswith("/v1/sessions/"):
         suffix = "/runs"
@@ -912,28 +1140,27 @@ def _first_stream_summary(
             resource_id,
         )
     if is_failed:
-        failure_code = (
-            "workflow_resume_rejected"
-            if event_type == "workflow.resume_rejected"
-            else "evaluation_stream_failed"
-        )
-        failure_message = (
-            "workflow resume request was rejected"
-            if event_type == "workflow.resume_rejected"
-            else "evaluation stream failed before it was accepted"
+        (
+            failure_code,
+            failure_message,
+            failure_status,
+            failure_recovery,
+        ) = _failed_first_stream_outcome(
+            event_type,
+            payload,
         )
         failure_envelope = error_payload(
             code=failure_code,
             message=failure_message,
-            recovery=RecoveryAction.MANUAL_RECONCILE,
+            recovery=failure_recovery,
         )
         failure_envelope.update(summary)
-        failure_envelope["recovery"] = "manual_reconcile"
+        failure_envelope["recovery"] = failure_recovery.value
         return (
             CommandExecutionStatus.FAILED,
             failure_envelope,
-            event_type[:200],
-            409 if event_type == "workflow.resume_rejected" else 500,
+            failure_code,
+            failure_status,
             resource_type,
             resource_id,
         )
@@ -1158,6 +1385,8 @@ def create_app(
                 recovery=RecoveryAction.USE_NEW_IDEMPOTENCY_KEY,
                 idempotency_key=idempotency_key,
             )
+
+        request.state.command_execution_id = execution.id
         if not created:
             if (
                 execution.status
@@ -1386,6 +1615,342 @@ def create_app(
     @app.get("/healthz")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/slash-commands")
+    async def list_slash_commands() -> dict[str, Any]:
+        commands = service.list_slash_commands()
+        return {
+            "registry_version": service.slash_commands.version,
+            "commands": [command.model_dump(mode="json") for command in commands],
+        }
+
+    @app.get("/v1/slash-commands/resolve")
+    async def resolve_slash_command(
+        text: str = Query(min_length=1, max_length=2_100),
+        registry_version: str | None = Query(default=None, max_length=100),
+    ) -> dict[str, Any]:
+        try:
+            resolved = service.resolve_slash_command(
+                text,
+                registry_version=registry_version,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="slash command is not registered") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid slash command query") from exc
+        return resolved.model_dump(mode="json")
+
+    @app.post("/v1/commands/workspace/init")
+    async def initialize_workspace(
+        request: InitializeWorkspaceRequest,
+        raw_request: Request,
+    ) -> dict[str, Any]:
+        try:
+            initialization, created = service.initialize_workspace(request.workspace)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="workspace does not exist") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="workspace is not readable") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid workspace") from exc
+        audit = service.append_phase1d_audit(
+            command_execution_id=raw_request.state.command_execution_id,
+            command_kind=SlashCommandKind.WORKSPACE_INIT,
+            event_type="workspace.registered",
+            resource_type="workspace",
+            resource_id=initialization.id,
+            detail={
+                "workspace_id": initialization.id,
+                "workspace_hash": initialization.workspace_hash,
+                "created": created,
+                "readable": initialization.readable,
+                "writable": initialization.writable,
+            },
+        )
+        return {
+            "id": initialization.id,
+            "cursor": initialization.cursor,
+            "audit_cursor": audit.cursor,
+            "workspace_hash": initialization.workspace_hash,
+            "readable": initialization.readable,
+            "writable": initialization.writable,
+            "created": created,
+            "created_at": initialization.created_at,
+        }
+
+    async def apply_context_baseline(
+        request: ContextBaselineRequest,
+        *,
+        operation: ContextBaselineOperation,
+        command_execution_id: str,
+    ) -> dict[str, Any]:
+        try:
+            baseline = service.append_context_baseline(
+                session_id=request.session_id,
+                thread_id=request.thread_id,
+                operation=operation,
+                agent_id=request.agent_id,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Context scope was not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="Context scope is not allowed") from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail="Context baseline conflicts") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid Context baseline request") from exc
+        command_kind = (
+            SlashCommandKind.CONTEXT_CLEAR
+            if operation is ContextBaselineOperation.CLEAR
+            else SlashCommandKind.CONTEXT_COMPACT
+        )
+        audit = service.append_phase1d_audit(
+            command_execution_id=command_execution_id,
+            command_kind=command_kind,
+            event_type=f"context.{operation.value}",
+            resource_type="context_baseline",
+            resource_id=baseline.id,
+            detail={
+                "baseline_id": baseline.id,
+                "session_id": baseline.session_id,
+                "thread_id": baseline.thread_id,
+                "item_cursor_end": baseline.item_cursor_end,
+                "compaction_id": baseline.compaction_id,
+            },
+        )
+        result = baseline.model_dump(mode="json")
+        result["audit_cursor"] = audit.cursor
+        return result
+
+    @app.post("/v1/commands/context/clear")
+    async def clear_context(
+        request: ContextBaselineRequest,
+        raw_request: Request,
+    ) -> dict[str, Any]:
+        return await apply_context_baseline(
+            request,
+            operation=ContextBaselineOperation.CLEAR,
+            command_execution_id=raw_request.state.command_execution_id,
+        )
+
+    @app.post("/v1/commands/context/compact")
+    async def compact_context(
+        request: ContextBaselineRequest,
+        raw_request: Request,
+    ) -> dict[str, Any]:
+        return await apply_context_baseline(
+            request,
+            operation=ContextBaselineOperation.COMPACT,
+            command_execution_id=raw_request.state.command_execution_id,
+        )
+
+    @app.get("/v1/context-baselines")
+    async def list_context_baselines(
+        session_id: str = Query(min_length=1, max_length=300),
+        thread_id: str = Query(min_length=1, max_length=300),
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        try:
+            baselines = service.list_context_baselines(
+                session_id,
+                thread_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Context scope was not found") from exc
+        return [baseline.model_dump(mode="json") for baseline in baselines]
+
+    @app.post("/v1/commands/review")
+    async def run_review(
+        request: ReviewCommandRequest,
+        raw_request: Request,
+    ) -> StreamingResponse:
+        async def events() -> AsyncIterator[str]:
+            try:
+                async for event in service.run_review(
+                    command_execution_id=raw_request.state.command_execution_id,
+                    reviewer_role_id=request.reviewer_role_id,
+                    workspace=request.workspace,
+                    scope=request.scope,
+                    thread_id=request.thread_id,
+                ):
+                    yield _sse_event(
+                        event.event_type,
+                        _phase1d_audit_payload(event),
+                        cursor=event.cursor,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except (NotFoundError, ValueError, PermissionError) as exc:
+                payload = _phase1d_stream_start_error("review", exc)
+                yield _sse_event("review.stream_error", payload)
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.get("/v1/reviews/{review_run_id}")
+    async def get_review_run(review_run_id: str) -> dict[str, Any]:
+        try:
+            run = store.get_review_run(review_run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Review run not found") from exc
+        return {
+            "id": run.id,
+            "cursor": run.cursor,
+            "session_id": run.session_id,
+            "thread_id": run.thread_id,
+            "scope_hash": hashlib.sha256(run.scope.encode("utf-8")).hexdigest(),
+            "status": run.status.value,
+            "artifact_id": run.artifact_id,
+            "error_code": run.error_code,
+            "created_at": run.created_at,
+            "updated_at": run.updated_at,
+        }
+
+    @app.get("/v1/command-executions/{command_execution_id}/events")
+    async def list_command_audit_events(
+        command_execution_id: str,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        events = service.list_phase1d_audit_events(
+            command_execution_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+        return [
+            {"event_type": event.event_type, **_phase1d_audit_payload(event)} for event in events
+        ]
+
+    @app.get("/v1/command-executions/{command_execution_id}/events/stream")
+    async def stream_command_audit_events(
+        command_execution_id: str,
+        raw_request: Request,
+    ) -> StreamingResponse:
+        after_cursor = _parse_last_event_id(raw_request.headers.get("Last-Event-ID"))
+        events = service.list_phase1d_audit_events(
+            command_execution_id,
+            after_cursor=after_cursor,
+            limit=1000,
+        )
+
+        async def replay() -> AsyncIterator[str]:
+            for event in events:
+                yield _sse_event(
+                    event.event_type,
+                    _phase1d_audit_payload(event),
+                    cursor=event.cursor,
+                )
+
+        return StreamingResponse(replay(), media_type="text/event-stream")
+
+    @app.post("/v1/sidecars/btw")
+    async def run_btw_sidecar(request: BTWSidecarRequest) -> StreamingResponse:
+        async def events() -> AsyncIterator[str]:
+            try:
+                async for event in service.run_btw_sidecar(
+                    session_id=request.session_id,
+                    thread_id=request.thread_id,
+                    workspace=request.workspace,
+                    prompt=request.prompt,
+                ):
+                    yield _sse_event(
+                        event.event_type,
+                        event.model_dump(mode="json"),
+                        cursor=event.cursor,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except (NotFoundError, ValueError, PermissionError) as exc:
+                payload = _phase1d_stream_start_error("btw", exc)
+                yield _sse_event("btw.stream_error", payload)
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.get("/v1/sidecars/btw/{run_id}")
+    async def get_btw_sidecar(run_id: str) -> dict[str, Any]:
+        try:
+            run = service.get_btw_sidecar_run(run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="BTW Sidecar run not found") from exc
+        return {
+            "id": run.id,
+            "cursor": run.cursor,
+            "session_id": run.session_id,
+            "agent_id": run.agent_id,
+            "thread_id": run.thread_id,
+            "source_item_cursor_end": run.source_item_cursor_end,
+            "status": run.status.value,
+            "response": run.response,
+            "context_revision_id": run.context_revision_id,
+            "promoted_turn_id": run.promoted_turn_id,
+            "promoted_item_id": run.promoted_item_id,
+            "error_code": run.error_code,
+            "created_at": run.created_at,
+            "updated_at": run.updated_at,
+        }
+
+    @app.get("/v1/sidecars/btw/{run_id}/events")
+    async def list_btw_events(
+        run_id: str,
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        try:
+            events = service.list_btw_sidecar_events(
+                run_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="BTW Sidecar run not found") from exc
+        return [event.model_dump(mode="json") for event in events]
+
+    @app.post("/v1/sidecars/btw/{run_id}/cancel")
+    async def cancel_btw_sidecar(run_id: str) -> dict[str, bool]:
+        try:
+            accepted = service.cancel_btw_sidecar(run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="BTW Sidecar run not found") from exc
+        return {"accepted": accepted}
+
+    @app.get("/v1/sidecars/btw/{run_id}/events/stream")
+    async def stream_btw_events(run_id: str, raw_request: Request) -> StreamingResponse:
+        after_cursor = _parse_last_event_id(raw_request.headers.get("Last-Event-ID"))
+        try:
+            committed = service.list_btw_sidecar_events(
+                run_id,
+                after_cursor=after_cursor,
+                limit=1000,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="BTW Sidecar run not found") from exc
+
+        async def replay() -> AsyncIterator[str]:
+            for event in committed:
+                yield _sse_event(
+                    event.event_type,
+                    event.model_dump(mode="json"),
+                    cursor=event.cursor,
+                )
+
+        return StreamingResponse(replay(), media_type="text/event-stream")
+
+    @app.post("/v1/sidecars/btw/{run_id}/promote")
+    async def promote_btw_sidecar(run_id: str) -> dict[str, Any]:
+        try:
+            run, turn, item = service.promote_btw_sidecar(run_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="BTW Sidecar run not found") from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail="BTW Sidecar cannot be promoted") from exc
+        return {
+            "sidecar_run_id": run.id,
+            "status": run.status.value,
+            "turn_id": turn.id,
+            "item_id": item.id,
+        }
 
     @app.get("/v1/models")
     async def list_models() -> list[dict[str, object]]:

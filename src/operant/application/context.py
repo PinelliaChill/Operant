@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from operant.domain.commands import ContextBaselineOperation
 from operant.domain.context import (
     Compaction,
     CompactionMessageCoverage,
@@ -93,6 +94,7 @@ class PersistentContextComposer:
         artifact_reader: ArtifactReader,
         artifact_writer: ArtifactWriter,
         watermark_policy: ContextWatermarkPolicy | None = None,
+        thread_item_cursor_end: int | None = None,
     ) -> None:
         self.store = store
         self.session = session
@@ -104,6 +106,7 @@ class PersistentContextComposer:
         self.artifact_reader = artifact_reader
         self.artifact_writer = artifact_writer
         self.policy = watermark_policy or ContextWatermarkPolicy()
+        self.thread_item_cursor_end = thread_item_cursor_end
         self.layout = PromptLayout()
 
         keys = [(request.ref_type, request.target_id) for request in self.references]
@@ -249,9 +252,8 @@ class PersistentContextComposer:
                 source.source_id
                 for item in resolved
                 for source in (
-                    item.compaction.covered_item_refs
-                    if item.compaction is not None
-                    else item.source_refs
+                    *item.source_refs,
+                    *(() if item.compaction is None else item.compaction.covered_item_refs),
                 )
                 if source.source_type is ContextSourceType.ITEM
             )
@@ -511,7 +513,26 @@ class PersistentContextComposer:
         total_source_tokens = 0
         active_goal = ""
         compact_required = False
+        baseline = self.store.get_active_context_baseline(self.session.id, thread_id)
+        baseline_compaction: Compaction | None = None
         cursor: int | None = None
+        if baseline is not None:
+            cursor = baseline.item_cursor_end
+            if baseline.operation is ContextBaselineOperation.COMPACT:
+                assert baseline.compaction_id is not None
+                baseline_compaction = self.store.get_compaction(baseline.compaction_id)
+                if (
+                    baseline_compaction.session_id != self.session.id
+                    or baseline_compaction.thread_id != thread_id
+                    or baseline_compaction.source_type is not CompactionSourceType.THREAD_ITEMS
+                    or baseline_compaction.source_cursor_end != baseline.item_cursor_end
+                ):
+                    raise ContextCompositionError(
+                        "active Context baseline evidence is inconsistent"
+                    )
+                # Store expects a semantic candidate for deterministic reuse;
+                # the physical cursor belongs only to the already-persisted row.
+                baseline_compaction = baseline_compaction.model_copy(update={"cursor": None})
 
         while True:
             page = self.store.list_items(
@@ -520,6 +541,13 @@ class PersistentContextComposer:
                 limit=_THREAD_PAGE_SIZE,
             )
             for item in page:
+                if (
+                    self.thread_item_cursor_end is not None
+                    and item.cursor is not None
+                    and item.cursor > self.thread_item_cursor_end
+                ):
+                    page = []
+                    break
                 if len(exact_item_refs) >= _THREAD_ITEM_HARD_LIMIT:
                     raise ContextLimitExceeded(
                         "thread Context exceeds the Phase 1B item safety limit"
@@ -589,7 +617,22 @@ class PersistentContextComposer:
                 cursor=thread_cursor,
                 content_hash=thread_body_hash,
             )
-            return self._checked_reference(request, rendered, (thread_ref,))
+            if baseline_compaction is None:
+                return self._checked_reference(request, rendered, (thread_ref,))
+            rendered["compaction"] = self._rendered_compaction(baseline_compaction)
+            compaction_ref = ContextSourceRef(
+                source_type=ContextSourceType.COMPACTION,
+                source_id=baseline_compaction.id,
+                content_hash=baseline_compaction.content_hash,
+            )
+            return self._checked_reference(
+                request,
+                rendered,
+                (thread_ref, compaction_ref),
+                cursor_start=baseline_compaction.source_cursor_start,
+                cursor_end=baseline_compaction.source_cursor_end,
+                compaction=baseline_compaction,
+            )
 
         if not compact_required:
             rendered = {**header, "items": full_items}
@@ -599,13 +642,45 @@ class PersistentContextComposer:
                 cursor=thread_cursor,
                 content_hash=thread_body_hash,
             )
+            source_refs: tuple[ContextSourceRef, ...] = (thread_ref, *exact_item_refs)
+            cursor_start = exact_item_refs[0].cursor
+            compaction = None
+            if baseline_compaction is not None:
+                rendered["compaction"] = self._rendered_compaction(baseline_compaction)
+                source_refs = (
+                    thread_ref,
+                    ContextSourceRef(
+                        source_type=ContextSourceType.COMPACTION,
+                        source_id=baseline_compaction.id,
+                        content_hash=baseline_compaction.content_hash,
+                    ),
+                    *exact_item_refs,
+                )
+                cursor_start = baseline_compaction.source_cursor_start
+                compaction = baseline_compaction
             return self._checked_reference(
                 request,
                 rendered,
-                (thread_ref, *exact_item_refs),
-                cursor_start=exact_item_refs[0].cursor,
+                source_refs,
+                cursor_start=cursor_start,
                 cursor_end=exact_item_refs[-1].cursor,
+                compaction=compaction,
             )
+
+        if baseline_compaction is not None:
+            exact_item_refs = [*baseline_compaction.covered_item_refs, *exact_item_refs]
+            source_digest = hashlib.sha256()
+            for ref in exact_item_refs:
+                source_digest.update(
+                    _json(
+                        {
+                            "id": ref.source_id,
+                            "cursor": ref.cursor,
+                            "content_hash": ref.content_hash,
+                        }
+                    ).encode("utf-8")
+                )
+                source_digest.update(b"\n")
 
         summary = self._safe_compaction_summary(
             {
@@ -666,6 +741,17 @@ class PersistentContextComposer:
             cursor_end=compaction.source_cursor_end,
             compaction=compaction,
         )
+
+    @staticmethod
+    def _rendered_compaction(compaction: Compaction) -> dict[str, Any]:
+        return {
+            "id": compaction.id,
+            "source_type": compaction.source_type.value,
+            "source_cursor_start": compaction.source_cursor_start,
+            "source_cursor_end": compaction.source_cursor_end,
+            "source_snapshot_hash": compaction.source_snapshot_hash,
+            "summary": compaction.summary.model_dump(mode="json"),
+        }
 
     @staticmethod
     def _checked_reference(
