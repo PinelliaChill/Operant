@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 Body = str | bytes | bytearray | Iterator[str | bytes] | None
+RawText = str | Callable[[], str]
 
 
 class HeaderCollection(Protocol):
@@ -26,11 +28,13 @@ class TransportRequest:
 
 @dataclass
 class TransportResponse:
+    """A response carrying raw JSON/text so int64 parsing remains lossless."""
+
     status: int
     headers: Mapping[str, str]
     body: Body = None
-    json: Any = None
-    text: Any = None
+    json: RawText | None = None
+    text: RawText | None = None
 
 
 Transport = Callable[[TransportRequest], TransportResponse]
@@ -97,18 +101,18 @@ def response_text(response: TransportResponse) -> str:
         return response.text
     if callable(response.text):
         value = response.text()
-        return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+        if not isinstance(value, str):
+            raise TypeError("Transport text callback must return raw text")
+        return value
     return _body_bytes(response.body).decode("utf-8", errors="replace")
 
 
 def response_json(response: TransportResponse) -> Any:
     if response.json is not None:
         value = response.json() if callable(response.json) else response.json
-        if isinstance(value, bytes):
-            return json.loads(value.decode("utf-8"))
-        if isinstance(value, str):
-            return json.loads(value) if value.strip() else None
-        return value
+        if not isinstance(value, str):
+            raise TypeError("Transport JSON must be raw text; pre-parsed objects are unsupported")
+        return json.loads(value) if value.strip() else None
     text = response_text(response)
     if not text.strip():
         return None
@@ -183,16 +187,34 @@ class Phase1EError(RuntimeError):
 
 
 def _chunks(source: Body) -> Iterator[str]:
+    decoder = codecs.getincrementaldecoder("utf-8")()
     if source is None:
         return
     if isinstance(source, str):
         yield source
         return
     if isinstance(source, (bytes, bytearray)):
-        yield bytes(source).decode("utf-8", errors="replace")
+        decoded = decoder.decode(bytes(source), final=False)
+        if decoded:
+            yield decoded
+        tail = decoder.decode(b"", final=True)
+        if tail:
+            yield tail
         return
     for chunk in source:
-        yield chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
+        if isinstance(chunk, str):
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                yield tail
+            yield chunk
+            decoder = codecs.getincrementaldecoder("utf-8")()
+            continue
+        decoded = decoder.decode(bytes(chunk), final=False)
+        if decoded:
+            yield decoded
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        yield tail
 
 
 def _sse_lines(source: Body) -> Iterator[str]:

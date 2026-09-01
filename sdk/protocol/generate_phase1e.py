@@ -66,6 +66,7 @@ class OperationSpec:
     parameters: tuple[ParameterSpec, ...]
     request_body: dict[str, Any] | None
     responses: dict[str, dict[str, Any]]
+    mutually_exclusive: tuple[tuple[str, ...], ...]
 
     @property
     def path_parameters(self) -> tuple[ParameterSpec, ...]:
@@ -261,6 +262,75 @@ def _wire_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
+def _schema_from_ref(document: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    ref = _ref_name(schema)
+    if ref is None:
+        return schema
+    value = _components(document, "schemas").get(ref)
+    if not isinstance(value, dict):
+        raise ValueError(f"schema references missing components.schemas.{ref}")
+    return value
+
+
+def _exclusive_groups_from_value(
+    value: Any, *, properties: set[str], label: str
+) -> tuple[tuple[str, ...], ...]:
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        groups_value: list[Any] = [value]
+    elif isinstance(value, list) and all(isinstance(item, list) for item in value):
+        groups_value = value
+    else:
+        raise ValueError(f"{label} must be a list of property names or lists")
+    groups: list[tuple[str, ...]] = []
+    for index, group_value in enumerate(groups_value):
+        if (
+            not isinstance(group_value, list)
+            or len(group_value) < 2
+            or not all(isinstance(name, str) and name for name in group_value)
+            or len(set(group_value)) != len(group_value)
+            or not set(group_value) <= properties
+        ):
+            raise ValueError(f"{label}[{index}] must name two or more distinct properties")
+        groups.append(tuple(group_value))
+    if not groups:
+        raise ValueError(f"{label} must not be empty")
+    return tuple(groups)
+
+
+def _mutually_exclusive_groups(
+    document: dict[str, Any], schema: dict[str, Any], *, label: str
+) -> tuple[tuple[str, ...], ...]:
+    """Read the schema's explicit XOR metadata, failing closed when malformed."""
+
+    resolved = _schema_from_ref(document, schema)
+    properties = resolved.get("properties", {})
+    property_names = set(properties) if isinstance(properties, dict) else set()
+    extension = resolved.get("x-mutually-exclusive")
+    if extension is not None:
+        return _exclusive_groups_from_value(
+            extension, properties=property_names, label=f"{label}.x-mutually-exclusive"
+        )
+    one_of = resolved.get("oneOf")
+    if one_of is None:
+        return ()
+    if not isinstance(one_of, list) or not one_of:
+        raise ValueError(f"{label}.oneOf must be a non-empty list")
+    branch_fields: list[str] = []
+    for index, branch in enumerate(one_of):
+        if not isinstance(branch, dict):
+            raise ValueError(f"{label}.oneOf[{index}] must be an object")
+        branch_schema = _schema_from_ref(document, branch)
+        required = branch_schema.get("required")
+        if not isinstance(required, list) or len(required) != 1 or not isinstance(required[0], str):
+            raise ValueError(
+                f"{label}.oneOf[{index}] must require exactly one property for XOR generation"
+            )
+        branch_fields.append(required[0])
+    return _exclusive_groups_from_value(
+        branch_fields, properties=property_names, label=f"{label}.oneOf"
+    )
+
+
 def _content_descriptor(content: Any, *, label: str) -> dict[str, Any]:
     if content is None:
         return {}
@@ -338,14 +408,32 @@ def _operation_specs(document: dict[str, Any]) -> dict[str, OperationSpec]:
                 )
             raw_request = raw_operation.get("requestBody")
             request_body: dict[str, Any] | None = None
+            mutually_exclusive: tuple[tuple[str, ...], ...] = ()
             if raw_request is not None:
                 request = _resolve_component(
                     document, raw_request, "requestBodies", label=f"{operation_id}.requestBody"
                 )
+                request_content = request.get("content")
+                if isinstance(request_content, dict):
+                    for media_type in sorted(request_content):
+                        media = request_content[media_type]
+                        if not isinstance(media, dict) or not isinstance(media.get("schema"), dict):
+                            continue
+                        groups = _mutually_exclusive_groups(
+                            document,
+                            media["schema"],
+                            label=f"{operation_id}.requestBody.{media_type}.schema",
+                        )
+                        if groups:
+                            if mutually_exclusive and groups != mutually_exclusive:
+                                raise ValueError(
+                                    f"{operation_id} request body has inconsistent XOR metadata"
+                                )
+                            mutually_exclusive = groups
                 request_body = {
                     "required": request.get("required") is True,
                     "content": _content_descriptor(
-                        request.get("content"), label=f"{operation_id}.requestBody"
+                        request_content, label=f"{operation_id}.requestBody"
                     ),
                 }
             raw_responses = raw_operation.get("responses")
@@ -369,6 +457,7 @@ def _operation_specs(document: dict[str, Any]) -> dict[str, OperationSpec]:
                 parameters=tuple(parameters),
                 request_body=request_body,
                 responses=responses,
+                mutually_exclusive=mutually_exclusive,
             )
     if set(operations) != EXPECTED_OPERATION_IDS:
         raise ValueError(f"unexpected Phase 1E operation ids: {sorted(operations)}")
@@ -415,6 +504,35 @@ def _is_stream_operation(operation: OperationSpec) -> bool:
     )
 
 
+def _stream_response_status(operation: OperationSpec) -> str:
+    candidates = [
+        status
+        for status, response in operation.responses.items()
+        if status.isdigit()
+        and 200 <= int(status) < 300
+        and any(
+            media_type.lower() == "text/event-stream" for media_type in response.get("content", {})
+        )
+    ]
+    if candidates != ["200"]:
+        raise ValueError(
+            f"{operation.operation_id} must declare exactly one 200 text/event-stream response"
+        )
+    return "200"
+
+
+def _receipt_response_status(operation: OperationSpec) -> str:
+    response = operation.responses.get("202")
+    content = response.get("content", {}) if isinstance(response, dict) else {}
+    if not isinstance(content, dict) or not any(
+        media_type.lower() == "application/json" for media_type in content
+    ):
+        raise ValueError(
+            f"{operation.operation_id} must declare a 202 application/json receipt response"
+        )
+    return "202"
+
+
 def _operation_metadata(operation: OperationSpec) -> dict[str, Any]:
     return {
         "method": operation.method,
@@ -429,6 +547,7 @@ def _operation_metadata(operation: OperationSpec) -> dict[str, Any]:
             for parameter in operation.parameters
         ],
         "requestBody": operation.request_body,
+        "mutuallyExclusive": [list(group) for group in operation.mutually_exclusive],
         "responses": operation.responses,
     }
 
@@ -610,8 +729,6 @@ def _render_ts_method(operation: OperationSpec) -> list[str]:
     response_type = _response_type(response)
     return_type = "RunSessionStream" if _is_stream_operation(operation) else response_type
     lines = [f"  async {method_name}({', '.join(args)}): Promise<{return_type}> {{"]
-    if operation.operation_id == "createSession":
-        lines.append("    validateCreateSessionRequest(request);")
     request_args: list[str] = []
     if operation.path_parameters:
         pairs = ", ".join(
@@ -656,18 +773,25 @@ def _render_ts_method(operation: OperationSpec) -> list[str]:
         header_entries.append(f"'Content-Type': {json.dumps(media_type)}")
     request_args.append(f"headers: {{ {', '.join(header_entries)} }}")
     if body_schema:
+        request_args.append("bodyValue: request")
         request_args.append("body: stringifyJson(request)")
     lines.append(
         f"    const response = await this.requestOperation(PHASE1E_OPERATIONS[{json.dumps(operation.operation_id)}], {{ {', '.join(request_args)} }});"
     )
     if _is_stream_operation(operation):
-        receipt_status = next((status for status in operation.responses if status == "202"), None)
-        receipt_response = operation.responses.get(receipt_status or "")
-        receipt_type = _response_type(receipt_response) if receipt_response else "CommandReceipt"
+        stream_status = _stream_response_status(operation)
+        receipt_status = _receipt_response_status(operation)
+        receipt_response = operation.responses[receipt_status]
+        receipt_type = _response_type(receipt_response)
         lines.extend(
             [
                 "    const metadata = this.responseMetadata ?? { status: response.status, idempotencyReplayed: false };",
-                f"    if (response.status === {receipt_status or 202}) return {{ receipt: await readJson<{receipt_type}>(response), metadata, events: (async function*() {{}})() }};",
+                "    const contentType = responseHeaders(response.headers)['content-type']?.split(';', 1)[0]?.trim().toLowerCase();",
+                f"    if (response.status === {receipt_status}) {{",
+                "      if (contentType !== 'application/json') throw new Phase1EError('invalid_stream_response', '202 stream receipt must use application/json', false, 'none');",
+                f"      return {{ receipt: await readJson<{receipt_type}>(response), metadata, events: (async function*() {{}})() }};",
+                "    }",
+                f"    if (response.status !== {stream_status} || contentType !== 'text/event-stream') throw new Phase1EError('invalid_stream_response', '200 stream response must use text/event-stream', false, 'none');",
                 "    const source = response.body ?? await readText(response);",
                 "    return { receipt: null, metadata, events: (async function*() {",
                 "      for await (const frame of parseSse(source)) {",
@@ -696,7 +820,8 @@ def _render_ts_client(document: dict[str, Any], digest: str) -> str:
         "type OperationParameter = { name: string; in: string; required: boolean; schema: Record<string, unknown> };",
         "type OperationDefinition = {",
         "  method: string; pathTemplate: string; parameters: readonly OperationParameter[];",
-        "  requestBody: Record<string, unknown> | null; responses: Record<string, Record<string, unknown>>;",
+        "  requestBody: Record<string, unknown> | null; mutuallyExclusive: readonly (readonly string[])[];",
+        "  responses: Record<string, Record<string, unknown>>;",
         "};",
         "",
         f"const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {metadata_json} as const;",
@@ -749,8 +874,19 @@ def _render_ts_client(document: dict[str, Any], digest: str) -> str:
             "  }",
             "}",
             "",
-            "export class ProtocolNegotiationError extends Error {",
-            "  constructor(message: string) { super(message); this.name = 'ProtocolNegotiationError'; }",
+            "export class ProtocolNegotiationError extends Phase1EError {",
+            "  constructor(message: string) { super('protocol_incompatible', message, false, 'refresh_and_retry'); this.name = 'ProtocolNegotiationError'; }",
+            "}",
+            "",
+            "function validateProtocolNegotiation(value: unknown): ProtocolNegotiation {",
+            "  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new ProtocolNegotiationError('protocol response is not an object');",
+            "  const metadata = value as Record<string, unknown>;",
+            "  const required = ['protocol_version', 'schema_digest', 'min_client_version', 'capabilities'];",
+            "  if (required.some(field => !Object.prototype.hasOwnProperty.call(metadata, field))) throw new ProtocolNegotiationError('protocol response is missing required metadata');",
+            "  if (metadata.protocol_version !== PHASE1E_PROTOCOL_VERSION || metadata.min_client_version !== PHASE1E_PROTOCOL_VERSION) throw new ProtocolNegotiationError(`unsupported Core protocol: ${String(metadata.protocol_version)}`);",
+            "  if (metadata.schema_digest !== PHASE1E_SCHEMA_DIGEST) throw new ProtocolNegotiationError(`Core Schema digest mismatch: expected ${PHASE1E_SCHEMA_DIGEST}, got ${String(metadata.schema_digest)}`);",
+            "  if (!Array.isArray(metadata.capabilities) || metadata.capabilities.some(item => typeof item !== 'string' || item.length === 0)) throw new ProtocolNegotiationError('Core protocol capabilities are invalid');",
+            "  return metadata as unknown as ProtocolNegotiation;",
             "}",
             "",
             "function newIdempotencyKey(): string {",
@@ -780,10 +916,15 @@ def _render_ts_client(document: dict[str, Any], digest: str) -> str:
             "  return encodeURIComponent(value);",
             "}",
             "",
-            "function validateCreateSessionRequest(request: CreateSessionRequest): void {",
-            "  const hasRoleId = request.role_id !== undefined && request.role_id !== null;",
-            "  const hasNewRole = request.new_role !== undefined && request.new_role !== null;",
-            "  if (hasRoleId === hasNewRole) throw new TypeError('exactly one of role_id or new_role is required');",
+            "function validateMutuallyExclusive(request: unknown, groups: readonly (readonly string[])[]): void {",
+            "  if (groups.length === 0) return;",
+            "  if (typeof request !== 'object' || request === null || Array.isArray(request)) throw new TypeError('request body must be an object');",
+            "  const record = request as Record<string, unknown>;",
+            "  for (const group of groups) {",
+            "    if (!Array.isArray(group) || group.length < 2 || group.some(field => typeof field !== 'string' || field.length === 0)) throw new TypeError('invalid mutually-exclusive schema metadata');",
+            "    const provided = group.filter(field => record[field] !== undefined && record[field] !== null);",
+            "    if (provided.length !== 1) throw new TypeError(`exactly one of ${group.join(', ')} is required`);",
+            "  }",
             "}",
             "",
             "export class Phase1EClient {",
@@ -805,14 +946,12 @@ def _render_ts_client(document: dict[str, Any], digest: str) -> str:
             "  async negotiateProtocol(force = false): Promise<ProtocolNegotiation> {",
             "    if (this.negotiated && !force) return this.negotiated;",
             "    const response = await this.requestOperation(PHASE1E_OPERATIONS.negotiateProtocol, {}, true);",
-            "    const metadata = await readJson<ProtocolNegotiation>(response);",
-            "    if (metadata.protocol_version !== PHASE1E_PROTOCOL_VERSION || metadata.min_client_version !== PHASE1E_PROTOCOL_VERSION) throw new ProtocolNegotiationError(`unsupported Core protocol: ${String(metadata.protocol_version)}`);",
-            "    if (metadata.schema_digest !== PHASE1E_SCHEMA_DIGEST) throw new ProtocolNegotiationError(`Core Schema digest mismatch: expected ${PHASE1E_SCHEMA_DIGEST}, got ${metadata.schema_digest}`);",
-            "    if (!Array.isArray(metadata.capabilities)) throw new ProtocolNegotiationError('Core protocol capabilities are invalid');",
+            "    const metadata = validateProtocolNegotiation(await readJson<unknown>(response));",
             "    this.negotiated = metadata; return metadata;",
             "  }",
             "",
-            "  private async requestOperation(operation: OperationDefinition, args: { pathParams?: Record<string, string>; query?: Record<string, string | undefined>; headers?: Record<string, string | undefined>; body?: string; }, skipNegotiation = false): Promise<Phase1EResponse> {",
+            "  private async requestOperation(operation: OperationDefinition, args: { pathParams?: Record<string, string>; query?: Record<string, string | undefined>; headers?: Record<string, string | undefined>; body?: string; bodyValue?: unknown; }, skipNegotiation = false): Promise<Phase1EResponse> {",
+            "    validateMutuallyExclusive(args.bodyValue, operation.mutuallyExclusive);",
             "    const path = operation.pathTemplate.replace(/\\{([^}]+)\\}/g, (_match, name: string) => { const value = args.pathParams?.[name]; if (value === undefined) throw new TypeError(`missing path parameter: ${name}`); return value; });",
             "    const headers = Object.fromEntries(Object.entries(args.headers ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined));",
             "    return this.requestRaw({ method: operation.method, path, query: args.query, headers, body: args.body }, skipNegotiation);",
@@ -898,8 +1037,6 @@ def _render_py_method(operation: OperationSpec) -> list[str]:
     response_type = _py_response_type(response)
     return_type = "RunSessionStream" if _is_stream_operation(operation) else response_type
     lines = [f"    def {method_name}({', '.join(args)}) -> {return_type}:"]
-    if operation.operation_id == "createSession":
-        lines.append("        _validate_create_session_request(request)")
     request_args: list[str] = [repr(operation.operation_id)]
     if operation.path_parameters:
         entries = ", ".join(
@@ -937,13 +1074,19 @@ def _render_py_method(operation: OperationSpec) -> list[str]:
         request_args.append("body=dict(request)")
     lines.append(f"        response = self._request_operation({', '.join(request_args)})")
     if _is_stream_operation(operation):
-        receipt_status = next((status for status in operation.responses if status == "202"), None)
+        stream_status = _stream_response_status(operation)
+        receipt_status = _receipt_response_status(operation)
         lines.extend(
             [
                 "        metadata = self.last_response or ResponseMetadata(response.status)",
-                f"        if response.status == {receipt_status or 202}:",
+                "        content_type = response_headers(response.headers).get('content-type', '').split(';', 1)[0].strip().lower()",
+                f"        if response.status == {receipt_status}:",
+                "            if content_type != 'application/json':",
+                "                raise Phase1EError('invalid_stream_response', '202 stream receipt must use application/json', recovery='none')",
                 "            receipt = cast(CommandReceipt, response_json(response))",
                 "            return RunSessionStream(receipt=receipt, events=iter(()), metadata=metadata)",
+                f"        if response.status != {stream_status} or content_type != 'text/event-stream':",
+                "            raise Phase1EError('invalid_stream_response', '200 stream response must use text/event-stream', recovery='none')",
                 "        source = response.body if response.body is not None else response_text(response)",
                 "        frames = parse_sse(source)",
                 "        def events() -> Iterator[SseFrame]:",
@@ -970,7 +1113,6 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
         "# Source: sdk/protocol/schema/operant-phase1e.openapi.json",
         "# ruff: noqa: E501",
         f"# Generated by sdk/protocol/generate_phase1e.py; schema digest: {digest}",
-        "from __future__ import annotations",
         "",
         "import json",
         "import re",
@@ -1134,11 +1276,37 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
             "        raise ValueError('SSE id must be a decimal cursor')",
             "    return _cursor_value_int(int(value))",
             "",
-            "def _validate_create_session_request(request: CreateSessionRequest) -> None:",
-            "    has_role_id = request.get('role_id') is not None",
-            "    has_new_role = request.get('new_role') is not None",
-            "    if has_role_id == has_new_role:",
-            "        raise ValueError('exactly one of role_id or new_role is required')",
+            "def _validate_mutually_exclusive(request: object, groups: object) -> None:",
+            "    if not groups:",
+            "        return",
+            "    if not isinstance(request, dict):",
+            "        raise TypeError('request body must be an object')",
+            "    if not isinstance(groups, list):",
+            "        raise TypeError('invalid mutually-exclusive schema metadata')",
+            "    for group in groups:",
+            "        if (not isinstance(group, list) or len(group) < 2 or",
+            "                any(not isinstance(field, str) or not field for field in group)):",
+            "            raise TypeError('invalid mutually-exclusive schema metadata')",
+            "        provided = [field for field in group if request.get(field) is not None]",
+            "        if len(provided) != 1:",
+            "            names = ', '.join(group)",
+            "            raise ValueError(f'exactly one of {names} is required')",
+            "",
+            "def _validate_protocol_negotiation(value: object) -> ProtocolNegotiation:",
+            "    if not isinstance(value, dict):",
+            "        raise ProtocolNegotiationError('protocol response is not an object')",
+            "    required = ('protocol_version', 'schema_digest', 'min_client_version', 'capabilities')",
+            "    if any(field not in value for field in required):",
+            "        raise ProtocolNegotiationError('protocol response is missing required metadata')",
+            "    if value.get('protocol_version') != PHASE1E_PROTOCOL_VERSION or value.get('min_client_version') != PHASE1E_PROTOCOL_VERSION:",
+            "        raise ProtocolNegotiationError(f'unsupported Core protocol: {value.get(\"protocol_version\")}')",
+            "    if value.get('schema_digest') != PHASE1E_SCHEMA_DIGEST:",
+            "        raise ProtocolNegotiationError(f'Core Schema digest mismatch: expected {PHASE1E_SCHEMA_DIGEST}, got {value.get(\"schema_digest\")}')",
+            "    capabilities = value.get('capabilities')",
+            "    if (not isinstance(capabilities, list) or",
+            "            any(not isinstance(item, str) or not item for item in capabilities)):",
+            "        raise ProtocolNegotiationError('Core protocol capabilities are invalid')",
+            "    return cast(ProtocolNegotiation, value)",
             "",
             "class Phase1EClient:",
             "    protocol_version = PHASE1E_PROTOCOL_VERSION",
@@ -1159,6 +1327,7 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
             "        operation = OPERATION_DEFINITIONS.get(operation_id)",
             "        if operation is None:",
             "            raise ValueError(f'unknown protocol operation: {operation_id}')",
+            "        _validate_mutually_exclusive(body, operation.get('mutuallyExclusive', []))",
             "        values = path_params or {}",
             "        def replace(match: re.Match[str]) -> str:",
             "            name = match.group(1)",
@@ -1195,16 +1364,8 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
             "        if self._negotiated is not None and not force:",
             "            return self._negotiated",
             "        response = self._request_operation('negotiateProtocol', skip_negotiation=True)",
-            "        metadata = response_json(response)",
-            "        if not isinstance(metadata, dict):",
-            "            raise ProtocolNegotiationError('protocol response is not an object')",
-            "        if metadata.get('protocol_version') != PHASE1E_PROTOCOL_VERSION or metadata.get('min_client_version') != PHASE1E_PROTOCOL_VERSION:",
-            "            raise ProtocolNegotiationError(f'unsupported Core protocol: {metadata.get(\"protocol_version\")}')",
-            "        if metadata.get('schema_digest') != PHASE1E_SCHEMA_DIGEST:",
-            "            raise ProtocolNegotiationError('Core Schema digest mismatch')",
-            "        if not isinstance(metadata.get('capabilities'), list) or any(not isinstance(item, str) for item in metadata['capabilities']):",
-            "            raise ProtocolNegotiationError('Core protocol capabilities are invalid')",
-            "        self._negotiated = cast(ProtocolNegotiation, metadata)",
+            "        metadata = _validate_protocol_negotiation(response_json(response))",
+            "        self._negotiated = metadata",
             "        return self._negotiated",
             "",
         ]

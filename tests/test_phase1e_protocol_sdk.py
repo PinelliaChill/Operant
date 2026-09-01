@@ -17,12 +17,14 @@ import pytest
 # generation tests exercise the repository-local SDK directly.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import sdk.python_client.phase1e_generated as generated
 from sdk.protocol.generate_phase1e import (
     DIGEST_PATH,
     PY_PATH,
     SCHEMA_PATH,
     TS_PATH,
     _canonical_json,
+    _operation_specs,
     _render_ts_client,
     generate,
 )
@@ -40,6 +42,7 @@ from sdk.python_client.transport import (
     TransportRequest,
     TransportResponse,
     parse_sse,
+    response_json,
 )
 
 
@@ -50,11 +53,12 @@ def _response(
     headers: dict[str, str] | None = None,
     body: str | bytes | None = None,
 ) -> TransportResponse:
+    raw_json = None if body is not None or payload is None else json.dumps(payload)
     return TransportResponse(
         status=status,
         headers=headers or {},
         body=body,
-        json=payload if body is None else None,
+        json=raw_json,
     )
 
 
@@ -142,7 +146,11 @@ def test_mutations_send_reusable_idempotency_key_and_read_receipt_headers() -> N
         _response(
             {"command_kind": "stream", "accepted": True, "command_id": "cmd-1"},
             status=202,
-            headers={"Idempotency-Key": "idem-1", "Idempotency-Replayed": "true"},
+            headers={
+                "Idempotency-Key": "idem-1",
+                "Idempotency-Replayed": "true",
+                "Content-Type": "application/json",
+            },
         ),
     )
     client = Phase1EClient("http://core.test", transport=transport)
@@ -168,7 +176,10 @@ def test_stream_reconnect_sends_last_event_id_and_scoped_lossless_cursor() -> No
         b"event: agent.completed\n"
         b'data: {"cursor": 9223372036854775807,"payload": {"ok": true}}\n\n'
     )
-    transport = QueueTransport(_response(_metadata()), _response(None, body=stream_body))
+    transport = QueueTransport(
+        _response(_metadata()),
+        _response(None, body=stream_body, headers={"Content-Type": "text/event-stream"}),
+    )
     client = Phase1EClient("http://core.test", transport=transport)
 
     stream = client.run_session_stream(
@@ -194,15 +205,17 @@ def test_protocol_mismatch_and_error_envelope_fail_closed() -> None:
     error = TransportResponse(
         status=409,
         headers={},
-        json={
-            "detail": "legacy detail",
-            "error": {
-                "code": "command_outcome_unknown",
-                "message": "manual reconciliation required",
-                "retryable": False,
-                "recovery": "manual_reconcile",
-            },
-        },
+        body=json.dumps(
+            {
+                "detail": "legacy detail",
+                "error": {
+                    "code": "command_outcome_unknown",
+                    "message": "manual reconciliation required",
+                    "retryable": False,
+                    "recovery": "manual_reconcile",
+                },
+            }
+        ),
     )
     raised = Phase1EError.from_response(error)
     assert raised.code == "command_outcome_unknown"
@@ -266,6 +279,19 @@ def test_int64_and_required_types_are_explicit_and_strict() -> None:
     assert str(get_type_hints(WorkspaceFileEntry)["size_bytes"]) == "int | None"
 
 
+def test_all_generated_typed_dict_required_sets_match_schema() -> None:
+    document = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    for name, schema in document["components"]["schemas"].items():
+        if schema.get("type") != "object" and "properties" not in schema:
+            continue
+        model = getattr(generated, name)
+        properties = set(schema.get("properties", {}))
+        required = set(schema.get("required", []))
+        assert model.__required_keys__ == frozenset(required)
+        assert model.__optional_keys__ == frozenset(properties - required)
+        assert set(get_type_hints(model)) == properties
+
+
 def test_sse_line_endings_and_cursor_tracker_are_bounded() -> None:
     chunks = ['id: 1\rdata: {"ok":', "true}\r\r", "id: 2\n", "data: 2\n\n"]
     assert list(parse_sse(iter(chunks))) == [
@@ -297,3 +323,82 @@ def test_create_session_xor_is_checked_before_transport() -> None:
     with pytest.raises(ValueError, match="exactly one"):
         client.create_session({"role_id": "r1", "new_role": {}})
     assert transport.requests == []
+
+
+def test_create_session_xor_is_schema_metadata_driven_and_fails_closed() -> None:
+    document = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    assert _operation_specs(document)["createSession"].mutually_exclusive == (
+        ("role_id", "new_role"),
+    )
+
+    changed = deepcopy(document)
+    changed["components"]["schemas"]["CreateSessionRequest"]["x-mutually-exclusive"] = [
+        "role_id",
+        "effort",
+    ]
+    changed_operations = _operation_specs(changed)
+    assert changed_operations["createSession"].mutually_exclusive == (("role_id", "effort"),)
+    assert _render_ts_client(changed, "digest") != _render_ts_client(document, "digest")
+
+    standard_one_of = deepcopy(document)
+    request_schema = standard_one_of["components"]["schemas"]["CreateSessionRequest"]
+    request_schema.pop("x-mutually-exclusive")
+    request_schema["oneOf"] = [
+        {"type": "object", "required": ["role_id"]},
+        {"type": "object", "required": ["new_role"]},
+    ]
+    assert _operation_specs(standard_one_of)["createSession"].mutually_exclusive == (
+        ("role_id", "new_role"),
+    )
+
+    invalid = deepcopy(document)
+    invalid["components"]["schemas"]["CreateSessionRequest"]["x-mutually-exclusive"] = [
+        "role_id",
+        "not_a_property",
+    ]
+    with pytest.raises(ValueError, match="mutually-exclusive"):
+        _operation_specs(invalid)
+
+
+def test_negotiation_requires_exact_metadata_shape_and_raw_transport_json() -> None:
+    invalid_values = [
+        None,
+        {"protocol_version": PHASE1E_PROTOCOL_VERSION},
+        {**_metadata(), "capabilities": [1]},
+        {**_metadata(), "capabilities": [""]},
+    ]
+    for value in invalid_values:
+        with pytest.raises(ProtocolNegotiationError) as raised:
+            Phase1EClient(transport=QueueTransport(_response(value))).negotiate_protocol()
+        assert raised.value.code == "protocol_incompatible"
+        assert raised.value.recovery == "refresh_and_retry"
+
+    with pytest.raises(TypeError, match="raw text"):
+        response_json(TransportResponse(status=200, headers={}, json={"cursor": 2**63 - 1}))  # type: ignore[arg-type]
+
+
+def test_python_transport_decodes_split_utf8_and_stream_content_types_strictly() -> None:
+    raw = 'data: {"text": "é"}\n\n'.encode()
+    split = raw.index(b"\xc3") + 1
+    assert list(parse_sse(iter([raw[:split], raw[split:]]))) == [{"data": {"text": "é"}}]
+
+    for status, content_type in ((200, "application/json"), (202, "text/event-stream")):
+        response_body = (
+            'data: {"ok": true}\n\n'
+            if status == 200
+            else json.dumps({"command_kind": "stream", "accepted": True, "command_id": "c1"})
+        )
+        transport = QueueTransport(
+            _response(_metadata()),
+            _response(
+                None,
+                status=status,
+                headers={"Content-Type": content_type},
+                body=response_body,
+            ),
+        )
+        with pytest.raises(Phase1EError, match="stream") as raised:
+            Phase1EClient(transport=transport).run_session_stream(
+                "s1", {"message": "m", "workspace": "/tmp/ws"}, idempotency_key="k"
+            )
+        assert raised.value.code == "invalid_stream_response"

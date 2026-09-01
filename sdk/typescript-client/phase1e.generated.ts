@@ -235,7 +235,8 @@ export interface ApprovalDecisionResult {
 type OperationParameter = { name: string; in: string; required: boolean; schema: Record<string, unknown> };
 type OperationDefinition = {
   method: string; pathTemplate: string; parameters: readonly OperationParameter[];
-  requestBody: Record<string, unknown> | null; responses: Record<string, Record<string, unknown>>;
+  requestBody: Record<string, unknown> | null; mutuallyExclusive: readonly (readonly string[])[];
+  responses: Record<string, Record<string, unknown>>;
 };
 
 const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
@@ -244,6 +245,7 @@ const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
     "pathTemplate": "/v1/protocol",
     "parameters": [],
     "requestBody": null,
+    "mutuallyExclusive": [],
     "responses": {
       "200": {
         "description": "Protocol metadata",
@@ -292,6 +294,7 @@ const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
       }
     ],
     "requestBody": null,
+    "mutuallyExclusive": [],
     "responses": {
       "200": {
         "description": "Workspace-backed project projections",
@@ -383,6 +386,7 @@ const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
       }
     ],
     "requestBody": null,
+    "mutuallyExclusive": [],
     "responses": {
       "200": {
         "description": "A deterministic metadata page",
@@ -457,6 +461,7 @@ const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
       }
     ],
     "requestBody": null,
+    "mutuallyExclusive": [],
     "responses": {
       "200": {
         "description": "Canonical thread projections",
@@ -508,6 +513,12 @@ const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
         }
       }
     },
+    "mutuallyExclusive": [
+      [
+        "role_id",
+        "new_role"
+      ]
+    ],
     "responses": {
       "201": {
         "description": "Created session",
@@ -574,6 +585,7 @@ const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
         }
       }
     },
+    "mutuallyExclusive": [],
     "responses": {
       "200": {
         "description": "New or replayed committed SSE events",
@@ -623,6 +635,7 @@ const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
       }
     ],
     "requestBody": null,
+    "mutuallyExclusive": [],
     "responses": {
       "200": {
         "description": "Pending approval projections",
@@ -694,6 +707,7 @@ const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {
         }
       }
     },
+    "mutuallyExclusive": [],
     "responses": {
       "200": {
         "description": "Persisted approval decision result",
@@ -795,8 +809,19 @@ export class ScopedCursorTracker {
   }
 }
 
-export class ProtocolNegotiationError extends Error {
-  constructor(message: string) { super(message); this.name = 'ProtocolNegotiationError'; }
+export class ProtocolNegotiationError extends Phase1EError {
+  constructor(message: string) { super('protocol_incompatible', message, false, 'refresh_and_retry'); this.name = 'ProtocolNegotiationError'; }
+}
+
+function validateProtocolNegotiation(value: unknown): ProtocolNegotiation {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new ProtocolNegotiationError('protocol response is not an object');
+  const metadata = value as Record<string, unknown>;
+  const required = ['protocol_version', 'schema_digest', 'min_client_version', 'capabilities'];
+  if (required.some(field => !Object.prototype.hasOwnProperty.call(metadata, field))) throw new ProtocolNegotiationError('protocol response is missing required metadata');
+  if (metadata.protocol_version !== PHASE1E_PROTOCOL_VERSION || metadata.min_client_version !== PHASE1E_PROTOCOL_VERSION) throw new ProtocolNegotiationError(`unsupported Core protocol: ${String(metadata.protocol_version)}`);
+  if (metadata.schema_digest !== PHASE1E_SCHEMA_DIGEST) throw new ProtocolNegotiationError(`Core Schema digest mismatch: expected ${PHASE1E_SCHEMA_DIGEST}, got ${String(metadata.schema_digest)}`);
+  if (!Array.isArray(metadata.capabilities) || metadata.capabilities.some(item => typeof item !== 'string' || item.length === 0)) throw new ProtocolNegotiationError('Core protocol capabilities are invalid');
+  return metadata as unknown as ProtocolNegotiation;
 }
 
 function newIdempotencyKey(): string {
@@ -826,10 +851,15 @@ function pathPart(value: string, label: string): string {
   return encodeURIComponent(value);
 }
 
-function validateCreateSessionRequest(request: CreateSessionRequest): void {
-  const hasRoleId = request.role_id !== undefined && request.role_id !== null;
-  const hasNewRole = request.new_role !== undefined && request.new_role !== null;
-  if (hasRoleId === hasNewRole) throw new TypeError('exactly one of role_id or new_role is required');
+function validateMutuallyExclusive(request: unknown, groups: readonly (readonly string[])[]): void {
+  if (groups.length === 0) return;
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) throw new TypeError('request body must be an object');
+  const record = request as Record<string, unknown>;
+  for (const group of groups) {
+    if (!Array.isArray(group) || group.length < 2 || group.some(field => typeof field !== 'string' || field.length === 0)) throw new TypeError('invalid mutually-exclusive schema metadata');
+    const provided = group.filter(field => record[field] !== undefined && record[field] !== null);
+    if (provided.length !== 1) throw new TypeError(`exactly one of ${group.join(', ')} is required`);
+  }
 }
 
 export class Phase1EClient {
@@ -851,14 +881,12 @@ export class Phase1EClient {
   async negotiateProtocol(force = false): Promise<ProtocolNegotiation> {
     if (this.negotiated && !force) return this.negotiated;
     const response = await this.requestOperation(PHASE1E_OPERATIONS.negotiateProtocol, {}, true);
-    const metadata = await readJson<ProtocolNegotiation>(response);
-    if (metadata.protocol_version !== PHASE1E_PROTOCOL_VERSION || metadata.min_client_version !== PHASE1E_PROTOCOL_VERSION) throw new ProtocolNegotiationError(`unsupported Core protocol: ${String(metadata.protocol_version)}`);
-    if (metadata.schema_digest !== PHASE1E_SCHEMA_DIGEST) throw new ProtocolNegotiationError(`Core Schema digest mismatch: expected ${PHASE1E_SCHEMA_DIGEST}, got ${metadata.schema_digest}`);
-    if (!Array.isArray(metadata.capabilities)) throw new ProtocolNegotiationError('Core protocol capabilities are invalid');
+    const metadata = validateProtocolNegotiation(await readJson<unknown>(response));
     this.negotiated = metadata; return metadata;
   }
 
-  private async requestOperation(operation: OperationDefinition, args: { pathParams?: Record<string, string>; query?: Record<string, string | undefined>; headers?: Record<string, string | undefined>; body?: string; }, skipNegotiation = false): Promise<Phase1EResponse> {
+  private async requestOperation(operation: OperationDefinition, args: { pathParams?: Record<string, string>; query?: Record<string, string | undefined>; headers?: Record<string, string | undefined>; body?: string; bodyValue?: unknown; }, skipNegotiation = false): Promise<Phase1EResponse> {
+    validateMutuallyExclusive(args.bodyValue, operation.mutuallyExclusive);
     const path = operation.pathTemplate.replace(/\{([^}]+)\}/g, (_match, name: string) => { const value = args.pathParams?.[name]; if (value === undefined) throw new TypeError(`missing path parameter: ${name}`); return value; });
     const headers = Object.fromEntries(Object.entries(args.headers ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined));
     return this.requestRaw({ method: operation.method, path, query: args.query, headers, body: args.body }, skipNegotiation);
@@ -890,15 +918,19 @@ export class Phase1EClient {
   }
 
   async createSession(request: CreateSessionRequest, options: CreateSessionOptions = {}): Promise<Session> {
-    validateCreateSessionRequest(request);
-    const response = await this.requestOperation(PHASE1E_OPERATIONS["createSession"], { headers: { 'Idempotency-Key': requireIdempotencyKey(options.idempotencyKey ?? newIdempotencyKey()), Accept: "application/json", 'Content-Type': "application/json" }, body: stringifyJson(request) });
+    const response = await this.requestOperation(PHASE1E_OPERATIONS["createSession"], { headers: { 'Idempotency-Key': requireIdempotencyKey(options.idempotencyKey ?? newIdempotencyKey()), Accept: "application/json", 'Content-Type': "application/json" }, bodyValue: request, body: stringifyJson(request) });
     return readJson<Session>(response);
   }
 
   async runSessionStream(sessionId: string, request: RunSessionRequest, options: RunSessionStreamOptions = {}): Promise<RunSessionStream> {
-    const response = await this.requestOperation(PHASE1E_OPERATIONS["runSessionStream"], { pathParams: { "session_id": pathPart(sessionId, "session_id") }, headers: { 'Last-Event-ID': options.lastEventId === undefined ? undefined : cursorQuery(options.lastEventId), 'Idempotency-Key': requireIdempotencyKey(options.idempotencyKey ?? newIdempotencyKey()), Accept: "text/event-stream, application/json", 'Content-Type': "application/json" }, body: stringifyJson(request) });
+    const response = await this.requestOperation(PHASE1E_OPERATIONS["runSessionStream"], { pathParams: { "session_id": pathPart(sessionId, "session_id") }, headers: { 'Last-Event-ID': options.lastEventId === undefined ? undefined : cursorQuery(options.lastEventId), 'Idempotency-Key': requireIdempotencyKey(options.idempotencyKey ?? newIdempotencyKey()), Accept: "text/event-stream, application/json", 'Content-Type': "application/json" }, bodyValue: request, body: stringifyJson(request) });
     const metadata = this.responseMetadata ?? { status: response.status, idempotencyReplayed: false };
-    if (response.status === 202) return { receipt: await readJson<CommandReceipt>(response), metadata, events: (async function*() {})() };
+    const contentType = responseHeaders(response.headers)['content-type']?.split(';', 1)[0]?.trim().toLowerCase();
+    if (response.status === 202) {
+      if (contentType !== 'application/json') throw new Phase1EError('invalid_stream_response', '202 stream receipt must use application/json', false, 'none');
+      return { receipt: await readJson<CommandReceipt>(response), metadata, events: (async function*() {})() };
+    }
+    if (response.status !== 200 || contentType !== 'text/event-stream') throw new Phase1EError('invalid_stream_response', '200 stream response must use text/event-stream', false, 'none');
     const source = response.body ?? await readText(response);
     return { receipt: null, metadata, events: (async function*() {
       for await (const frame of parseSse(source)) {
@@ -914,7 +946,7 @@ export class Phase1EClient {
   }
 
   async submitApproval(sessionId: string, toolCallId: string, request: ApprovalDecisionRequest, options: SubmitApprovalOptions = {}): Promise<ApprovalDecisionResult> {
-    const response = await this.requestOperation(PHASE1E_OPERATIONS["submitApproval"], { pathParams: { "session_id": pathPart(sessionId, "session_id"), "tool_call_id": pathPart(toolCallId, "tool_call_id") }, headers: { 'Idempotency-Key': requireIdempotencyKey(options.idempotencyKey ?? newIdempotencyKey()), Accept: "application/json", 'Content-Type': "application/json" }, body: stringifyJson(request) });
+    const response = await this.requestOperation(PHASE1E_OPERATIONS["submitApproval"], { pathParams: { "session_id": pathPart(sessionId, "session_id"), "tool_call_id": pathPart(toolCallId, "tool_call_id") }, headers: { 'Idempotency-Key': requireIdempotencyKey(options.idempotencyKey ?? newIdempotencyKey()), Accept: "application/json", 'Content-Type': "application/json" }, bodyValue: request, body: stringifyJson(request) });
     return readJson<ApprovalDecisionResult>(response);
   }
 

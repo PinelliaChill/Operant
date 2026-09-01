@@ -15,6 +15,8 @@ export type Phase1EBody =
   | null
   | undefined;
 
+export type Phase1ERawText = string | (() => Promise<string> | string);
+
 export interface Phase1ERequest {
   method: string;
   url: string;
@@ -29,8 +31,9 @@ export interface Phase1EResponse {
   status: number;
   headers?: Headers | Record<string, string | string[] | undefined>;
   body?: Phase1EBody;
-  json?: (() => Promise<unknown> | unknown) | unknown;
-  text?: (() => Promise<string> | string) | unknown;
+  /** JSON must remain raw text until parseJsonLossless runs. */
+  json?: Phase1ERawText;
+  text?: Phase1ERawText;
 }
 
 export type Phase1ETransport = (
@@ -91,9 +94,16 @@ async function bodyText(body: Phase1EBody): Promise<string> {
   if (typeof body === 'string') return body;
   if (body instanceof Uint8Array) return new TextDecoder().decode(body);
   let text = '';
+  const decoder = new TextDecoder();
   for await (const chunk of await bodyToAsyncIterable(body)) {
-    text += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+    if (typeof chunk === 'string') {
+      text += decoder.decode();
+      text += chunk;
+    } else {
+      text += decoder.decode(chunk, { stream: true });
+    }
   }
+  text += decoder.decode();
   return text;
 }
 
@@ -227,6 +237,7 @@ export function stringifyJson(value: unknown): string {
     if (typeof current === 'boolean') return current ? 'true' : 'false';
     if (typeof current === 'number') {
       if (!Number.isFinite(current)) throw new TypeError('JSON number must be finite');
+      if (Number.isInteger(current) && !Number.isSafeInteger(current)) throw new TypeError('unsafe integer cannot be serialized losslessly');
       return JSON.stringify(current);
     }
     if (current === undefined || typeof current === 'function' || typeof current === 'symbol') {
@@ -254,23 +265,25 @@ export function stringifyJson(value: unknown): string {
 export async function readJson<T>(response: Phase1EResponse): Promise<T> {
   if (typeof response.json === 'function') {
     const value = await response.json();
-    return (typeof value === 'string' ? parseJsonLossless(value) : value) as T;
+    if (typeof value !== 'string') throw new Phase1EError('preparsed_json_unsupported', 'Transport must return raw JSON text', false, 'none');
+    return parseJsonLossless(value) as T;
   }
   if (response.json !== undefined) {
-    return (typeof response.json === 'string' ? parseJsonLossless(response.json) : response.json) as T;
+    return parseJsonLossless(response.json) as T;
   }
-  const text = typeof response.text === 'function'
-    ? await response.text()
-    : response.text !== undefined
-      ? String(response.text)
-      : await bodyText(response.body);
+  const text = typeof response.text === 'function' ? await response.text() : response.text ?? await bodyText(response.body);
+  if (typeof text !== 'string') throw new Phase1EError('raw_text_required', 'Transport must return raw text', false, 'none');
   if (!text.trim()) return undefined as T;
   return parseJsonLossless(text) as T;
 }
 
 export async function readText(response: Phase1EResponse): Promise<string> {
-  if (typeof response.text === 'function') return await response.text();
-  if (response.text !== undefined) return String(response.text);
+  if (typeof response.text === 'function') {
+    const value = await response.text();
+    if (typeof value !== 'string') throw new Phase1EError('raw_text_required', 'Transport must return raw text', false, 'none');
+    return value;
+  }
+  if (response.text !== undefined) return response.text;
   return bodyText(response.body);
 }
 
@@ -355,9 +368,17 @@ async function* bodyToSseIterable(body: Phase1EBody): AsyncGenerator<string> {
     yield new TextDecoder().decode(body);
     return;
   }
+  const decoder = new TextDecoder();
   for await (const chunk of await bodyToAsyncIterable(body)) {
-    yield typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+    if (typeof chunk === 'string') {
+      yield decoder.decode();
+      yield chunk;
+    } else {
+      yield decoder.decode(chunk, { stream: true });
+    }
   }
+  const tail = decoder.decode();
+  if (tail) yield tail;
 }
 
 export class Phase1EError extends Error {
