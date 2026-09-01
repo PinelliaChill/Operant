@@ -17,6 +17,7 @@ __pycache__/
 htmlcov/
 dist/
 build/
+node_modules/
 
 # Local runtime state and secrets
 .env
