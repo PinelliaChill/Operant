@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Generate the Phase 1E SDK from the one public OpenAPI document.
+"""Generate the Phase 1E SDK from the public OpenAPI document.
 
-The generator intentionally uses only the Python standard library.  That keeps
-the checked-in SDK reproducible when the Core or a client is built offline.
-The generated files contain no hand-maintained request/response models; the
-small transport and SSE adapters are kept separately because they are runtime
-plumbing rather than protocol definitions.
+The OpenAPI document is the only wire-contract source. In particular, client
+operation metadata, paths, HTTP methods, parameters, request bodies, and
+responses are all read from ``document["paths"]``. The small amount of
+operation-id keyed code below is deliberately limited to runtime ergonomics
+(for example, the SSE response adapter); it does not contain a second wire
+contract.
+
+Only the Python standard library is used so generation remains deterministic
+and works offline.
 """
 
-# Generated output contains long protocol declarations; the generated files
-# carry the same targeted exemption.
+# Generated output contains long protocol declarations; generated files carry
+# the same targeted exemption.
 # ruff: noqa: E501
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +35,49 @@ PY_INIT_PATH = PY_DIR / "__init__.py"
 
 PROTOCOL_VERSION = "phase1e.v1"
 MAX_CURSOR = 2**63 - 1
+EXPECTED_OPERATION_IDS = {
+    "negotiateProtocol",
+    "listProjects",
+    "listWorkspaceFiles",
+    "listThreads",
+    "createSession",
+    "runSessionStream",
+    "listPendingApprovals",
+    "submitApproval",
+}
+HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 _IDENTIFIER = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+_PATH_PARAMETER = re.compile(r"\{([^}]+)\}")
+
+
+@dataclass(frozen=True)
+class ParameterSpec:
+    name: str
+    location: str
+    required: bool
+    schema: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class OperationSpec:
+    operation_id: str
+    path: str
+    method: str
+    parameters: tuple[ParameterSpec, ...]
+    request_body: dict[str, Any] | None
+    responses: dict[str, dict[str, Any]]
+
+    @property
+    def path_parameters(self) -> tuple[ParameterSpec, ...]:
+        return tuple(parameter for parameter in self.parameters if parameter.location == "path")
+
+    @property
+    def query_parameters(self) -> tuple[ParameterSpec, ...]:
+        return tuple(parameter for parameter in self.parameters if parameter.location == "query")
+
+    @property
+    def header_parameters(self) -> tuple[ParameterSpec, ...]:
+        return tuple(parameter for parameter in self.parameters if parameter.location == "header")
 
 
 def _read_schema() -> dict[str, Any]:
@@ -82,9 +129,16 @@ def _literal(value: Any) -> str:
 
 
 def _ts_type(schema: dict[str, Any], *, property_name: str = "") -> str:
+    """Render a schema type while preserving the lossless int64 distinction."""
+
     ref = _ref_name(schema)
     if ref:
         return "Cursor" if ref == "Cursor" else ref
+    if schema.get("format") == "int64":
+        schema_type = schema.get("type")
+        if isinstance(schema_type, list):
+            return " | ".join("null" if item == "null" else "Int64" for item in schema_type)
+        return "Int64"
     if "const" in schema:
         return _literal(schema["const"])
     enum = schema.get("enum")
@@ -128,6 +182,11 @@ def _py_type(schema: dict[str, Any], *, property_name: str = "") -> str:
     ref = _ref_name(schema)
     if ref:
         return "Cursor" if ref == "Cursor" else ref
+    if schema.get("format") == "int64":
+        schema_type = schema.get("type")
+        if isinstance(schema_type, list):
+            return " | ".join("None" if item == "null" else "Int64" for item in schema_type)
+        return "Int64"
     if "const" in schema:
         return f"Literal[{schema['const']!r}]"
     enum = schema.get("enum")
@@ -169,7 +228,294 @@ def _schema_objects(document: dict[str, Any]) -> list[tuple[str, dict[str, Any]]
     return [(name, schemas[name]) for name in schemas if isinstance(schemas[name], dict)]
 
 
-def _render_ts_models(document: dict[str, Any], digest: str) -> str:
+def _components(document: dict[str, Any], kind: str) -> dict[str, Any]:
+    components = document.get("components")
+    if not isinstance(components, dict) or not isinstance(components.get(kind), dict):
+        raise ValueError(f"components.{kind} must be an object")
+    return components[kind]
+
+
+def _resolve_component(
+    document: dict[str, Any], value: Any, kind: str, *, label: str
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    ref = value.get("$ref")
+    if ref is None:
+        return value
+    if not isinstance(ref, str) or not ref.startswith(f"#/components/{kind}/"):
+        raise ValueError(f"{label} has an unsupported reference")
+    name = ref.rsplit("/", 1)[-1]
+    component = _components(document, kind).get(name)
+    if not isinstance(component, dict):
+        raise ValueError(f"{label} references missing components.{kind}.{name}")
+    return component
+
+
+def _wire_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Keep refs compact while retaining inline schemas from the operation."""
+
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        return {"$ref": ref}
+    return schema
+
+
+def _content_descriptor(content: Any, *, label: str) -> dict[str, Any]:
+    if content is None:
+        return {}
+    if not isinstance(content, dict) or not content:
+        raise ValueError(f"{label}.content must be a non-empty object")
+    result: dict[str, Any] = {}
+    for media_type in sorted(content):
+        media = content[media_type]
+        if not isinstance(media, dict) or not isinstance(media.get("schema"), dict):
+            raise ValueError(f"{label} media type {media_type} must declare a schema")
+        result[media_type] = {"schema": _wire_schema(media["schema"])}
+    return result
+
+
+def _operation_specs(document: dict[str, Any]) -> dict[str, OperationSpec]:
+    paths = document.get("paths")
+    if not isinstance(paths, dict) or not paths:
+        raise ValueError("Phase 1E Schema paths are missing")
+    operations: dict[str, OperationSpec] = {}
+    for path, path_item in paths.items():
+        if not isinstance(path, str) or not isinstance(path_item, dict):
+            raise ValueError("each path item must be an object")
+        path_parameters = path_item.get("parameters", [])
+        if not isinstance(path_parameters, list):
+            raise ValueError(f"{path} path parameters must be an array")
+        for raw_method, raw_operation in path_item.items():
+            method = str(raw_method).lower()
+            if method not in HTTP_METHODS:
+                continue
+            if not isinstance(raw_operation, dict):
+                raise ValueError(f"{path} {method} operation must be an object")
+            operation_id = raw_operation.get("operationId")
+            if not isinstance(operation_id, str) or not operation_id:
+                raise ValueError(f"{path} {method} must declare operationId")
+            if operation_id in operations:
+                raise ValueError(f"duplicate operationId: {operation_id}")
+            operation_parameters = raw_operation.get("parameters", [])
+            if not isinstance(operation_parameters, list):
+                raise ValueError(f"{operation_id}.parameters must be an array")
+            raw_parameters = path_parameters + operation_parameters
+            parameters: list[ParameterSpec] = []
+            seen_parameters: set[tuple[str, str]] = set()
+            for index, raw_parameter in enumerate(raw_parameters):
+                parameter = _resolve_component(
+                    document,
+                    raw_parameter,
+                    "parameters",
+                    label=f"{operation_id}.parameters[{index}]",
+                )
+                name = parameter.get("name")
+                location = parameter.get("in")
+                schema = parameter.get("schema")
+                if not isinstance(name, str) or not name:
+                    raise ValueError(f"{operation_id} parameter name is invalid")
+                if location not in {"path", "query", "header"}:
+                    raise ValueError(f"{operation_id} parameter {name} has unsupported location")
+                if not isinstance(schema, dict):
+                    raise ValueError(f"{operation_id} parameter {name} has no schema")
+                key = (location, name)
+                if key in seen_parameters:
+                    raise ValueError(f"{operation_id} has duplicate parameter {location}:{name}")
+                seen_parameters.add(key)
+                required = parameter.get("required") is True or location == "path"
+                parameters.append(
+                    ParameterSpec(name=name, location=location, required=required, schema=schema)
+                )
+            placeholders = set(_PATH_PARAMETER.findall(path))
+            declared_path = {
+                parameter.name for parameter in parameters if parameter.location == "path"
+            }
+            if placeholders != declared_path:
+                raise ValueError(
+                    f"{operation_id} path parameters do not match template: "
+                    f"expected {sorted(placeholders)}, got {sorted(declared_path)}"
+                )
+            raw_request = raw_operation.get("requestBody")
+            request_body: dict[str, Any] | None = None
+            if raw_request is not None:
+                request = _resolve_component(
+                    document, raw_request, "requestBodies", label=f"{operation_id}.requestBody"
+                )
+                request_body = {
+                    "required": request.get("required") is True,
+                    "content": _content_descriptor(
+                        request.get("content"), label=f"{operation_id}.requestBody"
+                    ),
+                }
+            raw_responses = raw_operation.get("responses")
+            if not isinstance(raw_responses, dict) or not raw_responses:
+                raise ValueError(f"{operation_id}.responses must be a non-empty object")
+            responses: dict[str, dict[str, Any]] = {}
+            for status, raw_response in raw_responses.items():
+                response = _resolve_component(
+                    document, raw_response, "responses", label=f"{operation_id}.responses.{status}"
+                )
+                responses[str(status)] = {
+                    "description": response.get("description", ""),
+                    "content": _content_descriptor(
+                        response.get("content"), label=f"{operation_id}.responses.{status}"
+                    ),
+                }
+            operations[operation_id] = OperationSpec(
+                operation_id=operation_id,
+                path=path,
+                method=method.upper(),
+                parameters=tuple(parameters),
+                request_body=request_body,
+                responses=responses,
+            )
+    if set(operations) != EXPECTED_OPERATION_IDS:
+        raise ValueError(f"unexpected Phase 1E operation ids: {sorted(operations)}")
+    return operations
+
+
+def _success_response(operation: OperationSpec) -> tuple[str, dict[str, Any]]:
+    candidates = [
+        (status, response)
+        for status, response in operation.responses.items()
+        if status.isdigit() and 200 <= int(status) < 300
+    ]
+    if not candidates:
+        raise ValueError(f"{operation.operation_id} must declare a 2xx response")
+    return min(candidates, key=lambda item: int(item[0]))
+
+
+def _response_schema(
+    response: dict[str, Any], media_type: str | None = None
+) -> dict[str, Any] | None:
+    content = response.get("content", {})
+    if not isinstance(content, dict) or not content:
+        return None
+    selected = media_type if media_type in content else sorted(content)[0]
+    media = content.get(selected)
+    return media.get("schema") if isinstance(media, dict) else None
+
+
+def _response_type(response: dict[str, Any]) -> str:
+    schema = _response_schema(response)
+    return _ts_type(schema) if isinstance(schema, dict) else "unknown"
+
+
+def _py_response_type(response: dict[str, Any]) -> str:
+    schema = _response_schema(response)
+    return _py_type(schema) if isinstance(schema, dict) else "Any"
+
+
+def _is_stream_operation(operation: OperationSpec) -> bool:
+    return any(
+        media_type == "text/event-stream"
+        for response in operation.responses.values()
+        for media_type in response.get("content", {})
+    )
+
+
+def _operation_metadata(operation: OperationSpec) -> dict[str, Any]:
+    return {
+        "method": operation.method,
+        "pathTemplate": operation.path,
+        "parameters": [
+            {
+                "name": parameter.name,
+                "in": parameter.location,
+                "required": parameter.required,
+                "schema": _wire_schema(parameter.schema),
+            }
+            for parameter in operation.parameters
+        ],
+        "requestBody": operation.request_body,
+        "responses": operation.responses,
+    }
+
+
+def _camel(name: str) -> str:
+    parts = re.split(r"[^A-Za-z0-9]+", name)
+    if not parts:
+        return name
+    return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:] if part)
+
+
+def _snake(name: str) -> str:
+    value = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value).replace("-", "_").lower()
+
+
+def _pascal(name: str) -> str:
+    value = _camel(name)
+    return value[:1].upper() + value[1:]
+
+
+def _ts_options_name(operation: OperationSpec) -> str:
+    return {
+        "listProjects": "ProjectListOptions",
+        "listWorkspaceFiles": "WorkspaceFilesOptions",
+        "listThreads": "ThreadListOptions",
+        "runSessionStream": "RunSessionStreamOptions",
+    }.get(operation.operation_id, f"{_pascal(operation.operation_id)}Options")
+
+
+def _option_parameters(operation: OperationSpec) -> list[ParameterSpec]:
+    return [parameter for parameter in operation.parameters if parameter.location == "query"]
+
+
+def _header_parameter(operation: OperationSpec, name: str) -> ParameterSpec | None:
+    return next(
+        (
+            parameter
+            for parameter in operation.header_parameters
+            if parameter.name.lower() == name.lower()
+        ),
+        None,
+    )
+
+
+def _accept_header(operation: OperationSpec) -> str:
+    media_types: list[str] = []
+    for response in operation.responses.values():
+        for media_type in response.get("content", {}):
+            if media_type not in media_types:
+                media_types.append(media_type)
+    return ", ".join(media_types) if media_types else "application/json"
+
+
+def _request_media_type(operation: OperationSpec) -> str | None:
+    if not operation.request_body:
+        return None
+    content = operation.request_body.get("content", {})
+    return sorted(content)[0] if content else None
+
+
+def _ts_param_options_lines(operation: OperationSpec) -> list[str]:
+    parameters = _option_parameters(operation)
+    has_idempotency = _header_parameter(operation, "Idempotency-Key") is not None
+    has_last_event = _header_parameter(operation, "Last-Event-ID") is not None
+    if not parameters and not has_idempotency and not has_last_event:
+        return []
+    name = _ts_options_name(operation)
+    base = " extends Phase1ERequestOptions" if operation.operation_id == "runSessionStream" else ""
+    lines = [f"export interface {name}{base} {{"]
+    emitted: set[str] = set()
+    for parameter in parameters:
+        field = _camel(parameter.name)
+        if field in emitted:
+            raise ValueError(f"{operation.operation_id} option name collision: {field}")
+        emitted.add(field)
+        optional = "" if parameter.required else "?"
+        lines.append(f"  {field}{optional}: {_ts_type(parameter.schema)};")
+    if has_idempotency and "idempotencyKey" not in emitted and not base:
+        lines.append("  idempotencyKey?: string;")
+    if has_last_event and "lastEventId" not in emitted:
+        lines.append("  lastEventId?: Cursor;")
+    lines.extend(["}", ""])
+    return lines
+
+
+def _ts_models(document: dict[str, Any], digest: str) -> str:
     lines = [
         "/* eslint-disable */",
         "// GENERATED FILE - DO NOT EDIT. Source: sdk/protocol/schema/operant-phase1e.openapi.json",
@@ -186,14 +532,16 @@ def _render_ts_models(document: dict[str, Any], digest: str) -> str:
         "  readJson,",
         "  readText,",
         "  responseHeaders,",
+        "  stringifyJson,",
         "} from './phase1e-transport';",
         "",
-        "export const PHASE1E_PROTOCOL_VERSION = 'phase1e.v1' as const;",
-        f"export const PHASE1E_SCHEMA_DIGEST = '{digest}' as const;",
-        "export const PHASE1E_MAX_CURSOR = 9223372036854775807n;",
+        f"export const PHASE1E_PROTOCOL_VERSION = {json.dumps(PROTOCOL_VERSION)} as const;",
+        f"export const PHASE1E_SCHEMA_DIGEST = {json.dumps(digest)} as const;",
+        f"export const PHASE1E_MAX_CURSOR = {MAX_CURSOR}n;",
         "",
-        "/** Cursor is kept lossless for SSE ids beyond Number.MAX_SAFE_INTEGER. */",
-        "export type Cursor = number | bigint;",
+        "/** All int64 values remain a safe number or a bigint; JSON parsing promotes large tokens. */",
+        "export type Int64 = number | bigint;",
+        "export type Cursor = Int64;",
         "",
     ]
     for name, schema in _schema_objects(document):
@@ -220,7 +568,7 @@ def _render_ts_models(document: dict[str, Any], digest: str) -> str:
                 field = (
                     property_name
                     if _IDENTIFIER.fullmatch(property_name)
-                    else json.dumps(property_name)
+                    else json.dumps(property_name, ensure_ascii=False)
                 )
                 lines.append(
                     f"  {field}{optional}: {_ts_type(property_schema, property_name=property_name)};"
@@ -231,391 +579,390 @@ def _render_ts_models(document: dict[str, Any], digest: str) -> str:
     return "\n".join(lines)
 
 
+def _render_ts_method(operation: OperationSpec) -> list[str]:
+    method_name = operation.operation_id
+    path_args = [f"{_camel(parameter.name)}: string" for parameter in operation.path_parameters]
+    body_schema = operation.request_body
+    body_type = "unknown"
+    if body_schema:
+        content = body_schema.get("content", {})
+        if content:
+            body_schema_value = next(iter(content.values())).get("schema")
+            if isinstance(body_schema_value, dict):
+                body_type = _ts_type(body_schema_value)
+    option_parameters = _option_parameters(operation)
+    has_options = (
+        bool(option_parameters)
+        or bool(_header_parameter(operation, "Idempotency-Key"))
+        or bool(_header_parameter(operation, "Last-Event-ID"))
+    )
+    option_name = _ts_options_name(operation)
+    required_options = any(parameter.required for parameter in option_parameters)
+    options_arg = ""
+    if has_options:
+        options_arg = f"options: {option_name}" + ("" if required_options else " = {}")
+    args = path_args.copy()
+    if body_schema:
+        args.append(f"request: {body_type}")
+    if options_arg:
+        args.append(options_arg)
+    _status, response = _success_response(operation)
+    response_type = _response_type(response)
+    return_type = "RunSessionStream" if _is_stream_operation(operation) else response_type
+    lines = [f"  async {method_name}({', '.join(args)}): Promise<{return_type}> {{"]
+    if operation.operation_id == "createSession":
+        lines.append("    validateCreateSessionRequest(request);")
+    request_args: list[str] = []
+    if operation.path_parameters:
+        pairs = ", ".join(
+            f"{json.dumps(parameter.name)}: pathPart({_camel(parameter.name)}, {json.dumps(parameter.name)})"
+            for parameter in operation.path_parameters
+        )
+        request_args.append(f"pathParams: {{ {pairs} }}")
+    if operation.query_parameters:
+        query_entries = []
+        for parameter in operation.query_parameters:
+            field = _camel(parameter.name)
+            value = f"options.{field}"
+            if parameter.required:
+                value = f"requireOption({value}, {parameter.name!r})"
+            if _ref_name(parameter.schema) == "Cursor":
+                value = (
+                    f"cursorQuery({value})"
+                    if parameter.required
+                    else f"{value} === undefined ? undefined : cursorQuery({value})"
+                )
+            else:
+                value = (
+                    f"String({value})"
+                    if parameter.required
+                    else f"{value} === undefined ? undefined : String({value})"
+                )
+            query_entries.append(f"{json.dumps(parameter.name)}: {value}")
+        request_args.append(f"query: {{ {', '.join(query_entries)} }}")
+    header_entries: list[str] = [f"Accept: {json.dumps(_accept_header(operation))}"]
+    if _header_parameter(operation, "Idempotency-Key"):
+        header_entries.insert(
+            0,
+            "'Idempotency-Key': requireIdempotencyKey(options.idempotencyKey ?? newIdempotencyKey())",
+        )
+    if _header_parameter(operation, "Last-Event-ID"):
+        header_entries.insert(
+            0,
+            "'Last-Event-ID': options.lastEventId === undefined ? undefined : cursorQuery(options.lastEventId)",
+        )
+    media_type = _request_media_type(operation)
+    if media_type:
+        header_entries.append(f"'Content-Type': {json.dumps(media_type)}")
+    request_args.append(f"headers: {{ {', '.join(header_entries)} }}")
+    if body_schema:
+        request_args.append("body: stringifyJson(request)")
+    lines.append(
+        f"    const response = await this.requestOperation(PHASE1E_OPERATIONS[{json.dumps(operation.operation_id)}], {{ {', '.join(request_args)} }});"
+    )
+    if _is_stream_operation(operation):
+        receipt_status = next((status for status in operation.responses if status == "202"), None)
+        receipt_response = operation.responses.get(receipt_status or "")
+        receipt_type = _response_type(receipt_response) if receipt_response else "CommandReceipt"
+        lines.extend(
+            [
+                "    const metadata = this.responseMetadata ?? { status: response.status, idempotencyReplayed: false };",
+                f"    if (response.status === {receipt_status or 202}) return {{ receipt: await readJson<{receipt_type}>(response), metadata, events: (async function*() {{}})() }};",
+                "    const source = response.body ?? await readText(response);",
+                "    return { receipt: null, metadata, events: (async function*() {",
+                "      for await (const frame of parseSse(source)) {",
+                "        const id = frame.id === undefined ? null : parseCursor(frame.id);",
+                "        yield { id, event: frame.event ?? 'message', data: frame.data, resource_scope: `session:${sessionId}`, stream_kind: 'session.run' };",
+                "      }",
+                "    })() };",
+            ]
+        )
+    else:
+        lines.append(f"    return readJson<{response_type}>(response);")
+    lines.append("  }")
+    return lines
+
+
 def _render_ts_client(document: dict[str, Any], digest: str) -> str:
-    del document  # Operation names and wire shapes are frozen in the Schema above.
-    return f"""/* eslint-disable */
-// GENERATED FILE - DO NOT EDIT. Source: sdk/protocol/schema/operant-phase1e.openapi.json
-// Generated by sdk/protocol/generate_phase1e.py; schema digest: {digest}
+    # The digest is embedded in the model header; operation data is schema-derived.
+    _ = digest
+    operations = _operation_specs(document)
+    metadata = {
+        operation_id: _operation_metadata(operation)
+        for operation_id, operation in operations.items()
+    }
+    metadata_json = json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=False)
+    lines = [
+        "type OperationParameter = { name: string; in: string; required: boolean; schema: Record<string, unknown> };",
+        "type OperationDefinition = {",
+        "  method: string; pathTemplate: string; parameters: readonly OperationParameter[];",
+        "  requestBody: Record<string, unknown> | null; responses: Record<string, Record<string, unknown>>;",
+        "};",
+        "",
+        f"const PHASE1E_OPERATIONS: Record<string, OperationDefinition> = {metadata_json} as const;",
+        "",
+        "export interface ResponseMetadata {",
+        "  status: number; idempotencyKey?: string; idempotencyReplayed: boolean;",
+        "}",
+        "export interface Phase1ERequestOptions { idempotencyKey?: string; }",
+    ]
+    for operation in operations.values():
+        lines.extend(_ts_param_options_lines(operation))
+    lines.extend(
+        [
+            "export interface RunSessionStream {",
+            "  receipt: CommandReceipt | null; metadata: ResponseMetadata;",
+            "  events: AsyncIterable<SseFrame>;",
+            "}",
+            "",
+            "/** Deduplicate only a bounded recent window per resource and stream scope. */",
+            "export class ScopedCursorTracker {",
+            "  private readonly seen = new Map<string, Set<string>>();",
+            "  private readonly order = new Map<string, string[]>();",
+            "  private readonly latest = new Map<string, Cursor>();",
+            "  private readonly scopeOrder: string[] = [];",
+            "  constructor(private readonly maxSeenPerScope = 1024, private readonly maxScopes = 1024) {",
+            "    if (!Number.isSafeInteger(maxSeenPerScope) || maxSeenPerScope < 1 || !Number.isSafeInteger(maxScopes) || maxScopes < 1) throw new RangeError('cursor tracker bounds must be positive safe integers');",
+            "  }",
+            "",
+            "  accept(frame: SseFrame): boolean {",
+            "    if (frame.id === null || frame.id === undefined) return true;",
+            "    if (!frame.resource_scope || !frame.stream_kind) throw new TypeError('SSE scope is required');",
+            "    const parsed = parseCursor(frame.id);",
+            "    const key = `${frame.resource_scope}\\0${frame.stream_kind}`;",
+            "    const cursor = BigInt(parsed).toString();",
+            "    const scope = this.seen.get(key) ?? new Set<string>();",
+            "    const order = this.order.get(key) ?? [];",
+            "    if (!this.seen.has(key)) { this.scopeOrder.push(key); while (this.scopeOrder.length > this.maxScopes) { const evictedKey = this.scopeOrder.shift(); if (evictedKey !== undefined) { this.seen.delete(evictedKey); this.order.delete(evictedKey); this.latest.delete(evictedKey); } } }",
+            "    if (scope.has(cursor)) return false;",
+            "    scope.add(cursor); order.push(cursor);",
+            "    while (order.length > this.maxSeenPerScope) { const evicted = order.shift(); if (evicted !== undefined) scope.delete(evicted); }",
+            "    this.seen.set(key, scope); this.order.set(key, order);",
+            "    const previous = this.latest.get(key);",
+            "    if (previous === undefined || BigInt(parsed) > BigInt(previous)) this.latest.set(key, parsed);",
+            "    return true;",
+            "  }",
+            "",
+            "  last(scope: string, streamKind: string): Cursor | null {",
+            "    if (!scope || !streamKind) throw new TypeError('SSE scope is required');",
+            "    return this.latest.get(`${scope}\\0${streamKind}`) ?? null;",
+            "  }",
+            "}",
+            "",
+            "export class ProtocolNegotiationError extends Error {",
+            "  constructor(message: string) { super(message); this.name = 'ProtocolNegotiationError'; }",
+            "}",
+            "",
+            "function newIdempotencyKey(): string {",
+            "  const cryptoApi = globalThis.crypto;",
+            "  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID();",
+            "  if (typeof cryptoApi?.getRandomValues === 'function') {",
+            "    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));",
+            "    bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;",
+            "    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');",
+            "    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;",
+            "  }",
+            "  throw new Phase1EError('crypto_unavailable', 'Secure idempotency key generation is unavailable', false, 'none');",
+            "}",
+            "",
+            "function requireIdempotencyKey(value: string): string {",
+            "  if (typeof value !== 'string' || !value) throw new TypeError('idempotencyKey must not be empty');",
+            "  return value;",
+            "}",
+            "",
+            "function cursorQuery(value: Cursor | undefined): string | undefined {",
+            "  if (value === undefined) return undefined;",
+            "  return parseCursor(value).toString();",
+            "}",
+            "",
+            "function pathPart(value: string, label: string): string {",
+            "  if (!value) throw new TypeError(`${label} must not be empty`);",
+            "  return encodeURIComponent(value);",
+            "}",
+            "",
+            "function validateCreateSessionRequest(request: CreateSessionRequest): void {",
+            "  const hasRoleId = request.role_id !== undefined && request.role_id !== null;",
+            "  const hasNewRole = request.new_role !== undefined && request.new_role !== null;",
+            "  if (hasRoleId === hasNewRole) throw new TypeError('exactly one of role_id or new_role is required');",
+            "}",
+            "",
+            "export class Phase1EClient {",
+            "  readonly protocolVersion = PHASE1E_PROTOCOL_VERSION;",
+            "  readonly schemaDigest = PHASE1E_SCHEMA_DIGEST;",
+            "  private readonly baseUrl: string;",
+            "  private readonly transport: Phase1ETransport;",
+            "  private readonly clientVersion: string;",
+            "  private negotiated: ProtocolNegotiation | null = null;",
+            "  private responseMetadata: ResponseMetadata | null = null;",
+            "",
+            "  constructor(baseUrl = 'http://127.0.0.1:8000', transport: Phase1ETransport = fetchPhase1ETransport, clientVersion = PHASE1E_PROTOCOL_VERSION) {",
+            "    this.baseUrl = baseUrl.replace(/\\/+$/, ''); this.transport = transport; this.clientVersion = clientVersion;",
+            "  }",
+            "",
+            "  get lastResponse(): ResponseMetadata | null { return this.responseMetadata; }",
+            "  get negotiatedProtocol(): ProtocolNegotiation | null { return this.negotiated; }",
+            "",
+            "  async negotiateProtocol(force = false): Promise<ProtocolNegotiation> {",
+            "    if (this.negotiated && !force) return this.negotiated;",
+            "    const response = await this.requestOperation(PHASE1E_OPERATIONS.negotiateProtocol, {}, true);",
+            "    const metadata = await readJson<ProtocolNegotiation>(response);",
+            "    if (metadata.protocol_version !== PHASE1E_PROTOCOL_VERSION || metadata.min_client_version !== PHASE1E_PROTOCOL_VERSION) throw new ProtocolNegotiationError(`unsupported Core protocol: ${String(metadata.protocol_version)}`);",
+            "    if (metadata.schema_digest !== PHASE1E_SCHEMA_DIGEST) throw new ProtocolNegotiationError(`Core Schema digest mismatch: expected ${PHASE1E_SCHEMA_DIGEST}, got ${metadata.schema_digest}`);",
+            "    if (!Array.isArray(metadata.capabilities)) throw new ProtocolNegotiationError('Core protocol capabilities are invalid');",
+            "    this.negotiated = metadata; return metadata;",
+            "  }",
+            "",
+            "  private async requestOperation(operation: OperationDefinition, args: { pathParams?: Record<string, string>; query?: Record<string, string | undefined>; headers?: Record<string, string | undefined>; body?: string; }, skipNegotiation = false): Promise<Phase1EResponse> {",
+            "    const path = operation.pathTemplate.replace(/\\{([^}]+)\\}/g, (_match, name: string) => { const value = args.pathParams?.[name]; if (value === undefined) throw new TypeError(`missing path parameter: ${name}`); return value; });",
+            "    const headers = Object.fromEntries(Object.entries(args.headers ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined));",
+            "    return this.requestRaw({ method: operation.method, path, query: args.query, headers, body: args.body }, skipNegotiation);",
+            "  }",
+            "",
+            "  private async requestRaw(request: Omit<Phase1ERequest, 'url'> & { path: string; query?: Record<string, string | undefined>; }, skipNegotiation = false): Promise<Phase1EResponse> {",
+            "    if (!skipNegotiation) await this.negotiateProtocol();",
+            "    const url = new URL(`${this.baseUrl}${request.path}`); for (const [key, value] of Object.entries(request.query ?? {})) if (value !== undefined) url.searchParams.set(key, value);",
+            "    let response: Phase1EResponse;",
+            "    try { response = await this.transport({ ...request, url: url.toString(), headers: { 'X-Operant-Client-Version': this.clientVersion, ...(request.headers ?? {}) } }); }",
+            "    catch (error: unknown) { if (error instanceof Phase1EError) throw error; throw new Phase1EError('transport_unavailable', error instanceof Error ? error.message : 'transport request failed', true, 'retry_later'); }",
+            "    const headers = responseHeaders(response.headers); this.responseMetadata = { status: response.status, idempotencyKey: headers['idempotency-key'], idempotencyReplayed: headers['idempotency-replayed']?.toLowerCase() === 'true' };",
+            "    if (response.status < 200 || response.status >= 300) throw await Phase1EError.fromResponse(response); return response;",
+            "  }",
+            "",
+        ]
+    )
+    if any(
+        parameter.required
+        for operation in operations.values()
+        for parameter in operation.query_parameters
+    ):
+        insert_at = lines.index(
+            "function cursorQuery(value: Cursor | undefined): string | undefined {"
+        )
+        lines[insert_at:insert_at] = [
+            "function requireOption<T>(value: T | undefined, label: string): T {",
+            "  if (value === undefined || value === null) throw new TypeError(`${label} is required`);",
+            "  return value;",
+            "}",
+            "",
+        ]
+    for operation in operations.values():
+        if operation.operation_id == "negotiateProtocol":
+            continue
+        lines.extend(_render_ts_method(operation))
+        lines.append("")
+    lines.extend(["}", "", "export { Phase1EError };", ""])
+    return "\n".join(lines)
 
-import {{
-  Phase1EError,
-  Phase1ERequest,
-  Phase1EResponse,
-  Phase1ETransport,
-  fetchPhase1ETransport,
-  parseCursor,
-  parseSse,
-  readJson,
-  readText,
-  responseHeaders,
-}} from './phase1e-transport';
 
-export const PHASE1E_PROTOCOL_VERSION = 'phase1e.v1' as const;
-export const PHASE1E_SCHEMA_DIGEST = '{digest}' as const;
-export const PHASE1E_MAX_CURSOR = 9223372036854775807n;
+def _py_options_name(operation: OperationSpec) -> str:
+    return {
+        "listProjects": "ProjectListOptions",
+        "listWorkspaceFiles": "WorkspaceFilesOptions",
+        "listThreads": "ThreadListOptions",
+        "runSessionStream": "RunSessionStreamOptions",
+    }.get(operation.operation_id, f"{_pascal(operation.operation_id)}Options")
 
-/** Cursor is kept lossless for SSE ids beyond Number.MAX_SAFE_INTEGER. */
-export type Cursor = number | bigint;
 
-export interface ProtocolNegotiation {{
-  protocol_version: 'phase1e.v1';
-  schema_digest: string;
-  min_client_version: 'phase1e.v1';
-  capabilities: string[];
-}}
-
-export interface ReceiptResource {{ type: string; id: string; }}
-export interface CommandReceipt {{
-  command_kind: 'command' | 'stream';
-  accepted: boolean;
-  command_id: string;
-  stream_replay_available?: boolean;
-  first_event_type?: string | null;
-  resource_type?: string | null;
-  resource_id?: string | null;
-  replay_url?: string | null;
-  replay_after_cursor?: Cursor | null;
-  recovery?: 'replay_events' | 'not_available' | 'none' | 'manual_reconcile';
-  resource?: ReceiptResource | null;
-  [key: string]: unknown;
-}}
-
-export interface ProjectThreadSummary {{
-  id: string; status: string; created_at: string; updated_at: string;
-}}
-export interface ProjectWorkflowRunSummary {{
-  id: string; status: string; current_stage: string; summary: string;
-  created_at: string; updated_at: string;
-}}
-export interface ProjectProjection {{
-  project_id: string; workspace_ref: string; readable: boolean; writable: boolean;
-  created_at: string; threads: ProjectThreadSummary[];
-  workflow_runs: ProjectWorkflowRunSummary[];
-}}
-export interface WorkspaceFileEntry {{
-  path: string; name: string; type: 'file' | 'directory';
-  size_bytes: number | bigint | null; modified_at: string | null;
-}}
-export interface WorkspaceFilesPage {{
-  workspace_id: string; path: string; entries: WorkspaceFileEntry[];
-  snapshot: string; next_page_token: string | null;
-}}
-export type ThreadStatus = 'active' | 'completed' | 'cancelled' | 'archived';
-export interface ThreadLegacyRef {{ source_type: 'session' | 'workflow_run'; source_id: string; }}
-export interface ThreadProjection {{
-  id: string; cursor: Cursor | null; parent_thread_id: string | null;
-  workspace_ref: string | null; status: ThreadStatus; legacy_refs: ThreadLegacyRef[];
-  created_at: string; updated_at: string; archived_at: string | null;
-}}
-export interface RoleSnapshot {{
-  [key: string]: unknown;
-  role_id: string; role_version: number; role_name: string; system_prompt: string;
-  model_profile_id: string; model_profile_name: string; provider: string; model_id: string;
-  base_url: string; secret_ref: string; context_window?: number | null; effort: string;
-  provider_effort_parameter?: string | null; provider_effort_value?: string | null;
-  tool_policy: Record<string, unknown>; budget: Record<string, unknown>;
-  memory_scope: string; captured_at: string; overrides: Record<string, unknown>;
-}}
-export interface Session {{ id: string; role_snapshot: RoleSnapshot; created_at: string; }}
-export interface CreateRole {{
-  name: string; system_prompt: string; model_profile_id: string; [key: string]: unknown;
-}}
-export interface CreateSessionRequest {{
-  role_id?: string | null; new_role?: CreateRole | null;
-  model_profile_id?: string | null; effort?: string | null;
-  budget_overrides?: Record<string, unknown> | null;
-}}
-export interface ReferenceRequest {{ [key: string]: unknown; path?: string; start_line?: number; end_line?: number; }}
-export interface RunSessionRequest {{
-  message: string; workspace: string; thread_id?: string | null; references?: ReferenceRequest[];
-}}
-export interface RuntimeEvent {{
-  [key: string]: unknown; id?: string; cursor?: Cursor | null; session_id?: string;
-  agent_id?: string | null; event_type?: string; payload?: Record<string, unknown>;
-  created_at?: string;
-}}
-export interface SseFrame {{
-  id: Cursor | null; event: string; data: unknown; resource_scope: string; stream_kind: string;
-}}
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
-export interface ApprovalProjection {{
-  approval_id: string; tool_call_id: string; category: string; detail: string;
-  action_hash: string; status: ApprovalStatus; requested_at: string; expires_at: string;
-  continuation_available: boolean;
-}}
-export interface ApprovalDecisionRequest {{ approved: boolean; }}
-export interface ApprovalDecisionResult {{
-  accepted: boolean; changed: boolean; approved: boolean; status: ApprovalStatus;
-  approval_id: string; continuation_available: boolean; [key: string]: unknown;
-}}
-export interface ResponseMetadata {{
-  status: number; idempotencyKey?: string; idempotencyReplayed: boolean;
-}}
-export interface Phase1ERequestOptions {{ idempotencyKey?: string; }}
-export interface WorkspaceFilesOptions {{
-  path?: string; limit?: number; pageToken?: string; snapshot?: string; afterName?: string;
-}}
-export interface ProjectListOptions {{ afterCursor?: Cursor; limit?: number; }}
-export interface ThreadListOptions {{
-  afterCursor?: Cursor; limit?: number; parentThreadId?: string;
-  workspaceRef?: string; status?: ThreadStatus;
-}}
-export interface RunSessionStreamOptions extends Phase1ERequestOptions {{
-  lastEventId?: Cursor;
-}}
-export interface RunSessionStream {{
-  receipt: CommandReceipt | null; metadata: ResponseMetadata;
-  events: AsyncIterable<SseFrame>;
-}}
-
-/** Deduplicate only within the same resource and stream scope. Cursor gaps are valid. */
-export class ScopedCursorTracker {{
-  private readonly seen = new Map<string, Set<string>>();
-  private readonly latest = new Map<string, Cursor>();
-
-  accept(frame: SseFrame): boolean {{
-    if (frame.id === null || frame.id === undefined) return true;
-    if (!frame.resource_scope || !frame.stream_kind) throw new TypeError('SSE scope is required');
-    const key = `${{frame.resource_scope}}\\0${{frame.stream_kind}}`;
-    const cursor = String(frame.id);
-    const scope = this.seen.get(key) ?? new Set<string>();
-    if (scope.has(cursor)) return false;
-    scope.add(cursor);
-    this.seen.set(key, scope);
-    const previous = this.latest.get(key);
-    if (previous === undefined || BigInt(frame.id) > BigInt(previous)) this.latest.set(key, frame.id);
-    return true;
-  }}
-
-  last(scope: string, streamKind: string): Cursor | null {{
-    return this.latest.get(`${{scope}}\\0${{streamKind}}`) ?? null;
-  }}
-}}
-
-export class ProtocolNegotiationError extends Error {{
-  constructor(message: string) {{ super(message); this.name = 'ProtocolNegotiationError'; }}
-}}
-
-function newIdempotencyKey(): string {{
-  const cryptoApi = globalThis.crypto;
-  if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-  return `phase1e-${{Date.now().toString(36)}}-${{Math.random().toString(36).slice(2)}}`;
-}}
-
-function cursorQuery(value: Cursor | undefined): string | undefined {{
-  if (value === undefined) return undefined;
-  return typeof value === 'bigint' ? value.toString() : String(value);
-}}
-
-function pathPart(value: string, label: string): string {{
-  if (!value) throw new TypeError(`${{label}} must not be empty`);
-  return encodeURIComponent(value);
-}}
-
-export class Phase1EClient {{
-  readonly protocolVersion = PHASE1E_PROTOCOL_VERSION;
-  readonly schemaDigest = PHASE1E_SCHEMA_DIGEST;
-  private readonly baseUrl: string;
-  private readonly transport: Phase1ETransport;
-  private readonly clientVersion: string;
-  private negotiated: ProtocolNegotiation | null = null;
-  private responseMetadata: ResponseMetadata | null = null;
-
-  constructor(
-    baseUrl = 'http://127.0.0.1:8000',
-    transport: Phase1ETransport = fetchPhase1ETransport,
-    clientVersion = PHASE1E_PROTOCOL_VERSION,
-  ) {{
-    this.baseUrl = baseUrl.replace(/\\/+$/, '');
-    this.transport = transport;
-    this.clientVersion = clientVersion;
-  }}
-
-  get lastResponse(): ResponseMetadata | null {{ return this.responseMetadata; }}
-  get negotiatedProtocol(): ProtocolNegotiation | null {{ return this.negotiated; }}
-
-  async negotiateProtocol(force = false): Promise<ProtocolNegotiation> {{
-    if (this.negotiated && !force) return this.negotiated;
-    const response = await this.requestRaw({{ method: 'GET', path: '/v1/protocol' }}, true);
-    const metadata = await readJson<ProtocolNegotiation>(response);
-    if (
-      metadata.protocol_version !== PHASE1E_PROTOCOL_VERSION ||
-      metadata.min_client_version !== PHASE1E_PROTOCOL_VERSION
-    ) {{
-      throw new ProtocolNegotiationError(
-        `unsupported Core protocol: ${{String(metadata.protocol_version)}}`,
-      );
-    }}
-    if (metadata.schema_digest !== PHASE1E_SCHEMA_DIGEST) {{
-      throw new ProtocolNegotiationError(
-        `Core Schema digest mismatch: expected ${{PHASE1E_SCHEMA_DIGEST}}, got ${{metadata.schema_digest}}`,
-      );
-    }}
-    if (!Array.isArray(metadata.capabilities)) {{
-      throw new ProtocolNegotiationError('Core protocol capabilities are invalid');
-    }}
-    this.negotiated = metadata;
-    return metadata;
-  }}
-
-  private async ensureNegotiated(): Promise<void> {{ await this.negotiateProtocol(); }}
-
-  private async requestRaw(
-    request: Omit<Phase1ERequest, 'url'> & {{ path: string; query?: Record<string, string | undefined>; }},
-    skipNegotiation = false,
-  ): Promise<Phase1EResponse> {{
-    if (!skipNegotiation) await this.ensureNegotiated();
-    const url = new URL(`${{this.baseUrl}}${{request.path}}`);
-    for (const [key, value] of Object.entries(request.query ?? {{}})) {{
-      if (value !== undefined) url.searchParams.set(key, value);
-    }}
-    let response: Phase1EResponse;
-    try {{
-      response = await this.transport({{
-        ...request,
-        url: url.toString(),
-        headers: {{ 'X-Operant-Client-Version': this.clientVersion, ...(request.headers ?? {{}}) }},
-      }});
-    }} catch (error: unknown) {{
-      if (error instanceof Phase1EError) throw error;
-      throw new Phase1EError(
-        'transport_unavailable',
-        error instanceof Error ? error.message : 'transport request failed',
-        true,
-        'retry_later',
-      );
-    }}
-    const headers = responseHeaders(response.headers);
-    this.responseMetadata = {{
-      status: response.status,
-      idempotencyKey: headers['idempotency-key'],
-      idempotencyReplayed: headers['idempotency-replayed']?.toLowerCase() === 'true',
-    }};
-    if (response.status < 200 || response.status >= 300) throw await Phase1EError.fromResponse(response);
-    return response;
-  }}
-
-  async listProjects(options: ProjectListOptions = {{}}): Promise<ProjectProjection[]> {{
-    const response = await this.requestRaw({{
-      method: 'GET', path: '/v1/projects', headers: {{ Accept: 'application/json' }},
-      query: {{ after_cursor: cursorQuery(options.afterCursor), limit: options.limit === undefined ? undefined : String(options.limit) }},
-    }});
-    return readJson<ProjectProjection[]>(response);
-  }}
-
-  async listWorkspaceFiles(workspaceId: string, options: WorkspaceFilesOptions = {{}}): Promise<WorkspaceFilesPage> {{
-    const response = await this.requestRaw({{
-      method: 'GET', path: `/v1/workspaces/${{pathPart(workspaceId, 'workspaceId')}}/files`,
-      headers: {{ Accept: 'application/json' }},
-      query: {{
-        path: options.path,
-        limit: options.limit === undefined ? undefined : String(options.limit),
-        page_token: options.pageToken,
-        snapshot: options.snapshot,
-        after_name: options.afterName,
-      }},
-    }});
-    return readJson<WorkspaceFilesPage>(response);
-  }}
-
-  async listThreads(options: ThreadListOptions = {{}}): Promise<ThreadProjection[]> {{
-    const response = await this.requestRaw({{
-      method: 'GET', path: '/v1/threads', headers: {{ Accept: 'application/json' }},
-      query: {{
-        after_cursor: cursorQuery(options.afterCursor),
-        limit: options.limit === undefined ? undefined : String(options.limit),
-        parent_thread_id: options.parentThreadId,
-        workspace_ref: options.workspaceRef,
-        status: options.status,
-      }},
-    }});
-    return readJson<ThreadProjection[]>(response);
-  }}
-
-  async createSession(
-    request: CreateSessionRequest,
-    options: Phase1ERequestOptions = {{}},
-  ): Promise<Session> {{
-    const response = await this.requestRaw({{
-      method: 'POST', path: '/v1/sessions',
-      headers: {{
-        Accept: 'application/json', 'Content-Type': 'application/json',
-        'Idempotency-Key': options.idempotencyKey ?? newIdempotencyKey(),
-      }},
-      body: JSON.stringify(request),
-    }});
-    return readJson<Session>(response);
-  }}
-
-  async runSessionStream(
-    sessionId: string,
-    request: RunSessionRequest,
-    options: RunSessionStreamOptions = {{}},
-  ): Promise<RunSessionStream> {{
-    const response = await this.requestRaw({{
-      method: 'POST', path: `/v1/sessions/${{pathPart(sessionId, 'sessionId')}}/runs`,
-      headers: {{
-        Accept: 'text/event-stream, application/json', 'Content-Type': 'application/json',
-        'Idempotency-Key': options.idempotencyKey ?? newIdempotencyKey(),
-        ...(options.lastEventId === undefined ? {{}} : {{ 'Last-Event-ID': String(options.lastEventId) }}),
-      }},
-      body: JSON.stringify(request),
-    }});
-    const metadata = this.responseMetadata ?? {{ status: response.status, idempotencyReplayed: false }};
-    if (response.status === 202) {{
-      return {{ receipt: await readJson<CommandReceipt>(response), metadata, events: (async function*() {{}})() }};
-    }}
-    const source = response.body ?? await readText(response);
-    return {{
-      receipt: null,
-      metadata,
-      events: (async function*() {{
-        for await (const frame of parseSse(source)) {{
-          const id = frame.id === undefined ? null : parseCursor(frame.id);
-          yield {{
-            id,
-            event: frame.event ?? 'message',
-            data: frame.data,
-            resource_scope: `session:${{sessionId}}`,
-            stream_kind: 'session.run',
-          }};
-        }}
-      }})(),
-    }};
-  }}
-
-  async listPendingApprovals(sessionId: string): Promise<ApprovalProjection[]> {{
-    const response = await this.requestRaw({{
-      method: 'GET', path: `/v1/sessions/${{pathPart(sessionId, 'sessionId')}}/approvals`,
-      headers: {{ Accept: 'application/json' }},
-    }});
-    return readJson<ApprovalProjection[]>(response);
-  }}
-
-  async submitApproval(
-    sessionId: string,
-    toolCallId: string,
-    request: ApprovalDecisionRequest,
-    options: Phase1ERequestOptions = {{}},
-  ): Promise<ApprovalDecisionResult> {{
-    const response = await this.requestRaw({{
-      method: 'POST',
-      path: `/v1/sessions/${{pathPart(sessionId, 'sessionId')}}/approvals/${{pathPart(toolCallId, 'toolCallId')}}`,
-      headers: {{
-        Accept: 'application/json', 'Content-Type': 'application/json',
-        'Idempotency-Key': options.idempotencyKey ?? newIdempotencyKey(),
-      }},
-      body: JSON.stringify(request),
-    }});
-    return readJson<ApprovalDecisionResult>(response);
-  }}
-}}
-
-export {{ Phase1EError }};
-"""
+def _render_py_method(operation: OperationSpec) -> list[str]:
+    method_name = _snake(operation.operation_id)
+    args: list[str] = ["self"]
+    for parameter in operation.path_parameters:
+        args.append(f"{parameter.name}: str")
+    body_schema = operation.request_body
+    body_type = "dict[str, Any]"
+    if body_schema:
+        content = body_schema.get("content", {})
+        if content:
+            body_value = next(iter(content.values())).get("schema")
+            if isinstance(body_value, dict):
+                body_type = _py_type(body_value)
+        args.append(f"request: {body_type}")
+    query_params = operation.query_parameters
+    header_idempotency = _header_parameter(operation, "Idempotency-Key")
+    header_last_event = _header_parameter(operation, "Last-Event-ID")
+    if query_params:
+        args.append("*")
+        for parameter in query_params:
+            type_name = _py_type(parameter.schema)
+            if not parameter.required:
+                type_name = f"{type_name} | None"
+            default = "" if parameter.required else " = None"
+            args.append(f"{parameter.name}: {type_name}{default}")
+    elif header_idempotency or header_last_event:
+        args.append("*")
+    if header_idempotency:
+        args.append("idempotency_key: str | None = None")
+    if header_last_event:
+        args.append("last_event_id: int | None = None")
+    _status, response = _success_response(operation)
+    response_type = _py_response_type(response)
+    return_type = "RunSessionStream" if _is_stream_operation(operation) else response_type
+    lines = [f"    def {method_name}({', '.join(args)}) -> {return_type}:"]
+    if operation.operation_id == "createSession":
+        lines.append("        _validate_create_session_request(request)")
+    request_args: list[str] = [repr(operation.operation_id)]
+    if operation.path_parameters:
+        entries = ", ".join(
+            f"{parameter.name!r}: _required_path({parameter.name}, {parameter.name!r})"
+            for parameter in operation.path_parameters
+        )
+        request_args.append(f"path_params={{ {entries} }}")
+    if query_params:
+        entries = []
+        for parameter in query_params:
+            value = parameter.name
+            if parameter.required:
+                value = f"_required_option({value}, {parameter.name!r})"
+            if _ref_name(parameter.schema) == "Cursor":
+                value = (
+                    f"_cursor_value({value})" if parameter.required else f"_cursor_value({value})"
+                )
+            elif parameter.required:
+                value = f"str({value})"
+            else:
+                value = f"None if {value} is None else str({value})"
+            entries.append(f"{parameter.name!r}: {value}")
+        request_args.append(f"query={{ {', '.join(entries)} }}")
+    header_entries: list[str] = []
+    if header_idempotency:
+        header_entries.append(
+            "'Idempotency-Key': _require_idempotency_key(idempotency_key if idempotency_key is not None else _new_idempotency_key())"
+        )
+    if header_last_event:
+        header_entries.append("'Last-Event-ID': _cursor_value(last_event_id)")
+    if header_entries:
+        request_args.append(f"headers={{ {', '.join(header_entries)} }}")
+    request_args.append(f"accept={_accept_header(operation)!r}")
+    if body_schema:
+        request_args.append("body=dict(request)")
+    lines.append(f"        response = self._request_operation({', '.join(request_args)})")
+    if _is_stream_operation(operation):
+        receipt_status = next((status for status in operation.responses if status == "202"), None)
+        lines.extend(
+            [
+                "        metadata = self.last_response or ResponseMetadata(response.status)",
+                f"        if response.status == {receipt_status or 202}:",
+                "            receipt = cast(CommandReceipt, response_json(response))",
+                "            return RunSessionStream(receipt=receipt, events=iter(()), metadata=metadata)",
+                "        source = response.body if response.body is not None else response_text(response)",
+                "        frames = parse_sse(source)",
+                "        def events() -> Iterator[SseFrame]:",
+                "            for frame in frames:",
+                "                yield {'id': _parse_cursor_id(frame.get('id')), 'event': frame.get('event', 'message'), 'data': frame.get('data'), 'resource_scope': f'session:{session_id}', 'stream_kind': 'session.run'}",
+                "        return RunSessionStream(receipt=None, events=events(), metadata=metadata)",
+            ]
+        )
+    else:
+        lines.append(f"        return cast({response_type}, response_json(response))")
+    return lines
 
 
 def _render_py_models(document: dict[str, Any], digest: str) -> str:
+    operations = _operation_specs(document)
+    metadata = {
+        operation_id: _operation_metadata(operation)
+        for operation_id, operation in operations.items()
+    }
     lines = [
         '"""Generated Phase 1E models and synchronous client. DO NOT EDIT."""',
         "",
@@ -626,10 +973,12 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
         "from __future__ import annotations",
         "",
         "import json",
+        "import re",
         "import uuid",
+        "from collections import deque",
         "from collections.abc import Iterator",
         "from dataclasses import dataclass",
-        "from typing import Any, Literal, TypedDict, cast",
+        "from typing import Any, Literal, NotRequired, TypedDict, cast",
         "",
         "from .transport import (",
         "    Phase1EError,",
@@ -637,15 +986,16 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
         "    TransportRequest,",
         "    default_transport,",
         "    parse_sse,",
-            "    response_headers,",
-            "    response_json,",
-            "    response_text,",
+        "    response_headers,",
+        "    response_json,",
+        "    response_text,",
         ")",
         "",
         f"PHASE1E_PROTOCOL_VERSION = {PROTOCOL_VERSION!r}",
         f"PHASE1E_SCHEMA_DIGEST = {digest!r}",
         f"PHASE1E_MAX_CURSOR = {MAX_CURSOR}",
-        "Cursor = int",
+        "Int64 = int",
+        "Cursor = Int64",
         "",
     ]
     for name, schema in _schema_objects(document):
@@ -661,17 +1011,22 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
         if schema.get("type") != "object" and "properties" not in schema:
             lines.extend([f"{name} = {_py_type(schema)}", ""])
             continue
-        lines.append(f"class {name}(TypedDict, total=False):")
+        lines.append(f"class {name}(TypedDict):")
         properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
         if isinstance(properties, dict) and properties:
             for property_name, property_schema in properties.items():
                 if not isinstance(property_schema, dict):
                     continue
-                lines.append(
-                    f"    {property_name}: {_py_type(property_schema, property_name=property_name)}"
+                rendered = _py_type(property_schema, property_name=property_name)
+                if property_name not in required:
+                    rendered = f"NotRequired[{rendered}]"
+                field = (
+                    property_name if _IDENTIFIER.fullmatch(property_name) else repr(property_name)
                 )
+                lines.append(f"    {field}: {rendered}")
         else:
-            lines.append("    _empty: Any")
+            lines.append("    _empty: NotRequired[Any]")
         lines.append("")
     lines.extend(
         [
@@ -687,48 +1042,87 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
             "    events: Iterator[SseFrame]",
             "    metadata: ResponseMetadata",
             "",
+            f"OPERATION_DEFINITIONS: dict[str, dict[str, Any]] = {repr(metadata)}",
+            "",
+            "_PATH_PARAMETER = re.compile(r'\\{([^}]+)\\}')",
+            "",
             "class ProtocolNegotiationError(Phase1EError):",
             "    def __init__(self, message: str) -> None:",
             "        super().__init__('protocol_incompatible', message, recovery='refresh_and_retry')",
             "",
             "class ScopedCursorTracker:",
-            '    """Deduplicate only within one resource and stream scope; gaps are valid."""',
+            '    """Deduplicate a bounded recent window per resource and stream scope."""',
             "",
-            "    def __init__(self) -> None:",
+            "    def __init__(self, max_seen_per_scope: int = 1024, max_scopes: int = 1024) -> None:",
+            "        if isinstance(max_seen_per_scope, bool) or not isinstance(max_seen_per_scope, int) or max_seen_per_scope < 1 or isinstance(max_scopes, bool) or not isinstance(max_scopes, int) or max_scopes < 1:",
+            "            raise ValueError('cursor tracker bounds must be positive integers')",
+            "        self._max_seen_per_scope = max_seen_per_scope",
+            "        self._max_scopes = max_scopes",
             "        self._seen: dict[tuple[str, str], set[int]] = {}",
+            "        self._order: dict[tuple[str, str], deque[int]] = {}",
             "        self._latest: dict[tuple[str, str], int] = {}",
+            "        self._scope_order: deque[tuple[str, str]] = deque()",
             "",
             "    def accept(self, frame: SseFrame) -> bool:",
             "        cursor = frame.get('id')",
             "        if cursor is None:",
             "            return True",
+            "        parsed = _cursor_value_int(cursor)",
             "        scope = frame.get('resource_scope')",
             "        stream_kind = frame.get('stream_kind')",
             "        if not isinstance(scope, str) or not isinstance(stream_kind, str) or not scope or not stream_kind:",
             "            raise TypeError('SSE scope is required')",
             "        key = (scope, stream_kind)",
             "        seen = self._seen.setdefault(key, set())",
-            "        if cursor in seen:",
+            "        order = self._order.setdefault(key, deque())",
+            "        if key not in self._scope_order:",
+            "            self._scope_order.append(key)",
+            "            while len(self._scope_order) > self._max_scopes:",
+            "                evicted_key = self._scope_order.popleft()",
+            "                self._seen.pop(evicted_key, None)",
+            "                self._order.pop(evicted_key, None)",
+            "                self._latest.pop(evicted_key, None)",
+            "        if parsed in seen:",
             "            return False",
-            "        seen.add(cursor)",
-            "        self._latest[key] = max(cursor, self._latest.get(key, cursor))",
+            "        seen.add(parsed)",
+            "        order.append(parsed)",
+            "        while len(order) > self._max_seen_per_scope:",
+            "            seen.discard(order.popleft())",
+            "        latest = self._latest.get(key)",
+            "        if latest is None or parsed > latest:",
+            "            self._latest[key] = parsed",
             "        return True",
             "",
             "    def last(self, scope: str, stream_kind: str) -> int | None:",
+            "        if not scope or not stream_kind:",
+            "            raise TypeError('SSE scope is required')",
             "        return self._latest.get((scope, stream_kind))",
             "",
             "def _new_idempotency_key() -> str:",
             "    return f'phase1e-{uuid.uuid4()}'",
             "",
+            "def _require_idempotency_key(value: str) -> str:",
+            "    if not isinstance(value, str) or not value:",
+            "        raise ValueError('idempotency_key must not be empty')",
+            "    return value",
+            "",
+            "def _cursor_value_int(value: object) -> int:",
+            "    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= PHASE1E_MAX_CURSOR:",
+            "        raise ValueError('cursor must be a non-bool integer between 0 and 2^63-1')",
+            "    return value",
+            "",
             "def _cursor_value(value: int | None) -> str | None:",
             "    if value is None:",
             "        return None",
-            "    if isinstance(value, bool) or not 0 <= value <= PHASE1E_MAX_CURSOR:",
-            "        raise ValueError('cursor must be an integer between 0 and 2^63-1')",
-            "    return str(value)",
+            "    return str(_cursor_value_int(value))",
+            "",
+            "def _required_option(value: object, label: str) -> object:",
+            "    if value is None:",
+            "        raise ValueError(f'{label} is required')",
+            "    return value",
             "",
             "def _required_path(value: str, label: str) -> str:",
-            "    if not value:",
+            "    if not isinstance(value, str) or not value:",
             "        raise ValueError(f'{label} must not be empty')",
             "    from urllib.parse import quote",
             "    return quote(value, safe='')",
@@ -736,22 +1130,21 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
             "def _parse_cursor_id(value: object) -> int | None:",
             "    if value is None:",
             "        return None",
-            "    if not isinstance(value, str) or not value.isdecimal():",
+            "    if not isinstance(value, str) or not re.fullmatch(r'[0-9]+', value):",
             "        raise ValueError('SSE id must be a decimal cursor')",
-            "    parsed = int(value)",
-            "    _cursor_value(parsed)",
-            "    return parsed",
+            "    return _cursor_value_int(int(value))",
+            "",
+            "def _validate_create_session_request(request: CreateSessionRequest) -> None:",
+            "    has_role_id = request.get('role_id') is not None",
+            "    has_new_role = request.get('new_role') is not None",
+            "    if has_role_id == has_new_role:",
+            "        raise ValueError('exactly one of role_id or new_role is required')",
             "",
             "class Phase1EClient:",
             "    protocol_version = PHASE1E_PROTOCOL_VERSION",
             "    schema_digest = PHASE1E_SCHEMA_DIGEST",
             "",
-            "    def __init__(",
-            "        self,",
-            "        base_url: str = 'http://127.0.0.1:8000',",
-            "        transport: Transport = default_transport,",
-            "        client_version: str = PHASE1E_PROTOCOL_VERSION,",
-            "    ) -> None:",
+            "    def __init__(self, base_url: str = 'http://127.0.0.1:8000', transport: Transport = default_transport, client_version: str = PHASE1E_PROTOCOL_VERSION) -> None:",
             "        self._base_url = base_url.rstrip('/')",
             "        self._transport = transport",
             "        self._client_version = client_version",
@@ -762,108 +1155,67 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
             "    def negotiated_protocol(self) -> ProtocolNegotiation | None:",
             "        return self._negotiated",
             "",
+            "    def _request_operation(self, operation_id: str, *, path_params: dict[str, str] | None = None, query: dict[str, str | None] | None = None, headers: dict[str, str | None] | None = None, body: dict[str, Any] | None = None, accept: str = 'application/json', skip_negotiation: bool = False) -> Any:",
+            "        operation = OPERATION_DEFINITIONS.get(operation_id)",
+            "        if operation is None:",
+            "            raise ValueError(f'unknown protocol operation: {operation_id}')",
+            "        values = path_params or {}",
+            "        def replace(match: re.Match[str]) -> str:",
+            "            name = match.group(1)",
+            "            value = values.get(name)",
+            "            if value is None:",
+            "                raise ValueError(f'missing path parameter: {name}')",
+            "            return value",
+            "        path = _PATH_PARAMETER.sub(replace, str(operation['pathTemplate']))",
+            "        if not skip_negotiation:",
+            "            self.negotiate_protocol()",
+            "        outgoing_headers = {'Accept': accept, 'X-Operant-Client-Version': self._client_version}",
+            "        outgoing_headers.update({key: value for key, value in (headers or {}).items() if value is not None})",
+            "        payload = None",
+            "        if body is not None:",
+            "            outgoing_headers.setdefault('Content-Type', 'application/json')",
+            "            payload = json.dumps(body, ensure_ascii=False, separators=(',', ':'))",
+            "        from urllib.parse import urlencode",
+            "        query_values = {key: value for key, value in (query or {}).items() if value is not None}",
+            "        suffix = f'?{urlencode(query_values)}' if query_values else ''",
+            "        request = TransportRequest(method=str(operation['method']), url=f'{self._base_url}{path}{suffix}', headers=outgoing_headers, body=payload)",
+            "        try:",
+            "            response = self._transport(request)",
+            "        except Phase1EError:",
+            "            raise",
+            "        except Exception as error:",
+            "            raise Phase1EError('transport_unavailable', str(error) or 'transport request failed', retryable=True, recovery='retry_later') from error",
+            "        values = response_headers(response.headers)",
+            "        self.last_response = ResponseMetadata(status=response.status, idempotency_key=values.get('idempotency-key'), idempotency_replayed=values.get('idempotency-replayed', '').lower() == 'true')",
+            "        if not 200 <= response.status < 300:",
+            "            raise Phase1EError.from_response(response)",
+            "        return response",
+            "",
             "    def negotiate_protocol(self, *, force: bool = False) -> ProtocolNegotiation:",
             "        if self._negotiated is not None and not force:",
             "            return self._negotiated",
-            "        response = self._request('GET', '/v1/protocol', skip_negotiation=True)",
-            "        metadata: dict[str, Any] = response_json(response)",
+            "        response = self._request_operation('negotiateProtocol', skip_negotiation=True)",
+            "        metadata = response_json(response)",
             "        if not isinstance(metadata, dict):",
             "            raise ProtocolNegotiationError('protocol response is not an object')",
             "        if metadata.get('protocol_version') != PHASE1E_PROTOCOL_VERSION or metadata.get('min_client_version') != PHASE1E_PROTOCOL_VERSION:",
             "            raise ProtocolNegotiationError(f'unsupported Core protocol: {metadata.get(\"protocol_version\")}')",
             "        if metadata.get('schema_digest') != PHASE1E_SCHEMA_DIGEST:",
             "            raise ProtocolNegotiationError('Core Schema digest mismatch')",
-            "        if not isinstance(metadata.get('capabilities'), list):",
+            "        if not isinstance(metadata.get('capabilities'), list) or any(not isinstance(item, str) for item in metadata['capabilities']):",
             "            raise ProtocolNegotiationError('Core protocol capabilities are invalid')",
-            "        self._negotiated = metadata  # type: ignore[assignment]",
-            "        return metadata  # type: ignore[return-value]",
+            "        self._negotiated = cast(ProtocolNegotiation, metadata)",
+            "        return self._negotiated",
             "",
-            "    def _request(",
-            "        self,",
-            "        method: str,",
-            "        path: str,",
-            "        *,",
-            "        query: dict[str, str | None] | None = None,",
-            "        body: dict[str, Any] | None = None,",
-            "        idempotency_key: str | None = None,",
-            "        last_event_id: int | None = None,",
-            "        accept: str = 'application/json',",
-            "        skip_negotiation: bool = False,",
-            "    ) -> Any:",
-            "        if not skip_negotiation:",
-            "            self.negotiate_protocol()",
-            "        headers = {'Accept': accept}",
-            "        payload: str | None = None",
-            "        if body is not None:",
-            "            headers['Content-Type'] = 'application/json'",
-            "            payload = json.dumps(body, ensure_ascii=False, separators=(',', ':'))",
-            "        if idempotency_key is not None:",
-            "            headers['Idempotency-Key'] = idempotency_key or _new_idempotency_key()",
-            "        if last_event_id is not None:",
-            "            cursor = _cursor_value(last_event_id)",
-            "            assert cursor is not None",
-            "            headers['Last-Event-ID'] = cursor",
-            "        headers['X-Operant-Client-Version'] = self._client_version",
-            "        from urllib.parse import urlencode",
-            "        query_values = {key: value for key, value in (query or {}).items() if value is not None}",
-            "        query_suffix = f'?{urlencode(query_values)}' if query_values else ''",
-            "        request = TransportRequest(method=method, url=f'{self._base_url}{path}{query_suffix}', headers=headers, body=payload)",
-            "        response = self._transport(request)",
-            "        values = response_headers(response.headers)",
-            "        self.last_response = ResponseMetadata(",
-            "            status=response.status,",
-            "            idempotency_key=values.get('idempotency-key'),",
-            "            idempotency_replayed=values.get('idempotency-replayed', '').lower() == 'true',",
-            "        )",
-            "        if not 200 <= response.status < 300:",
-            "            raise Phase1EError.from_response(response)",
-            "        return response",
-            "",
-            "    def list_projects(self, *, after_cursor: int | None = None, limit: int | None = None) -> list[ProjectProjection]:",
-            "        response = self._request('GET', '/v1/projects', query={'after_cursor': _cursor_value(after_cursor), 'limit': None if limit is None else str(limit)})",
-            "        return cast(list[ProjectProjection], response_json(response))",
-            "",
-            "    def list_workspace_files(self, workspace_id: str, *, path: str | None = None, limit: int | None = None, page_token: str | None = None, snapshot: str | None = None, after_name: str | None = None) -> WorkspaceFilesPage:",
-            "        query = {'path': path, 'limit': None if limit is None else str(limit), 'page_token': page_token, 'snapshot': snapshot, 'after_name': after_name}",
-            "        response = self._request('GET', f'/v1/workspaces/{_required_path(workspace_id, \"workspace_id\")}/files', query=query)",
-            "        return cast(WorkspaceFilesPage, response_json(response))",
-            "",
-            "    def list_threads(self, *, after_cursor: int | None = None, limit: int | None = None, parent_thread_id: str | None = None, workspace_ref: str | None = None, status: ThreadStatus | None = None) -> list[ThreadProjection]:",
-            "        query = {'after_cursor': _cursor_value(after_cursor), 'limit': None if limit is None else str(limit), 'parent_thread_id': parent_thread_id, 'workspace_ref': workspace_ref, 'status': status}",
-            "        response = self._request('GET', '/v1/threads', query=query)",
-            "        return cast(list[ThreadProjection], response_json(response))",
-            "",
-            "    def create_session(self, request: CreateSessionRequest, *, idempotency_key: str | None = None) -> Session:",
-            "        response = self._request('POST', '/v1/sessions', body=dict(request), idempotency_key=idempotency_key or _new_idempotency_key())",
-            "        return cast(Session, response_json(response))",
-            "",
-            "    def run_session_stream(self, session_id: str, request: RunSessionRequest, *, idempotency_key: str | None = None, last_event_id: int | None = None) -> RunSessionStream:",
-            "        response = self._request('POST', f'/v1/sessions/{_required_path(session_id, \"session_id\")}/runs', body=dict(request), idempotency_key=idempotency_key or _new_idempotency_key(), last_event_id=last_event_id, accept='text/event-stream, application/json')",
-            "        metadata = self.last_response or ResponseMetadata(response.status)",
-            "        if response.status == 202:",
-            "            receipt: CommandReceipt = response_json(response)",
-            "            return RunSessionStream(receipt=receipt, events=iter(()), metadata=metadata)",
-            "        source = response.body if response.body is not None else response_text(response)",
-            "        frames = parse_sse(source)",
-            "        def events() -> Iterator[SseFrame]:",
-            "            for frame in frames:",
-            "                yield {",
-            "                    'id': _parse_cursor_id(frame.get('id')),",
-            "                    'event': frame.get('event', 'message'),",
-            "                    'data': frame.get('data'),",
-            "                    'resource_scope': f'session:{session_id}',",
-            "                    'stream_kind': 'session.run',",
-            "                }",
-            "        return RunSessionStream(receipt=None, events=events(), metadata=metadata)",
-            "",
-            "    def list_pending_approvals(self, session_id: str) -> list[ApprovalProjection]:",
-            "        response = self._request('GET', f'/v1/sessions/{_required_path(session_id, \"session_id\")}/approvals')",
-            "        return cast(list[ApprovalProjection], response_json(response))",
-            "",
-            "    def submit_approval(self, session_id: str, tool_call_id: str, request: ApprovalDecisionRequest, *, idempotency_key: str | None = None) -> ApprovalDecisionResult:",
-            "        response = self._request('POST', f'/v1/sessions/{_required_path(session_id, \"session_id\")}/approvals/{_required_path(tool_call_id, \"tool_call_id\")}', body=dict(request), idempotency_key=idempotency_key or _new_idempotency_key())",
-            "        return cast(ApprovalDecisionResult, response_json(response))",
-            "",
+        ]
+    )
+    for operation in operations.values():
+        if operation.operation_id == "negotiateProtocol":
+            continue
+        lines.extend(_render_py_method(operation))
+        lines.append("")
+    lines.extend(
+        [
             "    # The camelCase spellings mirror the OpenAPI operationIds used by the TS client.",
             "    negotiateProtocol = negotiate_protocol",
             "    listProjects = list_projects",
@@ -873,6 +1225,8 @@ def _render_py_models(document: dict[str, Any], digest: str) -> str:
             "    runSessionStream = run_session_stream",
             "    listPendingApprovals = list_pending_approvals",
             "    submitApproval = submit_approval",
+            "",
+            "# fmt: on",
             "",
         ]
     )
@@ -885,52 +1239,31 @@ def _validate_document(document: dict[str, Any]) -> None:
     info = document.get("info")
     if not isinstance(info, dict) or info.get("version") != PROTOCOL_VERSION:
         raise ValueError("Phase 1E Schema must declare phase1e.v1")
-    paths = document.get("paths")
-    if not isinstance(paths, dict):
-        raise ValueError("Phase 1E Schema paths are missing")
-    operation_ids = {
-        str(operation.get("operationId"))
-        for path in paths.values()
-        if isinstance(path, dict)
-        for operation in path.values()
-        if isinstance(operation, dict) and operation.get("operationId")
-    }
-    expected = {
-        "negotiateProtocol",
-        "listProjects",
-        "listWorkspaceFiles",
-        "listThreads",
-        "createSession",
-        "runSessionStream",
-        "listPendingApprovals",
-        "submitApproval",
-    }
-    if operation_ids != expected:
-        raise ValueError(f"unexpected Phase 1E operation ids: {sorted(operation_ids)}")
+    operations = _operation_specs(document)
     serialized = _canonical_json(document).decode("utf-8").lower()
     for excluded in ("graph", "remote", "team", "scheduler", "oauth", "tui", "tauri"):
         if excluded in serialized:
             raise ValueError(f"excluded capability appears in formal Schema: {excluded}")
+    for operation in operations.values():
+        if not operation.path.startswith("/"):
+            raise ValueError(f"{operation.operation_id} path must be absolute")
+        _success_response(operation)
+        if operation.request_body and not operation.request_body.get("content"):
+            raise ValueError(f"{operation.operation_id} request body has no content")
 
 
 def generate() -> str:
     document = _read_schema()
     _validate_document(document)
     digest = _digest(document)
+    _write_if_changed(DIGEST_PATH, f"{digest}  {SCHEMA_PATH.name}\n")
     _write_if_changed(
-        DIGEST_PATH,
-        f"{digest}  {SCHEMA_PATH.name}\n",
-    )
-    client = _render_ts_client(document, digest)
-    client_suffix = client.split("export interface ResponseMetadata", 1)[1]
-    _write_if_changed(
-        TS_PATH,
-        _render_ts_models(document, digest) + "\nexport interface ResponseMetadata" + client_suffix,
+        TS_PATH, _ts_models(document, digest) + "\n" + _render_ts_client(document, digest)
     )
     _write_if_changed(PY_PATH, _render_py_models(document, digest))
     _write_if_changed(
         PY_INIT_PATH,
-        """\"\"\"Generated Phase 1E Python SDK.\"\"\"\n\nfrom .phase1e_generated import (\n    PHASE1E_MAX_CURSOR,\n    PHASE1E_PROTOCOL_VERSION,\n    PHASE1E_SCHEMA_DIGEST,\n    Phase1EClient,\n    ProtocolNegotiationError,\n)\n\n__all__ = [\n    \"PHASE1E_MAX_CURSOR\",\n    \"PHASE1E_PROTOCOL_VERSION\",\n    \"PHASE1E_SCHEMA_DIGEST\",\n    \"Phase1EClient\",\n    \"ProtocolNegotiationError\",\n]\n""",
+        '''"""Generated Phase 1E Python SDK."""\n\nfrom .phase1e_generated import (\n    PHASE1E_MAX_CURSOR,\n    PHASE1E_PROTOCOL_VERSION,\n    PHASE1E_SCHEMA_DIGEST,\n    Phase1EClient,\n    ProtocolNegotiationError,\n)\n\n__all__ = [\n    "PHASE1E_MAX_CURSOR",\n    "PHASE1E_PROTOCOL_VERSION",\n    "PHASE1E_SCHEMA_DIGEST",\n    "Phase1EClient",\n    "ProtocolNegotiationError",\n]\n''',
     )
     return digest
 

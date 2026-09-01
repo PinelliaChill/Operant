@@ -117,18 +117,155 @@ async function bodyToAsyncIterable(
   return body as AsyncIterable<string | Uint8Array>;
 }
 
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+class LosslessJsonParser {
+  private index = 0;
+
+  constructor(private readonly source: string) {}
+
+  parse(): unknown {
+    const value = this.value();
+    this.whitespace();
+    if (this.index !== this.source.length) throw new SyntaxError('unexpected JSON input');
+    return value;
+  }
+
+  private whitespace(): void {
+    while (this.index < this.source.length && /\s/.test(this.source[this.index] ?? '')) this.index += 1;
+  }
+
+  private value(): unknown {
+    this.whitespace();
+    const character = this.source[this.index];
+    if (character === '"') return this.string();
+    if (character === '{') return this.object();
+    if (character === '[') return this.array();
+    if (this.source.startsWith('true', this.index)) { this.index += 4; return true; }
+    if (this.source.startsWith('false', this.index)) { this.index += 5; return false; }
+    if (this.source.startsWith('null', this.index)) { this.index += 4; return null; }
+    if (character === '-' || (character !== undefined && /\d/.test(character))) return this.number();
+    throw new SyntaxError(`invalid JSON at offset ${this.index}`);
+  }
+
+  private string(): string {
+    const start = this.index;
+    this.index += 1;
+    let escaped = false;
+    while (this.index < this.source.length) {
+      const character = this.source[this.index++];
+      if (escaped) { escaped = false; continue; }
+      if (character === '\\') { escaped = true; continue; }
+      if (character === '"') return JSON.parse(this.source.slice(start, this.index)) as string;
+    }
+    throw new SyntaxError('unterminated JSON string');
+  }
+
+  private number(): number | bigint {
+    const match = this.source.slice(this.index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+    if (!match) throw new SyntaxError(`invalid JSON number at offset ${this.index}`);
+    const token = match[0];
+    this.index += token.length;
+    if (!/[.eE]/.test(token)) {
+      const integer = BigInt(token);
+      if (integer >= -MAX_SAFE_BIGINT && integer <= MAX_SAFE_BIGINT) return Number(token);
+      return integer;
+    }
+    const parsed = Number(token);
+    if (!Number.isFinite(parsed)) throw new SyntaxError('JSON number is not finite');
+    return parsed;
+  }
+
+  private object(): Record<string, unknown> {
+    this.index += 1;
+    const result: Record<string, unknown> = {};
+    this.whitespace();
+    if (this.source[this.index] === '}') { this.index += 1; return result; }
+    while (true) {
+      this.whitespace();
+      if (this.source[this.index] !== '"') throw new SyntaxError('JSON object key must be a string');
+      const key = this.string();
+      this.whitespace(); this.expect(':');
+      result[key] = this.value();
+      this.whitespace();
+      if (this.source[this.index] === '}') { this.index += 1; return result; }
+      this.expect(',');
+    }
+  }
+
+  private array(): unknown[] {
+    this.index += 1;
+    const result: unknown[] = [];
+    this.whitespace();
+    if (this.source[this.index] === ']') { this.index += 1; return result; }
+    while (true) {
+      result.push(this.value());
+      this.whitespace();
+      if (this.source[this.index] === ']') { this.index += 1; return result; }
+      this.expect(',');
+    }
+  }
+
+  private expect(character: string): void {
+    if (this.source[this.index] !== character) throw new SyntaxError(`expected ${character}`);
+    this.index += 1;
+  }
+}
+
+/** Parse JSON while promoting integer tokens outside the safe number range to bigint. */
+export function parseJsonLossless(text: string): unknown {
+  return new LosslessJsonParser(text).parse();
+}
+
+/** Serialize request payloads without allowing bigint values to throw or round. */
+export function stringifyJson(value: unknown): string {
+  const active = new WeakSet<object>();
+  const encode = (current: unknown, inArray = false): string => {
+    if (current === null) return 'null';
+    if (typeof current === 'bigint') return current.toString();
+    if (typeof current === 'string') return JSON.stringify(current);
+    if (typeof current === 'boolean') return current ? 'true' : 'false';
+    if (typeof current === 'number') {
+      if (!Number.isFinite(current)) throw new TypeError('JSON number must be finite');
+      return JSON.stringify(current);
+    }
+    if (current === undefined || typeof current === 'function' || typeof current === 'symbol') {
+      return inArray ? 'null' : '';
+    }
+    if (typeof current !== 'object') throw new TypeError('unsupported JSON value');
+    if (active.has(current)) throw new TypeError('cannot serialize a cyclic JSON value');
+    active.add(current);
+    let result: string;
+    if (Array.isArray(current)) {
+      result = `[${current.map(item => encode(item, true)).join(',')}]`;
+    } else {
+      const entries = Object.entries(current)
+        .map(([key, item]) => [key, encode(item)] as const)
+        .filter(([, encoded]) => encoded !== '')
+        .map(([key, encoded]) => `${JSON.stringify(key)}:${encoded}`);
+      result = `{${entries.join(',')}}`;
+    }
+    active.delete(current);
+    return result;
+  };
+  return encode(value);
+}
+
 export async function readJson<T>(response: Phase1EResponse): Promise<T> {
   if (typeof response.json === 'function') {
-    return (await response.json()) as T;
+    const value = await response.json();
+    return (typeof value === 'string' ? parseJsonLossless(value) : value) as T;
   }
-  if (response.json !== undefined) return response.json as T;
+  if (response.json !== undefined) {
+    return (typeof response.json === 'string' ? parseJsonLossless(response.json) : response.json) as T;
+  }
   const text = typeof response.text === 'function'
     ? await response.text()
     : response.text !== undefined
       ? String(response.text)
       : await bodyText(response.body);
   if (!text.trim()) return undefined as T;
-  return JSON.parse(text) as T;
+  return parseJsonLossless(text) as T;
 }
 
 export async function readText(response: Phase1EResponse): Promise<string> {
@@ -144,7 +281,7 @@ function dispatchSseFrame(
   const rawData = fields.data.join('\n');
   let data: unknown = rawData;
   try {
-    data = JSON.parse(rawData) as unknown;
+    data = parseJsonLossless(rawData);
   } catch {
     // A malformed data field remains visible to the caller as text. The
     // typed client never interprets it as a successful protocol event.
@@ -155,35 +292,54 @@ function dispatchSseFrame(
 /** Parse standard SSE id/event/data fields, including multiline data. */
 export async function* parseSse(body: Phase1EBody): AsyncGenerator<RawSseFrame> {
   const source = bodyToSseIterable(body);
-  let buffer = '';
   let fields: { id?: string; event?: string; data: string[] } = { data: [] };
+  let line = '';
+  let pendingCarriageReturn = false;
+  const consumeLine = (value: string): RawSseFrame | null => {
+    if (value === '') {
+      const frame = dispatchSseFrame(fields);
+      fields = { data: [] };
+      return frame;
+    }
+    if (value.startsWith(':')) return null;
+    const separator = value.indexOf(':');
+    const name = separator < 0 ? value : value.slice(0, separator);
+    let fieldValue = separator < 0 ? '' : value.slice(separator + 1);
+    if (fieldValue.startsWith(' ')) fieldValue = fieldValue.slice(1);
+    if (name === 'id') fields.id = fieldValue;
+    else if (name === 'event') fields.event = fieldValue;
+    else if (name === 'data') fields.data.push(fieldValue);
+    return null;
+  };
   for await (const chunk of source) {
-    buffer += chunk;
-    let boundary = buffer.indexOf('\n');
-    while (boundary >= 0) {
-      let line = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 1);
-      if (line.endsWith('\r')) line = line.slice(0, -1);
-      if (line === '') {
-        const frame = dispatchSseFrame(fields);
+    for (const character of chunk) {
+      if (pendingCarriageReturn) {
+        if (character === '\n') {
+          const frame = consumeLine(line);
+          if (frame) yield frame;
+          line = '';
+          pendingCarriageReturn = false;
+          continue;
+        }
+        const frame = consumeLine(line);
         if (frame) yield frame;
-        fields = { data: [] };
-      } else if (!line.startsWith(':')) {
-        const separator = line.indexOf(':');
-        const name = separator < 0 ? line : line.slice(0, separator);
-        let value = separator < 0 ? '' : line.slice(separator + 1);
-        if (value.startsWith(' ')) value = value.slice(1);
-        if (name === 'id') fields.id = value;
-        else if (name === 'event') fields.event = value;
-        else if (name === 'data') fields.data.push(value);
+        line = '';
+        pendingCarriageReturn = false;
       }
-      boundary = buffer.indexOf('\n');
+      if (character === '\r') pendingCarriageReturn = true;
+      else if (character === '\n') {
+        const frame = consumeLine(line);
+        if (frame) yield frame;
+        line = '';
+      } else line += character;
     }
   }
-  if (buffer.length > 0) {
-    let line = buffer;
-    if (line.endsWith('\r')) line = line.slice(0, -1);
-    if (line.startsWith('data:')) fields.data.push(line.slice(5).replace(/^ /, ''));
+  if (pendingCarriageReturn) {
+    const frame = consumeLine(line);
+    if (frame) yield frame;
+  } else if (line.length > 0) {
+    const frame = consumeLine(line);
+    if (frame) yield frame;
   }
   const frame = dispatchSseFrame(fields);
   if (frame) yield frame;
@@ -226,25 +382,34 @@ export class Phase1EError extends Error {
   }
 
   static async fromResponse(response: Phase1EResponse): Promise<Phase1EError> {
+    const validRecoveries = new Set([
+      'none',
+      'retry',
+      'retry_later',
+      'retry_same_idempotency_key',
+      'use_new_idempotency_key',
+      'refresh_and_retry',
+      'manual_reconcile',
+    ]);
     let payload: unknown;
     try {
       payload = await readJson<unknown>(response);
     } catch {
       payload = undefined;
     }
-    if (isRecord(payload)) {
+    if (isRecord(payload) && isRecord(payload.error)) {
       const error = payload.error;
-      if (isRecord(error)) {
-        const code = typeof error.code === 'string' ? error.code : `http_${response.status}`;
-        const message = typeof error.message === 'string' ? error.message : 'request failed';
-        const retryable = error.retryable === true;
-        const recovery = typeof error.recovery === 'string' ? error.recovery : 'none';
-        return new Phase1EError(code, message, retryable, recovery, payload.detail);
+      if (
+        Object.prototype.hasOwnProperty.call(payload, 'detail') &&
+        typeof error.code === 'string' && error.code.length > 0 &&
+        typeof error.message === 'string' && error.message.length > 0 &&
+        typeof error.retryable === 'boolean' &&
+        typeof error.recovery === 'string' && validRecoveries.has(error.recovery)
+      ) {
+        return new Phase1EError(error.code, error.message, error.retryable, error.recovery, payload.detail);
       }
-      const detail = payload.detail;
-      if (typeof detail === 'string') return new Phase1EError(`http_${response.status}`, detail, response.status >= 500, 'none', detail);
     }
-    return new Phase1EError(`http_${response.status}`, `HTTP ${response.status} request failed`, response.status >= 500, 'none', payload);
+    return new Phase1EError('invalid_error_envelope', 'Core returned an invalid error envelope', false, 'none', payload);
   }
 }
 
@@ -260,7 +425,6 @@ export const fetchPhase1ETransport: Phase1ETransport = async (
     status: response.status,
     headers: response.headers,
     body: response.body,
-    json: () => response.json(),
     text: () => response.text(),
   };
 };

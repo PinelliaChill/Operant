@@ -487,6 +487,7 @@
     "schemas": {
       "Cursor": {
         "type": "integer",
+        "format": "int64",
         "minimum": 0,
         "maximum": 9223372036854775807,
         "description": "A committed SQLite cursor scoped to one resource and stream kind."
@@ -824,6 +825,7 @@
             "anyOf": [
               {
                 "type": "integer",
+                "format": "int64",
                 "minimum": 0,
                 "maximum": 9223372036854775807
               },
@@ -1296,8 +1298,9 @@
         "enum": [
           "pending",
           "approved",
-          "rejected",
-          "expired"
+          "denied",
+          "expired",
+          "cancelled"
         ]
       },
       "ApprovalProjection": {

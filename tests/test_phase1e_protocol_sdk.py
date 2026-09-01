@@ -6,8 +6,9 @@ import hashlib
 import json
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -22,6 +23,7 @@ from sdk.protocol.generate_phase1e import (
     SCHEMA_PATH,
     TS_PATH,
     _canonical_json,
+    _render_ts_client,
     generate,
 )
 from sdk.python_client.phase1e_generated import (
@@ -30,6 +32,8 @@ from sdk.python_client.phase1e_generated import (
     PHASE1E_SCHEMA_DIGEST,
     Phase1EClient,
     ProtocolNegotiationError,
+    ScopedCursorTracker,
+    _cursor_value_int,
 )
 from sdk.python_client.transport import (
     Phase1EError,
@@ -211,3 +215,85 @@ def test_sse_parser_handles_multiline_json_and_ignores_comments() -> None:
         parse_sse('id: 4\nevent: thread.item.appended\ndata: {"a":\ndata: 1}\n\n: ignored\n\n')
     )
     assert frames == [{"id": "4", "event": "thread.item.appended", "data": {"a": 1}}]
+
+
+def test_client_rendering_is_driven_by_path_operation_metadata() -> None:
+    document = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    baseline = _render_ts_client(document, "digest")
+
+    changed_path = deepcopy(document)
+    changed_path["components"]["parameters"]["AfterCursor"]["name"] = "cursor"
+    changed_path_render = _render_ts_client(changed_path, "digest")
+    assert changed_path_render != baseline
+    assert '"name": "cursor"' in changed_path_render
+    assert "options.cursor" in changed_path_render
+
+    changed_method = deepcopy(document)
+    changed_method["paths"]["/v1/projects"]["post"] = changed_method["paths"]["/v1/projects"].pop(
+        "get"
+    )
+    changed_method["paths"]["/v1/projects"]["post"]["operationId"] = "listProjects"
+    changed_method_render = _render_ts_client(changed_method, "digest")
+    assert '"method": "POST"' in changed_method_render
+
+    changed_response = deepcopy(document)
+    changed_response["paths"]["/v1/projects"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]["items"]["$ref"] = "#/components/schemas/ThreadProjection"
+    changed_response_render = _render_ts_client(changed_response, "digest")
+    assert "Array<ThreadProjection>" in changed_response_render
+    assert "del document" not in Path("sdk/protocol/generate_phase1e.py").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_int64_and_required_types_are_explicit_and_strict() -> None:
+    assert _cursor_value_int(0) == 0
+    assert _cursor_value_int(PHASE1E_MAX_CURSOR) == PHASE1E_MAX_CURSOR
+    with pytest.raises(ValueError):
+        _cursor_value_int(True)
+    with pytest.raises(ValueError):
+        _cursor_value_int(PHASE1E_MAX_CURSOR + 1)
+
+    from sdk.python_client.phase1e_generated import ProtocolNegotiation, WorkspaceFileEntry
+
+    assert ProtocolNegotiation.__required_keys__ == {
+        "protocol_version",
+        "schema_digest",
+        "min_client_version",
+        "capabilities",
+    }
+    assert str(get_type_hints(WorkspaceFileEntry)["size_bytes"]) == "int | None"
+
+
+def test_sse_line_endings_and_cursor_tracker_are_bounded() -> None:
+    chunks = ['id: 1\rdata: {"ok":', "true}\r\r", "id: 2\n", "data: 2\n\n"]
+    assert list(parse_sse(iter(chunks))) == [
+        {"id": "1", "data": {"ok": True}},
+        {"id": "2", "data": 2},
+    ]
+
+    tracker = ScopedCursorTracker(max_seen_per_scope=2, max_scopes=1)
+
+    def frame(cursor: int, scope: str = "s1") -> dict[str, object]:
+        return {"id": cursor, "resource_scope": scope, "stream_kind": "run"}
+
+    assert tracker.accept(frame(1))
+    assert tracker.accept(frame(2))
+    assert tracker.accept(frame(3))
+    assert not tracker.accept(frame(2))
+    assert tracker.accept(frame(1))  # cursor 1 was evicted from the bounded window
+    assert tracker.accept(frame(4, "s2"))
+    assert tracker.last("s1", "run") is None
+
+
+def test_create_session_xor_is_checked_before_transport() -> None:
+    transport = QueueTransport()
+    client = Phase1EClient(transport=transport)
+    with pytest.raises(ValueError, match="exactly one"):
+        client.create_session({})
+    with pytest.raises(ValueError, match="exactly one"):
+        client.create_session({"role_id": "r1", "new_role": {"name": "new"}})
+    with pytest.raises(ValueError, match="exactly one"):
+        client.create_session({"role_id": "r1", "new_role": {}})
+    assert transport.requests == []

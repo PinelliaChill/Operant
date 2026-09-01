@@ -104,6 +104,10 @@ def response_text(response: TransportResponse) -> str:
 def response_json(response: TransportResponse) -> Any:
     if response.json is not None:
         value = response.json() if callable(response.json) else response.json
+        if isinstance(value, bytes):
+            return json.loads(value.decode("utf-8"))
+        if isinstance(value, str):
+            return json.loads(value) if value.strip() else None
         return value
     text = response_text(response)
     if not text.strip():
@@ -132,6 +136,15 @@ class Phase1EError(RuntimeError):
 
     @classmethod
     def from_response(cls, response: TransportResponse) -> Phase1EError:
+        valid_recoveries = {
+            "none",
+            "retry",
+            "retry_later",
+            "retry_same_idempotency_key",
+            "use_new_idempotency_key",
+            "refresh_and_retry",
+            "manual_reconcile",
+        }
         payload: Any = None
         try:
             payload = response_json(response)
@@ -139,26 +152,32 @@ class Phase1EError(RuntimeError):
             payload = None
         if isinstance(payload, dict):
             error = payload.get("error")
-            if isinstance(error, dict):
-                code = error.get("code")
-                message = error.get("message")
-                if isinstance(code, str) and isinstance(message, str):
-                    return cls(
-                        code,
-                        message,
-                        retryable=error.get("retryable") is True,
-                        recovery=(
-                            error["recovery"] if isinstance(error.get("recovery"), str) else "none"
-                        ),
-                        detail=payload.get("detail"),
-                    )
-            detail = payload.get("detail")
-            if isinstance(detail, str):
-                return cls(f"http_{response.status}", detail, detail=detail)
+            code = error.get("code") if isinstance(error, dict) else None
+            message = error.get("message") if isinstance(error, dict) else None
+            retryable = error.get("retryable") if isinstance(error, dict) else None
+            recovery = error.get("recovery") if isinstance(error, dict) else None
+            if (
+                "detail" in payload
+                and isinstance(code, str)
+                and bool(code)
+                and isinstance(message, str)
+                and bool(message)
+                and isinstance(retryable, bool)
+                and isinstance(recovery, str)
+                and recovery in valid_recoveries
+            ):
+                return cls(
+                    code,
+                    message,
+                    retryable=retryable,
+                    recovery=recovery,
+                    detail=payload.get("detail"),
+                )
         return cls(
-            f"http_{response.status}",
-            f"HTTP {response.status} request failed",
-            retryable=response.status >= 500,
+            "invalid_error_envelope",
+            "Core returned an invalid error envelope",
+            retryable=False,
+            recovery="none",
             detail=payload,
         )
 
@@ -176,10 +195,36 @@ def _chunks(source: Body) -> Iterator[str]:
         yield chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
 
 
+def _sse_lines(source: Body) -> Iterator[str]:
+    """Yield SSE lines for LF, CRLF, and bare CR line endings."""
+
+    line: list[str] = []
+    pending_cr = False
+    for chunk in _chunks(source):
+        for character in chunk:
+            if pending_cr:
+                if character == "\n":
+                    yield "".join(line)
+                    line = []
+                    pending_cr = False
+                    continue
+                yield "".join(line)
+                line = []
+                pending_cr = False
+            if character == "\r":
+                pending_cr = True
+            elif character == "\n":
+                yield "".join(line)
+                line = []
+            else:
+                line.append(character)
+    if pending_cr or line:
+        yield "".join(line)
+
+
 def parse_sse(source: Body) -> Iterator[dict[str, Any]]:
     """Parse standard SSE id/event/data fields, preserving JSON data values."""
 
-    buffer = ""
     fields: dict[str, Any] = {"data": []}
 
     def dispatch() -> dict[str, Any] | None:
@@ -197,33 +242,24 @@ def parse_sse(source: Body) -> Iterator[dict[str, Any]]:
             frame["event"] = fields["event"]
         return frame
 
-    for chunk in _chunks(source):
-        buffer += chunk
-        while "\n" in buffer:
-            line, buffer = buffer.split("\n", 1)
-            if line.endswith("\r"):
-                line = line[:-1]
-            if not line:
-                frame = dispatch()
-                if frame is not None:
-                    yield frame
-                fields = {"data": []}
-                continue
-            if line.startswith(":"):
-                continue
-            name, separator, value = line.partition(":")
-            if separator and value.startswith(" "):
-                value = value[1:]
-            if name == "id":
-                fields["id"] = value
-            elif name == "event":
-                fields["event"] = value
-            elif name == "data":
-                fields["data"].append(value)
-    if buffer:
-        line = buffer[:-1] if buffer.endswith("\r") else buffer
-        if line.startswith("data:"):
-            fields["data"].append(line[5:].lstrip(" "))
+    for line in _sse_lines(source):
+        if not line:
+            frame = dispatch()
+            if frame is not None:
+                yield frame
+            fields = {"data": []}
+            continue
+        if line.startswith(":"):
+            continue
+        name, separator, value = line.partition(":")
+        if separator and value.startswith(" "):
+            value = value[1:]
+        if name == "id":
+            fields["id"] = value
+        elif name == "event":
+            fields["event"] = value
+        elif name == "data":
+            fields["data"].append(value)
     frame = dispatch()
     if frame is not None:
         yield frame
