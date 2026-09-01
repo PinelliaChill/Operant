@@ -21,6 +21,18 @@ from operant.domain.actions import (
     ToolActionReceipt,
     ToolActionReceiptStatus,
 )
+from operant.domain.commands import (
+    BTWSidecarEvent,
+    BTWSidecarRun,
+    BTWSidecarStatus,
+    ContextBaseline,
+    ContextBaselineOperation,
+    Phase1DCommandAuditEvent,
+    ReviewRun,
+    ReviewRunStatus,
+    SlashCommandKind,
+    WorkspaceInitialization,
+)
 from operant.domain.context import (
     Compaction,
     CompactionSourceType,
@@ -87,6 +99,7 @@ from operant.domain.threads import (
     ConversationThread,
     Item,
     RetentionPolicy,
+    SteeringPayload,
     ThreadLegacyRef,
     ThreadStatus,
     ToolCallPayload,
@@ -221,6 +234,7 @@ class SQLiteStore:
         5: "dc6ce273aa869446a520af09fb19335369dab273ffd38789d38298356e5d9df6",
         6: "e12f7993df336c97f2a97532615abfcda457bfba4b10d902223634417e59d373",
         7: "b8516d3a7deec9a93867c45f323992238b17968829001c6af2cf61831fe70df4",
+        8: "f3295d7911214ce19f2a6dc7fda63e21eebfe79c7cb4b3a16934ef40297da11b",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -230,6 +244,7 @@ class SQLiteStore:
         5: "ec6dad28422980314a01fa56a1a2d28e1b2bee4744eb76d28240124a4a112490",
         6: "5430fb415059679846e3f0c18a3b6c998573a053b81c1b4ce4a67719f6f60f66",
         7: "15496ba9e4cde4e1dd622abdc141ca2dc63f5b155c3b2eb57a24472c9df3e06b",
+        8: "bfd4f8367d6232d39b1fd9e9c916cc6de95fcfb8c89dfedd13d22f3da70b70e0",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -288,6 +303,48 @@ class SQLiteStore:
             "863fdbdb5d3030fecab446f0469faf2424d43f87b3f63c5913017e36b1056528",
         ),
     )
+    _PHASE1D_V8_PREVIEW_HISTORY = (
+        (1, "week1_base", _FROZEN_MIGRATION_CHECKSUMS[1]),
+        (2, "week3_week4_features", _FROZEN_MIGRATION_CHECKSUMS[2]),
+        (3, "m0_commands_approvals", _FROZEN_MIGRATION_CHECKSUMS[3]),
+        (4, "phase0_session_run_leases", _FROZEN_MIGRATION_CHECKSUMS[4]),
+        (5, "phase1a_thread_artifact_history", _FROZEN_MIGRATION_CHECKSUMS[5]),
+        (6, "phase1b_context_composer", _FROZEN_MIGRATION_CHECKSUMS[6]),
+        (7, "phase1c_artifact_retention_cache_observation", _FROZEN_MIGRATION_CHECKSUMS[7]),
+        (
+            8,
+            "phase1d_command_context_sidecar",
+            "eeda5ba8d0fb88ff9bfdfbcde1cd51d8c3b1f094b1f8bf073c9fefe6ea8f6080",
+        ),
+    )
+    _PHASE1D_V8_CONTEXT_GUARD_PREVIEW_HISTORY = (
+        (1, "week1_base", _FROZEN_MIGRATION_CHECKSUMS[1]),
+        (2, "week3_week4_features", _FROZEN_MIGRATION_CHECKSUMS[2]),
+        (3, "m0_commands_approvals", _FROZEN_MIGRATION_CHECKSUMS[3]),
+        (4, "phase0_session_run_leases", _FROZEN_MIGRATION_CHECKSUMS[4]),
+        (5, "phase1a_thread_artifact_history", _FROZEN_MIGRATION_CHECKSUMS[5]),
+        (6, "phase1b_context_composer", _FROZEN_MIGRATION_CHECKSUMS[6]),
+        (7, "phase1c_artifact_retention_cache_observation", _FROZEN_MIGRATION_CHECKSUMS[7]),
+        (
+            8,
+            "phase1d_command_context_sidecar",
+            "03758b816b16a2fcd42702f46686eea494c8b51b5f21591b27a400468b0bd0b2",
+        ),
+    )
+    _PHASE1D_V8_RUN_SCOPE_PREVIEW_HISTORY = (
+        (1, "week1_base", _FROZEN_MIGRATION_CHECKSUMS[1]),
+        (2, "week3_week4_features", _FROZEN_MIGRATION_CHECKSUMS[2]),
+        (3, "m0_commands_approvals", _FROZEN_MIGRATION_CHECKSUMS[3]),
+        (4, "phase0_session_run_leases", _FROZEN_MIGRATION_CHECKSUMS[4]),
+        (5, "phase1a_thread_artifact_history", _FROZEN_MIGRATION_CHECKSUMS[5]),
+        (6, "phase1b_context_composer", _FROZEN_MIGRATION_CHECKSUMS[6]),
+        (7, "phase1c_artifact_retention_cache_observation", _FROZEN_MIGRATION_CHECKSUMS[7]),
+        (
+            8,
+            "phase1d_command_context_sidecar",
+            "91a4f2e484d6549d67be62530c2864f3f3c6cd84821cd0e0817a452410fa9550",
+        ),
+    )
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -335,6 +392,7 @@ class SQLiteStore:
             self._reconcile_in_progress_commands(connection)
             self._reconcile_in_progress_tool_actions(connection)
             self._expire_pending_approvals(connection)
+            self._interrupt_running_phase1d_calls(connection)
 
     def migrate(
         self,
@@ -482,6 +540,12 @@ class SQLiteStore:
                 self._upgrade_v7,
                 self._downgrade_v7,
             ),
+            build(
+                8,
+                "phase1d_command_context_sidecar",
+                self._upgrade_v8,
+                self._downgrade_v8,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -539,6 +603,53 @@ class SQLiteStore:
             connection.execute(
                 "UPDATE schema_migrations SET checksum = ? WHERE version = 5",
                 (migrations[4].checksum,),
+            )
+            return
+        elif identity == self._PHASE1D_V8_PREVIEW_HISTORY:
+            self._validate_schema_contract(
+                connection,
+                version=8,
+                allow_legacy_phase1d_context_scope_guard=True,
+                allow_legacy_phase1d_prompt_scope_guard=True,
+                allow_missing_phase1d_run_scope_guards=True,
+            )
+            self._upgrade_preview_v8_context_scope_guard(connection)
+            self._validate_v8_schema_shape(connection)
+            connection.execute(
+                "UPDATE schema_migrations SET checksum = ? WHERE version = 8",
+                (migrations[7].checksum,),
+            )
+            return
+        elif identity == self._PHASE1D_V8_CONTEXT_GUARD_PREVIEW_HISTORY:
+            self._validate_schema_contract(
+                connection,
+                version=8,
+                allow_legacy_phase1d_prompt_scope_guard=True,
+                allow_missing_phase1d_run_scope_guards=True,
+            )
+            self._upgrade_preview_v8_context_scope_guard(connection)
+            self._validate_v8_schema_shape(connection)
+            connection.execute(
+                "UPDATE schema_migrations SET checksum = ? WHERE version = 8",
+                (migrations[7].checksum,),
+            )
+            return
+        elif identity == self._PHASE1D_V8_RUN_SCOPE_PREVIEW_HISTORY:
+            self._validate_schema_contract(
+                connection,
+                version=8,
+                allow_legacy_phase1d_prompt_scope_guard=True,
+                allow_missing_phase1d_run_scope_guards=True,
+            )
+            self._replace_phase1d_prompt_compaction_agent_guard(
+                connection,
+                allow_thread_items_cross_agent=True,
+            )
+            self._create_phase1d_run_scope_guards(connection)
+            self._validate_v8_schema_shape(connection)
+            connection.execute(
+                "UPDATE schema_migrations SET checksum = ? WHERE version = 8",
+                (migrations[7].checksum,),
             )
             return
         else:
@@ -694,6 +805,8 @@ class SQLiteStore:
             self._validate_v6_schema_shape(connection)
         elif migration.version == 7:
             self._validate_v7_schema_shape(connection)
+        elif migration.version == 8:
+            self._validate_v8_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -1156,6 +1269,83 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v8_required_columns() -> dict[str, set[str]]:
+        return {
+            "workspace_initializations": {
+                "sequence",
+                "id",
+                "workspace_ref",
+                "workspace_hash",
+                "readable",
+                "writable",
+                "created_at",
+            },
+            "context_baselines": {
+                "sequence",
+                "id",
+                "session_id",
+                "thread_id",
+                "item_cursor_end",
+                "operation",
+                "compaction_id",
+                "previous_baseline_id",
+                "created_at",
+            },
+            "review_runs": {
+                "sequence",
+                "id",
+                "session_id",
+                "thread_id",
+                "workspace_ref",
+                "scope",
+                "status",
+                "artifact_id",
+                "error_code",
+                "created_at",
+                "updated_at",
+            },
+            "btw_sidecar_runs": {
+                "sequence",
+                "id",
+                "session_id",
+                "agent_id",
+                "thread_id",
+                "workspace_ref",
+                "source_item_cursor_end",
+                "prompt",
+                "prompt_hash",
+                "status",
+                "response",
+                "response_hash",
+                "context_revision_id",
+                "promoted_turn_id",
+                "promoted_item_id",
+                "error_code",
+                "created_at",
+                "updated_at",
+            },
+            "btw_sidecar_events": {
+                "sequence",
+                "id",
+                "sidecar_run_id",
+                "event_type",
+                "body",
+                "created_at",
+            },
+            "phase1d_command_audit_events": {
+                "sequence",
+                "id",
+                "command_execution_id",
+                "command_kind",
+                "event_type",
+                "resource_type",
+                "resource_id",
+                "detail_json",
+                "created_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -1175,6 +1365,8 @@ class SQLiteStore:
             tables.update(cls._v6_required_columns())
         if version >= 7:
             tables.update(cls._v7_required_columns())
+        if version >= 8:
+            tables.update(cls._v8_required_columns())
         return tables
 
     @staticmethod
@@ -1239,6 +1431,19 @@ class SQLiteStore:
                 ("cache_observations", "cache_key_hash"),
                 ("cache_observations", "stable_prefix_hash"),
                 ("cache_observations", "invalidation_reason"),
+                ("context_baselines", "compaction_id"),
+                ("context_baselines", "previous_baseline_id"),
+                ("review_runs", "thread_id"),
+                ("review_runs", "artifact_id"),
+                ("review_runs", "error_code"),
+                ("btw_sidecar_runs", "response"),
+                ("btw_sidecar_runs", "response_hash"),
+                ("btw_sidecar_runs", "context_revision_id"),
+                ("btw_sidecar_runs", "promoted_turn_id"),
+                ("btw_sidecar_runs", "promoted_item_id"),
+                ("btw_sidecar_runs", "error_code"),
+                ("phase1d_command_audit_events", "resource_type"),
+                ("phase1d_command_audit_events", "resource_id"),
             }
         )
 
@@ -1277,6 +1482,10 @@ class SQLiteStore:
                 "completion_tokens",
                 "cache_read_tokens",
                 "cache_write_tokens",
+                "readable",
+                "writable",
+                "item_cursor_end",
+                "source_item_cursor_end",
             }
         )
 
@@ -1440,6 +1649,28 @@ class SQLiteStore:
                         if version >= 7
                         else {}
                     ),
+                    **(
+                        {
+                            "workspace_initializations": [
+                                "readable IN (0, 1)",
+                                "writable IN (0, 1)",
+                                "length(workspace_hash) = 64",
+                            ],
+                            "context_baselines": [
+                                "item_cursor_end >= 0",
+                                "operation IN ('clear', 'compact')",
+                            ],
+                            "review_runs": [
+                                "status IN ('running', 'completed', 'failed')",
+                            ],
+                            "btw_sidecar_runs": [
+                                "source_item_cursor_end >= 0",
+                                "status IN ('running', 'completed', 'failed', 'promoted')",
+                            ],
+                        }
+                        if version >= 8
+                        else {}
+                    ),
                 }
                 if version >= 3
                 else {}
@@ -1477,6 +1708,8 @@ class SQLiteStore:
                 store._upgrade_v6(connection)
             if version >= 7:
                 store._upgrade_v7(connection)
+            if version >= 8:
+                store._upgrade_v8(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -1574,6 +1807,17 @@ class SQLiteStore:
                     "cache_observations": ("sequence",),
                 }
             )
+        if version >= 8:
+            contract.update(
+                {
+                    "workspace_initializations": ("sequence",),
+                    "context_baselines": ("sequence",),
+                    "review_runs": ("sequence",),
+                    "btw_sidecar_runs": ("sequence",),
+                    "btw_sidecar_events": ("sequence",),
+                    "phase1d_command_audit_events": ("sequence",),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1641,6 +1885,25 @@ class SQLiteStore:
                 {
                     "artifact_retention_audit_events": (("id",),),
                     "cache_observations": (("id",),),
+                }
+            )
+        if version >= 8:
+            contract.update(
+                {
+                    "workspace_initializations": (
+                        ("id",),
+                        ("workspace_ref",),
+                        ("workspace_hash",),
+                    ),
+                    "context_baselines": (("id",),),
+                    "review_runs": (("id",),),
+                    "btw_sidecar_runs": (
+                        ("id",),
+                        ("context_revision_id",),
+                        ("promoted_item_id",),
+                    ),
+                    "btw_sidecar_events": (("id",),),
+                    "phase1d_command_audit_events": (("id",),),
                 }
             )
         return contract
@@ -1771,6 +2034,51 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 8:
+            contract.update(
+                {
+                    "context_baselines": (
+                        ("session_id", "sessions", "id", "NO ACTION"),
+                        ("thread_id", "threads", "id", "NO ACTION"),
+                        ("compaction_id", "compactions", "id", "NO ACTION"),
+                        (
+                            "previous_baseline_id",
+                            "context_baselines",
+                            "id",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "review_runs": (
+                        ("session_id", "sessions", "id", "NO ACTION"),
+                        ("thread_id", "threads", "id", "NO ACTION"),
+                        ("artifact_id", "artifacts", "id", "NO ACTION"),
+                    ),
+                    "btw_sidecar_runs": (
+                        ("session_id", "sessions", "id", "NO ACTION"),
+                        ("agent_id", "agents", "id", "NO ACTION"),
+                        ("thread_id", "threads", "id", "NO ACTION"),
+                        (
+                            "context_revision_id",
+                            "context_revisions",
+                            "id",
+                            "NO ACTION",
+                        ),
+                        ("promoted_turn_id", "turns", "id", "NO ACTION"),
+                        ("promoted_item_id", "items", "id", "NO ACTION"),
+                    ),
+                    "btw_sidecar_events": (
+                        ("sidecar_run_id", "btw_sidecar_runs", "id", "NO ACTION"),
+                    ),
+                    "phase1d_command_audit_events": (
+                        (
+                            "command_execution_id",
+                            "command_executions",
+                            "id",
+                            "NO ACTION",
+                        ),
+                    ),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1875,6 +2183,23 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 8:
+            indexes.update(
+                {
+                    "idx_context_baselines_session_thread_sequence": (
+                        "session_id",
+                        "thread_id",
+                        "sequence",
+                    ),
+                    "idx_review_runs_session_sequence": ("session_id", "sequence"),
+                    "idx_btw_sidecar_runs_thread_sequence": ("thread_id", "sequence"),
+                    "idx_btw_sidecar_events_run_sequence": ("sidecar_run_id", "sequence"),
+                    "idx_phase1d_command_audit_execution_sequence": (
+                        "command_execution_id",
+                        "sequence",
+                    ),
+                }
+            )
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -1964,6 +2289,9 @@ class SQLiteStore:
     def _validate_v7_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=7)
 
+    def _validate_v8_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=8)
+
     def _validate_schema_contract(
         self,
         connection: sqlite3.Connection,
@@ -1972,6 +2300,9 @@ class SQLiteStore:
         allow_missing_evaluation_updated_at: bool = False,
         allow_missing_evaluation_events: bool = False,
         allow_missing_phase1a_reference_guards: bool = False,
+        allow_legacy_phase1d_context_scope_guard: bool = False,
+        allow_legacy_phase1d_prompt_scope_guard: bool = False,
+        allow_missing_phase1d_run_scope_guards: bool = False,
     ) -> None:
         required_tables = self._required_columns_contract(version)
         if allow_missing_evaluation_events:
@@ -1994,6 +2325,24 @@ class SQLiteStore:
                 "items_tool_call_unique_guard",
                 "items_tool_result_call_guard",
                 "thread_legacy_refs_insert_guard",
+            }
+            expected_objects.difference_update(("trigger", name) for name in guard_names)
+            for name in guard_names:
+                expected_ddl.pop(name, None)
+        if allow_legacy_phase1d_context_scope_guard:
+            _v7_objects, v7_ddl = self._canonical_schema_objects(7)
+            expected_ddl["context_revisions_scope_guard"] = v7_ddl["context_revisions_scope_guard"]
+        if allow_legacy_phase1d_prompt_scope_guard:
+            _v7_objects, v7_ddl = self._canonical_schema_objects(7)
+            expected_ddl["prompt_blocks_source_refs_guard"] = v7_ddl[
+                "prompt_blocks_source_refs_guard"
+            ]
+        if allow_missing_phase1d_run_scope_guards:
+            guard_names = {
+                "review_runs_scope_guard",
+                "review_runs_identity_guard",
+                "btw_sidecar_runs_scope_guard",
+                "btw_sidecar_runs_identity_guard",
             }
             expected_objects.difference_update(("trigger", name) for name in guard_names)
             for name in guard_names:
@@ -2516,6 +2865,204 @@ class SQLiteStore:
                 ON evaluation_run_events(evaluation_run_id, sequence);
             """,
         )
+
+    def _upgrade_preview_v8_context_scope_guard(self, connection: sqlite3.Connection) -> None:
+        """Upgrade only the exact unmerged Phase 1D preview guards."""
+
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER context_revisions_scope_guard;
+
+            CREATE TRIGGER context_revisions_scope_guard
+            BEFORE INSERT ON context_revisions
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM agents
+                    WHERE id = NEW.agent_id AND session_id = NEW.session_id
+                )
+                OR (
+                    NEW.thread_id IS NOT NULL
+                    AND NEW.workspace_ref IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM threads
+                        WHERE id = NEW.thread_id
+                            AND workspace_ref = NEW.workspace_ref
+                    )
+                )
+                OR (
+                    NEW.compaction_id IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM compactions
+                        WHERE id = NEW.compaction_id
+                            AND session_id = NEW.session_id
+                            AND thread_id IS NEW.thread_id
+                            AND (
+                                source_type = 'thread_items'
+                                OR agent_id = NEW.agent_id
+                            )
+                    )
+                )
+                OR NEW.prompt_layout_version != 'phase1b.v1'
+                OR (
+                    (NEW.source_cursor_start IS NULL)
+                    != (NEW.source_cursor_end IS NULL)
+                )
+                OR (
+                    NEW.source_cursor_start IS NULL
+                    AND NEW.source_cursor_namespace IS NOT NULL
+                )
+                OR (
+                    NEW.source_cursor_start IS NOT NULL
+                    AND COALESCE(NEW.source_cursor_namespace, '') != 'items.sequence'
+                )
+                OR (
+                    NEW.thread_id IS NULL
+                    AND (
+                        NEW.source_cursor_start IS NOT NULL
+                        OR NEW.source_cursor_end IS NOT NULL
+                        OR json_array_length(NEW.source_item_ids_json) != 0
+                    )
+                )
+                OR (
+                    NEW.source_cursor_start IS NOT NULL
+                    AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_start
+                                AND thread_id = NEW.thread_id
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_end
+                                AND thread_id = NEW.thread_id
+                        )
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.source_item_ids_json) AS item_id
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM items
+                        WHERE id = item_id.value AND thread_id = NEW.thread_id
+                    )
+                )
+                OR (
+                    NEW.compaction_id IS NULL
+                    AND json_array_length(NEW.compaction_refs_json) != 0
+                )
+                OR (
+                    NEW.compaction_id IS NOT NULL
+                    AND (
+                        json_array_length(NEW.compaction_refs_json) != 1
+                        OR json_extract(NEW.compaction_refs_json, '$[0]') != NEW.compaction_id
+                    )
+                )
+                OR json_type(NEW.memory_refs_json) != 'array'
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.memory_refs_json) AS memory_ref
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM memories WHERE id = memory_ref.value
+                    )
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'ContextRevision source scope is invalid');
+            END;
+            """,
+        )
+        self._replace_phase1d_prompt_compaction_agent_guard(
+            connection,
+            allow_thread_items_cross_agent=True,
+        )
+        self._create_phase1d_run_scope_guards(connection)
+
+    @staticmethod
+    def _create_phase1d_run_scope_guards(connection: sqlite3.Connection) -> None:
+        """Bind Review and Sidecar immutable identities to their declared scope."""
+
+        SQLiteStore._execute_sql_batch(
+            connection,
+            """
+            CREATE TRIGGER review_runs_scope_guard
+            BEFORE INSERT ON review_runs
+            WHEN NEW.thread_id IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE id = NEW.thread_id AND workspace_ref = NEW.workspace_ref
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'Review run scope is invalid');
+            END;
+
+            CREATE TRIGGER review_runs_identity_guard
+            BEFORE UPDATE ON review_runs
+            WHEN OLD.session_id != NEW.session_id
+                OR OLD.thread_id IS NOT NEW.thread_id
+                OR OLD.workspace_ref != NEW.workspace_ref
+                OR OLD.scope != NEW.scope
+                OR OLD.created_at != NEW.created_at
+            BEGIN
+                SELECT RAISE(ABORT, 'Review run identity is immutable');
+            END;
+
+            CREATE TRIGGER btw_sidecar_runs_scope_guard
+            BEFORE INSERT ON btw_sidecar_runs
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM agents
+                    WHERE id = NEW.agent_id AND session_id = NEW.session_id
+                )
+                OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE id = NEW.thread_id AND workspace_ref = NEW.workspace_ref
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'BTW Sidecar run scope is invalid');
+            END;
+
+            CREATE TRIGGER btw_sidecar_runs_identity_guard
+            BEFORE UPDATE ON btw_sidecar_runs
+            WHEN OLD.session_id != NEW.session_id
+                OR OLD.agent_id != NEW.agent_id
+                OR OLD.thread_id != NEW.thread_id
+                OR OLD.workspace_ref != NEW.workspace_ref
+                OR OLD.source_item_cursor_end != NEW.source_item_cursor_end
+                OR OLD.prompt != NEW.prompt
+                OR OLD.prompt_hash != NEW.prompt_hash
+                OR OLD.created_at != NEW.created_at
+            BEGIN
+                SELECT RAISE(ABORT, 'BTW Sidecar run identity is immutable');
+            END;
+            """,
+        )
+
+    @staticmethod
+    def _replace_phase1d_prompt_compaction_agent_guard(
+        connection: sqlite3.Connection,
+        *,
+        allow_thread_items_cross_agent: bool,
+    ) -> None:
+        """Replace only the Compaction ownership clause in the v6 Prompt Block guard."""
+
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'trigger' AND name = 'prompt_blocks_source_refs_guard'"
+        ).fetchone()
+        if row is None or row["sql"] is None:
+            raise MigrationError("Prompt Block source reference guard is missing")
+        strict = """AND r.session_id = c.session_id
+                                    AND r.agent_id = c.agent_id
+                                    AND r.thread_id IS c.thread_id"""
+        relaxed = """AND r.session_id = c.session_id
+                                    AND r.thread_id IS c.thread_id
+                                    AND (
+                                        c.source_type = 'thread_items'
+                                        OR r.agent_id = c.agent_id
+                                    )"""
+        source = strict if allow_thread_items_cross_agent else relaxed
+        replacement = relaxed if allow_thread_items_cross_agent else strict
+        trigger_sql = str(row["sql"])
+        if trigger_sql.count(source) != 1:
+            raise MigrationError("Prompt Block Compaction ownership guard has drifted")
+        connection.execute("DROP TRIGGER prompt_blocks_source_refs_guard")
+        connection.execute(trigger_sql.replace(source, replacement, 1))
 
     def _upgrade_preview_v3_evaluation_events(self, connection: sqlite3.Connection) -> None:
         """Bring the exact first M0 preview schema to the final v3 contract."""
@@ -4738,6 +5285,495 @@ class SQLiteStore:
             DROP TABLE artifact_retention_states;
             DROP TABLE retention_policies;
             """,
+        )
+
+    def _upgrade_v8(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER context_revisions_scope_guard;
+
+            CREATE TRIGGER context_revisions_scope_guard
+            BEFORE INSERT ON context_revisions
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM agents
+                    WHERE id = NEW.agent_id AND session_id = NEW.session_id
+                )
+                OR (
+                    NEW.thread_id IS NOT NULL
+                    AND NEW.workspace_ref IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM threads
+                        WHERE id = NEW.thread_id
+                            AND workspace_ref = NEW.workspace_ref
+                    )
+                )
+                OR (
+                    NEW.compaction_id IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM compactions
+                        WHERE id = NEW.compaction_id
+                            AND session_id = NEW.session_id
+                            AND thread_id IS NEW.thread_id
+                            AND (
+                                source_type = 'thread_items'
+                                OR agent_id = NEW.agent_id
+                            )
+                    )
+                )
+                OR NEW.prompt_layout_version != 'phase1b.v1'
+                OR (
+                    (NEW.source_cursor_start IS NULL)
+                    != (NEW.source_cursor_end IS NULL)
+                )
+                OR (
+                    NEW.source_cursor_start IS NULL
+                    AND NEW.source_cursor_namespace IS NOT NULL
+                )
+                OR (
+                    NEW.source_cursor_start IS NOT NULL
+                    AND COALESCE(NEW.source_cursor_namespace, '') != 'items.sequence'
+                )
+                OR (
+                    NEW.thread_id IS NULL
+                    AND (
+                        NEW.source_cursor_start IS NOT NULL
+                        OR NEW.source_cursor_end IS NOT NULL
+                        OR json_array_length(NEW.source_item_ids_json) != 0
+                    )
+                )
+                OR (
+                    NEW.source_cursor_start IS NOT NULL
+                    AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_start
+                                AND thread_id = NEW.thread_id
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_end
+                                AND thread_id = NEW.thread_id
+                        )
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.source_item_ids_json) AS item_id
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM items
+                        WHERE id = item_id.value AND thread_id = NEW.thread_id
+                    )
+                )
+                OR (
+                    NEW.compaction_id IS NULL
+                    AND json_array_length(NEW.compaction_refs_json) != 0
+                )
+                OR (
+                    NEW.compaction_id IS NOT NULL
+                    AND (
+                        json_array_length(NEW.compaction_refs_json) != 1
+                        OR json_extract(NEW.compaction_refs_json, '$[0]') != NEW.compaction_id
+                    )
+                )
+                OR json_type(NEW.memory_refs_json) != 'array'
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.memory_refs_json) AS memory_ref
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM memories WHERE id = memory_ref.value
+                    )
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'ContextRevision source scope is invalid');
+            END;
+
+            CREATE TABLE workspace_initializations (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                workspace_ref TEXT UNIQUE NOT NULL CHECK (length(workspace_ref) >= 1),
+                workspace_hash TEXT UNIQUE NOT NULL CHECK (
+                    length(workspace_hash) = 64
+                    AND workspace_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                readable INTEGER NOT NULL CHECK (readable IN (0, 1)),
+                writable INTEGER NOT NULL CHECK (writable IN (0, 1)),
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE context_baselines (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                session_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                item_cursor_end INTEGER NOT NULL CHECK (item_cursor_end >= 0),
+                operation TEXT NOT NULL CHECK (operation IN ('clear', 'compact')),
+                compaction_id TEXT,
+                previous_baseline_id TEXT,
+                created_at TEXT NOT NULL,
+                CHECK (
+                    (operation = 'clear' AND compaction_id IS NULL)
+                    OR (operation = 'compact' AND compaction_id IS NOT NULL)
+                ),
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id),
+                FOREIGN KEY (compaction_id) REFERENCES compactions(id),
+                FOREIGN KEY (previous_baseline_id) REFERENCES context_baselines(id)
+            );
+
+            CREATE INDEX idx_context_baselines_session_thread_sequence
+                ON context_baselines(session_id, thread_id, sequence);
+
+            CREATE TABLE review_runs (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                session_id TEXT NOT NULL,
+                thread_id TEXT,
+                workspace_ref TEXT NOT NULL CHECK (length(workspace_ref) >= 1),
+                scope TEXT NOT NULL CHECK (length(scope) BETWEEN 1 AND 2000),
+                status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+                artifact_id TEXT,
+                error_code TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (
+                    (status = 'completed' AND artifact_id IS NOT NULL AND error_code IS NULL)
+                    OR (status = 'failed' AND artifact_id IS NULL AND error_code IS NOT NULL)
+                    OR (status = 'running' AND artifact_id IS NULL AND error_code IS NULL)
+                ),
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id),
+                FOREIGN KEY (artifact_id) REFERENCES artifacts(id)
+            );
+
+            CREATE INDEX idx_review_runs_session_sequence
+                ON review_runs(session_id, sequence);
+
+            CREATE TABLE btw_sidecar_runs (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                workspace_ref TEXT NOT NULL CHECK (length(workspace_ref) >= 1),
+                source_item_cursor_end INTEGER NOT NULL CHECK (source_item_cursor_end >= 0),
+                prompt TEXT NOT NULL CHECK (length(prompt) BETWEEN 1 AND 100000),
+                prompt_hash TEXT NOT NULL CHECK (
+                    length(prompt_hash) = 64 AND prompt_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                status TEXT NOT NULL CHECK (
+                    status IN ('running', 'completed', 'failed', 'promoted')
+                ),
+                response TEXT,
+                response_hash TEXT CHECK (
+                    response_hash IS NULL OR (
+                        length(response_hash) = 64
+                        AND response_hash NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                context_revision_id TEXT UNIQUE,
+                promoted_turn_id TEXT,
+                promoted_item_id TEXT UNIQUE,
+                error_code TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (
+                    (status = 'running' AND response IS NULL AND response_hash IS NULL
+                        AND context_revision_id IS NULL AND promoted_turn_id IS NULL
+                        AND promoted_item_id IS NULL AND error_code IS NULL)
+                    OR (status = 'failed' AND promoted_turn_id IS NULL
+                        AND promoted_item_id IS NULL AND error_code IS NOT NULL)
+                    OR (status = 'completed' AND response IS NOT NULL
+                        AND response_hash IS NOT NULL AND context_revision_id IS NOT NULL
+                        AND promoted_turn_id IS NULL AND promoted_item_id IS NULL
+                        AND error_code IS NULL)
+                    OR (status = 'promoted' AND response IS NOT NULL
+                        AND response_hash IS NOT NULL AND context_revision_id IS NOT NULL
+                        AND promoted_turn_id IS NOT NULL AND promoted_item_id IS NOT NULL
+                        AND error_code IS NULL)
+                ),
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id),
+                FOREIGN KEY (context_revision_id) REFERENCES context_revisions(id),
+                FOREIGN KEY (promoted_turn_id) REFERENCES turns(id),
+                FOREIGN KEY (promoted_item_id) REFERENCES items(id)
+            );
+
+            CREATE INDEX idx_btw_sidecar_runs_thread_sequence
+                ON btw_sidecar_runs(thread_id, sequence);
+
+            CREATE TABLE btw_sidecar_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                sidecar_run_id TEXT NOT NULL,
+                event_type TEXT NOT NULL CHECK (
+                    event_type IN (
+                        'btw.started', 'btw.model_completed', 'btw.failed', 'btw.promoted'
+                    )
+                ),
+                body TEXT NOT NULL CHECK (json_valid(body)),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (sidecar_run_id) REFERENCES btw_sidecar_runs(id)
+            );
+
+            CREATE INDEX idx_btw_sidecar_events_run_sequence
+                ON btw_sidecar_events(sidecar_run_id, sequence);
+
+            CREATE TABLE phase1d_command_audit_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                command_execution_id TEXT NOT NULL,
+                command_kind TEXT NOT NULL CHECK (
+                    command_kind IN (
+                        'workspace.initialize', 'review.run',
+                        'context.clear', 'context.compact'
+                    )
+                ),
+                event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 200),
+                resource_type TEXT,
+                resource_id TEXT,
+                detail_json TEXT NOT NULL CHECK (
+                    json_valid(detail_json) AND json_type(detail_json) = 'object'
+                ),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (command_execution_id) REFERENCES command_executions(id)
+            );
+
+            CREATE INDEX idx_phase1d_command_audit_execution_sequence
+                ON phase1d_command_audit_events(command_execution_id, sequence);
+
+            CREATE TRIGGER workspace_initializations_no_update
+            BEFORE UPDATE ON workspace_initializations
+            BEGIN
+                SELECT RAISE(ABORT, 'Workspace initialization facts are immutable');
+            END;
+
+            CREATE TRIGGER workspace_initializations_no_delete
+            BEFORE DELETE ON workspace_initializations
+            BEGIN
+                SELECT RAISE(ABORT, 'Workspace initialization facts are immutable');
+            END;
+
+            CREATE TRIGGER context_baselines_scope_guard
+            BEFORE INSERT ON context_baselines
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM sessions WHERE id = NEW.session_id
+                )
+                OR NOT EXISTS (
+                    SELECT 1 FROM threads WHERE id = NEW.thread_id
+                )
+                OR (
+                    NEW.item_cursor_end > 0
+                    AND NOT EXISTS (
+                        SELECT 1 FROM items
+                        WHERE sequence = NEW.item_cursor_end AND thread_id = NEW.thread_id
+                    )
+                )
+                OR (
+                    NEW.previous_baseline_id IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM context_baselines
+                        WHERE id = NEW.previous_baseline_id
+                            AND session_id = NEW.session_id
+                            AND thread_id = NEW.thread_id
+                            AND item_cursor_end <= NEW.item_cursor_end
+                    )
+                )
+                OR (
+                    NEW.operation = 'compact'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM compactions
+                        WHERE id = NEW.compaction_id
+                            AND session_id = NEW.session_id
+                            AND thread_id = NEW.thread_id
+                            AND source_type = 'thread_items'
+                            AND source_cursor_end = NEW.item_cursor_end
+                    )
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'Context baseline scope is invalid');
+            END;
+
+            CREATE TRIGGER context_baselines_no_update
+            BEFORE UPDATE ON context_baselines
+            BEGIN
+                SELECT RAISE(ABORT, 'Context baselines are append-only');
+            END;
+
+            CREATE TRIGGER context_baselines_no_delete
+            BEFORE DELETE ON context_baselines
+            BEGIN
+                SELECT RAISE(ABORT, 'Context baselines are append-only');
+            END;
+
+            CREATE TRIGGER btw_sidecar_events_no_update
+            BEFORE UPDATE ON btw_sidecar_events
+            BEGIN
+                SELECT RAISE(ABORT, 'BTW Sidecar events are append-only');
+            END;
+
+            CREATE TRIGGER btw_sidecar_events_no_delete
+            BEFORE DELETE ON btw_sidecar_events
+            BEGIN
+                SELECT RAISE(ABORT, 'BTW Sidecar events are append-only');
+            END;
+
+            CREATE TRIGGER phase1d_command_audit_events_no_update
+            BEFORE UPDATE ON phase1d_command_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase 1D command audit is append-only');
+            END;
+
+            CREATE TRIGGER phase1d_command_audit_events_no_delete
+            BEFORE DELETE ON phase1d_command_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase 1D command audit is append-only');
+            END;
+            """,
+        )
+        self._replace_phase1d_prompt_compaction_agent_guard(
+            connection,
+            allow_thread_items_cross_agent=True,
+        )
+        self._create_phase1d_run_scope_guards(connection)
+
+    def _downgrade_v8(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM workspace_initializations)
+                + (SELECT COUNT(*) FROM context_baselines)
+                + (SELECT COUNT(*) FROM review_runs)
+                + (SELECT COUNT(*) FROM btw_sidecar_runs)
+                + (SELECT COUNT(*) FROM btw_sidecar_events)
+                + (SELECT COUNT(*) FROM phase1d_command_audit_events) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back Phase 1D tables while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER phase1d_command_audit_events_no_delete;
+            DROP TRIGGER phase1d_command_audit_events_no_update;
+            DROP TRIGGER btw_sidecar_events_no_delete;
+            DROP TRIGGER btw_sidecar_events_no_update;
+            DROP TRIGGER btw_sidecar_runs_identity_guard;
+            DROP TRIGGER btw_sidecar_runs_scope_guard;
+            DROP TRIGGER review_runs_identity_guard;
+            DROP TRIGGER review_runs_scope_guard;
+            DROP TRIGGER context_baselines_no_delete;
+            DROP TRIGGER context_baselines_no_update;
+            DROP TRIGGER context_baselines_scope_guard;
+            DROP TRIGGER workspace_initializations_no_delete;
+            DROP TRIGGER workspace_initializations_no_update;
+            DROP INDEX idx_phase1d_command_audit_execution_sequence;
+            DROP TABLE phase1d_command_audit_events;
+            DROP INDEX idx_btw_sidecar_events_run_sequence;
+            DROP TABLE btw_sidecar_events;
+            DROP INDEX idx_btw_sidecar_runs_thread_sequence;
+            DROP TABLE btw_sidecar_runs;
+            DROP INDEX idx_review_runs_session_sequence;
+            DROP TABLE review_runs;
+            DROP INDEX idx_context_baselines_session_thread_sequence;
+            DROP TABLE context_baselines;
+            DROP TABLE workspace_initializations;
+
+            DROP TRIGGER context_revisions_scope_guard;
+
+            CREATE TRIGGER context_revisions_scope_guard
+            BEFORE INSERT ON context_revisions
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM agents
+                    WHERE id = NEW.agent_id AND session_id = NEW.session_id
+                )
+                OR (
+                    NEW.thread_id IS NOT NULL
+                    AND NEW.workspace_ref IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM threads
+                        WHERE id = NEW.thread_id
+                            AND workspace_ref = NEW.workspace_ref
+                    )
+                )
+                OR (
+                    NEW.compaction_id IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM compactions
+                        WHERE id = NEW.compaction_id
+                            AND session_id = NEW.session_id
+                            AND agent_id = NEW.agent_id
+                            AND thread_id IS NEW.thread_id
+                    )
+                )
+                OR NEW.prompt_layout_version != 'phase1b.v1'
+                OR (
+                    (NEW.source_cursor_start IS NULL)
+                    != (NEW.source_cursor_end IS NULL)
+                )
+                OR (
+                    NEW.source_cursor_start IS NULL
+                    AND NEW.source_cursor_namespace IS NOT NULL
+                )
+                OR (
+                    NEW.source_cursor_start IS NOT NULL
+                    AND COALESCE(NEW.source_cursor_namespace, '') != 'items.sequence'
+                )
+                OR (
+                    NEW.thread_id IS NULL
+                    AND (
+                        NEW.source_cursor_start IS NOT NULL
+                        OR NEW.source_cursor_end IS NOT NULL
+                        OR json_array_length(NEW.source_item_ids_json) != 0
+                    )
+                )
+                OR (
+                    NEW.source_cursor_start IS NOT NULL
+                    AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_start
+                                AND thread_id = NEW.thread_id
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM items
+                            WHERE sequence = NEW.source_cursor_end
+                                AND thread_id = NEW.thread_id
+                        )
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.source_item_ids_json) AS item_id
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM items
+                        WHERE id = item_id.value AND thread_id = NEW.thread_id
+                    )
+                )
+                OR (
+                    NEW.compaction_id IS NULL
+                    AND json_array_length(NEW.compaction_refs_json) != 0
+                )
+                OR (
+                    NEW.compaction_id IS NOT NULL
+                    AND (
+                        json_array_length(NEW.compaction_refs_json) != 1
+                        OR json_extract(NEW.compaction_refs_json, '$[0]') != NEW.compaction_id
+                    )
+                )
+                OR json_type(NEW.memory_refs_json) != 'array'
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.memory_refs_json) AS memory_ref
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM memories WHERE id = memory_ref.value
+                    )
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'ContextRevision source scope is invalid');
+            END;
+            """,
+        )
+        self._replace_phase1d_prompt_compaction_agent_guard(
+            connection,
+            allow_thread_items_cross_agent=False,
         )
 
     def _downgrade_v6(self, connection: sqlite3.Connection) -> None:
@@ -6983,23 +8019,27 @@ class SQLiteStore:
                         and pending_compaction.id == source.source_id
                         and pending_compaction.id == revision.compaction_id
                         and pending_compaction.session_id == revision.session_id
-                        and pending_compaction.agent_id == revision.agent_id
                         and pending_compaction.thread_id == revision.thread_id
                         and pending_compaction.content_hash == source.content_hash
+                        and (
+                            pending_compaction.source_type is CompactionSourceType.THREAD_ITEMS
+                            or pending_compaction.agent_id == revision.agent_id
+                        )
                     )
                     valid_persisted = connection.execute(
                         """
                         SELECT 1 FROM compactions
-                        WHERE id = ? AND id = ? AND session_id = ? AND agent_id = ?
+                        WHERE id = ? AND id = ? AND session_id = ?
                             AND thread_id IS ? AND content_hash = ?
+                            AND (source_type = 'thread_items' OR agent_id = ?)
                         """,
                         (
                             source.source_id,
                             revision.compaction_id,
                             revision.session_id,
-                            revision.agent_id,
                             revision.thread_id,
                             source.content_hash,
+                            revision.agent_id,
                         ),
                     ).fetchone()
                     if source.cursor is not None or not (valid_pending or valid_persisted):
@@ -7180,8 +8220,11 @@ class SQLiteStore:
                 raise ValueError("ContextRevision references a different Compaction")
             if (
                 compaction.session_id != revision.session_id
-                or compaction.agent_id != revision.agent_id
                 or compaction.thread_id != revision.thread_id
+                or (
+                    compaction.source_type is CompactionSourceType.CONTEXT_REVISIONS
+                    and compaction.agent_id != revision.agent_id
+                )
             ):
                 raise ValueError("ContextRevision and Compaction scopes differ")
             summary_json = compaction.summary.model_dump_json()
@@ -10289,6 +11332,963 @@ class SQLiteStore:
                 memory.project_scope or "",
             ),
         )
+
+    # Phase 1D Slash commands, explicit Context baselines, and BTW Sidecar
+
+    def register_workspace(
+        self,
+        initialization: WorkspaceInitialization,
+    ) -> tuple[WorkspaceInitialization, bool]:
+        if initialization.cursor is not None:
+            raise ValueError("a new Workspace initialization cannot provide a cursor")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM workspace_initializations WHERE workspace_ref = ?",
+                (initialization.workspace_ref,),
+            ).fetchone()
+            if row is not None:
+                existing = self._workspace_initialization_from_row(row)
+                if (
+                    existing.workspace_hash == initialization.workspace_hash
+                    and existing.readable == initialization.readable
+                    and existing.writable == initialization.writable
+                ):
+                    return existing, False
+                raise ConflictError("Workspace is already registered with different facts")
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO workspace_initializations(
+                        id, workspace_ref, workspace_hash, readable, writable, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        initialization.id,
+                        initialization.workspace_ref,
+                        initialization.workspace_hash,
+                        int(initialization.readable),
+                        int(initialization.writable),
+                        initialization.created_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("Workspace initialization identity already exists") from exc
+            if cursor is None:
+                raise RuntimeError("Workspace initialization insert did not produce a cursor")
+            return initialization.model_copy(update={"cursor": int(cursor)}), True
+
+    def get_workspace_initialization(self, workspace_hash: str) -> WorkspaceInitialization:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workspace_initializations WHERE workspace_hash = ?",
+                (workspace_hash,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"Workspace initialization not found: {workspace_hash}")
+        return self._workspace_initialization_from_row(row)
+
+    def list_workspace_initializations(
+        self,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[WorkspaceInitialization]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM workspace_initializations
+                WHERE sequence > ? ORDER BY sequence LIMIT ?
+                """,
+                (cursor, page_limit),
+            ).fetchall()
+        return [self._workspace_initialization_from_row(row) for row in rows]
+
+    @staticmethod
+    def _workspace_initialization_from_row(row: sqlite3.Row) -> WorkspaceInitialization:
+        return WorkspaceInitialization(
+            id=row["id"],
+            cursor=int(row["sequence"]),
+            workspace_ref=row["workspace_ref"],
+            workspace_hash=row["workspace_hash"],
+            readable=bool(row["readable"]),
+            writable=bool(row["writable"]),
+            created_at=row["created_at"],
+        )
+
+    def append_thread_compaction(self, compaction: Compaction) -> Compaction:
+        """Append exact THREAD_ITEMS evidence without inventing a model request."""
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            return self._append_thread_compaction_on_connection(connection, compaction)
+
+    def _append_thread_compaction_on_connection(
+        self,
+        connection: sqlite3.Connection,
+        compaction: Compaction,
+    ) -> Compaction:
+        if compaction.cursor is not None:
+            raise ValueError("a new Compaction cannot provide a cursor")
+        if compaction.source_type is not CompactionSourceType.THREAD_ITEMS:
+            raise ValueError("explicit Context compaction must cover Thread Items")
+        summary_json = compaction.summary.model_dump_json()
+        if hashlib.sha256(summary_json.encode("utf-8")).hexdigest() != compaction.content_hash:
+            raise ValueError("Compaction content hash does not match its summary")
+        refs_json = json.dumps(
+            [ref.model_dump(mode="json") for ref in compaction.covered_item_refs],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self._validate_thread_item_compaction_evidence(connection, compaction)
+        existing_row = connection.execute(
+            "SELECT * FROM compactions WHERE id = ?",
+            (compaction.id,),
+        ).fetchone()
+        if existing_row is not None:
+            existing = self._compaction_from_row(existing_row)
+            self._validate_persisted_compaction_evidence(connection, existing)
+            if self._compaction_semantic_payload(existing) == self._compaction_semantic_payload(
+                compaction
+            ):
+                return existing
+            raise ConflictError("Compaction identity already has different evidence")
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO compactions(
+                    id, session_id, agent_id, thread_id, source_type,
+                    source_cursor_start, source_cursor_end, source_snapshot_hash,
+                    summary_json, content_hash, covered_item_refs_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    compaction.id,
+                    compaction.session_id,
+                    compaction.agent_id,
+                    compaction.thread_id,
+                    compaction.source_type.value,
+                    compaction.source_cursor_start,
+                    compaction.source_cursor_end,
+                    compaction.source_snapshot_hash,
+                    summary_json,
+                    compaction.content_hash,
+                    refs_json,
+                    compaction.created_at.isoformat(),
+                ),
+            ).lastrowid
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("Compaction scope or identity is invalid") from exc
+        if cursor is None:
+            raise RuntimeError("Compaction insert did not produce a cursor")
+        return compaction.model_copy(update={"cursor": int(cursor)})
+
+    def append_context_baseline(
+        self,
+        baseline: ContextBaseline,
+        *,
+        compaction: Compaction | None = None,
+    ) -> ContextBaseline:
+        if baseline.cursor is not None:
+            raise ValueError("a new Context baseline cannot provide a cursor")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (baseline.operation is ContextBaselineOperation.COMPACT) != (compaction is not None):
+                raise ValueError("Context baseline Compaction evidence is incomplete")
+            if compaction is not None:
+                if compaction.id != baseline.compaction_id:
+                    raise ValueError("Context baseline references a different Compaction")
+                compaction = self._append_thread_compaction_on_connection(connection, compaction)
+            existing_row = connection.execute(
+                "SELECT * FROM context_baselines WHERE id = ?",
+                (baseline.id,),
+            ).fetchone()
+            if existing_row is not None:
+                existing = self._context_baseline_from_row(existing_row)
+                candidate = baseline.model_copy(
+                    update={"previous_baseline_id": existing.previous_baseline_id}
+                )
+                if self._context_baseline_payload(existing) == self._context_baseline_payload(
+                    candidate
+                ):
+                    return existing
+                raise ConflictError("Context baseline identity already has different evidence")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM sessions WHERE id = ?", (baseline.session_id,)
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError(f"session not found: {baseline.session_id}")
+            thread_row = connection.execute(
+                "SELECT 1 FROM threads WHERE id = ?",
+                (baseline.thread_id,),
+            ).fetchone()
+            if thread_row is None:
+                raise NotFoundError(f"thread not found: {baseline.thread_id}")
+            latest_item = connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) AS cursor FROM items WHERE thread_id = ?",
+                (baseline.thread_id,),
+            ).fetchone()
+            assert latest_item is not None
+            if int(latest_item["cursor"]) != baseline.item_cursor_end:
+                raise ConflictError("Context baseline must advance to the latest Thread Item")
+            previous_row = connection.execute(
+                """
+                SELECT * FROM context_baselines
+                WHERE session_id = ? AND thread_id = ?
+                ORDER BY sequence DESC LIMIT 1
+                """,
+                (baseline.session_id, baseline.thread_id),
+            ).fetchone()
+            previous_id = None if previous_row is None else str(previous_row["id"])
+            if baseline.previous_baseline_id not in {None, previous_id}:
+                raise ConflictError("Context baseline predecessor is stale")
+            persisted = baseline.model_copy(update={"previous_baseline_id": previous_id})
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO context_baselines(
+                        id, session_id, thread_id, item_cursor_end, operation,
+                        compaction_id, previous_baseline_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        persisted.id,
+                        persisted.session_id,
+                        persisted.thread_id,
+                        persisted.item_cursor_end,
+                        persisted.operation.value,
+                        persisted.compaction_id,
+                        persisted.previous_baseline_id,
+                        persisted.created_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("Context baseline scope is invalid") from exc
+            if cursor is None:
+                raise RuntimeError("Context baseline insert did not produce a cursor")
+            return persisted.model_copy(update={"cursor": int(cursor)})
+
+    def get_active_context_baseline(
+        self,
+        session_id: str,
+        thread_id: str,
+    ) -> ContextBaseline | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM context_baselines
+                WHERE session_id = ? AND thread_id = ?
+                ORDER BY sequence DESC LIMIT 1
+                """,
+                (session_id, thread_id),
+            ).fetchone()
+        return None if row is None else self._context_baseline_from_row(row)
+
+    def list_context_baselines(
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[ContextBaseline]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM context_baselines
+                WHERE session_id = ? AND thread_id = ? AND sequence > ?
+                ORDER BY sequence LIMIT ?
+                """,
+                (session_id, thread_id, cursor, page_limit),
+            ).fetchall()
+        return [self._context_baseline_from_row(row) for row in rows]
+
+    @staticmethod
+    def _context_baseline_from_row(row: sqlite3.Row) -> ContextBaseline:
+        return ContextBaseline(
+            id=row["id"],
+            cursor=int(row["sequence"]),
+            session_id=row["session_id"],
+            thread_id=row["thread_id"],
+            item_cursor_end=int(row["item_cursor_end"]),
+            operation=ContextBaselineOperation(row["operation"]),
+            compaction_id=row["compaction_id"],
+            previous_baseline_id=row["previous_baseline_id"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _context_baseline_payload(baseline: ContextBaseline) -> dict[str, Any]:
+        return {
+            "session_id": baseline.session_id,
+            "thread_id": baseline.thread_id,
+            "item_cursor_end": baseline.item_cursor_end,
+            "operation": baseline.operation.value,
+            "compaction_id": baseline.compaction_id,
+            "previous_baseline_id": baseline.previous_baseline_id,
+        }
+
+    def create_review_run(self, run: ReviewRun) -> ReviewRun:
+        if run.cursor is not None or run.status is not ReviewRunStatus.RUNNING:
+            raise ValueError("a new Review run must start running without a cursor")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                run.thread_id is not None
+                and connection.execute(
+                    "SELECT 1 FROM threads WHERE id = ? AND workspace_ref = ?",
+                    (run.thread_id, run.workspace_ref),
+                ).fetchone()
+                is None
+            ):
+                raise ConflictError("Review Thread workspace scope is invalid")
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO review_runs(
+                        id, session_id, thread_id, workspace_ref, scope, status,
+                        artifact_id, error_code, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                    """,
+                    (
+                        run.id,
+                        run.session_id,
+                        run.thread_id,
+                        run.workspace_ref,
+                        run.scope,
+                        run.status.value,
+                        run.created_at.isoformat(),
+                        run.updated_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("Review run identity or scope is invalid") from exc
+            if cursor is None:
+                raise RuntimeError("Review run insert did not produce a cursor")
+            return run.model_copy(update={"cursor": int(cursor)})
+
+    def get_review_run(self, run_id: str) -> ReviewRun:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM review_runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise NotFoundError(f"Review run not found: {run_id}")
+            return self._review_run_from_row(connection, row)
+
+    def finish_review_run(
+        self,
+        run_id: str,
+        *,
+        artifact_id: str | None = None,
+        error_code: str | None = None,
+    ) -> ReviewRun:
+        if (artifact_id is None) == (error_code is None):
+            raise ValueError("Review completion requires exactly one result")
+        status = ReviewRunStatus.COMPLETED if artifact_id is not None else ReviewRunStatus.FAILED
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM review_runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise NotFoundError(f"Review run not found: {run_id}")
+            current = self._review_run_from_row(connection, row)
+            if current.status is not ReviewRunStatus.RUNNING:
+                if (
+                    current.status is status
+                    and current.artifact_id == artifact_id
+                    and current.error_code == error_code
+                ):
+                    return current
+                raise ConflictError("Review run is already terminal")
+            connection.execute(
+                """
+                UPDATE review_runs
+                SET status = ?, artifact_id = ?, error_code = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (status.value, artifact_id, error_code, now.isoformat(), run_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM review_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            assert updated is not None
+            return self._review_run_from_row(connection, updated)
+
+    def update_review_run(self, review_run_id: str, **changes: Any) -> ReviewRun:
+        allowed = {"status", "artifact_id", "error_code"}
+        if not changes or set(changes) - allowed:
+            raise ValueError("Review run update contains unsupported fields")
+        raw_status = changes.get("status")
+        status = None if raw_status is None else ReviewRunStatus(raw_status)
+        artifact_id = changes.get("artifact_id")
+        error_code = changes.get("error_code")
+        if status is ReviewRunStatus.RUNNING:
+            raise ValueError("Review run cannot transition back to running")
+        if status is ReviewRunStatus.COMPLETED or artifact_id is not None:
+            if artifact_id is None:
+                raise ValueError("completed Review run requires artifact_id")
+            return self.finish_review_run(review_run_id, artifact_id=str(artifact_id))
+        if status is ReviewRunStatus.FAILED or error_code is not None:
+            if error_code is None:
+                raise ValueError("failed Review run requires error_code")
+            return self.finish_review_run(review_run_id, error_code=str(error_code))
+        raise ValueError("Review run update does not describe a terminal transition")
+
+    def list_review_runs(
+        self,
+        *,
+        session_id: str | None = None,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[ReviewRun]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        where = ["sequence > ?"]
+        params: list[Any] = [cursor]
+        if session_id is not None:
+            where.append("session_id = ?")
+            params.append(session_id)
+        params.append(page_limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM review_runs WHERE {' AND '.join(where)} ORDER BY sequence LIMIT ?",
+                params,
+            ).fetchall()
+            return [self._review_run_from_row(connection, row) for row in rows]
+
+    @staticmethod
+    def _review_run_from_row(
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+    ) -> ReviewRun:
+        run = ReviewRun(
+            id=row["id"],
+            cursor=int(row["sequence"]),
+            session_id=row["session_id"],
+            thread_id=row["thread_id"],
+            workspace_ref=row["workspace_ref"],
+            scope=row["scope"],
+            status=ReviewRunStatus(row["status"]),
+            artifact_id=row["artifact_id"],
+            error_code=row["error_code"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        if (
+            run.thread_id is not None
+            and connection.execute(
+                "SELECT 1 FROM threads WHERE id = ? AND workspace_ref = ?",
+                (run.thread_id, run.workspace_ref),
+            ).fetchone()
+            is None
+        ):
+            raise ConflictError("Stored Review Thread workspace scope is invalid")
+        return run
+
+    def create_btw_sidecar_run(self, run: BTWSidecarRun) -> BTWSidecarRun:
+        if run.cursor is not None or run.status is not BTWSidecarStatus.RUNNING:
+            raise ValueError("a new BTW Sidecar run must start running without a cursor")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM agents WHERE id = ? AND session_id = ?",
+                    (run.agent_id, run.session_id),
+                ).fetchone()
+                is None
+            ):
+                raise ConflictError("BTW Sidecar Agent session scope is invalid")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM threads WHERE id = ? AND workspace_ref = ?",
+                    (run.thread_id, run.workspace_ref),
+                ).fetchone()
+                is None
+            ):
+                raise ConflictError("BTW Sidecar Thread workspace scope is invalid")
+            latest = connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) AS cursor FROM items WHERE thread_id = ?",
+                (run.thread_id,),
+            ).fetchone()
+            assert latest is not None
+            if int(latest["cursor"]) != run.source_item_cursor_end:
+                raise ConflictError("BTW Sidecar source cursor is stale")
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO btw_sidecar_runs(
+                        id, session_id, agent_id, thread_id, workspace_ref,
+                        source_item_cursor_end, prompt, prompt_hash, status, response,
+                        response_hash, context_revision_id, promoted_turn_id,
+                        promoted_item_id, error_code, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, NULL,
+                              NULL, NULL, NULL, ?, ?)
+                    """,
+                    (
+                        run.id,
+                        run.session_id,
+                        run.agent_id,
+                        run.thread_id,
+                        run.workspace_ref,
+                        run.source_item_cursor_end,
+                        run.prompt,
+                        run.prompt_hash,
+                        run.created_at.isoformat(),
+                        run.updated_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("BTW Sidecar identity or scope is invalid") from exc
+            if cursor is None:
+                raise RuntimeError("BTW Sidecar insert did not produce a cursor")
+            return run.model_copy(update={"cursor": int(cursor)})
+
+    def get_btw_sidecar_run(self, run_id: str) -> BTWSidecarRun:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM btw_sidecar_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"BTW Sidecar run not found: {run_id}")
+            return self._btw_sidecar_run_from_row(connection, row)
+
+    def finish_btw_sidecar_run(
+        self,
+        run_id: str,
+        *,
+        response: str | None = None,
+        response_hash: str | None = None,
+        context_revision_id: str | None = None,
+        error_code: str | None = None,
+    ) -> BTWSidecarRun:
+        completed = error_code is None
+        if completed and (response is None or response_hash is None or context_revision_id is None):
+            raise ValueError("completed BTW Sidecar requires response evidence")
+        if not completed and any(
+            value is not None for value in (response, response_hash, context_revision_id)
+        ):
+            raise ValueError("failed BTW Sidecar cannot claim response evidence")
+        status = BTWSidecarStatus.COMPLETED if completed else BTWSidecarStatus.FAILED
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM btw_sidecar_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"BTW Sidecar run not found: {run_id}")
+            current = self._btw_sidecar_run_from_row(connection, row)
+            if current.status is not BTWSidecarStatus.RUNNING:
+                if (
+                    current.status is status
+                    and current.response == response
+                    and current.response_hash == response_hash
+                    and current.context_revision_id == context_revision_id
+                    and current.error_code == error_code
+                ):
+                    return current
+                raise ConflictError("BTW Sidecar run is already terminal")
+            connection.execute(
+                """
+                UPDATE btw_sidecar_runs
+                SET status = ?, response = ?, response_hash = ?, context_revision_id = ?,
+                    error_code = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (
+                    status.value,
+                    response,
+                    response_hash,
+                    context_revision_id,
+                    error_code,
+                    now.isoformat(),
+                    run_id,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM btw_sidecar_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            assert updated is not None
+            return self._btw_sidecar_run_from_row(connection, updated)
+
+    def update_btw_sidecar_run(self, run_id: str, **changes: Any) -> BTWSidecarRun:
+        allowed = {
+            "status",
+            "response",
+            "response_hash",
+            "context_revision_id",
+            "error_code",
+        }
+        if not changes or set(changes) - allowed:
+            raise ValueError("BTW Sidecar update contains unsupported fields")
+        raw_status = changes.get("status")
+        status = None if raw_status is None else BTWSidecarStatus(raw_status)
+        if status in {None, BTWSidecarStatus.COMPLETED} and changes.get("error_code") is None:
+            return self.finish_btw_sidecar_run(
+                run_id,
+                response=changes.get("response"),
+                response_hash=changes.get("response_hash"),
+                context_revision_id=changes.get("context_revision_id"),
+            )
+        if status is BTWSidecarStatus.FAILED or changes.get("error_code") is not None:
+            error_code = changes.get("error_code")
+            if error_code is None:
+                raise ValueError("failed BTW Sidecar requires an error_code")
+            return self.finish_btw_sidecar_run(run_id, error_code=str(error_code))
+        raise ValueError("BTW Sidecar promotion requires promote_btw_sidecar")
+
+    def promote_btw_sidecar(
+        self,
+        run_id: str,
+        *,
+        turn: Turn,
+        steering_item: Item,
+    ) -> tuple[BTWSidecarRun, Turn, Item, bool]:
+        """Atomically append one Steering Item and one promotion event."""
+
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM btw_sidecar_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"BTW Sidecar run not found: {run_id}")
+            current = self._btw_sidecar_run_from_row(connection, row)
+            if current.status is BTWSidecarStatus.PROMOTED:
+                assert current.promoted_turn_id is not None
+                assert current.promoted_item_id is not None
+                turn_row = connection.execute(
+                    "SELECT * FROM turns WHERE id = ?", (current.promoted_turn_id,)
+                ).fetchone()
+                item_row = connection.execute(
+                    "SELECT * FROM items WHERE id = ?", (current.promoted_item_id,)
+                ).fetchone()
+                assert turn_row is not None and item_row is not None
+                stored_turn = self._turn_from_row(turn_row)
+                stored_item = self._item_from_row(item_row)
+                return current, stored_turn, stored_item, False
+            if current.status is not BTWSidecarStatus.COMPLETED or current.response is None:
+                raise ConflictError("only a completed BTW Sidecar can be promoted")
+            self._assert_active_thread(connection, current.thread_id)
+            if turn.cursor is not None or turn.position is not None:
+                raise ValueError("a promotion Turn cannot provide cursor or position")
+            if steering_item.cursor is not None or steering_item.position is not None:
+                raise ValueError("a promotion Item cannot provide cursor or position")
+            if turn.thread_id != current.thread_id:
+                raise ConflictError("promotion Turn belongs to a different Thread")
+            if (
+                steering_item.thread_id != current.thread_id
+                or steering_item.turn_id != turn.id
+                or not isinstance(steering_item.payload, SteeringPayload)
+                or steering_item.payload.text != current.response
+            ):
+                raise ConflictError("promotion Item is not the exact Sidecar Steering result")
+            turn_position = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(position), 0) + 1 FROM turns WHERE thread_id = ?",
+                    (current.thread_id,),
+                ).fetchone()[0]
+            )
+            turn = turn.model_copy(update={"position": turn_position})
+            turn_cursor = connection.execute(
+                """
+                INSERT INTO turns(id, thread_id, position, body, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    turn.id,
+                    turn.thread_id,
+                    turn.position,
+                    turn.model_dump_json(),
+                    turn.created_at.isoformat(),
+                ),
+            ).lastrowid
+            item_position = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(position), 0) + 1 FROM items WHERE thread_id = ?",
+                    (current.thread_id,),
+                ).fetchone()[0]
+            )
+            item = steering_item.model_copy(update={"position": item_position})
+            body = item.model_dump_json()
+            item_cursor = connection.execute(
+                """
+                INSERT INTO items(
+                    id, thread_id, turn_id, position, item_type, body, body_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item.id,
+                    item.thread_id,
+                    item.turn_id,
+                    item.position,
+                    item.item_type.value,
+                    body,
+                    hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    item.created_at.isoformat(),
+                ),
+            ).lastrowid
+            connection.execute(
+                """
+                UPDATE btw_sidecar_runs
+                SET status = 'promoted', promoted_turn_id = ?, promoted_item_id = ?, updated_at = ?
+                WHERE id = ? AND status = 'completed'
+                """,
+                (turn.id, item.id, now.isoformat(), run_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO btw_sidecar_events(
+                    id, sidecar_run_id, event_type, body, created_at
+                ) VALUES (?, ?, 'btw.promoted', ?, ?)
+                """,
+                (
+                    new_id("btw_event"),
+                    run_id,
+                    json.dumps(
+                        {
+                            "sidecar_run_id": run_id,
+                            "turn_id": turn.id,
+                            "item_id": item.id,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    now.isoformat(),
+                ),
+            )
+            promoted_row = connection.execute(
+                "SELECT * FROM btw_sidecar_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            assert promoted_row is not None and turn_cursor is not None and item_cursor is not None
+            return (
+                self._btw_sidecar_run_from_row(connection, promoted_row),
+                turn.model_copy(update={"cursor": int(turn_cursor)}),
+                item.model_copy(update={"cursor": int(item_cursor)}),
+                True,
+            )
+
+    @staticmethod
+    def _btw_sidecar_run_from_row(
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+    ) -> BTWSidecarRun:
+        run = BTWSidecarRun(
+            id=row["id"],
+            cursor=int(row["sequence"]),
+            session_id=row["session_id"],
+            agent_id=row["agent_id"],
+            thread_id=row["thread_id"],
+            workspace_ref=row["workspace_ref"],
+            source_item_cursor_end=int(row["source_item_cursor_end"]),
+            prompt=row["prompt"],
+            prompt_hash=row["prompt_hash"],
+            status=BTWSidecarStatus(row["status"]),
+            response=row["response"],
+            response_hash=row["response_hash"],
+            context_revision_id=row["context_revision_id"],
+            promoted_turn_id=row["promoted_turn_id"],
+            promoted_item_id=row["promoted_item_id"],
+            error_code=row["error_code"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        if (
+            connection.execute(
+                "SELECT 1 FROM agents WHERE id = ? AND session_id = ?",
+                (run.agent_id, run.session_id),
+            ).fetchone()
+            is None
+        ):
+            raise ConflictError("Stored BTW Sidecar Agent session scope is invalid")
+        if (
+            connection.execute(
+                "SELECT 1 FROM threads WHERE id = ? AND workspace_ref = ?",
+                (run.thread_id, run.workspace_ref),
+            ).fetchone()
+            is None
+        ):
+            raise ConflictError("Stored BTW Sidecar Thread workspace scope is invalid")
+        return run
+
+    def append_btw_sidecar_event(self, event: BTWSidecarEvent) -> BTWSidecarEvent:
+        if event.cursor is not None:
+            raise ValueError("a new BTW Sidecar event cannot provide a cursor")
+        with self._connect() as connection:
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO btw_sidecar_events(
+                        id, sidecar_run_id, event_type, body, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.id,
+                        event.sidecar_run_id,
+                        event.event_type,
+                        json.dumps(
+                            event.payload,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        event.created_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("BTW Sidecar event identity or scope is invalid") from exc
+            if cursor is None:
+                raise RuntimeError("BTW Sidecar event insert did not produce a cursor")
+            return event.model_copy(update={"cursor": int(cursor)})
+
+    def list_btw_sidecar_events(
+        self,
+        run_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[BTWSidecarEvent]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        with self._connect() as connection:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM btw_sidecar_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+                is None
+            ):
+                raise NotFoundError(f"BTW Sidecar run not found: {run_id}")
+            rows = connection.execute(
+                """
+                SELECT * FROM btw_sidecar_events
+                WHERE sidecar_run_id = ? AND sequence > ?
+                ORDER BY sequence LIMIT ?
+                """,
+                (run_id, cursor, page_limit),
+            ).fetchall()
+        return [
+            BTWSidecarEvent(
+                id=row["id"],
+                cursor=int(row["sequence"]),
+                sidecar_run_id=row["sidecar_run_id"],
+                event_type=row["event_type"],
+                payload=json.loads(row["body"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def append_phase1d_command_audit_event(
+        self,
+        event: Phase1DCommandAuditEvent,
+    ) -> Phase1DCommandAuditEvent:
+        if event.cursor is not None:
+            raise ValueError("a new command audit event cannot provide a cursor")
+        with self._connect() as connection:
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO phase1d_command_audit_events(
+                        id, command_execution_id, command_kind, event_type,
+                        resource_type, resource_id, detail_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.id,
+                        event.command_execution_id,
+                        event.command_kind.value,
+                        event.event_type,
+                        event.resource_type,
+                        event.resource_id,
+                        json.dumps(
+                            event.detail,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        event.created_at.isoformat(),
+                    ),
+                ).lastrowid
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("Phase 1D command audit scope is invalid") from exc
+            if cursor is None:
+                raise RuntimeError("command audit insert did not produce a cursor")
+            return event.model_copy(update={"cursor": int(cursor)})
+
+    def list_phase1d_command_audit_events(
+        self,
+        command_execution_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[Phase1DCommandAuditEvent]:
+        cursor, page_limit = self._validate_cursor_page(after_cursor, limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM phase1d_command_audit_events
+                WHERE command_execution_id = ? AND sequence > ?
+                ORDER BY sequence LIMIT ?
+                """,
+                (command_execution_id, cursor, page_limit),
+            ).fetchall()
+        return [
+            Phase1DCommandAuditEvent(
+                id=row["id"],
+                cursor=int(row["sequence"]),
+                command_execution_id=row["command_execution_id"],
+                command_kind=SlashCommandKind(row["command_kind"]),
+                event_type=row["event_type"],
+                resource_type=row["resource_type"],
+                resource_id=row["resource_id"],
+                detail=json.loads(row["detail_json"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def _interrupt_running_phase1d_calls(self, connection: sqlite3.Connection) -> None:
+        now = utc_now().isoformat()
+        connection.execute(
+            """
+            UPDATE review_runs
+            SET status = 'failed', error_code = 'process_interrupted', updated_at = ?
+            WHERE status = 'running'
+            """,
+            (now,),
+        )
+        interrupted = connection.execute(
+            "SELECT id FROM btw_sidecar_runs WHERE status = 'running'"
+        ).fetchall()
+        connection.execute(
+            """
+            UPDATE btw_sidecar_runs
+            SET status = 'failed', error_code = 'process_interrupted', updated_at = ?
+            WHERE status = 'running'
+            """,
+            (now,),
+        )
+        for row in interrupted:
+            connection.execute(
+                """
+                INSERT INTO btw_sidecar_events(
+                    id, sidecar_run_id, event_type, body, created_at
+                ) VALUES (?, ?, 'btw.failed', ?, ?)
+                """,
+                (
+                    new_id("btw_event"),
+                    row["id"],
+                    json.dumps(
+                        {"error_code": "process_interrupted"},
+                        separators=(",", ":"),
+                    ),
+                    now,
+                ),
+            )
 
     @staticmethod
     def _build_fts_query(value: str) -> str:

@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-08-31
+> 最后更新：2026-09-01
 >
-> 对应版本：Operant 2.0 Phase 1C Artifact、Retention 与 CacheObservation
+> 对应版本：Operant 2.0 Phase 1D Slash Command、Context Command 与 BTW Sidecar
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -63,8 +63,20 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   History；大 Tool Result 先进入内容寻址 Artifact，再向模型提供安全 Stub；
 - Phase 1B 最小类型化引用：Thread、同 Thread Item、普通 Artifact 和当前 Session/Workspace 可读的
   active Memory；引用在 Provider 调用前完成作用域、敏感级别、完整性与 redaction 校验；
+- 冻结版本 `phase1d.v1` 的 Slash Command Registry，把 `/init`、`/review`、`/清空上下文`、
+  `/压缩上下文` 及英文别名解析为类型化 Command；Registry 只描述路由，不授予 Workspace、工具或
+  审批能力；
+- `/init` 只校验并登记一个绝对、存在且可读的 Workspace 到当前 Core SQLite，不创建第二套数据库、
+  不复制 Secret/Role/Model；公开 API 只返回身份 hash 和可读写事实，不返回真实本地路径；
+- 追加式 Context Baseline：清空只把后续 Context 的起点推进到当前 `items.sequence`，压缩先保存精确
+  `THREAD_ITEMS` Compaction 再推进基线；两者都不删除、不更新或伪造 Canonical Thread/Turn/Item；
+- `/review` 创建严格只读 Reviewer Session，仅开放 `read_file/search_files/git_diff`，复用 Session
+  预算、租约、取消和 Action Gateway，并把结果保存为不可变 sensitive Review Artifact；
+- BTW Sidecar 使用启动时已提交 Item Cursor 的冻结视图、独立 Agent/ContextRevision 和空 ToolPolicy，
+  不取得主 Session 执行租约、不写主 Session Event/Thread；只有显式 promote 才原子追加一个 Steering
+  Turn/Item，重复或并发 promote 返回同一结果；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1/v2/v3/v4/v5/v6/v7 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1/v2/v3/v4/v5/v6/v7/v8 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -959,6 +971,12 @@ SQLiteStore 当前创建以下表：
 | `context_revisions` | 保存每次 Provider 请求的不可变安全输入、Watermark、布局版本与 Compaction 关联 |
 | `prompt_blocks` | 保存 ContextRevision 内有序、不可变的 Prompt Block 与来源 hash |
 | `reference_bindings` | 保存显式 Thread/Item/Artifact/Memory 引用的解析快照与权限结果 |
+| `workspace_initializations` | 保存 Core 内部 Workspace 注册路径、公开 hash 和注册时可读写事实 |
+| `context_baselines` | 保存 Session+Thread 的追加式 clear/compact Context 起点和前驱链 |
+| `review_runs` | 保存只读 Review Session、状态和不可变 Review Artifact 关联 |
+| `btw_sidecar_runs` | 保存 Sidecar 冻结 Item Cursor、独立 Agent/Revision、状态与显式提升关联 |
+| `btw_sidecar_events` | 按资源 Cursor 保存 Sidecar started/model_completed/failed/promoted 事实 |
+| `phase1d_command_audit_events` | 保存 `/init`、Review 和 Context Command 的只追加 Receipt 关联审计 |
 
 当前使用 Python 标准库 `sqlite3`，每个 Store 操作创建独立连接，并启用外键约束。写操作使用
 事务；异常时回滚。Migration 使用 `BEGIN IMMEDIATE`，当前版本为：
@@ -970,6 +988,9 @@ SQLiteStore 当前创建以下表：
 5. v5：Thread/Turn/Item Canonical History、显式 legacy mapping 与内容寻址 Artifact metadata。
 6. v6：ContextRevision、PromptBlock、ReferenceBinding 与追加式 Compaction。
 7. v7：Artifact Retention Policy/状态/审计与 Provider CacheObservation。
+8. v8：Slash/Context Command、Workspace 注册、Review、BTW Sidecar 与 Command Audit；同时只为
+   `THREAD_ITEMS` Compaction 放宽同 Session/Thread 的跨 Agent 后续引用，普通 ContextRevision
+   Compaction 仍强制同 Agent。
 
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
@@ -987,6 +1008,13 @@ Approval、Event 或 Canonical History。Policy、Retention Audit 与 CacheObser
 唯一可按 CAS 更新的 projection。v1—v6 升级、重复/并发初始化和 v7 中途失败均在 Migration 单事务中
 保留原数据或完整回滚。
 
+v8 不自动创建或改写 Thread 历史。Context Baseline 与 Sidecar/Command Audit 只追加；Review/Sidecar
+运行态只允许 `running` 到一个已知终态。重启时遗留 running Review/Sidecar 安全转为
+`process_interrupted`，不会猜测 Provider 结果或自动重放。v8 对 ContextRevision 和 PromptBlock 两层
+Compaction provenance 使用相同规则：确定性的 `THREAD_ITEMS` 摘要可被同 Session/Thread 的后续 Agent
+引用，基于旧 ContextRevision 的摘要仍必须属于当前 Agent。三个已知未合并 v8 preview 只有在历史、
+checksum 和对应 trigger 的精确形状匹配时才收编；未知漂移继续拒绝。
+
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
 全部受管 table/index/view/trigger/FTS shadow object、规范化 DDL、列名/类型/NOT NULL、主键顺序、
@@ -999,8 +1027,9 @@ preview 收编、逐步升级、每步 manifest 复验和历史写入全部位�
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
 随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
-回滚 v7 要求全部 Phase 1C 投影、审计和 Observation 表为空，回滚 v6 要求全部 Phase 1B 表为空，
+v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+回滚 v8 要求全部 Phase 1D 注册、基线、Run、Event 与 Audit 表为空，并精确恢复 v7 的两条严格
+Compaction owner trigger；回滚 v7 要求全部 Phase 1C 投影、审计和 Observation 表为空，回滚 v6 要求全部 Phase 1B 表为空，
 回滚 v5 要求全部 Phase 1A 表为空，回滚 v4 要求两张 execution
 lease 表为空，继续回滚 v3 还要求
 Tool/Command Receipt、审批/审计和
@@ -1100,6 +1129,20 @@ workspace 绝对路径。
 | 方法 | 路径 | 功能 |
 |---|---|---|
 | `GET` | `/healthz` | 健康检查 |
+| `GET` | `/v1/slash-commands` | 查询冻结版本的 Slash Command Registry |
+| `GET` | `/v1/slash-commands/resolve` | 把界面别名解析为类型化 Command，不执行命令 |
+| `POST` | `/v1/commands/workspace/init` | 校验并登记 Workspace；公开响应不含本地路径 |
+| `POST` | `/v1/commands/context/clear` | 追加 clear Context Baseline，不改 Canonical History |
+| `POST` | `/v1/commands/context/compact` | 原子追加 THREAD_ITEMS Compaction 与 compact Baseline |
+| `GET` | `/v1/context-baselines` | 按 Session+Thread 和 Cursor 查询 Context Baseline |
+| `POST` | `/v1/commands/review` | 用严格只读 Reviewer 运行 Review，并返回审计 SSE |
+| `GET` | `/v1/reviews/{id}` | 查询 metadata-only Review 状态和 Artifact ID |
+| `GET` | `/v1/command-executions/{id}/events[/stream]` | 查询或 SSE 回放 Phase 1D Command Audit |
+| `POST` | `/v1/sidecars/btw` | 启动无工具、主 Thread 隔离的 Sidecar，并返回 SSE |
+| `GET` | `/v1/sidecars/btw/{id}` | 查询脱敏 Sidecar 结果和提升状态，不返回 prompt/路径 |
+| `GET` | `/v1/sidecars/btw/{id}/events[/stream]` | 查询或 SSE 回放已提交 Sidecar Event |
+| `POST` | `/v1/sidecars/btw/{id}/cancel` | 协作式取消本进程运行中的 Sidecar；重复取消安全返回 |
+| `POST` | `/v1/sidecars/btw/{id}/promote` | 显式且幂等地把已完成结果追加为一个 Steering Item |
 | `GET/POST` | `/v1/models` | 查询或创建 Model Profile |
 | `GET/PATCH/DELETE` | `/v1/models/{id}` | 查询、更新或停用 Model Profile |
 | `POST` | `/v1/models/discover` | 查询中转站模型 ID |
@@ -1186,6 +1229,11 @@ HTTP Command 记为 accepted；检查范围是完整首帧，硬上限为 256,00
 无效、无法验证、首帧前异常/结束或超限会进入 `manual_reconcile_required`，不能仅因读到任意字节就
 假定副作用已接受。
 
+Review/BTW 在创建 Run、Event 或 Agent 前由 NotFound、输入校验或 Policy 明确拒绝时，会返回固定安全的
+`review.stream_error`/`btw.stream_error` 首帧，并把 Command Receipt 记为 FAILED 404/400/403、
+`recovery=none`；相同 key 只重放已持久失败，不再次进入应用服务。这类启动前拒绝没有未知副作用，
+不得误标为 `manual_reconcile_required`。
+
 已 accepted 的 SSE Command 不保存或重放完整流，只保存 typed Receipt 摘要。相同 key 的普通重试
 固定返回 `202 application/json`、`Idempotency-Replayed: true`、资源类型/ID、`replay_url` 和 Cursor
 回放提示；它不是 `200 text/event-stream` 的假 SSE，也不会重新执行或重新接入原生成器。
@@ -1212,7 +1260,7 @@ Basic auth、URL userinfo 和常见 secret key；`secret_ref` 环境变量名保
 
 ### Cursor 与 SSE 回放边界
 
-Session、Workflow、Evaluation 事件与 Thread Item 都使用实际 SQLite 自增序号作为 Cursor。Query 和回放采用
+Session、Workflow、Evaluation、Phase 1D Command Audit、BTW Sidecar Event 与 Thread Item 都使用实际 SQLite 自增序号作为 Cursor。Query 和回放采用
 `cursor > after_cursor` 开区间，因此 SSE `id`、JSON `cursor` 与 SQLite 事实一致。Cursor 只允许在
 产生它的同一资源和事件流 scope 内复用；每张事件表的全表 `AUTOINCREMENT` 会因其他 Session/Run 的
 写入产生正常 gap，客户端不能拿另一 Session、Workflow Run 或 Evaluation Run 的 Cursor 跳过当前
@@ -1417,6 +1465,15 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 - 统一错误信封、校验输入与未知异常不泄密，以及首次非流 Command、REST 4xx/5xx、命令输出、
   Receipt、事件、模型 Tool Result 共用 bounded redaction；短 Bearer、任意/不完整 PEM 私钥块和
   大小写敏感文件名回归。
+- Slash Registry 版本/别名/未知命令、`/init` 绝对路径/权限/幂等和公开路径脱敏；Context clear/compact
+  不改 Canonical History、精确基线链、下一次真实 ContextRevision 才消费基线，以及跨 Agent
+  `THREAD_ITEMS`/同 Agent ContextRevision Compaction provenance 分界；
+- v1—v7 → v8 保留数据升级、重复初始化、三种精确 preview 收编、事务失败、并发基线、非空回滚拒绝
+  与 v8→v7→v8 两条 trigger 的逐字形状恢复；
+- `/review` 严格只读角色拒绝、预算/Session 运行复用、sensitive Artifact、M0 SSE Receipt 与 Audit
+  `Last-Event-ID` 回放、启动前确定性 4xx 失败 Receipt 与同 key 不重执行；BTW 无主 Session
+  lease/Event/Thread 写入、空工具、Provider 越权 Tool Call 拒绝、unknown usage/price、超时/取消/
+  重启收口、敏感输出清洗和显式提升只追加一个 Steering。
 
 本地验证命令：
 
@@ -1427,6 +1484,11 @@ uv run mypy src
 uv run pytest
 git diff --check
 ```
+
+2026-09-01 的 Phase 1D 后端底座使用确定性 Provider、隔离 v1—v8 SQLite 和临时 Workspace/Artifact
+Store：完整 pytest 为 367 通过、1 个条件性 Docker 测试跳过，并保留 1 个上游 Starlette TestClient
+弃用警告；Ruff format/check、mypy、`uv lock --check` 和 `git diff --check` 通过。未设置真实 Provider，
+未把 Docker skip 视为容器验收，也未实现 Skill、MCP、Scheduler 或客户端接入。
 
 2026-08-31 的 Phase 1C 后端底座只使用隔离数据库与临时 Artifact Store，覆盖 v1—v6 升级、能力票据、
 目录身份替换、Retention CAS/宽限期、物理删除中断、人工核对、孤儿/缺失/损坏/非安全审计、显式修复
@@ -1516,7 +1578,7 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-5. 已有 v1/v2/v3/v4/v5/v6/v7 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
+5. 已有 v1/v2/v3/v4/v5/v6/v7/v8 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
    但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
    Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
 6. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，但不支持任意模型流位置续传；SSE 断线
@@ -1544,6 +1606,10 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
     Result Artifact 也会持续增长；Artifact 之外还没有对象级 retention 执行，也没有语义摘要质量评测
     或吞吐基准。Composer
     与 SQLite/Artifact Store 使用同步本地 I/O，超大引用和高并发规模需要后续性能评估。
+14. Slash Registry 当前冻结为 `phase1d.v1`，只覆盖四个正式 Context/Review/Workspace 命令；Skill、
+    MCP 与 Scheduler 仍按 COM-20260831-004 拆为后续阶段，当前没有动态命令注册、MCP transport 或
+    定时副作用执行。BTW Sidecar 的主动取消通知仍是本进程协作式信号；跨进程重启只会安全标为
+    `process_interrupted`，不会从任意模型流位置恢复或自动继续。
 
 ## 19. 文档维护规则
 
@@ -1575,8 +1641,26 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 
 ## 20. 变更记录
 
+### 2026-09-01
+
+- 补齐第三种已知 v8 run-scope preview 的精确收编：只接受旧 PromptBlock provenance guard 与缺失
+  Review/Sidecar scope/identity triggers 的完整已知形状，升级后恢复正式 guard、四条 run trigger 和
+  冻结 checksum；未知 schema 漂移继续拒绝。
+- 修正 Review/BTW 启动前确定性 `stream_error` 的 M0 Receipt：按 not-found、validation、policy 保存
+  安全 FAILED 404/400/403 和 `recovery=none`，相同 key 重放持久失败且不再次创建资源或执行 Provider。
+
 ### 2026-08-31
 
+- 新增冻结 `phase1d.v1` Slash Command Registry 与四个正式类型化命令；`/init` 只登记当前 Core 的
+  Workspace，clear/compact 只推进追加式 Context Baseline，均继续使用 M0 Receipt/Action Hash/Audit；
+- 新增严格只读 `/review`，复用既有 Session 预算、审批、取消与恢复边界，并把结果保存为 immutable
+  sensitive Artifact；新增 BTW Sidecar 的冻结 Thread 视图、独立 Agent/Revision、空 ToolPolicy、
+  资源级 Cursor 回放和显式幂等 Steering 提升；
+- 新增冻结 manifest/checksum 的 SQLite v8、六张表和 append-only/scope trigger，支持 v1—v7 保留数据
+  升级、三种精确 preview 收编、失败原子回滚与受限空表 downgrade；`THREAD_ITEMS` Compaction 可在
+  同 Session/Thread 跨 Agent 消费，但普通 ContextRevision Compaction 继续同 Agent；
+- 本阶段未实现 Skill、MCP、Scheduler、Graph、Team、Remote/Relay 或客户端，也未修改目标架构、
+  `clients/`、`sdk/`、前端和 UI 设计文件；
 - 新增短时对象/操作/敏感级别 Artifact capability：完整性校验后的脱敏文本读取、固定安全文件名原文
   下载，以及绑定 Workspace root/父目录 inode 链的不覆盖原子导出；HTTP 不签发 capability，不返回
   storage key、本地路径或未授权正文；

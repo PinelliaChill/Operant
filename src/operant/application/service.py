@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
+import os
 import secrets
 import stat
 from collections.abc import AsyncIterator, Collection
+from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -15,6 +18,7 @@ from pydantic import TypeAdapter, ValidationError
 from operant.application.context import PersistentContextComposer
 from operant.application.defaults import default_role_presets
 from operant.application.factory import AgentFactory
+from operant.application.slash_commands import SlashCommandRegistry
 from operant.application.trace import (
     WorkflowTraceSummary,
     summarize_session_trace,
@@ -39,7 +43,30 @@ from operant.domain.actions import (
     ToolActionReceipt,
     ToolActionReceiptStatus,
 )
-from operant.domain.context import ContextRevision, ReferenceRequest
+from operant.domain.commands import (
+    BTWSidecarEvent,
+    BTWSidecarRun,
+    BTWSidecarStatus,
+    ContextBaseline,
+    ContextBaselineOperation,
+    Phase1DCommandAuditEvent,
+    ReviewRun,
+    ReviewRunStatus,
+    SlashCommandDefinition,
+    SlashCommandKind,
+    SlashCommandResolution,
+    WorkspaceInitialization,
+)
+from operant.domain.context import (
+    Compaction,
+    CompactionSourceType,
+    CompactionSummary,
+    ContextRevision,
+    ContextSourceRef,
+    ContextSourceType,
+    ReferenceRequest,
+    deterministic_compaction_id,
+)
 from operant.domain.evaluation import (
     EvaluationResult,
     EvaluationRun,
@@ -64,6 +91,7 @@ from operant.domain.models import (
     RolePreset,
     RoleSnapshot,
     Session,
+    ToolPolicy,
     new_id,
     utc_now,
 )
@@ -76,6 +104,7 @@ from operant.domain.threads import (
     ArtifactRetentionState,
     ArtifactSensitivity,
     ArtifactSourceRef,
+    ArtifactSourceType,
     CacheHitStatus,
     CacheObservation,
     ConversationThread,
@@ -83,6 +112,7 @@ from operant.domain.threads import (
     ItemPayload,
     RetentionLifecycle,
     RetentionPolicy,
+    SteeringPayload,
     ThreadStatus,
     Turn,
 )
@@ -282,7 +312,9 @@ class ApplicationService:
         self.store = store
         self.provider = provider
         self.factory = AgentFactory(store)
+        self.slash_commands = SlashCommandRegistry()
         self._cancellations: dict[str, asyncio.Event] = {}
+        self._sidecar_cancellations: dict[str, asyncio.Event] = {}
         self._approval_futures: dict[tuple[str, str], asyncio.Future[bool]] = {}
         self._approval_details: dict[tuple[str, str], dict[str, str]] = {}
         self._session_run_leases: dict[str, SessionRunLease] = {}
@@ -475,6 +507,757 @@ class ApplicationService:
             after_cursor=after_cursor,
             limit=limit,
         )
+
+    # Phase 1D explicit commands.  Registration only describes routing; it
+    # never grants a tool or workspace capability.
+
+    def list_slash_commands(self) -> tuple[SlashCommandDefinition, ...]:
+        return self.slash_commands.list_commands()
+
+    def resolve_slash_command(
+        self,
+        text: str,
+        *,
+        registry_version: str | None = None,
+    ) -> SlashCommandResolution:
+        return self.slash_commands.resolve(text, registry_version=registry_version)
+
+    def initialize_workspace(self, workspace: str | Path) -> tuple[WorkspaceInitialization, bool]:
+        candidate = Path(workspace)
+        if not candidate.is_absolute():
+            raise ValueError("workspace must be an absolute path")
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_dir():
+            raise ValueError("workspace must be a directory")
+        readable = os.access(resolved, os.R_OK)
+        writable = os.access(resolved, os.W_OK)
+        if not readable:
+            raise PermissionError("workspace is not readable")
+        workspace_ref = str(resolved)
+        initialization = WorkspaceInitialization(
+            workspace_ref=workspace_ref,
+            workspace_hash=hashlib.sha256(workspace_ref.encode("utf-8")).hexdigest(),
+            readable=readable,
+            writable=writable,
+        )
+        return self.store.register_workspace(initialization)
+
+    def append_context_baseline(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        operation: ContextBaselineOperation,
+        agent_id: str | None = None,
+    ) -> ContextBaseline:
+        self.get_session(session_id)
+        self.get_thread(thread_id)
+        latest_cursor = self._latest_thread_item_cursor(thread_id)
+        previous = self.store.get_active_context_baseline(session_id, thread_id)
+        compaction = None
+        if operation is ContextBaselineOperation.COMPACT:
+            if agent_id is None:
+                raise ValueError("compact context requires an agent_id")
+            agent = self.store.get_agent(agent_id)
+            if agent.session_id != session_id:
+                raise PermissionError("agent belongs to a different Session")
+            compaction = self._build_explicit_thread_compaction(
+                session_id=session_id,
+                agent_id=agent_id,
+                thread_id=thread_id,
+                item_cursor_end=latest_cursor,
+            )
+        baseline = ContextBaseline(
+            session_id=session_id,
+            thread_id=thread_id,
+            item_cursor_end=latest_cursor,
+            operation=operation,
+            compaction_id=None if compaction is None else compaction.id,
+            previous_baseline_id=None if previous is None else previous.id,
+        )
+        return self.store.append_context_baseline(baseline, compaction=compaction)
+
+    def get_active_context_baseline(
+        self,
+        session_id: str,
+        thread_id: str,
+    ) -> ContextBaseline | None:
+        self.get_session(session_id)
+        self.get_thread(thread_id)
+        return self.store.get_active_context_baseline(session_id, thread_id)
+
+    def list_context_baselines(
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[ContextBaseline]:
+        self.get_session(session_id)
+        self.get_thread(thread_id)
+        return self.store.list_context_baselines(
+            session_id,
+            thread_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+
+    def _latest_thread_item_cursor(self, thread_id: str) -> int:
+        cursor: int | None = None
+        while True:
+            page = self.store.list_items(thread_id, after_cursor=cursor, limit=1000)
+            if not page:
+                return 0 if cursor is None else cursor
+            assert page[-1].cursor is not None
+            cursor = page[-1].cursor
+            if len(page) < 1000:
+                return cursor
+
+    def _build_explicit_thread_compaction(
+        self,
+        *,
+        session_id: str,
+        agent_id: str,
+        thread_id: str,
+        item_cursor_end: int,
+    ) -> Compaction:
+        start_after = 0
+        baseline_cursor: int | None = None
+        while True:
+            baseline_page = self.store.list_context_baselines(
+                session_id,
+                thread_id,
+                after_cursor=baseline_cursor,
+                limit=1000,
+            )
+            for baseline in baseline_page:
+                if baseline.operation is ContextBaselineOperation.CLEAR:
+                    start_after = baseline.item_cursor_end
+            if len(baseline_page) < 1000:
+                break
+            assert baseline_page[-1].cursor is not None
+            baseline_cursor = baseline_page[-1].cursor
+
+        items: list[Item] = []
+        cursor: int | None = start_after
+        while True:
+            item_page = self.store.list_items(thread_id, after_cursor=cursor, limit=1000)
+            selected = [
+                item
+                for item in item_page
+                if item.cursor is not None and item.cursor <= item_cursor_end
+            ]
+            items.extend(selected)
+            if len(item_page) < 1000 or not item_page or item_page[-1].cursor == item_cursor_end:
+                break
+            assert item_page[-1].cursor is not None
+            if item_page[-1].cursor > item_cursor_end:
+                break
+            cursor = item_page[-1].cursor
+        if not items:
+            raise ConflictError("there are no active Thread Items to compact")
+
+        refs: list[ContextSourceRef] = []
+        coverage = hashlib.sha256()
+        active_goal = ""
+        for item in items:
+            assert item.cursor is not None
+            item_hash = hashlib.sha256(
+                item.model_copy(update={"cursor": None}).model_dump_json().encode("utf-8")
+            ).hexdigest()
+            ref = ContextSourceRef(
+                source_type=ContextSourceType.ITEM,
+                source_id=item.id,
+                cursor=item.cursor,
+                content_hash=item_hash,
+            )
+            refs.append(ref)
+            coverage.update(
+                json.dumps(
+                    {
+                        "id": ref.source_id,
+                        "cursor": ref.cursor,
+                        "content_hash": ref.content_hash,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            coverage.update(b"\n")
+            if item.item_type.value in {"user_message", "steering"}:
+                text = item.payload.model_dump(mode="json").get("text")
+                if isinstance(text, str):
+                    active_goal = redact_public_text(text, max_chars=500)
+        summary = CompactionSummary(
+            active_goal=active_goal,
+            completed_steps=(f"Compacted {len(refs)} committed Canonical Thread Items.",),
+            next_actions=("Continue from Items appended after the explicit baseline.",),
+        )
+        compaction = Compaction(
+            session_id=session_id,
+            agent_id=agent_id,
+            thread_id=thread_id,
+            source_type=CompactionSourceType.THREAD_ITEMS,
+            source_cursor_start=refs[0].cursor or 1,
+            source_cursor_end=refs[-1].cursor or 1,
+            source_snapshot_hash=coverage.hexdigest(),
+            summary=summary,
+            content_hash=hashlib.sha256(summary.model_dump_json().encode("utf-8")).hexdigest(),
+            covered_item_refs=tuple(refs),
+        )
+        return compaction.model_copy(update={"id": deterministic_compaction_id(compaction)})
+
+    def append_phase1d_audit(
+        self,
+        *,
+        command_execution_id: str,
+        command_kind: SlashCommandKind,
+        event_type: str,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> Phase1DCommandAuditEvent:
+        safe_detail = redact_public_data(detail or {}, max_chars=2_000)
+        if not isinstance(safe_detail, dict):
+            safe_detail = {}
+        return self.store.append_phase1d_command_audit_event(
+            Phase1DCommandAuditEvent(
+                command_execution_id=command_execution_id,
+                command_kind=command_kind,
+                event_type=event_type,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                detail=safe_detail,
+            )
+        )
+
+    def list_phase1d_audit_events(
+        self,
+        command_execution_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[Phase1DCommandAuditEvent]:
+        return self.store.list_phase1d_command_audit_events(
+            command_execution_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+
+    async def run_review(
+        self,
+        *,
+        command_execution_id: str,
+        reviewer_role_id: str,
+        workspace: str | Path,
+        scope: str,
+        thread_id: str | None = None,
+    ) -> AsyncIterator[Phase1DCommandAuditEvent]:
+        workspace_path = Path(workspace)
+        if not workspace_path.is_absolute():
+            raise ValueError("workspace must be absolute")
+        workspace_ref = str(workspace_path.resolve(strict=True))
+        if not Path(workspace_ref).is_dir():
+            raise ValueError("workspace must be a directory")
+        if thread_id is not None:
+            thread = self.get_thread(thread_id)
+            if (
+                thread.workspace_ref is None
+                or str(Path(thread.workspace_ref).resolve()) != workspace_ref
+            ):
+                raise PermissionError("Review Thread workspace binding does not match")
+
+        expected_policy = ToolPolicy(allowed_tools=("read_file", "search_files", "git_diff"))
+        reviewer_role = self.get_role(reviewer_role_id)
+        if reviewer_role.tool_policy != expected_policy:
+            raise PermissionError("Reviewer role is not strictly read-only")
+        review_session = self.create_session(reviewer_role_id)
+        if (
+            review_session.role_snapshot.role_id != reviewer_role.id
+            or review_session.role_snapshot.role_version != reviewer_role.version
+            or review_session.role_snapshot.tool_policy != expected_policy
+        ):
+            raise PermissionError("Reviewer role changed while the Session was created")
+        review_run = self.store.create_review_run(
+            ReviewRun(
+                session_id=review_session.id,
+                thread_id=thread_id,
+                workspace_ref=workspace_ref,
+                scope=redact_public_text(scope, max_chars=2_000),
+            )
+        )
+        result_text: str | None = None
+        failure_code: str | None = None
+        terminal_recorded = False
+
+        def record_failure(error_code: str) -> Phase1DCommandAuditEvent:
+            failed_run = self.store.update_review_run(
+                review_run.id,
+                status=ReviewRunStatus.FAILED,
+                error_code=error_code,
+            )
+            return self.append_phase1d_audit(
+                command_execution_id=command_execution_id,
+                command_kind=SlashCommandKind.REVIEW,
+                event_type="review.failed",
+                resource_type="review",
+                resource_id=review_run.id,
+                detail={
+                    "review_run_id": review_run.id,
+                    "error_code": failed_run.error_code,
+                },
+            )
+
+        try:
+            started = self.append_phase1d_audit(
+                command_execution_id=command_execution_id,
+                command_kind=SlashCommandKind.REVIEW,
+                event_type="review.started",
+                resource_type="review",
+                resource_id=review_run.id,
+                detail={"review_run_id": review_run.id, "session_id": review_session.id},
+            )
+            yield started
+
+            async for event in self.run_session(
+                review_session.id,
+                user_message=(
+                    "Perform a strict read-only code review. Use only read_file, "
+                    "search_files, and git_diff. Do not request command execution or file "
+                    f"changes. Review scope: {redact_public_text(scope, max_chars=2_000)}"
+                ),
+                workspace=workspace_ref,
+                thread_id=thread_id,
+            ):
+                if event.event_type == "agent.completed":
+                    content = event.payload.get("content")
+                    if isinstance(content, str):
+                        result_text = redact_public_text(content, max_chars=100_000)
+                elif event.event_type in {
+                    "agent.failed",
+                    "agent.cancelled",
+                    "agent.timed_out",
+                    "agent.stream_error",
+                    "budget.exhausted",
+                }:
+                    failure_code = event.event_type.replace(".", "_")[:200]
+            if result_text is None:
+                failure_code = failure_code or "review_result_missing"
+            if failure_code is not None:
+                failed_event = record_failure(failure_code)
+                terminal_recorded = True
+                yield failed_event
+                return
+            assert result_text is not None
+            source_refs = [
+                ArtifactSourceRef(
+                    source_type=ArtifactSourceType.SESSION,
+                    source_id=review_session.id,
+                )
+            ]
+            if thread_id is not None:
+                source_refs.append(
+                    ArtifactSourceRef(source_type=ArtifactSourceType.THREAD, source_id=thread_id)
+                )
+            artifact, _created = self.create_artifact(
+                content=result_text.encode("utf-8"),
+                media_type="text/markdown; profile=operant-review",
+                sensitivity=ArtifactSensitivity.SENSITIVE,
+                source_refs=source_refs,
+                retention_policy_ref="review-result",
+            )
+            completed_run = self.store.update_review_run(
+                review_run.id,
+                status=ReviewRunStatus.COMPLETED,
+                artifact_id=artifact.id,
+            )
+            completed_event = self.append_phase1d_audit(
+                command_execution_id=command_execution_id,
+                command_kind=SlashCommandKind.REVIEW,
+                event_type="review.completed",
+                resource_type="review",
+                resource_id=review_run.id,
+                detail={
+                    "review_run_id": review_run.id,
+                    "artifact_id": completed_run.artifact_id,
+                },
+            )
+            terminal_recorded = True
+            yield completed_event
+        except asyncio.CancelledError:
+            if not terminal_recorded:
+                record_failure("stream_cancelled")
+                terminal_recorded = True
+            raise
+        except Exception as exc:
+            error_code = self._safe_execution_error_code(exc, prefix="review")
+            failed_event = record_failure(error_code)
+            terminal_recorded = True
+            yield failed_event
+        finally:
+            if not terminal_recorded:
+                with suppress(ConflictError):
+                    record_failure("stream_closed")
+
+    async def run_btw_sidecar(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        workspace: str | Path,
+        prompt: str,
+    ) -> AsyncIterator[BTWSidecarEvent]:
+        session = self.get_session(session_id)
+        thread = self.get_thread(thread_id)
+        workspace_path = Path(workspace)
+        if not workspace_path.is_absolute():
+            raise ValueError("workspace must be absolute")
+        workspace_ref = str(workspace_path.resolve(strict=True))
+        if (
+            thread.workspace_ref is None
+            or str(Path(thread.workspace_ref).resolve()) != workspace_ref
+        ):
+            raise PermissionError("BTW Thread workspace binding does not match")
+        safe_prompt = redact_public_text(prompt, max_chars=100_000)
+        agent = self.factory.create_agent(session.id)
+        self.store.update_agent_status(agent.id, AgentStatus.RUNNING)
+        source_cursor = self._latest_thread_item_cursor(thread.id)
+        run = self.store.create_btw_sidecar_run(
+            BTWSidecarRun(
+                session_id=session.id,
+                agent_id=agent.id,
+                thread_id=thread.id,
+                workspace_ref=workspace_ref,
+                source_item_cursor_end=source_cursor,
+                prompt=safe_prompt,
+                prompt_hash=hashlib.sha256(safe_prompt.encode("utf-8")).hexdigest(),
+            )
+        )
+        started = self.store.append_btw_sidecar_event(
+            BTWSidecarEvent(
+                sidecar_run_id=run.id,
+                event_type="btw.started",
+                payload={"sidecar_run_id": run.id, "status": run.status.value},
+            )
+        )
+        cancellation = asyncio.Event()
+        self._sidecar_cancellations[run.id] = cancellation
+        iterator = None
+        next_event: asyncio.Future[RuntimeEvent] | None = None
+        cancelled: asyncio.Task[bool] | None = None
+        terminal_recorded = False
+        try:
+            yield started
+
+            sidecar_snapshot = session.role_snapshot.model_copy(
+                update={
+                    "system_prompt": (
+                        session.role_snapshot.system_prompt
+                        + "\nThis is an isolated BTW Sidecar call. Answer the question only. "
+                        "You have no tools and must not claim to modify the main Thread."
+                    ),
+                    "tool_policy": ToolPolicy(),
+                }
+            )
+            composer = PersistentContextComposer(
+                store=self.store,
+                session=session,
+                agent_id=agent.id,
+                workspace=workspace_ref,
+                thread_id=thread.id,
+                references=(),
+                memory_resolver=lambda memory_id: self.get_memory(
+                    memory_id,
+                    snapshot=sidecar_snapshot,
+                    session_id=session.id,
+                    project_scope=workspace_ref,
+                ),
+                artifact_reader=self._read_artifact_for_context,
+                artifact_writer=lambda content: self._write_tool_result_artifact(content=content),
+                thread_item_cursor_end=source_cursor,
+            )
+            # Use the same AgentLoop budget guards as a normal Agent run while
+            # keeping the Sidecar outside the main Session lease and Event log.
+            # The empty ToolPolicy makes the advertised tool set empty.  If a
+            # provider nevertheless returns a tool call, iteration stops at
+            # ``tool.started`` before AgentLoop can execute it.
+            loop = AgentLoop(
+                self.provider,
+                WorkspaceTools(workspace_ref, policy=ToolPolicy()),
+                context_composer=composer,
+            )
+            iterator = loop.run(
+                snapshot=sidecar_snapshot,
+                user_message=safe_prompt,
+            )
+            deadline = asyncio.get_running_loop().time() + sidecar_snapshot.budget.timeout_seconds
+            completed_payload: dict[str, Any] | None = None
+            failure_code: str | None = None
+            failure_detail: dict[str, Any] | None = None
+            failure_status = AgentStatus.FAILED
+
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    failure_code = "budget_time_limit_reached"
+                    failure_detail = {
+                        "budget": {
+                            "kind": "time",
+                            "reason": "limit_reached",
+                            "limit": sidecar_snapshot.budget.timeout_seconds,
+                            "observed": None,
+                            "usage_state": "unknown",
+                        }
+                    }
+                    failure_status = AgentStatus.TIMED_OUT
+                    break
+                next_event = asyncio.ensure_future(anext(iterator))
+                cancelled = asyncio.create_task(cancellation.wait())
+                done, pending = await asyncio.wait(
+                    {next_event, cancelled},
+                    timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for waiter in pending:
+                    waiter.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                if not done:
+                    failure_code = "budget_time_limit_reached"
+                    failure_detail = {
+                        "budget": {
+                            "kind": "time",
+                            "reason": "limit_reached",
+                            "limit": sidecar_snapshot.budget.timeout_seconds,
+                            "observed": None,
+                            "usage_state": "unknown",
+                        }
+                    }
+                    failure_status = AgentStatus.TIMED_OUT
+                    break
+                if cancelled in done and cancelled.result():
+                    next_event.cancel()
+                    await asyncio.gather(next_event, return_exceptions=True)
+                    failure_code = "cancelled"
+                    failure_status = AgentStatus.CANCELLED
+                    break
+                try:
+                    runtime_event = next_event.result()
+                except StopAsyncIteration:
+                    failure_code = "runtime_result_missing"
+                    break
+                if runtime_event.event_type == "model.completed":
+                    completed_payload = runtime_event.payload
+                    self._record_runtime_cache_observation(session, runtime_event)
+                elif runtime_event.event_type == "budget.exhausted":
+                    kind = str(runtime_event.payload.get("kind", "unknown"))
+                    reason = str(runtime_event.payload.get("reason", "unknown"))
+                    if kind not in {"output_tokens", "cost", "tool_calls"}:
+                        kind = "unknown"
+                    if reason not in {
+                        "limit_reached",
+                        "usage_unknown",
+                        "pricing_unknown",
+                    }:
+                        reason = "unknown"
+                    failure_code = f"budget_{kind}_{reason}"
+                    safe_budget = redact_public_data(runtime_event.payload, max_chars=500)
+                    failure_detail = {
+                        "budget": safe_budget if isinstance(safe_budget, dict) else {}
+                    }
+                    break
+                elif runtime_event.event_type == "tool.started":
+                    failure_code = "provider_tool_call_rejected"
+                    break
+                elif runtime_event.event_type == "agent.completed":
+                    if completed_payload is None:
+                        failure_code = "runtime_result_missing"
+                        break
+                    context_revision_id = completed_payload.get("context_revision_id")
+                    if not isinstance(context_revision_id, str):
+                        failure_code = "context_revision_missing"
+                        break
+                    response = redact_public_text(
+                        str(runtime_event.payload.get("content", "")),
+                        max_chars=100_000,
+                    )
+                    response = response.replace(workspace_ref, "[WORKSPACE]")
+                    completed_run = self.store.update_btw_sidecar_run(
+                        run.id,
+                        status=BTWSidecarStatus.COMPLETED,
+                        response=response,
+                        response_hash=hashlib.sha256(response.encode("utf-8")).hexdigest(),
+                        context_revision_id=context_revision_id,
+                    )
+                    self.store.update_agent_status(agent.id, AgentStatus.COMPLETED)
+                    terminal_recorded = True
+                    usage = completed_payload.get("usage")
+                    yield self.store.append_btw_sidecar_event(
+                        BTWSidecarEvent(
+                            sidecar_run_id=run.id,
+                            event_type="btw.model_completed",
+                            payload={
+                                "sidecar_run_id": run.id,
+                                "status": completed_run.status.value,
+                                "context_revision_id": completed_run.context_revision_id,
+                                "usage": usage,
+                            },
+                        )
+                    )
+                    return
+                elif runtime_event.event_type in {
+                    "agent.max_turns",
+                    "agent.no_progress",
+                }:
+                    failure_code = runtime_event.event_type.replace(".", "_")
+                    break
+
+            assert failure_code is not None
+            failed = self._fail_btw_sidecar(
+                run.id,
+                agent.id,
+                error_code=failure_code,
+                detail=failure_detail,
+                agent_status=failure_status,
+            )
+            terminal_recorded = True
+            yield failed
+        except asyncio.CancelledError:
+            if not terminal_recorded:
+                self._fail_btw_sidecar(
+                    run.id,
+                    agent.id,
+                    error_code="stream_cancelled",
+                    agent_status=AgentStatus.CANCELLED,
+                )
+                terminal_recorded = True
+            raise
+        except Exception as exc:
+            error_code = (
+                "provider_tool_call_rejected"
+                if isinstance(exc, PermissionError) and "tool call" in str(exc)
+                else self._safe_execution_error_code(exc, prefix="btw")
+            )
+            failed = self._fail_btw_sidecar(run.id, agent.id, error_code=error_code)
+            terminal_recorded = True
+            yield failed
+        finally:
+            cleanup_waiters: list[asyncio.Future[Any]] = []
+            if next_event is not None:
+                cleanup_waiters.append(next_event)
+            if cancelled is not None:
+                cleanup_waiters.append(cancelled)
+            for cleanup_waiter in cleanup_waiters:
+                if not cleanup_waiter.done():
+                    cleanup_waiter.cancel()
+            await asyncio.gather(
+                *cleanup_waiters,
+                return_exceptions=True,
+            )
+            if iterator is not None:
+                await iterator.aclose()
+            if self._sidecar_cancellations.get(run.id) is cancellation:
+                self._sidecar_cancellations.pop(run.id, None)
+            if not terminal_recorded:
+                with suppress(ConflictError):
+                    self._fail_btw_sidecar(
+                        run.id,
+                        agent.id,
+                        error_code="stream_closed",
+                        agent_status=AgentStatus.CANCELLED,
+                    )
+
+    def _fail_btw_sidecar(
+        self,
+        run_id: str,
+        agent_id: str,
+        *,
+        error_code: str,
+        detail: dict[str, Any] | None = None,
+        agent_status: AgentStatus = AgentStatus.FAILED,
+    ) -> BTWSidecarEvent:
+        self.store.update_btw_sidecar_run(
+            run_id,
+            status=BTWSidecarStatus.FAILED,
+            error_code=error_code,
+        )
+        self.store.update_agent_status(agent_id, agent_status)
+        payload: dict[str, Any] = {"sidecar_run_id": run_id, "error_code": error_code}
+        if detail:
+            safe_detail = redact_public_data(detail, max_chars=500)
+            if isinstance(safe_detail, dict):
+                payload.update(safe_detail)
+        return self.store.append_btw_sidecar_event(
+            BTWSidecarEvent(
+                sidecar_run_id=run_id,
+                event_type="btw.failed",
+                payload=payload,
+            )
+        )
+
+    def cancel_btw_sidecar(self, run_id: str) -> bool:
+        run = self.get_btw_sidecar_run(run_id)
+        if run.status is not BTWSidecarStatus.RUNNING:
+            return False
+        cancellation = self._sidecar_cancellations.get(run_id)
+        if cancellation is None:
+            return False
+        cancellation.set()
+        return True
+
+    def get_btw_sidecar_run(self, run_id: str) -> BTWSidecarRun:
+        return self.store.get_btw_sidecar_run(run_id)
+
+    def list_btw_sidecar_events(
+        self,
+        run_id: str,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[BTWSidecarEvent]:
+        return self.store.list_btw_sidecar_events(
+            run_id,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+
+    def promote_btw_sidecar(self, run_id: str) -> tuple[BTWSidecarRun, Turn, Item]:
+        run = self.get_btw_sidecar_run(run_id)
+        if (
+            run.status
+            not in {
+                BTWSidecarStatus.COMPLETED,
+                BTWSidecarStatus.PROMOTED,
+            }
+            or run.response is None
+        ):
+            raise ConflictError("only a completed BTW Sidecar can be promoted")
+        turn = Turn(thread_id=run.thread_id)
+        item = Item(
+            thread_id=run.thread_id,
+            turn_id=turn.id,
+            payload=SteeringPayload(text=run.response, mode="steer"),
+        )
+        promoted_run, promoted_turn, promoted_item, _created = self.store.promote_btw_sidecar(
+            run.id,
+            turn=turn,
+            steering_item=item,
+        )
+        return promoted_run, promoted_turn, promoted_item
+
+    @staticmethod
+    def _safe_execution_error_code(exc: Exception, *, prefix: str) -> str:
+        if isinstance(exc, (ValueError, ValidationError)):
+            category = "validation_error"
+        elif isinstance(exc, PermissionError):
+            category = "permission_denied"
+        elif isinstance(exc, OSError):
+            category = "io_error"
+        else:
+            category = "execution_failed"
+        return f"{prefix}_{category}"[:200]
 
     # Canonical Thread history and Artifact metadata
 
