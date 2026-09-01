@@ -14,6 +14,7 @@ import { useDemo } from '../../demo/DemoContext';
 import { Modal } from '../../components/Modal';
 import type { DemoConversation } from '../../demo/types';
 import { formatRelativeDay } from '../../lib/format';
+import { LiveSidebar } from './LiveSidebar';
 
 /** 临时工作流详情 Modal 的演示节点名清单（5 节点演示值，与 store 的 nodeCount 一致） */
 const TEMP_WF_NODE_NAMES = [
@@ -31,7 +32,13 @@ interface ChatSidebarProps {
   onCollapse?: () => void;
 }
 
-export const ChatSidebar: React.FC<ChatSidebarProps> = ({ onNavigate, onCollapse }) => {
+export const ChatSidebar: React.FC<ChatSidebarProps> = (props) => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') return <LiveSidebar {...props} />;
+  return <DemoChatSidebar {...props} />;
+};
+
+const DemoChatSidebar: React.FC<ChatSidebarProps> = ({ onNavigate, onCollapse }) => {
   const navigate = useNavigate();
   const { clientMode, setClientMode } = useOperant();
   const { conversations, projects, agents, tempWorkflows, persistTempWorkflow, createConversation } =

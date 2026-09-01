@@ -20,8 +20,15 @@ import { ChatTabs, type ChatTabKey } from './ChatTabs';
 import { MessageList } from './MessageList';
 import { FilesPanel, KnowledgePanel, TasksPanel } from './ChatPanels';
 import { Composer } from './Composer';
+import { LiveChatView } from './LiveChatView';
 
 export const ChatView: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') return <LiveChatView />;
+  return <DemoChatView />;
+};
+
+const DemoChatView: React.FC = () => {
   const { conversationId } = useParams<{ conversationId: string }>();
   const { getConversation, files, tasks } = useDemo();
   const { addNotification } = useOperant();

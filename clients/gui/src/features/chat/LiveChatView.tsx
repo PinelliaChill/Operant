@@ -1,0 +1,541 @@
+import React, { useCallback, useMemo, useState } from 'react';
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import {
+  AlertTriangle,
+  ChevronRight,
+  File,
+  Folder,
+  Loader2,
+  MessageSquare,
+  PanelLeftOpen,
+  RefreshCw,
+  SendHorizontal,
+  ShieldCheck,
+  Square,
+  Wifi,
+  X,
+} from 'lucide-react';
+import type { ApprovalCard, ApprovalDecision, AnyOperantEvent, Session } from '@operant/sdk';
+import { EmptyState } from '../../components/EmptyState';
+import { StatusBadge } from '../../components/StatusBadge';
+import { useOperant } from '../../context/ClientContext';
+import { useLive, liveThreadTitle } from '../../live/LiveContext';
+import type { LiveWorkspaceFile } from '../../live/liveState';
+import type { RailOutletContext } from '../../app/RailLayout';
+
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    idle: '空闲',
+    connecting: '连接中',
+    connected: '已连接',
+    replaying: '回放中',
+    error: '连接错误',
+    active: '活跃',
+    waiting_approval: '等待审批',
+    paused: '已暂停',
+    completed: '已完成',
+    failed: '已失败',
+    cancelled: '已取消',
+    pending: '待处理',
+    approved_once: '已批准',
+    approved_for_run: '本次运行已批准',
+    rejected: '已拒绝',
+    expired: '已过期',
+  };
+  return labels[status] ?? status;
+}
+
+function eventSummary(event: AnyOperantEvent): string {
+  const payload = event.payload;
+  if (event.event_type === 'model.delta' && typeof payload === 'object' && payload !== null && 'delta_text' in payload) {
+    const delta = (payload as { delta_text?: unknown }).delta_text;
+    return typeof delta === 'string' ? delta : '模型增量已提交';
+  }
+  if (event.event_type.startsWith('approval') || event.event_type.includes('approval')) {
+    return 'Approval Projection 已更新';
+  }
+  if (event.event_type.startsWith('tool.')) return 'Action Gateway Projection 已更新';
+  if (event.event_type.startsWith('agent.')) return 'Agent Projection 已更新';
+  return '收到已提交事件';
+}
+
+const LiveErrorBanner: React.FC<{
+  code: string;
+  message: string;
+  recovery?: string;
+  onRetry?: () => void;
+  onClear?: () => void;
+}> = ({ code, message, recovery, onRetry, onClear }) => (
+  <div className="live-alert live-alert-error" role="alert">
+    <AlertTriangle size={17} aria-hidden="true" />
+    <div className="live-alert-content">
+      <strong>{code}</strong>
+      <span>{message}</span>
+      {recovery && <span className="live-alert-recovery">{recovery}</span>}
+    </div>
+    <div className="live-alert-actions">
+      {onRetry && (
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
+          <RefreshCw size={13} aria-hidden="true" />
+          重试
+        </button>
+      )}
+      {onClear && (
+        <button type="button" className="btn btn-ghost btn-icon" onClick={onClear} aria-label="关闭错误提示" title="关闭错误提示">
+          <X size={15} aria-hidden="true" />
+        </button>
+      )}
+    </div>
+  </div>
+);
+
+export const LiveApprovalCard: React.FC<{
+  approval: ApprovalCard;
+  busy: boolean;
+  onDecide: (decision: ApprovalDecision['decision']) => void;
+}> = ({ approval, busy, onDecide }) => (
+  <article className="live-approval-card">
+    <div className="live-approval-head">
+      <span className="live-approval-icon" aria-hidden="true"><ShieldCheck size={16} /></span>
+      <div>
+        <h3>{approval.action_name}</h3>
+        <p>{approval.role_name} · {approval.target_resource}</p>
+      </div>
+      <StatusBadge status={approval.risk_tier} size="sm" />
+    </div>
+    <dl className="live-approval-meta">
+      <div><dt>策略</dt><dd>{approval.matched_policy_rule.description}</dd></div>
+      <div><dt>边界</dt><dd>{approval.workspace_boundary}</dd></div>
+      <div><dt>影响</dt><dd>{approval.impact_summary.files_affected.length > 0 ? approval.impact_summary.files_affected.join('、') : '未提供文件清单'}</dd></div>
+    </dl>
+    <div className="live-approval-actions">
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDecide('reject')} disabled={busy}>
+        拒绝
+      </button>
+      <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve_once')} disabled={busy}>
+        {busy ? '提交中…' : '批准一次'}
+      </button>
+    </div>
+  </article>
+);
+
+const LiveFileBrowser: React.FC<{
+  projectId: string;
+  workspaceRef: string;
+  files: LiveWorkspaceFile[];
+  currentPath: string;
+  loading: boolean;
+  onLoad: (path: string) => void;
+}> = ({ projectId, workspaceRef, files, currentPath, loading, onLoad }) => {
+  const parentPath = currentPath.split('/').filter(Boolean).slice(0, -1).join('/');
+  return (
+    <section className="live-panel live-files-panel" aria-labelledby="live-files-title">
+      <div className="live-panel-heading">
+        <div>
+          <h2 id="live-files-title">Workspace 文件</h2>
+          <p>{workspaceRef} · 只读目录 metadata</p>
+        </div>
+        {currentPath && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onLoad(parentPath)} disabled={loading}>
+            返回上级
+          </button>
+        )}
+      </div>
+      <div className="live-file-path" aria-label="当前目录路径">
+        <span>{currentPath ? `/${currentPath}` : '/'}</span>
+        <span className="live-file-project-id">Workspace ID: {projectId}</span>
+      </div>
+      {loading ? (
+        <div className="live-panel-loading" role="status"><Loader2 size={16} className="animate-spin" />正在读取 Core 文件投影…</div>
+      ) : files.length === 0 ? (
+        <p className="live-panel-empty">当前目录没有可读条目，或 Core 未返回目录内容。</p>
+      ) : (
+        <ul className="live-file-list">
+          {files.map((file) => (
+            <li key={file.path}>
+              {file.kind === 'directory' ? <Folder size={15} aria-hidden="true" /> : <File size={15} aria-hidden="true" />}
+              {file.kind === 'directory' ? (
+                <button type="button" className="live-file-link" onClick={() => onLoad(file.path)}>{file.name}</button>
+              ) : (
+                <span className="live-file-name">{file.name}</span>
+              )}
+              <span className="live-file-kind">{file.kind === 'directory' ? '目录' : '文件'}</span>
+              {typeof file.size === 'number' && <span className="live-file-size">{file.size} B</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+};
+
+const LiveEventTimeline: React.FC<{ events: AnyOperantEvent[]; cursor: number; status: string }> = ({ events, cursor, status }) => (
+  <section className="live-panel live-events-panel" aria-labelledby="live-events-title">
+    <div className="live-panel-heading">
+      <div>
+        <h2 id="live-events-title">SSE 回放与连接</h2>
+        <p>已提交 Cursor：{cursor} · {statusLabel(status)}</p>
+      </div>
+      <Wifi size={16} aria-hidden="true" className={status === 'connected' ? 'live-icon-ok' : undefined} />
+    </div>
+    {events.length === 0 ? (
+      <p className="live-panel-empty">尚未收到该 Thread 的已提交事件。</p>
+    ) : (
+      <ol className="live-event-list" aria-live="polite">
+        {events.slice(-12).map((event) => (
+          <li key={`${event.id}:${event.sequence}`}>
+            <span className="live-event-sequence">#{event.sequence}</span>
+            <span className="live-event-type">{event.event_type}</span>
+            <span className="live-event-summary">{eventSummary(event)}</span>
+          </li>
+        ))}
+      </ol>
+    )}
+  </section>
+);
+
+function sessionLabel(session: Session): string {
+  const role = session.role_snapshot?.role_name || 'Session';
+  return `${role} · ${session.id.slice(0, 12)}`;
+}
+
+export const LiveChatView: React.FC = () => {
+  const { conversationId } = useParams<{ conversationId: string }>();
+  const navigate = useNavigate();
+  const { clientMode } = useOperant();
+  const { showSidebarOpenBtn, openSidebar, isMobile } = useOutletContext<RailOutletContext>();
+  const {
+    phase,
+    projects,
+    threads,
+    sessions,
+    approvals,
+    selectedProjectId,
+    selectedThreadId,
+    selectedSessionId,
+    selectedThread,
+    selectedSession,
+    messages,
+    files,
+    stream,
+    projectionStale,
+    lastError,
+    command,
+    approvalAction,
+    manualReconcileRequired,
+    selectProject,
+    selectThread,
+    selectSession,
+    refresh,
+    reconnect,
+    createSession,
+    sendMessage,
+    cancelSession,
+    decideApproval,
+    loadFiles,
+    clearError,
+  } = useLive();
+  const [draft, setDraft] = useState('');
+  const [showFiles, setShowFiles] = useState(false);
+  const [showEvents, setShowEvents] = useState(false);
+  const [filePath, setFilePath] = useState('');
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
+
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const visibleApprovals = useMemo(() => approvals.filter((approval) => (
+    !selectedSessionId || approval.session_id === selectedSessionId
+  )), [approvals, selectedSessionId]);
+  const busy = command.status === 'sending' || command.status === 'awaiting_projection' || manualReconcileRequired;
+  const canSend = Boolean(selectedThread?.session_id && selectedThread.workspace && draft.trim()) && !busy && phase === 'ready';
+
+  // A deep link is resolved against the server projection.  Unknown IDs stay
+  // visible as an empty live state; they are never replaced with Demo data.
+  React.useEffect(() => {
+    if (clientMode !== 'live' || !conversationId || conversationId === selectedThreadId) return;
+    if (threads.some((thread) => thread.id === conversationId)) selectThread(conversationId);
+  }, [clientMode, conversationId, selectThread, selectedThreadId, threads]);
+
+  const loadLiveFiles = useCallback(async (path = '') => {
+    if (!selectedProject) return;
+    setFilesLoading(true);
+    setFilePath(path);
+    await loadFiles(selectedProject.id, path);
+    setFilesLoading(false);
+  }, [loadFiles, selectedProject]);
+
+  const handleSubmit = async () => {
+    if (!canSend) return;
+    const message = draft.trim();
+    setDraft('');
+    await sendMessage(message);
+  };
+
+  const handleCreateSession = async () => {
+    setCreatingSession(true);
+    const session = await createSession({});
+    setCreatingSession(false);
+    if (session) {
+      const projectedThread = threads.find((thread) => thread.session_id === session.id);
+      if (projectedThread) navigate(`/chat/${projectedThread.id}`);
+    }
+  };
+
+  const topError = lastError || stream.error;
+  const connectionMessage = phase === 'ready'
+    ? stream.status === 'replaying' ? 'Core 已连接，正在回放并校正 Projection' : 'Core 已连接'
+    : phase === 'connecting' ? '正在连接 Core 并协商 phase1e.v1…'
+      : phase === 'error' ? 'Core 连接失败，实时数据未加载'
+        : '等待 Core 连接';
+
+  if (phase !== 'ready' && !selectedThread && !topError) {
+    return (
+      <div className="live-chat-view live-chat-empty">
+        <div className="live-connection-state" role="status" aria-live="polite">
+          <Loader2 size={22} className="animate-spin" aria-hidden="true" />
+          <h1>{connectionMessage}</h1>
+          <p>Live 模式只等待 Core Projection，不会显示演示会话。</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="live-chat-view" data-client-mode="live">
+      <header className="live-chat-header">
+        <div className="live-header-leading">
+          {showSidebarOpenBtn && (
+            <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开 Core 侧栏" title="打开 Core 侧栏">
+              {isMobile ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftOpen size={16} aria-hidden="true" />}
+            </button>
+          )}
+          <div>
+            <div className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时 Core · phase1e.v1</div>
+            <h1>{liveThreadTitle(selectedThread)}</h1>
+          </div>
+        </div>
+        <div className="live-header-actions">
+          <StatusBadge
+            status={phase === 'ready' ? (stream.status === 'replaying' ? 'pending' : 'connected') : phase === 'error' ? 'disconnected' : 'pending'}
+            label={connectionMessage}
+            size="sm"
+            pulse={phase === 'connecting' || stream.status === 'replaying'}
+          />
+          <button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新 Core Projection" title="刷新 Core Projection" disabled={phase === 'connecting'}>
+            <RefreshCw size={15} aria-hidden="true" />
+          </button>
+        </div>
+      </header>
+
+      {topError && (
+        <LiveErrorBanner
+          code={topError.code}
+          message={topError.message}
+          recovery={topError.recovery}
+          onRetry={topError.retryable ? () => void reconnect() : undefined}
+          onClear={clearError}
+        />
+      )}
+
+      {manualReconcileRequired && (
+        <div className="live-alert live-alert-warn" role="alert">
+          <AlertTriangle size={17} aria-hidden="true" />
+          <div className="live-alert-content">
+            <strong>需要人工核对</strong>
+            <span>Core 返回了 manual_reconcile_required / outcome_unknown。GUI 不会自动重放或猜测运行终态。</span>
+          </div>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={phase !== 'ready'}>
+            重新查询 Projection
+          </button>
+        </div>
+      )}
+
+      <div className="live-chat-toolbar">
+        <label className="live-select-label">
+          <span>Project / Workspace</span>
+          <select
+            className="select"
+            value={selectedProjectId ?? ''}
+            onChange={(event) => selectProject(event.target.value || null)}
+            aria-label="选择 Core Project Workspace"
+          >
+            <option value="">未选择 Project</option>
+            {projects.filter((project) => project.readable).map((project) => (
+              <option key={project.id} value={project.id}>{project.name} · {project.workspaceRef}</option>
+            ))}
+          </select>
+        </label>
+        <label className="live-select-label">
+          <span>Thread</span>
+          <select
+            className="select"
+            value={selectedThreadId ?? ''}
+            onChange={(event) => {
+              const id = event.target.value || null;
+              selectThread(id);
+              if (id) navigate(`/chat/${id}`);
+            }}
+            aria-label="选择 Core Thread"
+          >
+            <option value="">未选择 Thread</option>
+            {threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title || thread.id}</option>)}
+          </select>
+        </label>
+        <label className="live-select-label live-session-select">
+          <span>Session</span>
+          <select
+            className="select"
+            value={selectedSessionId ?? ''}
+            onChange={(event) => selectSession(event.target.value || null)}
+            aria-label="选择 Core Session"
+          >
+            <option value="">未绑定 Session</option>
+            {sessions.map((session) => <option key={session.id} value={session.id}>{sessionLabel(session)}</option>)}
+          </select>
+        </label>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={phase !== 'ready' || creatingSession || manualReconcileRequired}>
+          <PlusIcon />
+          {creatingSession ? '创建中…' : '创建 Session'}
+        </button>
+      </div>
+
+      {projectionStale && (
+        <div className="live-projection-note" role="status">
+          <RefreshCw size={13} aria-hidden="true" /> 当前显示可能落后于 Core，等待 Query Projection 校正。
+        </div>
+      )}
+
+      {!selectedThread ? (
+        <div className="live-chat-empty-content">
+          <EmptyState
+            icon={MessageSquare}
+            titleAs="h4"
+            title={phase === 'error' ? '无法显示 Core Thread' : '选择一个 Core Thread'}
+            description={phase === 'error' ? '连接失败不会回退为演示数据。请修复 Core 或协议协商后重试。' : '从侧栏或上方选择服务端 Projection 中的 Thread。'}
+            action={(
+              <div className="live-empty-actions">
+                <button type="button" className="btn btn-primary" onClick={() => void reconnect()}>
+                  <RefreshCw size={14} aria-hidden="true" />重连 Core
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => void handleCreateSession()} disabled={phase !== 'ready' || creatingSession}>
+                  创建 Session
+                </button>
+              </div>
+            )}
+          />
+        </div>
+      ) : (
+        <>
+          <section className="live-thread-summary" aria-label="Core Thread Projection">
+            <div className="live-thread-summary-main">
+              <span className="live-thread-icon" aria-hidden="true"><MessageSquare size={16} /></span>
+              <div>
+                <strong>{liveThreadTitle(selectedThread)}</strong>
+                <span>{selectedThread.workspace} · {selectedThread.id}</span>
+              </div>
+            </div>
+            <StatusBadge status={selectedThread.status} label={statusLabel(selectedThread.status)} size="sm" />
+          </section>
+
+          {visibleApprovals.length > 0 && (
+            <section className="live-approvals-section" aria-labelledby="live-approvals-title">
+              <div className="live-section-heading">
+                <h2 id="live-approvals-title"><ShieldCheck size={16} aria-hidden="true" />待处理 Approval</h2>
+                <span>{visibleApprovals.length} 项 · 由 Core Projection 提供</span>
+              </div>
+              <div className="live-approval-list">
+                {visibleApprovals.map((approval) => (
+                  <LiveApprovalCard
+                    key={approval.id}
+                    approval={approval}
+                    busy={approvalAction.status === 'sending' || approvalAction.status === 'awaiting_projection'}
+                    onDecide={(decision) => void decideApproval(approval, decision)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          <div className="live-content-grid">
+            <section className="live-messages-panel" aria-labelledby="live-messages-title">
+              <div className="live-panel-heading">
+                <div>
+                  <h2 id="live-messages-title">Thread Messages</h2>
+                  <p>历史消息来自 Core Query，运行状态来自 Projection / SSE。</p>
+                </div>
+                {selectedSession && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelSession()} disabled={busy || manualReconcileRequired}>
+                    <Square size={12} aria-hidden="true" />取消 Session
+                  </button>
+                )}
+              </div>
+              <div className="live-message-list" aria-live="polite">
+                {messages.length === 0 ? (
+                  <p className="live-panel-empty">Core 尚未返回消息 Projection。</p>
+                ) : messages.map((message) => (
+                  <article className={`live-message live-message-${message.role}`} key={message.id}>
+                    <div className="live-message-meta"><strong>{message.sender.name}</strong><span>{message.role}</span></div>
+                    <p>{message.content}</p>
+                  </article>
+                ))}
+              </div>
+              <div className="live-composer">
+                <textarea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      void handleSubmit();
+                    }
+                  }}
+                  placeholder={manualReconcileRequired ? '需要人工核对，完成 Projection 校正后才能发送' : selectedSession ? '向当前 Session 发送消息，Enter 发送' : '先选择或创建绑定 Session'}
+                  aria-label="向 Core Session 发送消息"
+                  disabled={!selectedSession || busy || phase !== 'ready'}
+                  rows={2}
+                />
+                <button type="button" className="btn btn-primary btn-icon" onClick={() => void handleSubmit()} disabled={!canSend} aria-label="发送消息" title="发送消息">
+                  {command.status === 'sending' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <SendHorizontal size={16} aria-hidden="true" />}
+                </button>
+              </div>
+              <p className="live-composer-note">发送请求只表示命令已提交；GUI 等待 Core 的 Receipt / Projection，不把网络送达当成完成。</p>
+            </section>
+
+            <aside className="live-inspector-column" aria-label="Core 实时检查器">
+              <div className="live-inspector-actions">
+                <button type="button" className={`btn btn-secondary btn-sm${showEvents ? ' active' : ''}`} onClick={() => setShowEvents((current) => !current)}>
+                  <Wifi size={13} aria-hidden="true" />{showEvents ? '隐藏 SSE' : '查看 SSE'}
+                </button>
+                <button type="button" className={`btn btn-secondary btn-sm${showFiles ? ' active' : ''}`} onClick={() => {
+                  const next = !showFiles;
+                  setShowFiles(next);
+                  if (next) void loadLiveFiles();
+                }} disabled={!selectedProject}>
+                  <Folder size={13} aria-hidden="true" />{showFiles ? '隐藏文件' : '浏览文件'}
+                </button>
+              </div>
+              {showEvents && <LiveEventTimeline events={stream.events} cursor={stream.cursor.sequence} status={stream.status} />}
+              {showFiles && selectedProject && (
+                <LiveFileBrowser
+                  projectId={selectedProject.id}
+                  workspaceRef={selectedProject.workspaceRef}
+                  files={files}
+                  currentPath={filePath}
+                  loading={filesLoading}
+                  onLoad={(path) => void loadLiveFiles(path)}
+                />
+              )}
+              <section className="live-panel live-scope-panel">
+                <div className="live-panel-heading"><h2>本阶段边界</h2><ChevronRight size={15} aria-hidden="true" /></div>
+                <p>Live 已接入 Core 连接、Workspace/Project、Thread、Session/Run、SSE Cursor 回放、Approval 与类型化错误。</p>
+                <p className="live-not-connected">Graph、Team、Skill/MCP、Scheduler、OAuth、Remote、TUI、Tauri：本阶段未接入。</p>
+              </section>
+            </aside>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const PlusIcon: React.FC = () => <span aria-hidden="true"><span className="live-plus-icon">+</span></span>;

@@ -3,6 +3,7 @@ import { RouterProvider } from 'react-router-dom';
 import { ClientProvider } from '../context/ClientContext';
 import { DemoProvider } from '../demo/DemoContext';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { LiveProvider } from '../live/LiveContext';
 import { router } from './routes';
 
 export const App: React.FC = () => {
@@ -11,7 +12,9 @@ export const App: React.FC = () => {
       <ClientProvider>
         {/* DemoProvider 必须在 ClientProvider 之内：审批卡回写依赖 client */}
         <DemoProvider>
-          <RouterProvider router={router} />
+          <LiveProvider>
+            <RouterProvider router={router} />
+          </LiveProvider>
         </DemoProvider>
       </ClientProvider>
     </ErrorBoundary>

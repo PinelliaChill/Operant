@@ -16,6 +16,8 @@ import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
 import { APPROVAL_ACTION_LABELS, useDemo } from '../../demo/DemoContext';
 import { formatDateTime } from '../../lib/format';
+import { useOperant } from '../../context/ClientContext';
+import { LiveApprovalsView } from './LiveApprovalsView';
 
 /** 来源会话内联链接样式（12px 强调色，无下划线，全局 :focus-visible 提供焦点环） */
 const sourceLinkStyle: React.CSSProperties = {
@@ -46,6 +48,12 @@ const SourceConversationLink: React.FC<{ conversationId: string; title: string }
 };
 
 export const ApprovalCenterView: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') return <LiveApprovalsView />;
+  return <DemoApprovalCenterView />;
+};
+
+const DemoApprovalCenterView: React.FC = () => {
   const { pendingApprovals, approvalHistory, approveCard, rejectCard, getAgent } = useDemo();
 
   const history = approvalHistory();

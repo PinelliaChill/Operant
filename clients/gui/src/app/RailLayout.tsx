@@ -38,6 +38,8 @@ import { ChatSidebar } from '../features/chat/ChatSidebar';
 import { getWorkflowDisplayName } from '../features/chat/chatUtils';
 import { CollabSidebar } from '../features/collab/CollabSidebar';
 import { APPROVAL_MODE_LABELS } from '../demo/DemoContext';
+import { useLive } from '../live/LiveContext';
+import { LiveUnavailableView } from '../live/LiveUnavailableView';
 
 /** 监听 CSS 媒体查询，用于壳层响应式行为（内联/覆盖抽屉切换） */
 function useMediaQuery(query: string): boolean {
@@ -104,8 +106,8 @@ export interface RailOutletContext {
   setCollabStatus: (info: CollabStatusInfo | null) => void;
 }
 
-/** 状态栏（32px）：会话分区显示协作信息，协作分区显示画布摘要，其余分区显示通用信息 */
-const RailStatusBar: React.FC<{ collabStatus: CollabStatusInfo | null }> = ({ collabStatus }) => {
+/** Mock 状态栏：仅在明确演示模式渲染 Demo Projection。 */
+const DemoRailStatusBar: React.FC<{ collabStatus: CollabStatusInfo | null }> = ({ collabStatus }) => {
   const { activeWorkspace, connectionStatus } = useOperant();
   const { conversations, agents, getConversationStats, approvalPolicy, pendingApprovals } =
     useDemo();
@@ -223,10 +225,45 @@ const RailStatusBar: React.FC<{ collabStatus: CollabStatusInfo | null }> = ({ co
   );
 };
 
+/** Live 状态栏：只显示 LiveProvider 的 Core/SSE 状态，不读取演示统计。 */
+const LiveRailStatusBar: React.FC = () => {
+  const { activeWorkspace } = useOperant();
+  const { phase, stream, selectedThread, projectionStale } = useLive();
+  const status = phase === 'error' ? 'disconnected' : phase === 'ready' && stream.status !== 'replaying' ? 'connected' : 'pending';
+  const label = phase === 'error'
+    ? 'Core 连接失败'
+    : stream.status === 'replaying'
+      ? 'SSE 回放中'
+      : phase === 'ready'
+        ? 'Core 已连接'
+        : 'Core 连接中';
+  return (
+    <footer className="rail-statusbar" data-client-mode="live">
+      <div className="rail-statusbar-side">
+        <span className="rail-statusbar-text">Workspace：{selectedThread?.workspace || activeWorkspace}</span>
+      </div>
+      <div className="rail-statusbar-side">
+        {projectionStale && <span className="rail-statusbar-text">Projection 待校正 · </span>}
+        <StatusBadge status={status} label={label} size="sm" pulse={status === 'pending'} />
+      </div>
+    </footer>
+  );
+};
+
+/** 状态栏根据显式客户端模式分支，避免 Live 页面混入 Demo 统计。 */
+const RailStatusBar: React.FC<{ collabStatus: CollabStatusInfo | null }> = (props) => {
+  const { clientMode } = useOperant();
+  return clientMode === 'live' ? <LiveRailStatusBar /> : <DemoRailStatusBar {...props} />;
+};
+
 export const RailLayout: React.FC = () => {
-  const { theme, toggleTheme, notifications, removeNotification } = useOperant();
+  const { theme, toggleTheme, notifications, removeNotification, clientMode } = useOperant();
   const location = useLocation();
   const section = location.pathname.split('/')[1] || 'chat';
+
+  // Only the three Phase 1E live surfaces may render while in live mode.
+  // Other routes remain available as explicitly labelled demo-only boundaries.
+  const liveSupportedSection = section === 'chat' || section === 'projects' || section === 'approvals';
 
   const isMobile = useMediaQuery('(max-width: 959px)');
 
@@ -383,13 +420,15 @@ export const RailLayout: React.FC = () => {
     document.title = `${SECTION_TITLES[section] ?? SECTION_TITLES.chat} — Operant`;
   }, [section]);
 
-  // 会话与协作分区有情境侧栏（chat=会话列表 / collab=草稿+运行进度）
-  const hasSidebar = section === 'chat' || section === 'collab';
+  // Live 仅保留 Core Thread 侧栏；协作草稿侧栏属于明确的 Demo-only 面。
+  const hasSidebar = clientMode === 'live' ? section === 'chat' : section === 'chat' || section === 'collab';
   // >=960 所有宽度内联且可收起为把手（v6 §3）；<960 维持覆盖抽屉
   const sidebarInline = hasSidebar && !isMobile && sidebarExpanded;
   const showSidebarHandle = hasSidebar && !isMobile && !sidebarExpanded;
   const sidebarDrawer = hasSidebar && isMobile && drawerOpen;
-  const showSidebarOpenBtn = hasSidebar && (isMobile ? !drawerOpen : !sidebarExpanded);
+  // Keep the mobile trigger mounted while the drawer is open so Esc/close can
+  // restore keyboard focus to a live element instead of an unmounted button.
+  const showSidebarOpenBtn = hasSidebar && (isMobile ? true : !sidebarExpanded);
   // onCollapse 全宽度注入（v6 §3）：桌面收起内联侧栏 / 移动端关闭抽屉；
   // onNavigate 供抽屉内行点击关闭抽屉（桌面内联为幂等空操作）
   const contextSidebar = isCollabSection ? (
@@ -483,14 +522,18 @@ export const RailLayout: React.FC = () => {
 
         {/* 主区：侧栏开启按钮由各分区经 Outlet context 静态嵌入页头，避免浮动遮挡 */}
         <main id="main-content" tabIndex={-1} className="rail-main">
-          <Outlet
-            context={{
-              showSidebarOpenBtn,
-              openSidebar,
-              isMobile,
-              setCollabStatus,
-            }}
-          />
+          {clientMode === 'live' && !liveSupportedSection ? (
+            <LiveUnavailableView section={section} />
+          ) : (
+            <Outlet
+              context={{
+                showSidebarOpenBtn,
+                openSidebar,
+                isMobile,
+                setCollabStatus,
+              }}
+            />
+          )}
         </main>
 
         {/* <960px：侧栏覆盖抽屉（Drawer 自带遮罩 / Esc / 焦点管理与还原）；
