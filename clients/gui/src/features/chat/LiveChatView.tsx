@@ -295,9 +295,11 @@ export const LiveChatView: React.FC = () => {
     }
   };
 
-  const topError = lastError || stream.error;
+  const topError = lastError || stream.error || (command.status === 'awaiting_projection' ? command.error : undefined);
   const connectionMessage = phase === 'ready'
-    ? stream.status === 'replaying' ? 'Core 已连接，正在回放并校正 Projection' : 'Core 已连接'
+    ? manualReconcileRequired
+      ? '需要人工核对，已阻止自动重试'
+      : stream.status === 'replaying' ? 'Core 正在重建连接，Projection 待校正' : 'Core 已连接'
     : phase === 'connecting' ? '正在连接 Core 并协商 phase1e.v1…'
       : phase === 'error' ? 'Core 连接失败，实时数据未加载'
         : '等待 Core 连接';

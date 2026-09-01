@@ -101,6 +101,9 @@ export interface LiveEvent {
   thread_id?: string;
   occurred_at?: string;
   payload: Record<string, unknown>;
+  /** Preserve a typed error carried in SSE data, including its detail. */
+  error?: LiveError;
+  detail?: unknown;
   resource_scope: string;
   stream_kind: string;
 }
@@ -120,6 +123,41 @@ export interface LiveError {
   message: string;
   retryable: boolean;
   recovery?: string;
+  /** Core may attach structured recovery evidence to an error. */
+  detail?: unknown;
+}
+
+export interface LiveConnectionLoss {
+  phase: 'connecting' | 'error';
+  streamStatus: 'replaying';
+  projectionStale: true;
+  error: LiveError;
+}
+
+/** Resolve a newly-created Session only through an exact legacy session ref. */
+export function threadForSession(
+  threads: readonly LiveThread[],
+  sessionId: string,
+): LiveThread | undefined {
+  return threads.find((thread) => thread.sessionId === sessionId);
+}
+
+export function connectionLossState(
+  status: 'disconnected' | 'reconnecting',
+): LiveConnectionLoss {
+  return {
+    phase: status === 'reconnecting' ? 'connecting' : 'error',
+    streamStatus: 'replaying',
+    projectionStale: true,
+    error: {
+      code: status === 'reconnecting' ? 'core_reconnecting' : 'core_disconnected',
+      message: status === 'reconnecting'
+        ? 'Core 连接正在重建，Projection 可能过期；命令与审批已禁用。'
+        : 'Core 已断开，Projection 可能过期；命令与审批已禁用。',
+      retryable: true,
+      recovery: 'retry_later',
+    },
+  };
 }
 
 export interface LiveCommandState {
@@ -170,6 +208,9 @@ export interface EventAccumulator {
   seen: ReadonlySet<string>;
 }
 
+/** Keep the visible timeline bounded while the current stream stays live. */
+export const LIVE_EVENT_WINDOW_SIZE = 256;
+
 /**
  * Reducer used by the GUI timeline. It only records committed frames and
  * never treats a frame or receipt as the authoritative run/approval state.
@@ -184,9 +225,14 @@ export function reduceEvent(
 
   const seen = new Set(current.seen);
   seen.add(key);
+  const events = [...current.events, event];
+  if (events.length > LIVE_EVENT_WINDOW_SIZE) {
+    const evicted = events.shift();
+    if (evicted) seen.delete(eventKey(scope, evicted));
+  }
   return {
     cursor: cursorFromEvent(event, current.cursor),
-    events: [...current.events, event],
+    events,
     seen,
   };
 }
@@ -212,7 +258,9 @@ export function isApprovalProjectionEvent(event: LiveEvent): boolean {
 }
 
 export function isManualReconcileValue(value: unknown): boolean {
-  return value === 'manual_reconcile_required' || value === 'outcome_unknown';
+  return value === 'manual_reconcile_required'
+    || value === 'manual_reconcile'
+    || value === 'outcome_unknown';
 }
 
 export function containsManualReconcile(value: unknown, seen = new Set<unknown>()): boolean {
@@ -221,6 +269,22 @@ export function containsManualReconcile(value: unknown, seen = new Set<unknown>(
   seen.add(value);
   if (Array.isArray(value)) return value.some((item) => containsManualReconcile(item, seen));
   return Object.values(value).some((item) => containsManualReconcile(item, seen));
+}
+
+export function eventNeedsManualReconcile(event: LiveEvent): boolean {
+  return event.error?.recovery === 'manual_reconcile'
+    || containsManualReconcile(event.error)
+    || containsManualReconcile(event.detail)
+    || containsManualReconcile(event.payload);
+}
+
+/** Include the action in an approval idempotency namespace. */
+export function approvalActionKey(
+  sessionId: string,
+  approvalId: string,
+  decision: 'approve' | 'reject',
+): string {
+  return `${sessionId}\0${approvalId}\0${decision}`;
 }
 
 export function threadNeedsManualReconcile(_thread: LiveThread | undefined): boolean {

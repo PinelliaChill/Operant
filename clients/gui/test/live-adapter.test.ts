@@ -120,13 +120,47 @@ test('run stream keeps Promise plus AsyncIterable and lossless replay cursor', a
   assert.equal(event.thread_id, undefined);
 });
 
+test('SSE error recovery and detail survive generated frame mapping', () => {
+  const frame = {
+    id: 12n,
+    event: 'run.error',
+    resource_scope: 'session:session-a',
+    stream_kind: 'session.run',
+    data: {
+      event_type: 'run.error',
+      error: {
+        code: 'run_outcome_unknown',
+        message: 'Outcome cannot be determined',
+        retryable: true,
+        recovery: 'manual_reconcile',
+        detail: { command_id: 'cmd-a' },
+      },
+      detail: { source: 'core' },
+      payload: { state: 'outcome_unknown' },
+    },
+  } as const;
+  const event = mapSseFrame(frame, 'session-a');
+  assert.equal(event.error?.recovery, 'manual_reconcile');
+  assert.deepEqual(event.error?.detail, { command_id: 'cmd-a' });
+  assert.deepEqual(event.detail, { source: 'core' });
+});
+
 test('missing Schema operations and session scopes fail explicitly', async () => {
-  const adapter = new LiveClientAdapter(fakeClient() as never);
+  let createCalls = 0;
+  const adapter = new LiveClientAdapter(fakeClient({
+    createSession: async () => {
+      createCalls += 1;
+      return { id: 'session-created' };
+    },
+  }) as never);
   await assert.rejects(() => adapter.listThreadMessages('thread-a'), UnsupportedLiveCapabilityError);
   await assert.rejects(() => adapter.cancelSession('session-a'), UnsupportedLiveCapabilityError);
   await assert.rejects(() => adapter.listPendingApprovals(''), (error: unknown) => (
     error instanceof LiveAdapterError && error.detail.code === 'session_required'
   ));
+  await assert.rejects(() => adapter.createSession({}));
+  await assert.rejects(() => adapter.createSession({ newRole: { name: '', system_prompt: '', model_profile_id: '' } }));
+  assert.equal(createCalls, 0);
 });
 
 test('approval projection carries its required session scope', () => {

@@ -154,6 +154,23 @@ function eventData(data: unknown): Phase1E.RuntimeEvent {
   return { payload: { value: data } };
 }
 
+function eventError(value: unknown): LiveError | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const detail = candidate.detail;
+  const message = typeof candidate.message === 'string'
+    ? candidate.message
+    : typeof detail === 'string' ? detail : 'Core SSE 返回错误';
+  return {
+    ...candidate,
+    code: typeof candidate.code === 'string' ? candidate.code : 'stream_error',
+    message,
+    retryable: typeof candidate.retryable === 'boolean' ? candidate.retryable : false,
+    recovery: typeof candidate.recovery === 'string' ? candidate.recovery : undefined,
+    detail,
+  };
+}
+
 /** Convert generated RuntimeEvent data while retaining the generated Cursor. */
 export function mapSseFrame(frame: Phase1E.SseFrame, sessionId: string): LiveEvent {
   const runtime = eventData(frame.data);
@@ -167,6 +184,8 @@ export function mapSseFrame(frame: Phase1E.SseFrame, sessionId: string): LiveEve
     thread_id: typeof runtime.thread_id === 'string' ? runtime.thread_id : undefined,
     occurred_at: runtime.created_at,
     payload: runtime.payload || {},
+    error: eventError(runtime.error),
+    detail: runtime.detail,
     resource_scope: resourceScope,
     stream_kind: streamKind,
   };

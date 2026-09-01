@@ -32,11 +32,15 @@ import {
   LiveThread,
   LiveWorkspaceFile,
   containsManualReconcile,
+  connectionLossState,
   createIdempotencyKey,
   emptyEventAccumulator,
+  approvalActionKey,
+  eventNeedsManualReconcile,
   isApprovalProjectionEvent,
   isTerminalEvent,
   reduceEvent,
+  threadForSession,
 } from './liveState';
 
 export type LiveProjectionPhase = 'idle' | 'connecting' | 'ready' | 'error';
@@ -101,6 +105,11 @@ interface PendingApprovalDecision {
   approvalId: string;
 }
 
+interface PendingSessionCreation {
+  sessionId: string;
+  idempotencyKey: string;
+}
+
 function initialStream(): LiveStreamState {
   return { status: 'idle', cursor: 0, events: [] };
 }
@@ -131,6 +140,26 @@ function errorNeedsManualReconcile(error: LiveError): boolean {
   return error.recovery === 'manual_reconcile'
     || error.code.includes('manual_reconcile')
     || error.code.includes('outcome_unknown');
+}
+
+function manualReconcileError(value: unknown, fallback: string): LiveError {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const candidate = value as { code?: unknown; message?: unknown; detail?: unknown };
+    return {
+      code: typeof candidate.code === 'string' ? candidate.code : 'manual_reconcile_required',
+      message: typeof candidate.message === 'string' ? candidate.message : fallback,
+      retryable: false,
+      recovery: 'manual_reconcile',
+      detail: candidate.detail ?? value,
+    };
+  }
+  return {
+    code: 'manual_reconcile_required',
+    message: fallback,
+    retryable: false,
+    recovery: 'manual_reconcile',
+    detail: value,
+  };
 }
 
 function frameHasTerminalProjection(event: LiveEvent): boolean {
@@ -168,6 +197,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const selectedProjectIdRef = useRef<string | null>(null);
   const deepLinkTargetRef = useRef<string | null>(null);
   const pendingRunRef = useRef<PendingRun | null>(null);
+  const pendingSessionRef = useRef<PendingSessionCreation | null>(null);
   const approvalKeysRef = useRef(new Map<string, string>());
   const createSessionKeyRef = useRef<string | null>(null);
   const createSessionInputRef = useRef<string | null>(null);
@@ -177,11 +207,15 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const createSessionDispatchingRef = useRef(false);
   const manualReconcileRef = useRef(false);
   const previousConnectionRef = useRef(connectionStatus);
+  const phaseRef = useRef(phase);
+  const connectionStatusRef = useRef(connectionStatus);
 
   selectedThreadIdRef.current = selectedThreadId;
   selectedSessionIdRef.current = selectedSessionId;
   selectedProjectIdRef.current = selectedProjectId;
   deepLinkTargetRef.current = deepLinkTargetId;
+  phaseRef.current = phase;
+  connectionStatusRef.current = connectionStatus;
 
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId);
@@ -259,10 +293,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       adapter.listThreads(),
     ]);
     if (generation !== lifecycleRef.current) return;
+    if (connectionStatusRef.current !== 'connected' && phaseRef.current === 'ready') return;
 
     const sessionIds = [...new Set(nextThreads.map((thread) => thread.sessionId).filter((id): id is string => Boolean(id)))];
     const approvalPages = await Promise.all(sessionIds.map((sessionId) => adapter.listPendingApprovals(sessionId)));
     if (generation !== lifecycleRef.current) return;
+    if (connectionStatusRef.current !== 'connected' && phaseRef.current === 'ready') return;
 
     const nextApprovals = approvalPages.flat();
     const nextSessions = adapter.listSessions();
@@ -293,6 +329,29 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? null
       : nextThreadId ? currentProject?.id ?? null : nextProjects[0]?.id ?? null));
 
+    const pendingSession = pendingSessionRef.current;
+    const pendingSessionThread = pendingSession ? threadForSession(nextThreads, pendingSession.sessionId) : undefined;
+    if (pendingSessionThread) {
+      pendingSessionRef.current = null;
+      createSessionKeyRef.current = null;
+      createSessionInputRef.current = null;
+      setCommand({ status: 'idle' });
+      setSelectedThreadId(pendingSessionThread.id);
+      setSelectedSessionId(pendingSessionThread.sessionId);
+      setSelectedProjectId(nextProjects.find((project) => project.threadIds.includes(pendingSessionThread.id))?.id ?? null);
+    } else if (pendingSession) {
+      setCommand({
+        status: 'awaiting_projection',
+        idempotencyKey: pendingSession.idempotencyKey,
+        error: {
+          code: 'session_thread_projection_pending',
+          message: `Core 已创建 Session ${pendingSession.sessionId}，但 ThreadProjection.legacy_refs 尚未返回对应 session ref；不会重复创建。`,
+          retryable: false,
+          recovery: 'none',
+        },
+      });
+    }
+
     const pendingApproval = pendingApprovalRef.current;
     if (pendingApproval) {
       const remainsPending = nextApprovals.some((approval) => (
@@ -318,19 +377,24 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refresh = useCallback(async () => {
     if (clientMode !== 'live') return;
+    if (connectionStatusRef.current !== 'connected' && phaseRef.current !== 'connecting') return;
     const generation = ++lifecycleRef.current;
     try {
       await loadProjection(generation);
-      if (generation === lifecycleRef.current) setPhase('ready');
+      if (generation === lifecycleRef.current && connectionStatusRef.current === 'connected') {
+        phaseRef.current = 'ready';
+        setPhase('ready');
+      }
     } catch (error: unknown) {
       if (generation !== lifecycleRef.current) return;
+      phaseRef.current = 'error';
       setPhase((current) => (current === 'ready' ? current : 'error'));
       applyError(error);
     }
   }, [applyError, clientMode, loadProjection]);
 
   const correctProjection = useCallback(async () => {
-    if (clientMode !== 'live') return;
+    if (clientMode !== 'live' || manualReconcileRef.current) return;
     // A projection correction must not invalidate the generation captured by
     // the active AsyncIterable. Only an explicit refresh/reconnect supersedes
     // in-flight stream work.
@@ -342,30 +406,78 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [applyError, clientMode, loadProjection]);
 
-  const connectAndRefresh = useCallback(async () => {
-    if (clientMode !== 'live') return;
+  const connectAndRefresh = useCallback(async (): Promise<boolean> => {
+    if (clientMode !== 'live') return false;
     const generation = ++lifecycleRef.current;
+    phaseRef.current = 'connecting';
     setPhase('connecting');
-    setStream((current) => ({ ...current, status: 'connecting', error: undefined }));
+    setStream((current) => ({
+      ...current,
+      status: 'connecting',
+      error: manualReconcileRef.current ? current.error : undefined,
+    }));
     try {
       await adapter.connect();
-      if (generation !== lifecycleRef.current) return;
+      if (generation !== lifecycleRef.current) return false;
       await loadProjection(generation);
-      if (generation !== lifecycleRef.current) return;
+      if (generation !== lifecycleRef.current) return false;
+      if (connectionStatusRef.current === 'disconnected' || connectionStatusRef.current === 'reconnecting') return false;
+      phaseRef.current = 'ready';
       setPhase('ready');
-      setStream((current) => ({ ...current, status: 'connected', error: undefined }));
+      if (manualReconcileRef.current) {
+        setStream((current) => ({
+          ...current,
+          status: 'error',
+          error: current.error || manualReconcileError(undefined, '需要人工核对，Live 不会自动重试。'),
+        }));
+      } else {
+        setStream((current) => ({ ...current, status: 'connected', error: undefined }));
+      }
+      return true;
     } catch (error: unknown) {
-      if (generation !== lifecycleRef.current) return;
+      if (generation !== lifecycleRef.current) return false;
       const detail = applyError(error, false);
+      phaseRef.current = 'error';
       setPhase('error');
       setStream((current) => ({ ...current, status: 'error', error: detail }));
+      return false;
     }
   }, [adapter, applyError, clientMode, loadProjection]);
 
   const handleFrame = useCallback((frame: Phase1E.SseFrame, threadId: string, generation: number) => {
     if (generation !== lifecycleRef.current || selectedThreadIdRef.current !== threadId) return;
-    if (!cursorTrackerRef.current.accept(frame)) return;
+    if (manualReconcileRef.current) return;
     const event = mapSseFrame(frame, pendingRunRef.current?.sessionId || selectedSessionIdRef.current || 'unknown');
+    const requiresManualReconcile = eventNeedsManualReconcile(event) || containsManualReconcile(frame.data);
+    if (requiresManualReconcile) {
+      // Detect and persist this before any stream state can be marked
+      // connected. The raw error/detail remains on the mapped event.
+      const detail = manualReconcileError(
+        event.error,
+        'SSE 返回 manual_reconcile_required / outcome_unknown，必须人工核对。',
+      );
+      markManualReconcile(detail.message);
+      const accepted = cursorTrackerRef.current.accept(frame);
+      const next = accepted
+        ? reduceEvent(accumulatorRef.current, `${event.resource_scope}\0${event.stream_kind}`, event)
+        : accumulatorRef.current;
+      accumulatorRef.current = next;
+      setLastError(detail);
+      setProjectionStale(true);
+      setCommand((current) => ({ status: 'error', error: detail, idempotencyKey: current.idempotencyKey }));
+      setApprovalAction((current) => ({ status: 'error', error: detail, idempotencyKey: current.idempotencyKey }));
+      setStream((current) => ({
+        ...current,
+        status: 'error',
+        cursor: next.cursor,
+        events: next.events,
+        lastEvent: accepted ? event : current.lastEvent,
+        error: detail,
+      }));
+      return;
+    }
+    const accepted = cursorTrackerRef.current.accept(frame);
+    if (!accepted) return;
     if (event.thread_id && event.thread_id !== threadId) return;
     const scope = `${event.resource_scope}\0${event.stream_kind}`;
     const next = reduceEvent(accumulatorRef.current, scope, event);
@@ -379,9 +491,6 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       lastEvent: event,
       error: undefined,
     }));
-    if (containsManualReconcile(frame.data)) {
-      markManualReconcile('SSE 返回 manual_reconcile_required / outcome_unknown，必须人工核对。');
-    }
     if (isApprovalProjectionEvent(event) || frameHasTerminalProjection(event)) void correctProjection();
   }, [correctProjection, markManualReconcile]);
 
@@ -410,7 +519,16 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (streamResult.receipt) {
       if (streamResult.receipt.recovery === 'manual_reconcile' || containsManualReconcile(streamResult.receipt)) {
-        markManualReconcile('Core Receipt 要求 manual_reconcile，必须人工核对。');
+        const detail = manualReconcileError(
+          streamResult.receipt,
+          'Core Receipt 要求 manual_reconcile，必须人工核对。',
+        );
+        markManualReconcile(detail.message);
+        setLastError(detail);
+        setProjectionStale(true);
+        setCommand({ status: 'error', error: detail, idempotencyKey: run.idempotencyKey });
+        setStream((current) => ({ ...current, status: 'error', error: detail }));
+        return;
       }
       // 202 is only idempotency/command admission evidence, never terminal.
       setCommand({ status: 'awaiting_projection', idempotencyKey: run.idempotencyKey });
@@ -422,11 +540,13 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     for await (const frame of streamResult.events) {
       handleFrame(frame, run.threadId, generation);
     }
-    if (generation === lifecycleRef.current) setStream((current) => ({ ...current, status: 'connected', error: undefined }));
+    if (generation === lifecycleRef.current && !manualReconcileRef.current) {
+      setStream((current) => ({ ...current, status: 'connected', error: undefined }));
+    }
   }, [adapter, handleFrame, markManualReconcile]);
 
   const replayThenCorrect = useCallback(async () => {
-    if (clientMode !== 'live' || phase !== 'ready' || manualReconcileRequired) return;
+    if (clientMode !== 'live' || manualReconcileRequired || connectionStatusRef.current !== 'connected') return;
     const generation = lifecycleRef.current;
     const pendingRun = pendingRunRef.current;
     try {
@@ -451,13 +571,15 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     if (phase !== 'ready' || connectionStatus !== 'connected') {
-      await connectAndRefresh();
+      const established = await connectAndRefresh();
+      if (established && !manualReconcileRef.current) await replayThenCorrect();
       return;
     }
     await replayThenCorrect();
   }, [clientMode, connectAndRefresh, connectionStatus, manualReconcileRequired, phase, replayThenCorrect]);
 
   useEffect(() => {
+    previousConnectionRef.current = connectionStatus;
     if (clientMode === 'live') {
       void connectAndRefresh();
       return () => {
@@ -465,6 +587,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
     }
     lifecycleRef.current += 1;
+    phaseRef.current = 'idle';
     setPhase('idle');
     setProjects([]);
     setThreads([]);
@@ -487,6 +610,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     accumulatorRef.current = emptyEventAccumulator();
     cursorTrackerRef.current = new Phase1E.ScopedCursorTracker();
     pendingRunRef.current = null;
+    pendingSessionRef.current = null;
     pendingApprovalRef.current = null;
     approvalKeysRef.current.clear();
     createSessionKeyRef.current = null;
@@ -509,15 +633,35 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     previousConnectionRef.current = connectionStatus;
     if (clientMode !== 'live') return;
     if (connectionStatus === 'disconnected' || connectionStatus === 'reconnecting') {
-      setStream((current) => ({ ...current, status: 'replaying' }));
+      const lost = connectionLossState(connectionStatus);
+      phaseRef.current = lost.phase;
+      setPhase(lost.phase);
+      setProjectionStale(lost.projectionStale);
+      setLastError(lost.error);
+      setStream((current) => ({ ...current, status: lost.streamStatus, error: lost.error }));
       return;
     }
-    if (connectionStatus === 'connected' && previous !== 'connected') void replayThenCorrect();
-  }, [clientMode, connectionStatus, replayThenCorrect]);
+    if (connectionStatus === 'connected' && previous !== 'connected') {
+      void (async () => {
+        const established = await connectAndRefresh();
+        if (established && !manualReconcileRef.current) await replayThenCorrect();
+      })();
+    }
+  }, [clientMode, connectAndRefresh, connectionStatus, replayThenCorrect]);
 
   const createSession = useCallback(async (input: LiveCreateSessionInput) => {
-    if (clientMode !== 'live' || phase !== 'ready' || manualReconcileRequired) return undefined;
+    if (clientMode !== 'live' || phase !== 'ready' || manualReconcileRequired || command.status !== 'idle') return undefined;
     if (stream.status === 'replaying' || stream.status === 'error' || connectionStatus !== 'connected') return undefined;
+    const roleIdAvailable = typeof input?.roleId === 'string' && input.roleId.trim().length > 0;
+    const newRole = input?.newRole;
+    const validNewRole = newRole
+      && newRole.name.trim().length > 0
+      && newRole.system_prompt.trim().length > 0
+      && newRole.model_profile_id.trim().length > 0
+      ? newRole
+      : undefined;
+    const newRoleAvailable = validNewRole !== undefined;
+    if (Number(roleIdAvailable) + Number(newRoleAvailable) !== 1) return undefined;
     if (createSessionDispatchingRef.current) return undefined;
     createSessionDispatchingRef.current = true;
     try {
@@ -528,28 +672,32 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         : createIdempotencyKey();
       createSessionInputRef.current = inputFingerprint;
       createSessionKeyRef.current = idempotencyKey;
+      pendingSessionRef.current = { sessionId: '', idempotencyKey };
       setCommand({ status: 'sending', idempotencyKey });
       const session = await adapter.createSession(input, idempotencyKey);
+      pendingSessionRef.current = { sessionId: session.id, idempotencyKey };
       setSessions(adapter.listSessions());
       setSelectedSessionId(session.id);
-      setCommand({ status: 'awaiting_projection', idempotencyKey });
+      setCommand({
+        status: 'awaiting_projection',
+        idempotencyKey,
+        error: {
+          code: 'session_thread_projection_pending',
+          message: `Core 已创建 Session ${session.id}，等待 ThreadProjection.legacy_refs 返回对应 session ref。`,
+          retryable: false,
+          recovery: 'none',
+        },
+      });
       await refresh();
-      const projectedThreads = await adapter.listThreads();
-      const createdThread = projectedThreads.find((thread) => thread.sessionId === session.id);
-      if (createdThread && lifecycleRef.current > 0) {
-        setSelectedThreadId(createdThread.id);
-        setSelectedProjectId(projects.find((project) => project.threadIds.includes(createdThread.id))?.id ?? null);
-      }
-      createSessionKeyRef.current = null;
       return session;
     } catch (error: unknown) {
       const detail = applyError(error, false);
-      setCommand({ status: 'error', error: detail });
+      setCommand({ status: 'error', error: detail, idempotencyKey: createSessionKeyRef.current ?? undefined });
       return undefined;
     } finally {
       createSessionDispatchingRef.current = false;
     }
-  }, [adapter, applyError, clientMode, connectionStatus, manualReconcileRequired, phase, projects, refresh, stream.status]);
+  }, [adapter, applyError, clientMode, command.status, connectionStatus, manualReconcileRequired, phase, refresh, stream.status]);
 
   const sendMessage = useCallback(async (message: string) => {
     const trimmed = message.trim();
@@ -605,7 +753,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       || approvalDispatchingRef.current
     ) return;
     approvalDispatchingRef.current = true;
-    const keyId = `${approval.sessionId}\0${approval.id}`;
+    const keyId = approvalActionKey(approval.sessionId, approval.id, decision);
     const idempotencyKey = approvalKeysRef.current.get(keyId) || createIdempotencyKey();
     approvalKeysRef.current.set(keyId, idempotencyKey);
     pendingApprovalRef.current = { sessionId: approval.sessionId, approvalId: approval.id };
@@ -652,9 +800,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     && phase === 'ready'
     && connectionStatus === 'connected'
     && stream.status === 'connected'
+    && command.status === 'idle'
     && !manualReconcileRequired;
   const createSessionUnavailableReason = manualReconcileRequired
     ? '需要人工核对，不能创建新命令。'
+    : command.status === 'awaiting_projection'
+      ? command.error?.message || '等待 Core ThreadProjection 校正，不能重复创建 Session。'
     : connectionStatus !== 'connected' || phase !== 'ready'
       ? 'Core 尚未连接或协议尚未协商。'
       : stream.status !== 'connected'

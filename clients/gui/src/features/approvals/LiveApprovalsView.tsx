@@ -33,6 +33,7 @@ export const LiveApprovalsView: React.FC = () => {
   const decide = (approval: (typeof approvals)[number], decision: LiveApprovalDecision) => {
     void decideApproval(approval, decision);
   };
+  const phaseLabel = phase === 'ready' ? 'Core 已连接' : phase === 'error' ? 'Core 连接失败' : '正在连接 Core';
 
   if (phase !== 'ready' && approvals.length === 0) {
     return (
@@ -52,7 +53,7 @@ export const LiveApprovalsView: React.FC = () => {
           {showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开 Core 侧栏" title="打开 Core 侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}
           <div><span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时 Core · phase1e.v1</span><h1>Approval Center</h1></div>
         </div>
-        <div className="live-route-header-actions"><StatusBadge status={phase === 'ready' ? 'connected' : 'pending'} label={phase === 'ready' ? 'Core 已连接' : '读取中'} size="sm" /><button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新 Approval Projection" title="刷新 Approval Projection"><RefreshCw size={15} aria-hidden="true" /></button></div>
+        <div className="live-route-header-actions"><StatusBadge status={phase === 'ready' ? 'connected' : phase === 'error' ? 'disconnected' : 'pending'} label={phaseLabel} size="sm" /><button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新 Approval Projection" title="刷新 Approval Projection"><RefreshCw size={15} aria-hidden="true" /></button></div>
       </header>
       {lastError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>{lastError.code}：{lastError.message}</span></div>}
       <div className="live-approval-route-summary"><span><ShieldCheck size={16} aria-hidden="true" />待处理 Approval</span><strong>{pending.length}</strong><small>服务端 Projection 权威 · 本阶段不修改全局审批策略</small></div>
