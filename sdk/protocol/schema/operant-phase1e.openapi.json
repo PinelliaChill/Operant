@@ -1,0 +1,1404 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Operant Phase 1E Client Protocol",
+    "version": "phase1e.v1",
+    "description": "The narrow, read-mostly client contract for the Phase 1E Core connection and session loop."
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8000"
+    }
+  ],
+  "x-operant": {
+    "protocol_version": "phase1e.v1",
+    "min_client_version": "phase1e.v1",
+    "capabilities": [
+      "workspace_project_projection",
+      "workspace_file_metadata",
+      "thread_projection",
+      "session_command",
+      "sse_replay",
+      "approval_projection"
+    ],
+    "cursor": {
+      "minimum": 0,
+      "maximum": 9223372036854775807,
+      "scope": "resource_scope+stream_kind",
+      "ordering": "committed_integer"
+    },
+    "sse": {
+      "id": "cursor",
+      "event": "event_type",
+      "data": "json_payload",
+      "replay_header": "Last-Event-ID"
+    }
+  },
+  "paths": {
+    "/v1/protocol": {
+      "get": {
+        "operationId": "negotiateProtocol",
+        "summary": "Negotiate the Phase 1E protocol and schema digest",
+        "responses": {
+          "200": {
+            "description": "Protocol metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolNegotiation"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/projects": {
+      "get": {
+        "operationId": "listProjects",
+        "summary": "List registered workspace project projections",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AfterCursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit1000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace-backed project projections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectProjection"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace_id}/files": {
+      "get": {
+        "operationId": "listWorkspaceFiles",
+        "summary": "List safe metadata for one registered workspace directory",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/RelativePath"
+          },
+          {
+            "$ref": "#/components/parameters/Limit200"
+          },
+          {
+            "$ref": "#/components/parameters/PageToken"
+          },
+          {
+            "$ref": "#/components/parameters/Snapshot"
+          },
+          {
+            "$ref": "#/components/parameters/AfterName"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A deterministic metadata page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceFilesPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/threads": {
+      "get": {
+        "operationId": "listThreads",
+        "summary": "List canonical thread projections",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AfterCursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit1000"
+          },
+          {
+            "name": "parent_thread_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          {
+            "name": "workspace_ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ThreadStatus"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical thread projections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ThreadProjection"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "summary": "Create one persisted session from an existing role",
+        "x-idempotent": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{session_id}/runs": {
+      "post": {
+        "operationId": "runSessionStream",
+        "summary": "Start or replay a session run as a typed SSE stream",
+        "x-idempotent": true,
+        "x-sse": {
+          "resource_scope": "session:{session_id}",
+          "stream_kind": "session.run",
+          "replay_only_when": "Last-Event-ID is present"
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/LastEventId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New or replayed committed SSE events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/SseFrame"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Typed receipt returned for an idempotency replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{session_id}/approvals": {
+      "get": {
+        "operationId": "listPendingApprovals",
+        "summary": "List durable pending approvals for a session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending approval projections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovalProjection"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{session_id}/approvals/{tool_call_id}": {
+      "post": {
+        "operationId": "submitApproval",
+        "summary": "Submit one approval decision through the Action Gateway",
+        "x-idempotent": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          },
+          {
+            "name": "tool_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Persisted approval decision result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDecisionResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "AfterCursor": {
+        "name": "after_cursor",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/Cursor"
+        }
+      },
+      "Limit1000": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        }
+      },
+      "Limit200": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 100
+        }
+      },
+      "WorkspaceId": {
+        "name": "workspace_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "SessionId": {
+        "name": "session_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "RelativePath": {
+        "name": "path",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "default": "."
+        }
+      },
+      "PageToken": {
+        "name": "page_token",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "Snapshot": {
+        "name": "snapshot",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "AfterName": {
+        "name": "after_name",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 255
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "LastEventId": {
+        "name": "Last-Event-ID",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/Cursor"
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Typed public error envelope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Cursor": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9223372036854775807,
+        "description": "A committed SQLite cursor scoped to one resource and stream kind."
+      },
+      "ProtocolNegotiation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol_version",
+          "schema_digest",
+          "min_client_version",
+          "capabilities"
+        ],
+        "properties": {
+          "protocol_version": {
+            "const": "phase1e.v1"
+          },
+          "schema_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "min_client_version": {
+            "const": "phase1e.v1"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "ErrorRecovery": {
+        "type": "string",
+        "enum": [
+          "none",
+          "retry",
+          "retry_later",
+          "retry_same_idempotency_key",
+          "use_new_idempotency_key",
+          "refresh_and_retry",
+          "manual_reconcile"
+        ]
+      },
+      "ErrorDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "recovery"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/ErrorRecovery"
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "detail",
+          "error"
+        ],
+        "properties": {
+          "detail": {},
+          "error": {
+            "$ref": "#/components/schemas/ErrorDescriptor"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ReceiptResource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "CommandReceipt": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "command_kind",
+          "accepted",
+          "command_id"
+        ],
+        "properties": {
+          "command_kind": {
+            "type": "string",
+            "enum": [
+              "command",
+              "stream"
+            ]
+          },
+          "accepted": {
+            "type": "boolean"
+          },
+          "command_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "stream_replay_available": {
+            "type": "boolean"
+          },
+          "first_event_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replay_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replay_after_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recovery": {
+            "type": "string",
+            "enum": [
+              "replay_events",
+              "not_available",
+              "none",
+              "manual_reconcile"
+            ]
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ProjectThreadSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectWorkflowRunSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status",
+          "current_stage",
+          "summary",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "current_stage": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectProjection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "workspace_ref",
+          "readable",
+          "writable",
+          "created_at",
+          "threads",
+          "workflow_runs"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "workspace_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "readable": {
+            "type": "boolean"
+          },
+          "writable": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "threads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectThreadSummary"
+            }
+          },
+          "workflow_runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectWorkflowRunSummary"
+            }
+          }
+        }
+      },
+      "WorkspaceFileEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "name",
+          "type",
+          "size_bytes",
+          "modified_at"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "file",
+              "directory"
+            ]
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036854775807
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WorkspaceFilesPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workspace_id",
+          "path",
+          "entries",
+          "snapshot",
+          "next_page_token"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceFileEntry"
+            }
+          },
+          "snapshot": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "next_page_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ThreadStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "completed",
+          "cancelled",
+          "archived"
+        ]
+      },
+      "ThreadLegacyRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_type",
+          "source_id"
+        ],
+        "properties": {
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "session",
+              "workflow_run"
+            ]
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
+      },
+      "ThreadProjection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "cursor",
+          "parent_thread_id",
+          "workspace_ref",
+          "status",
+          "legacy_refs",
+          "created_at",
+          "updated_at",
+          "archived_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_thread_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ThreadStatus"
+          },
+          "legacy_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadLegacyRef"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "RoleSnapshot": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "role_id",
+          "role_version",
+          "role_name",
+          "system_prompt",
+          "model_profile_id",
+          "model_profile_name",
+          "provider",
+          "model_id",
+          "base_url",
+          "secret_ref",
+          "effort",
+          "tool_policy",
+          "budget",
+          "memory_scope",
+          "captured_at",
+          "overrides"
+        ],
+        "properties": {
+          "role_id": {
+            "type": "string"
+          },
+          "role_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "role_name": {
+            "type": "string"
+          },
+          "system_prompt": {
+            "type": "string"
+          },
+          "model_profile_id": {
+            "type": "string"
+          },
+          "model_profile_name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "secret_ref": {
+            "type": "string"
+          },
+          "context_window": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": "string"
+          },
+          "provider_effort_parameter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_effort_value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool_policy": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "budget": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "memory_scope": {
+            "type": "string"
+          },
+          "captured_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "overrides": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "role_snapshot",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "role_snapshot": {
+            "$ref": "#/components/schemas/RoleSnapshot"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateRole": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "name",
+          "system_prompt",
+          "model_profile_id"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "system_prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "model_profile_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "CreateSessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Exactly one of role_id or new_role is required by Core.",
+        "x-mutually-exclusive": [
+          "role_id",
+          "new_role"
+        ],
+        "properties": {
+          "role_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "new_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreateRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "budget_overrides": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "ReferenceRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "RunSessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "message",
+          "workspace"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "workspace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "references": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/ReferenceRequest"
+            }
+          }
+        }
+      },
+      "RuntimeEvent": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SseFrame": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "event",
+          "data"
+        ],
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "event": {
+            "type": "string",
+            "minLength": 1
+          },
+          "data": {},
+          "resource_scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stream_kind": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "ApprovalStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "expired"
+        ]
+      },
+      "ApprovalProjection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "approval_id",
+          "tool_call_id",
+          "category",
+          "detail",
+          "action_hash",
+          "status",
+          "requested_at",
+          "expires_at",
+          "continuation_available"
+        ],
+        "properties": {
+          "approval_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "tool_call_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "action_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "continuation_available": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApprovalDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "approved"
+        ],
+        "properties": {
+          "approved": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApprovalDecisionResult": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "accepted",
+          "changed",
+          "approved",
+          "status",
+          "approval_id",
+          "continuation_available"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "approved": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus"
+          },
+          "approval_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "continuation_available": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}
