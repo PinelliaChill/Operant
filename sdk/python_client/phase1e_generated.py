@@ -11,7 +11,12 @@ import uuid
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal, NotRequired, TypedDict, cast
+from typing import Any, Literal, cast
+
+try:
+    from typing import NotRequired, TypedDict
+except ImportError:
+    from typing_extensions import NotRequired, TypedDict
 
 from .transport import (
     Phase1EError,

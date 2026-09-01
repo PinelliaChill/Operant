@@ -248,7 +248,7 @@ export function stringifyJson(value: unknown): string {
     active.add(current);
     let result: string;
     if (Array.isArray(current)) {
-      result = `[${current.map(item => encode(item, true)).join(',')}]`;
+      result = `[${Array.from(current, item => encode(item, true)).join(',')}]`;
     } else {
       const entries = Object.entries(current)
         .map(([key, item]) => [key, encode(item)] as const)
@@ -266,15 +266,18 @@ export async function readJson<T>(response: Phase1EResponse): Promise<T> {
   if (typeof response.json === 'function') {
     const value = await response.json();
     if (typeof value !== 'string') throw new Phase1EError('preparsed_json_unsupported', 'Transport must return raw JSON text', false, 'none');
-    return parseJsonLossless(value) as T;
+    return parseJsonText(value) as T;
   }
   if (response.json !== undefined) {
-    return parseJsonLossless(response.json) as T;
+    return parseJsonText(response.json) as T;
   }
   const text = typeof response.text === 'function' ? await response.text() : response.text ?? await bodyText(response.body);
   if (typeof text !== 'string') throw new Phase1EError('raw_text_required', 'Transport must return raw text', false, 'none');
-  if (!text.trim()) return undefined as T;
-  return parseJsonLossless(text) as T;
+  return parseJsonText(text) as T;
+}
+
+function parseJsonText(text: string): unknown {
+  return text.trim() ? parseJsonLossless(text) : undefined;
 }
 
 export async function readText(response: Phase1EResponse): Promise<string> {

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 from copy import deepcopy
@@ -290,6 +292,35 @@ def test_all_generated_typed_dict_required_sets_match_schema() -> None:
         assert model.__required_keys__ == frozenset(required)
         assert model.__optional_keys__ == frozenset(properties - required)
         assert set(get_type_hints(model)) == properties
+
+
+def test_generated_python_sdk_uses_python310_typed_dict_compatibility_import() -> None:
+    source = PY_PATH.read_text(encoding="utf-8")
+    assert "from typing import Any, Literal, NotRequired, TypedDict, cast" not in source
+    assert "from typing import NotRequired, TypedDict" in source
+    assert "from typing_extensions import NotRequired, TypedDict" in source
+
+    python310 = shutil.which("python3.10")
+    if python310 is None:
+        return  # Static source check is the available Python 3.10 compatibility gate.
+    probe = subprocess.run([python310, "--version"], capture_output=True, text=True)
+    if probe.returncode != 0:
+        return  # A pyenv shim without an activated 3.10 runtime is not executable.
+    smoke = subprocess.run(
+        [
+            python310,
+            "-c",
+            (
+                "import sdk.python_client.phase1e_generated as m; "
+                "assert m.CreateSessionRequest.__optional_keys__"
+            ),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        capture_output=True,
+        text=True,
+    )
+    assert smoke.returncode == 0, smoke.stderr
 
 
 def test_sse_line_endings_and_cursor_tracker_are_bounded() -> None:
