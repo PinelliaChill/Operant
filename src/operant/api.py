@@ -26,7 +26,11 @@ from starlette.background import BackgroundTask
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from operant.application.client_projection import WorkspaceProjectionError
+from operant.application.client_projection import (
+    ProjectProjectionCursorError,
+    ProjectProjectionError,
+    WorkspaceProjectionError,
+)
 from operant.application.evaluation import EvaluationRunner
 from operant.application.protocol_metadata import (
     ProtocolSchemaUnavailable,
@@ -1649,13 +1653,24 @@ def create_app(
                 limit=limit,
             )
             return [project.model_dump(mode="json") for project in projects]
-        except ValueError:
+        except ProjectProjectionCursorError:
             return JSONResponse(
                 status_code=400,
                 content=error_payload(
                     code="invalid_project_cursor",
                     message="project cursor or limit is invalid",
                     recovery=RecoveryAction.REFRESH_AND_RETRY,
+                ),
+            )
+        except ProjectProjectionError as exc:
+            recovery = RecoveryAction(exc.recovery)
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=error_payload(
+                    code=exc.code,
+                    message=exc.message,
+                    recovery=recovery,
+                    retryable=exc.status_code in {408, 425, 429, 502, 503, 504},
                 ),
             )
 

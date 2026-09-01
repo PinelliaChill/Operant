@@ -149,6 +149,55 @@ def test_projects_endpoint_serializes_domain_projection(tmp_path: Path) -> None:
     ]
 
 
+def test_projects_endpoint_bounds_redacted_workflow_summary_to_model_limit(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = create_app(tmp_path / "long-task.sqlite3", artifact_root=tmp_path / "artifacts")
+    service: ApplicationService = app.state.operant_service
+    _workspace_initialization(service, workspace)
+    service.create_workflow_run(
+        WorkflowRun(
+            id="workflow-long-task",
+            task="x" * 500,
+            workspace=str(workspace),
+            planner_role_id="role-planner",
+            coder_role_id="role-coder",
+            reviewer_role_id="role-reviewer",
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/v1/projects")
+
+    assert response.status_code == 200
+    summary = response.json()[0]["workflow_runs"][0]["summary"]
+    assert len(summary) == 500
+    assert summary.endswith("...[truncated]")
+
+
+def test_projects_endpoint_does_not_misreport_persisted_projection_error_as_cursor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = create_app(tmp_path / "projection-error.sqlite3", artifact_root=tmp_path / "artifacts")
+    service: ApplicationService = app.state.operant_service
+    _workspace_initialization(service, workspace)
+
+    def raise_persisted_error(**_: object) -> list[object]:
+        raise ValueError("persisted workflow row is invalid")
+
+    monkeypatch.setattr(service.store, "list_workflow_runs", raise_persisted_error)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/v1/projects")
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "project_projection_unavailable"
+
+
 def test_workspace_file_projection_is_metadata_only_safe_and_paged(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -260,6 +309,36 @@ def test_workspace_file_projection_fails_closed_when_registered_root_is_replaced
     assert replaced.json()["error"]["code"] == "workspace_directory_changed"
 
 
+def test_workspace_file_projection_rejects_replaced_registered_parent_symlink(
+    tmp_path: Path,
+) -> None:
+    registered_parent = tmp_path / "registered-parent"
+    registered_parent.mkdir()
+    workspace = registered_parent / "workspace"
+    workspace.mkdir()
+    (workspace / "before.txt").write_text("before", encoding="utf-8")
+
+    attacker_parent = tmp_path / "attacker-parent"
+    attacker_parent.mkdir()
+    attacker_workspace = attacker_parent / "workspace"
+    attacker_workspace.mkdir()
+    (attacker_workspace / "after.txt").write_text("after", encoding="utf-8")
+
+    app = create_app(tmp_path / "parent-symlink.sqlite3", artifact_root=tmp_path / "artifacts")
+    service: ApplicationService = app.state.operant_service
+    initialization = _workspace_initialization(service, workspace)
+
+    shutil.move(registered_parent, tmp_path / "old-parent")
+    registered_parent.symlink_to(attacker_parent, target_is_directory=True)
+
+    with TestClient(app) as client:
+        replaced = client.get(f"/v1/workspaces/{initialization.id}/files")
+
+    assert replaced.status_code == 409
+    assert replaced.json()["error"]["code"] == "workspace_directory_changed"
+    assert "after.txt" not in replaced.text
+
+
 def test_workspace_file_projection_catches_root_replacement_during_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -293,6 +372,66 @@ def test_workspace_file_projection_catches_root_replacement_during_scan(
 
     assert raised.value.code == "workspace_directory_changed"
     assert scan_calls == 2
+
+
+def test_workspace_file_projection_rejects_manifest_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "first.txt").write_text("first", encoding="utf-8")
+    (workspace / "second.txt").write_text("second", encoding="utf-8")
+    app = create_app(tmp_path / "manifest-limit.sqlite3", artifact_root=tmp_path / "artifacts")
+    service: ApplicationService = app.state.operant_service
+    initialization = _workspace_initialization(service, workspace)
+    monkeypatch.setattr(client_projection, "MAX_WORKSPACE_DIRECTORY_ENTRIES", 1)
+
+    with TestClient(app) as client:
+        response = client.get(f"/v1/workspaces/{initialization.id}/files")
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "workspace_directory_too_large"
+
+
+def test_projects_fail_closed_instead_of_silently_omitting_too_many_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = create_app(tmp_path / "thread-limit.sqlite3", artifact_root=tmp_path / "artifacts")
+    service: ApplicationService = app.state.operant_service
+    _workspace_initialization(service, workspace)
+    service.create_thread(ConversationThread(workspace_ref=str(workspace.resolve())))
+    service.create_thread(ConversationThread(workspace_ref=str(workspace.resolve())))
+    monkeypatch.setattr(client_projection, "MAX_PROJECT_THREADS", 1)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/v1/projects")
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "project_projection_too_large"
+
+
+def test_projects_fail_closed_instead_of_silently_omitting_too_many_workflow_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app = create_app(tmp_path / "workflow-limit.sqlite3", artifact_root=tmp_path / "artifacts")
+    service: ApplicationService = app.state.operant_service
+    _workspace_initialization(service, workspace)
+    for run_id in ("workflow-one", "workflow-two"):
+        service.create_workflow_run(_workflow(workspace, run_id=run_id))
+    monkeypatch.setattr(client_projection, "MAX_PROJECT_WORKFLOW_RUNS", 1)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/v1/projects")
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "project_projection_too_large"
 
 
 def test_workspace_file_projection_rejects_malformed_or_conflicting_page_state(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import hashlib
 import json
 import os
@@ -30,6 +31,12 @@ from operant.tools.execution import is_protected_workspace_name
 MAX_WORKSPACE_FILE_PAGE_SIZE = 200
 MAX_WORKSPACE_FILE_PATH_CHARS = 4_096
 MAX_WORKSPACE_FILE_NAME_CHARS = 255
+MAX_WORKSPACE_DIRECTORY_ENTRIES = 10_000
+MAX_PROJECT_THREADS = 1_000
+MAX_PROJECT_WORKFLOW_RUNS = 1_000
+MAX_PROJECT_SUMMARY_CHARS = 500
+_PUBLIC_TEXT_TRUNCATION_SUFFIX = "...[truncated]"
+_MAX_PROJECT_SUMMARY_INPUT_CHARS = MAX_PROJECT_SUMMARY_CHARS - len(_PUBLIC_TEXT_TRUNCATION_SUFFIX)
 
 
 class WorkspaceProjectionError(RuntimeError):
@@ -48,6 +55,38 @@ class WorkspaceProjectionError(RuntimeError):
         self.status_code = status_code
         self.recovery = recovery
         super().__init__(message)
+
+
+class ProjectProjectionError(RuntimeError):
+    """Safe failure while materializing a persisted project projection."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int = 500,
+        recovery: str = "retry_later",
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.recovery = recovery
+        super().__init__(message)
+
+
+class ProjectProjectionCursorError(ValueError):
+    """Invalid project-list paging arguments, distinct from persisted failures."""
+
+
+class _ProjectProjectionTooLarge(ProjectProjectionError):
+    def __init__(self, resource: str, limit: int) -> None:
+        super().__init__(
+            "project_projection_too_large",
+            f"project projection contains more than {limit} {resource}",
+            status_code=413,
+            recovery="refresh_and_retry",
+        )
 
 
 class _WorkspacePathError(WorkspaceProjectionError):
@@ -117,45 +156,118 @@ def list_project_projections(
     prevents aliases and guessed legacy mappings from entering the projection.
     """
 
-    initializations = store.list_workspace_initializations(
-        after_cursor=after_cursor,
-        limit=limit,
-    )
+    _validate_project_page(after_cursor, limit)
+    try:
+        initializations = store.list_workspace_initializations(
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+    except ProjectProjectionCursorError:
+        raise
+    except (TypeError, ValueError) as exc:
+        # A malformed durable row must not be reported as a bad request
+        # cursor. The API turns this into a generic projection failure.
+        raise ProjectProjectionError(
+            "project_projection_unavailable",
+            "persisted project projection is unavailable",
+        ) from exc
+
     projects: list[ProjectProjection] = []
     for initialization in initializations:
         workspace_ref = initialization.workspace_ref
-        threads = store.list_threads(workspace_ref=workspace_ref, limit=1000)
-        workflow_runs = store.list_workflow_runs(workspace_ref=workspace_ref, limit=None)
-        projects.append(
-            ProjectProjection(
-                project_id=initialization.id,
+        try:
+            threads = _list_project_threads(store, workspace_ref)
+            workflow_runs = store.list_workflow_runs(
                 workspace_ref=workspace_ref,
-                readable=initialization.readable,
-                writable=initialization.writable,
-                created_at=initialization.created_at,
-                threads=tuple(
-                    ProjectThreadSummary(
-                        id=thread.id,
-                        status=thread.status.value,
-                        created_at=thread.created_at,
-                        updated_at=thread.updated_at,
-                    )
-                    for thread in threads
-                ),
-                workflow_runs=tuple(
-                    ProjectWorkflowRunSummary(
-                        id=run.id,
-                        status=run.status.value,
-                        current_stage=run.current_stage.value,
-                        summary=redact_public_text(run.task, max_chars=500),
-                        created_at=run.created_at,
-                        updated_at=run.updated_at,
-                    )
-                    for run in workflow_runs
-                ),
+                limit=MAX_PROJECT_WORKFLOW_RUNS + 1,
             )
-        )
+            if len(workflow_runs) > MAX_PROJECT_WORKFLOW_RUNS:
+                raise _ProjectProjectionTooLarge("workflow runs", MAX_PROJECT_WORKFLOW_RUNS)
+            projects.append(
+                ProjectProjection(
+                    project_id=initialization.id,
+                    workspace_ref=workspace_ref,
+                    readable=initialization.readable,
+                    writable=initialization.writable,
+                    created_at=initialization.created_at,
+                    threads=tuple(
+                        ProjectThreadSummary(
+                            id=thread.id,
+                            status=thread.status.value,
+                            created_at=thread.created_at,
+                            updated_at=thread.updated_at,
+                        )
+                        for thread in threads
+                    ),
+                    workflow_runs=tuple(
+                        ProjectWorkflowRunSummary(
+                            id=run.id,
+                            status=run.status.value,
+                            current_stage=run.current_stage.value,
+                            summary=_redact_project_summary(run.task),
+                            created_at=run.created_at,
+                            updated_at=run.updated_at,
+                        )
+                        for run in workflow_runs
+                    ),
+                )
+            )
+        except _ProjectProjectionTooLarge:
+            raise
+        except (TypeError, ValueError) as exc:
+            # Pydantic/JSON errors from persisted facts are projection
+            # failures, not malformed project cursors.
+            raise ProjectProjectionError(
+                "project_projection_unavailable",
+                "persisted project projection is unavailable",
+            ) from exc
     return projects
+
+
+def _validate_project_page(after_cursor: int | None, limit: int) -> None:
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1_000:
+        raise ProjectProjectionCursorError("project list limit must be between 1 and 1000")
+    if after_cursor is not None and (
+        not isinstance(after_cursor, int) or isinstance(after_cursor, bool) or after_cursor < 0
+    ):
+        raise ProjectProjectionCursorError("project list cursor must be a non-negative integer")
+
+
+def _list_project_threads(
+    store: SQLiteStore,
+    workspace_ref: str,
+) -> list[Any]:
+    """Read all workspace threads up to a hard bound without silent omission."""
+
+    threads: list[Any] = []
+    after_cursor: int | None = None
+    while len(threads) <= MAX_PROJECT_THREADS:
+        remaining = MAX_PROJECT_THREADS + 1 - len(threads)
+        page_limit = min(1_000, remaining)
+        page = store.list_threads(
+            after_cursor=after_cursor,
+            limit=page_limit,
+            workspace_ref=workspace_ref,
+        )
+        threads.extend(page)
+        if len(threads) > MAX_PROJECT_THREADS:
+            raise _ProjectProjectionTooLarge("threads", MAX_PROJECT_THREADS)
+        if len(page) < page_limit:
+            return threads
+        last_cursor = page[-1].cursor
+        if last_cursor is None:
+            raise ProjectProjectionError(
+                "project_projection_unavailable",
+                "persisted project projection is unavailable",
+            )
+        after_cursor = last_cursor
+    raise _ProjectProjectionTooLarge("threads", MAX_PROJECT_THREADS)
+
+
+def _redact_project_summary(value: str) -> str:
+    """Redact a workflow task while keeping the final model within 500 chars."""
+
+    return redact_public_text(value, max_chars=_MAX_PROJECT_SUMMARY_INPUT_CHARS)
 
 
 def get_workspace_initialization(store: SQLiteStore, workspace_id: str) -> WorkspaceInitialization:
@@ -336,32 +448,18 @@ def _open_directory(
     root_ref: str,
     parts: tuple[str, ...],
 ) -> tuple[int, tuple[str, ...], tuple[int, int]]:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags = _directory_open_flags()
+    fd = _open_registered_root(root_ref, flags)
     try:
-        fd = os.open(root_ref, flags)
-    except (FileNotFoundError, NotADirectoryError):
+        root_stat = os.fstat(fd)
+    except BaseException:
+        os.close(fd)
         raise WorkspaceProjectionError(
             "workspace_unavailable",
             "registered workspace directory is unavailable",
             status_code=409,
             recovery="refresh_and_retry",
         ) from None
-    except PermissionError:
-        raise WorkspaceProjectionError(
-            "workspace_not_readable",
-            "registered workspace is not readable",
-            status_code=403,
-        ) from None
-    except OSError:
-        raise WorkspaceProjectionError(
-            "workspace_unavailable",
-            "registered workspace directory is unavailable",
-            status_code=409,
-            recovery="refresh_and_retry",
-        ) from None
-
-    root_stat = os.fstat(fd)
     if not stat.S_ISDIR(root_stat.st_mode):
         os.close(fd)
         raise WorkspaceProjectionError(
@@ -404,7 +502,7 @@ def _open_directory(
             except FileNotFoundError:
                 raise _WorkspaceDirectoryChanged() from None
             except OSError as exc:
-                if exc.errno in {getattr(os, "ELOOP", 62), getattr(os, "ENOTDIR", 20)}:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
                     raise WorkspaceProjectionError(
                         "workspace_symlink_forbidden",
                         "workspace path cannot contain a symbolic link",
@@ -421,12 +519,140 @@ def _open_directory(
             except BaseException:
                 os.close(child_fd)
                 raise
-            os.close(fd)
+            old_fd = fd
+            try:
+                os.close(old_fd)
+            except BaseException:
+                os.close(child_fd)
+                raise
             fd = child_fd
             canonical_parts.append(match.name)
         return fd, tuple(canonical_parts), root_identity
     except BaseException:
         os.close(fd)
+        raise
+
+
+def _directory_open_flags() -> int:
+    """Return flags required for a POSIX directory-handle walk.
+
+    A platform without ``O_NOFOLLOW`` cannot provide the path guarantee this
+    projection needs. Failing closed is safer than silently falling back to a
+    path-based open that can follow a replaced ancestor.
+    """
+
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    supports_dir_fd = getattr(os, "supports_dir_fd", ())
+    if no_follow is None or os.open not in supports_dir_fd:
+        raise WorkspaceProjectionError(
+            "workspace_unavailable",
+            "registered workspace directory cannot be opened safely",
+            status_code=409,
+            recovery="refresh_and_retry",
+        )
+    return (
+        os.O_RDONLY
+        | int(no_follow)
+        | int(getattr(os, "O_DIRECTORY", 0))
+        | int(getattr(os, "O_CLOEXEC", 0))
+    )
+
+
+def _open_registered_root(root_ref: str, flags: int) -> int:
+    """Open every component of an absolute registered path with ``openat``."""
+
+    if not isinstance(root_ref, str) or not root_ref.startswith(os.sep):
+        raise WorkspaceProjectionError(
+            "workspace_unavailable",
+            "registered workspace directory is unavailable",
+            status_code=409,
+            recovery="refresh_and_retry",
+        )
+    root_parts = Path(root_ref).parts
+    if not root_parts or not root_parts[0].startswith(os.sep):
+        raise WorkspaceProjectionError(
+            "workspace_unavailable",
+            "registered workspace directory is unavailable",
+            status_code=409,
+            recovery="refresh_and_retry",
+        )
+    components = tuple(part for part in root_parts[1:] if part)
+    if any(part in {".", ".."} for part in components):
+        raise WorkspaceProjectionError(
+            "workspace_unavailable",
+            "registered workspace directory is unavailable",
+            status_code=409,
+            recovery="refresh_and_retry",
+        )
+
+    fd: int | None = None
+    try:
+        try:
+            fd = os.open(os.sep, flags)
+        except PermissionError:
+            raise WorkspaceProjectionError(
+                "workspace_not_readable",
+                "registered workspace is not readable",
+                status_code=403,
+            ) from None
+        except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
+            raise WorkspaceProjectionError(
+                "workspace_unavailable",
+                "registered workspace directory is unavailable",
+                status_code=409,
+                recovery="refresh_and_retry",
+            ) from None
+
+        for component in components:
+            try:
+                child_fd = os.open(component, flags, dir_fd=fd)
+            except PermissionError:
+                raise WorkspaceProjectionError(
+                    "workspace_not_readable",
+                    "registered workspace is not readable",
+                    status_code=403,
+                ) from None
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                    # A registered ancestor was replaced with a symlink. The
+                    # requested path no longer names the original workspace.
+                    raise _WorkspaceDirectoryChanged() from None
+                raise WorkspaceProjectionError(
+                    "workspace_unavailable",
+                    "registered workspace directory is unavailable",
+                    status_code=409,
+                    recovery="refresh_and_retry",
+                ) from None
+            try:
+                child_stat = os.fstat(child_fd)
+                if not stat.S_ISDIR(child_stat.st_mode):
+                    raise WorkspaceProjectionError(
+                        "workspace_unavailable",
+                        "registered workspace directory is unavailable",
+                        status_code=409,
+                        recovery="refresh_and_retry",
+                    )
+            except BaseException:
+                os.close(child_fd)
+                raise
+            old_fd = fd
+            try:
+                os.close(old_fd)
+            except BaseException:
+                os.close(child_fd)
+                raise
+            fd = child_fd
+        if fd is None:
+            raise WorkspaceProjectionError(
+                "workspace_unavailable",
+                "registered workspace directory is unavailable",
+                status_code=409,
+                recovery="refresh_and_retry",
+            )
+        return fd
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
         raise
 
 
@@ -462,8 +688,17 @@ def _scan_directory(fd: int, canonical_parts: tuple[str, ...]) -> _DirectoryScan
     try:
         directory_stat = os.fstat(fd)
         entries: list[_DirectoryEntry] = []
+        scanned_entry_count = 0
         with os.scandir(fd) as scandir_entries:
             for entry in scandir_entries:
+                scanned_entry_count += 1
+                if scanned_entry_count > MAX_WORKSPACE_DIRECTORY_ENTRIES:
+                    raise WorkspaceProjectionError(
+                        "workspace_directory_too_large",
+                        "workspace directory contains too many entries",
+                        status_code=413,
+                        recovery="refresh_and_retry",
+                    )
                 name = entry.name
                 if _is_sensitive_name(name):
                     continue
