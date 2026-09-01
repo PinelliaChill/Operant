@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { HttpClient, MockClient, OperantClient } from '@operant/sdk';
+import { MockClient, OperantClient, Phase1EClient } from '@operant/sdk';
 import { formatTime } from '../lib/format';
 
 export type ClientMode = 'mock' | 'live';
@@ -14,7 +14,10 @@ export interface AppNotification {
 }
 
 interface ClientContextValue {
+  /** Legacy client retained for explicitly rendered Demo surfaces only. */
   client: OperantClient;
+  /** The generated Phase 1E client used by every live surface. */
+  phase1eClient: Phase1EClient;
   clientMode: ClientMode;
   setClientMode: (mode: ClientMode) => void;
   connectionStatus: ConnectionStatus;
@@ -66,11 +69,11 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
-  // Instantiate client singletons
+  // Keep the legacy client isolated to the explicitly selected Demo surface.
+  // LiveProvider receives phase1eClient below and never calls this object.
   const mockClient = useMemo(() => new MockClient(), []);
-  const httpClient = useMemo(() => new HttpClient('http://127.0.0.1:8000'), []);
-
-  const client: OperantClient = clientMode === 'mock' ? mockClient : httpClient;
+  const phase1eClient = useMemo(() => new Phase1EClient('http://127.0.0.1:8000'), []);
+  const client: OperantClient = mockClient;
 
   const setClientMode = (mode: ClientMode) => {
     localStorage.setItem('operant_client_mode', mode);
@@ -109,6 +112,12 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const refreshPendingApprovals = async () => {
+    // Phase 1E has no global approvals query. LiveProvider queries each
+    // exact session scope; this legacy counter is Demo-only.
+    if (clientMode !== 'mock') {
+      setPendingApprovalCount(0);
+      return;
+    }
     try {
       const approvals = await client.listPendingApprovals();
       setPendingApprovalCount(approvals.length);
@@ -127,13 +136,15 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (isMounted) setConnectionStatus('mock_active');
       } else {
         try {
-          await client.checkHealth();
+          // Protocol negotiation is the live connection check and validates
+          // both the supported version and generated Schema digest.
+          await phase1eClient.negotiateProtocol(true);
           if (isMounted) setConnectionStatus('connected');
         } catch {
           if (isMounted) setConnectionStatus('disconnected');
         }
       }
-      refreshPendingApprovals();
+      void refreshPendingApprovals();
     };
 
     checkConn();
@@ -142,12 +153,13 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       isMounted = false;
       clearInterval(interval);
     };
-  }, [client, clientMode, theme]);
+  }, [client, clientMode, phase1eClient, theme]);
 
   return (
     <ClientContext.Provider
       value={{
         client,
+        phase1eClient,
         clientMode,
         setClientMode,
         connectionStatus,

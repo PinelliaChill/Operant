@@ -24,10 +24,25 @@ test('reducer deduplicates by resource scope and committed cursor', () => {
   const otherScope = reduceEvent(first, 'thread-other', event(7));
 
   assert.equal(first.events.length, 1);
-  assert.equal(first.cursor.sequence, 7);
+  assert.equal(first.cursor, 7);
   assert.equal(duplicate, first);
   assert.equal(otherScope.events.length, 2);
-  assert.equal(otherScope.cursor.sequence, 7);
+  assert.equal(otherScope.cursor, 7);
+});
+
+test('cursor reducer keeps an int64 cursor lossless', () => {
+  const cursor = 9007199254740993n;
+  const result = reduceEvent(emptyEventAccumulator(), 'thread-live', {
+    ...event(1),
+    id: 'large-cursor-event',
+    sequence: cursor,
+  });
+  assert.equal(result.cursor, cursor);
+  assert.equal(reduceEvent(result, 'thread-live', {
+    ...event(1),
+    id: 'replayed-event',
+    sequence: cursor,
+  }), result);
 });
 
 test('manual reconcile marker is found in nested projection payloads', () => {

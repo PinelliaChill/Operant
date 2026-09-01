@@ -1,42 +1,27 @@
+import type * as Phase1E from '../../../../sdk/typescript-client/phase1e.generated';
 import type {
-  AnyOperantEvent,
-  ApprovalCard,
-  ApprovalDecision,
-  CanonicalAgentMessage,
-  EventCursor,
-  EventSubscriber,
-  EventUnsubscribe,
-  OperantClient,
-  Session,
-  Thread,
-} from '@operant/sdk';
-import {
+  Cursor,
+  LiveApproval,
+  LiveCreateSessionInput,
   LiveError,
+  LiveEvent,
   LiveProjectProjection,
+  LiveSession,
+  LiveThread,
   LiveWorkspaceFile,
-  safeText,
-} from './liveState';
+} from './liveState.ts';
 
-type OptionalClientMethod = (...args: unknown[]) => unknown;
+/** A capability which is not in the generated Phase 1E Schema. */
+export class UnsupportedLiveCapabilityError extends Error {
+  readonly code = 'capability_unavailable';
+  readonly retryable = false;
+  readonly recovery = 'none';
 
-/**
- * Keep the generated SDK as the only wire-model owner.  The protocol line can
- * add Phase 1E methods to OperantClient without requiring this GUI adapter to
- * duplicate every generated response interface while the branches converge.
- */
-function optionalClientMethod(client: OperantClient, name: string): OptionalClientMethod | undefined {
-  const candidate = (client as unknown as Record<string, unknown>)[name];
-  return typeof candidate === 'function' ? candidate as OptionalClientMethod : undefined;
-}
-
-async function callOptionalClientMethod(
-  client: OperantClient,
-  name: string,
-  ...args: unknown[]
-): Promise<unknown> {
-  const method = optionalClientMethod(client, name);
-  if (!method) return undefined;
-  return method.apply(client, args);
+  constructor(capability: string) {
+    super(`${capability} 不在 phase1e.v1 Schema 中，Live 不会调用旧 API 或伪造结果。`);
+    this.name = 'UnsupportedLiveCapabilityError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
 }
 
 export class LiveAdapterError extends Error {
@@ -50,132 +35,175 @@ export class LiveAdapterError extends Error {
   }
 }
 
+/** Translate the generated transport error without guessing from HTTP text. */
 export function normalizeLiveError(error: unknown): LiveAdapterError {
   if (error instanceof LiveAdapterError) return error;
-
-  if (typeof error === 'object' && error !== null) {
-    const value = error as Record<string, unknown>;
-    const nested = typeof value.error === 'object' && value.error !== null
-      ? (value.error as Record<string, unknown>)
-      : value;
-    const code = safeText(nested.code, 'runtime_error');
-    const message = safeText(nested.message, error instanceof Error ? error.message : 'Live request failed');
-    const retryable = nested.retryable === true || value.recoverable === true;
-    const recovery = safeText(nested.recovery, safeText(value.userGuidance));
-    return new LiveAdapterError({ code, message, retryable, recovery: recovery || undefined });
+  if (error instanceof UnsupportedLiveCapabilityError) {
+    return new LiveAdapterError({
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+      recovery: error.recovery,
+    });
   }
-
+  if (isGeneratedPhase1EError(error)) {
+    return new LiveAdapterError({
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+      recovery: error.recovery || undefined,
+    });
+  }
   return new LiveAdapterError({
-    code: 'runtime_error',
+    code: 'transport_unavailable',
     message: error instanceof Error ? error.message : 'Live request failed',
     retryable: true,
-    recovery: '请检查 Core 连接后重试。',
+    recovery: 'retry_later',
   });
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
+function isGeneratedPhase1EError(
+  error: unknown,
+): error is Error & { code: string; retryable: boolean; recovery: string } {
+  if (!(error instanceof Error)) return false;
+  const candidate = error as { code?: unknown; retryable?: unknown; recovery?: unknown };
+  return typeof candidate.code === 'string'
+    && typeof candidate.retryable === 'boolean'
+    && typeof candidate.recovery === 'string';
 }
 
-function asArray(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  const record = asRecord(value);
-  if (!record) return [];
-  for (const key of ['items', 'projects', 'files', 'data']) {
-    if (Array.isArray(record[key])) return record[key] as unknown[];
+function projectName(project: Phase1E.ProjectProjection): string {
+  const parts = project.workspace_ref.split('/').filter(Boolean);
+  return parts.at(-1) || project.project_id;
+}
+
+/** Map only generated fields; relationship IDs come from the nested projection. */
+export function mapProjectProjection(project: Phase1E.ProjectProjection): LiveProjectProjection {
+  return {
+    id: project.project_id,
+    name: projectName(project),
+    workspaceRef: project.workspace_ref,
+    readable: project.readable,
+    writable: project.writable,
+    createdAt: project.created_at,
+    threadIds: project.threads.map((thread) => thread.id),
+    runIds: project.workflow_runs.map((run) => run.id),
+  };
+}
+
+function legacyId(
+  refs: Phase1E.ThreadLegacyRef[],
+  sourceType: Phase1E.ThreadLegacyRef['source_type'],
+): string | null {
+  return refs.find((ref) => ref.source_type === sourceType)?.source_id ?? null;
+}
+
+/** Preserve the missing-session case; it is not valid to infer a Session ID. */
+export function mapThreadProjection(thread: Phase1E.ThreadProjection): LiveThread {
+  return {
+    id: thread.id,
+    title: thread.id,
+    workspaceRef: thread.workspace_ref,
+    workspace: thread.workspace_ref || '',
+    status: thread.status,
+    createdAt: thread.created_at,
+    updatedAt: thread.updated_at,
+    created_at: thread.created_at,
+    updated_at: thread.updated_at,
+    archivedAt: thread.archived_at,
+    legacyRefs: thread.legacy_refs,
+    sessionId: legacyId(thread.legacy_refs, 'session'),
+    session_id: legacyId(thread.legacy_refs, 'session'),
+    workflowRunId: legacyId(thread.legacy_refs, 'workflow_run'),
+  };
+}
+
+export function mapApprovalProjection(
+  sessionId: string,
+  approval: Phase1E.ApprovalProjection,
+): LiveApproval {
+  return {
+    id: approval.approval_id,
+    sessionId,
+    session_id: sessionId,
+    toolCallId: approval.tool_call_id,
+    category: approval.category,
+    detail: approval.detail,
+    actionHash: approval.action_hash,
+    status: approval.status,
+    requestedAt: approval.requested_at,
+    expiresAt: approval.expires_at,
+    continuationAvailable: approval.continuation_available,
+  };
+}
+
+export function mapWorkspaceFile(entry: Phase1E.WorkspaceFileEntry): LiveWorkspaceFile {
+  return {
+    path: entry.path,
+    name: entry.name,
+    kind: entry.type,
+    size: entry.size_bytes,
+    modifiedAt: entry.modified_at,
+  };
+}
+
+function eventData(data: unknown): Phase1E.RuntimeEvent {
+  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    return data as Phase1E.RuntimeEvent;
   }
-  return [];
+  return { payload: { value: data } };
 }
 
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-}
-
-function normalizeProject(value: unknown): LiveProjectProjection | undefined {
-  const record = asRecord(value);
-  if (!record) return undefined;
-  const workspaceRef = safeText(record.workspace_ref, safeText(record.workspaceRef));
-  const id = safeText(record.project_id, safeText(record.projectId, safeText(record.id)));
-  if (!workspaceRef || !id) return undefined;
+/** Convert generated RuntimeEvent data while retaining the generated Cursor. */
+export function mapSseFrame(frame: Phase1E.SseFrame, sessionId: string): LiveEvent {
+  const runtime = eventData(frame.data);
+  const resourceScope = frame.resource_scope || `session:${sessionId}`;
+  const streamKind = frame.stream_kind || 'session.run';
   return {
-    id,
-    name: safeText(record.name, safeText(record.display_name, workspaceRef || id)),
-    workspaceRef: workspaceRef || safeText(record.workspace, id),
-    readable: record.readable !== false,
-    writable: record.writable === true,
-    createdAt: safeText(record.created_at, safeText(record.createdAt)) || undefined,
-    threadIds: stringArray(record.thread_ids ?? record.threadIds),
-    runIds: stringArray(record.run_ids ?? record.runIds),
+    id: runtime.id || `${resourceScope}:${frame.id === null ? 'no-cursor' : BigInt(frame.id).toString()}`,
+    sequence: frame.id ?? runtime.cursor ?? null,
+    event_type: runtime.event_type || frame.event,
+    session_id: runtime.session_id || sessionId,
+    thread_id: typeof runtime.thread_id === 'string' ? runtime.thread_id : undefined,
+    occurred_at: runtime.created_at,
+    payload: runtime.payload || {},
+    resource_scope: resourceScope,
+    stream_kind: streamKind,
   };
 }
 
-function normalizeFile(value: unknown): LiveWorkspaceFile | undefined {
-  const record = asRecord(value);
-  if (!record) return undefined;
-  const path = safeText(record.path, safeText(record.relative_path, safeText(record.relativePath)));
-  if (!path) return undefined;
-  const name = safeText(record.name, path.split('/').filter(Boolean).pop() || path);
-  const rawKind = safeText(record.type, safeText(record.kind));
-  const kind: LiveWorkspaceFile['kind'] = rawKind === 'file' || rawKind === 'directory' ? rawKind : 'unknown';
-  const size = typeof record.size === 'number' && Number.isFinite(record.size) ? record.size : undefined;
-  return {
-    path,
-    name,
-    kind,
-    size,
-    modifiedAt: safeText(record.modified_at, safeText(record.modifiedAt)) || undefined,
-  };
-}
+export type LiveRunStream = Phase1E.RunSessionStream;
 
+/**
+ * Adapter for the generated Phase 1E client only.
+ *
+ * There is deliberately no `OperantClient`/HttpClient union here. Missing
+ * Schema operations fail explicitly so a live screen can show its boundary.
+ */
 export class LiveClientAdapter {
-  private readonly client: OperantClient;
+  private readonly sessions = new Map<string, LiveSession>();
+  private readonly client: Phase1E.Phase1EClient;
 
-  constructor(client: OperantClient) {
+  constructor(client: Phase1E.Phase1EClient) {
     this.client = client;
   }
 
-  async connect(): Promise<unknown> {
+  async connect(): Promise<Phase1E.ProtocolNegotiation> {
     try {
-      await this.client.checkHealth();
-      const protocol = await callOptionalClientMethod(this.client, 'negotiateProtocol');
-      if (protocol === undefined) {
+      // Negotiation is the live connection check. Phase1EClient validates the
+      // exact protocol major/version and embedded Schema digest.
+      const metadata = await this.client.negotiateProtocol(true);
+      if (metadata.protocol_version !== this.client.protocolVersion
+        || metadata.min_client_version !== this.client.protocolVersion
+        || metadata.schema_digest !== this.client.schemaDigest) {
         throw new LiveAdapterError({
-          code: 'protocol_negotiation_unavailable',
-          message: '当前 TypeScript Client 未提供 Phase 1E 协议协商，未建立实时连接。',
+          code: 'protocol_incompatible',
+          message: 'Core 协议协商结果与生成 Phase1EClient 不匹配，未建立实时连接。',
           retryable: false,
-          recovery: '请先合入由 Schema 生成的 Client，再重试。',
+          recovery: 'none',
         });
       }
-      const protocolRecord = asRecord(protocol);
-      const version = safeText(protocolRecord?.protocol_version, safeText(protocolRecord?.protocolVersion));
-      if (version !== 'phase1e.v1') {
-        throw new LiveAdapterError({
-          code: 'schema_incompatible',
-          message: version ? `Core 协议版本 ${version} 不受本阶段 Client 支持。` : 'Core 未返回可识别的协议版本。',
-          retryable: false,
-          recovery: '请升级 Core 与生成 Client，使其使用 phase1e.v1。',
-        });
-      }
-      const schemaDigest = safeText(protocolRecord?.schema_digest, safeText(protocolRecord?.schemaDigest));
-      if (!schemaDigest) {
-        throw new LiveAdapterError({
-          code: 'schema_digest_missing',
-          message: 'Core 协议协商响应缺少 Schema digest，未建立实时连接。',
-          retryable: false,
-          recovery: '请升级 Core 与生成 Client，使协商响应包含 schema_digest。',
-        });
-      }
-      const clientRecord = this.client as unknown as Record<string, unknown>;
-      const embeddedDigest = safeText(clientRecord.schema_digest, safeText(clientRecord.schemaDigest));
-      if (embeddedDigest && embeddedDigest !== schemaDigest) {
-        throw new LiveAdapterError({
-          code: 'schema_digest_mismatch',
-          message: 'Core Schema digest 与生成 Client 不一致，未建立实时连接。',
-          retryable: false,
-          recovery: '请重新生成并部署匹配当前 Core Schema 的 Client。',
-        });
-      }
-      return protocol;
+      return metadata;
     } catch (error: unknown) {
       throw normalizeLiveError(error);
     }
@@ -183,18 +211,9 @@ export class LiveClientAdapter {
 
   async listProjects(workspace?: string): Promise<LiveProjectProjection[]> {
     try {
-      const raw = await callOptionalClientMethod(this.client, 'listProjects', workspace);
-      if (raw === undefined) {
-        throw new LiveAdapterError({
-          code: 'projects_unavailable',
-          message: '当前 TypeScript Client 未提供 Phase 1E Workspace/Project 投影。',
-          retryable: false,
-          recovery: '请先合入由 Schema 生成的 Projects Client；本页不会从演示数据或旧 Session 猜测项目。',
-        });
-      }
-      return asArray(raw)
-        .map(normalizeProject)
-        .filter((project): project is LiveProjectProjection => Boolean(project))
+      const projects = await this.client.listProjects();
+      return projects
+        .map(mapProjectProjection)
         .filter((project) => !workspace || project.workspaceRef === workspace);
     } catch (error: unknown) {
       throw normalizeLiveError(error);
@@ -203,94 +222,159 @@ export class LiveClientAdapter {
 
   async listWorkspaceFiles(workspaceId: string, relativePath = ''): Promise<LiveWorkspaceFile[]> {
     try {
-      const raw = await callOptionalClientMethod(this.client, 'listWorkspaceFiles', workspaceId, relativePath);
-      if (raw === undefined) {
-        throw new LiveAdapterError({
-          code: 'workspace_files_unavailable',
-          message: '当前 TypeScript Client 未提供安全只读文件浏览接口。',
-          retryable: false,
-          recovery: '请先合入生成的 Workspace Files Client；本页不会退回演示文件。',
-        });
-      }
-      return asArray(raw)
-        .map(normalizeFile)
-        .filter((file): file is LiveWorkspaceFile => Boolean(file));
+      const page = await this.client.listWorkspaceFiles(workspaceId, {
+        path: relativePath || undefined,
+      });
+      return page.entries.map(mapWorkspaceFile);
     } catch (error: unknown) {
       throw normalizeLiveError(error);
     }
   }
 
-  listThreads(workspace?: string): Promise<Thread[]> {
-    return this.client.listThreads(workspace);
+  async listThreads(workspace?: string): Promise<LiveThread[]> {
+    try {
+      const threads = await this.client.listThreads({ workspaceRef: workspace });
+      return threads.map(mapThreadProjection);
+    } catch (error: unknown) {
+      throw normalizeLiveError(error);
+    }
   }
 
-  getThread(threadId: string): Promise<Thread> {
-    return this.client.getThread(threadId);
+  async getThread(threadId: string): Promise<LiveThread> {
+    const thread = (await this.listThreads()).find((item) => item.id === threadId);
+    if (!thread) {
+      throw new LiveAdapterError({
+        code: 'thread_not_found',
+        message: `Core 没有返回 Thread ${threadId} 的 Projection。`,
+        retryable: false,
+        recovery: 'none',
+      });
+    }
+    return thread;
   }
 
-  listThreadMessages(threadId: string): Promise<CanonicalAgentMessage[]> {
-    return this.client.listThreadMessages(threadId);
+  /** No message Query exists in the phase1e.v1 Schema. */
+  listThreadMessages(_threadId: string): Promise<never> {
+    return Promise.reject(new UnsupportedLiveCapabilityError('Thread 消息 Query'));
   }
 
-  listSessions(workspace?: string): Promise<Session[]> {
-    return this.client.listSessions(workspace);
+  /** Sessions are only retained when returned by generated createSession. */
+  listSessions(): LiveSession[] {
+    return [...this.sessions.values()];
   }
 
-  createSession(options: Parameters<OperantClient['createSession']>[0]): Promise<Session> {
-    return this.client.createSession(options);
+  async createSession(input: LiveCreateSessionInput | undefined, idempotencyKey?: string): Promise<LiveSession> {
+    const hasRoleId = typeof input?.roleId === 'string' && input.roleId.trim().length > 0;
+    const newRole = input?.newRole;
+    const validatedNewRole = newRole
+      && newRole.name.trim().length > 0
+      && newRole.system_prompt.trim().length > 0
+      && newRole.model_profile_id.trim().length > 0
+      ? newRole
+      : undefined;
+    const hasNewRole = validatedNewRole !== undefined;
+    if (Number(hasRoleId) + Number(hasNewRole) !== 1) {
+      throw new LiveAdapterError({
+        code: 'invalid_create_session_input',
+        message: '创建 Session 必须明确提供 roleId 或完整 newRole，且两者只能提供一个。',
+        retryable: false,
+        recovery: 'none',
+      });
+    }
+    try {
+      const request: Phase1E.CreateSessionRequest = {
+        role_id: hasRoleId ? input.roleId : undefined,
+        new_role: validatedNewRole,
+        model_profile_id: input?.modelProfileId,
+        effort: input?.effort,
+        budget_overrides: input?.budgetOverrides,
+      };
+      const session = await this.client.createSession(request, { idempotencyKey });
+      this.sessions.set(session.id, session);
+      return session;
+    } catch (error: unknown) {
+      throw normalizeLiveError(error);
+    }
   }
 
+  /** The generated method returns a Promise plus an AsyncIterable of frames. */
   runSessionStream(
     sessionId: string,
-    message: string,
-    workspace: string,
-    onEvent: EventSubscriber
-  ): EventUnsubscribe {
-    return this.client.runSessionStream(sessionId, message, workspace, onEvent);
-  }
-
-  cancelSession(sessionId: string): Promise<{ accepted: boolean }> {
-    return this.client.cancelSession(sessionId);
-  }
-
-  listPendingApprovals(sessionId?: string): Promise<ApprovalCard[]> {
-    return this.client.listPendingApprovals(sessionId);
-  }
-
-  submitApproval(
-    sessionId: string,
-    approvalId: string,
-    decision: ApprovalDecision
-  ): Promise<{ accepted: boolean }> {
-    return this.client.submitApproval(sessionId, approvalId, decision);
-  }
-
-  subscribeEvents(cursor: EventCursor, subscriber: EventSubscriber): EventUnsubscribe {
-    return this.client.subscribeEvents(cursor, subscriber);
-  }
-
-  /** Keep event typing visible at the adapter boundary for generated clients. */
-  subscribeThreadEvents(
-    threadId: string,
-    cursor: EventCursor,
-    subscriber: EventSubscriber
-  ): EventUnsubscribe {
-    const scopedMethod = optionalClientMethod(this.client, 'subscribeThreadEvents');
-    if (scopedMethod) {
-      return scopedMethod.apply(this.client, [threadId, cursor, subscriber]) as EventUnsubscribe;
+    request: Phase1E.RunSessionRequest,
+    options: Phase1E.RunSessionStreamOptions,
+  ): Promise<LiveRunStream> {
+    if (!sessionId) {
+      return Promise.reject(new LiveAdapterError({
+        code: 'session_required',
+        message: '运行 Session 必须提供服务端 Session ID。',
+        retryable: false,
+        recovery: 'none',
+      }));
     }
-    return this.subscribeEvents(cursor, (event) => {
-      if (event.thread_id && event.thread_id !== threadId) return;
-      subscriber(event);
+    return this.client.runSessionStream(sessionId, request, options).catch((error: unknown) => {
+      throw normalizeLiveError(error);
     });
   }
 
-  /** No GUI caller should need to reach through this adapter to the transport. */
-  get rawClient(): never {
-    throw new Error('LiveClientAdapter.rawClient is intentionally unavailable');
+  /** No cancel operation is present in the generated Schema. */
+  cancelSession(_sessionId: string): Promise<never> {
+    return Promise.reject(new UnsupportedLiveCapabilityError('Session cancel Command'));
   }
+
+  /** A session scope is mandatory; there is no global pending-approval Query. */
+  async listPendingApprovals(sessionId: string): Promise<LiveApproval[]> {
+    if (!sessionId) {
+      throw new LiveAdapterError({
+        code: 'session_required',
+        message: 'Approval Query 必须提供服务端 Session ID。',
+        retryable: false,
+        recovery: 'none',
+      });
+    }
+    try {
+      const approvals = await this.client.listPendingApprovals(sessionId);
+      return approvals.map((approval) => mapApprovalProjection(sessionId, approval));
+    } catch (error: unknown) {
+      throw normalizeLiveError(error);
+    }
+  }
+
+  async submitApproval(
+    approval: LiveApproval,
+    approved: boolean,
+    idempotencyKey: string,
+  ): Promise<Phase1E.ApprovalDecisionResult> {
+    if (!approval.sessionId || !approval.toolCallId) {
+      throw new LiveAdapterError({
+        code: 'approval_scope_required',
+        message: 'Approval 缺少服务端 Session 或 tool call ID，不能提交。',
+        retryable: false,
+        recovery: 'none',
+      });
+    }
+    try {
+      return await this.client.submitApproval(
+        approval.sessionId,
+        approval.toolCallId,
+        { approved },
+        { idempotencyKey },
+      );
+    } catch (error: unknown) {
+      throw normalizeLiveError(error);
+    }
+  }
+
+  /** There is no generated global-event Query/stream in phase1e.v1. */
+  subscribeEvents(): never {
+    throw new UnsupportedLiveCapabilityError('全局事件 Query/订阅');
+  }
+
 }
 
-export function eventPayload(event: AnyOperantEvent): Record<string, unknown> {
-  return asRecord(event.payload) ?? {};
+export function eventPayload(event: LiveEvent): Record<string, unknown> {
+  return event.payload;
+}
+
+export function cursorValue(cursor: Cursor | null | undefined): string {
+  return cursor === null || cursor === undefined ? '' : BigInt(cursor).toString();
 }

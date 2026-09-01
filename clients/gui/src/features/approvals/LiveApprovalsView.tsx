@@ -1,20 +1,23 @@
 import React, { useMemo } from 'react';
 import { AlertTriangle, PanelLeftOpen, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import type { ApprovalDecision } from '@operant/sdk';
 import { StatusBadge } from '../../components/StatusBadge';
-import { useLive } from '../../live/LiveContext';
+import { useOperant } from '../../context/ClientContext';
+import { useLive, type LiveApprovalDecision } from '../../live/LiveContext';
 import { LiveApprovalCard } from '../chat/LiveChatView';
 import type { RailOutletContext } from '../../app/RailLayout';
 
 export const LiveApprovalsView: React.FC = () => {
   const navigate = useNavigate();
   const { showSidebarOpenBtn, openSidebar } = useOutletContext<RailOutletContext>();
+  const { connectionStatus } = useOperant();
   const {
     phase,
     approvals,
     selectedSessionId,
     approvalAction,
+    manualReconcileRequired,
+    stream,
     lastError,
     refresh,
     reconnect,
@@ -22,8 +25,12 @@ export const LiveApprovalsView: React.FC = () => {
   } = useLive();
 
   const pending = useMemo(() => approvals.filter((approval) => approval.status === 'pending'), [approvals]);
-  const busy = approvalAction.status === 'sending' || approvalAction.status === 'awaiting_projection';
-  const decide = (approval: (typeof approvals)[number], decision: ApprovalDecision['decision']) => {
+  const busy = approvalAction.status === 'sending'
+    || approvalAction.status === 'awaiting_projection'
+    || manualReconcileRequired
+    || connectionStatus !== 'connected'
+    || stream.status !== 'connected';
+  const decide = (approval: (typeof approvals)[number], decision: LiveApprovalDecision) => {
     void decideApproval(approval, decision);
   };
 

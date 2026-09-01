@@ -1,38 +1,117 @@
-import type { AnyOperantEvent, EventCursor, Thread } from '@operant/sdk';
+import type { Phase1E } from '@operant/sdk';
 
 /**
- * Presentation-only values used by the live GUI.
+ * Presentation state for the Phase 1E live surface.
  *
- * These are deliberately not wire models.  The wire models stay in the
- * generated SDK; this file only contains the small, normalized shape the
- * view needs after the adapter has received a projection.
+ * Values received from Core are generated `Phase1E` types. These small view
+ * models only add labels/relationship indexes needed by React; they do not
+ * define another wire protocol or infer relationships from a workspace path.
  */
+export type Cursor = Phase1E.Cursor;
+export type GeneratedProjectProjection = Phase1E.ProjectProjection;
+export type GeneratedThreadProjection = Phase1E.ThreadProjection;
+export type GeneratedSession = Phase1E.Session;
+export type GeneratedApprovalProjection = Phase1E.ApprovalProjection;
+export type GeneratedRunSessionStream = Phase1E.RunSessionStream;
+export type GeneratedRunSessionRequest = Phase1E.RunSessionRequest;
+export type GeneratedRunSessionOptions = Phase1E.RunSessionStreamOptions;
+export type GeneratedCreateSessionRequest = Phase1E.CreateSessionRequest;
+export type GeneratedCreateSessionOptions = Phase1E.CreateSessionOptions;
+export type GeneratedCreateRole = Phase1E.CreateRole;
+export type GeneratedApprovalDecisionResult = Phase1E.ApprovalDecisionResult;
+
 export interface LiveProjectProjection {
+  /** Exact generated `project_id`. */
   id: string;
+  /** A safe display label derived from the generated workspace reference. */
   name: string;
   workspaceRef: string;
   readable: boolean;
   writable: boolean;
-  createdAt?: string;
+  createdAt: string;
+  /** Exact IDs from `ProjectProjection.threads[]`. */
   threadIds: string[];
+  /** Exact IDs from `ProjectProjection.workflow_runs[]`. */
   runIds: string[];
 }
 
 export interface LiveWorkspaceFile {
   path: string;
   name: string;
-  kind: 'file' | 'directory' | 'unknown';
-  size?: number;
-  modifiedAt?: string;
+  kind: 'file' | 'directory';
+  /** Keep int64 values as number|bigint. Never coerce a large value to number. */
+  size: Cursor | null;
+  modifiedAt: string | null;
+}
+
+export interface LiveThread {
+  /** Exact generated `ThreadProjection.id`. */
+  id: string;
+  /** Phase 1E has no title field; the ID is the only honest label. */
+  title: string;
+  workspaceRef: string | null;
+  /** UI aliases keep labels readable; both values are the generated projection. */
+  workspace: string;
+  status: Phase1E.ThreadStatus;
+  createdAt: string;
+  updatedAt: string;
+  created_at: string;
+  updated_at: string;
+  archivedAt: string | null;
+  /** Exact generated `ThreadProjection.legacy_refs`. */
+  legacyRefs: Phase1E.ThreadLegacyRef[];
+  /** Exact `source_id` for the session legacy ref, or null when absent. */
+  sessionId: string | null;
+  session_id: string | null;
+  /** Exact `source_id` for the workflow_run legacy ref, or null when absent. */
+  workflowRunId: string | null;
+}
+
+export interface LiveSession extends GeneratedSession {}
+
+export interface LiveApproval {
+  /** Generated approval_id, carried with its required session scope. */
+  id: string;
+  sessionId: string;
+  session_id: string;
+  toolCallId: string;
+  category: string;
+  detail: string;
+  actionHash: string;
+  status: Phase1E.ApprovalStatus;
+  requestedAt: string;
+  expiresAt: string;
+  continuationAvailable: boolean;
+}
+
+/** No message Query is in the Schema; this shape is intentionally never populated in live mode. */
+export interface LiveMessage {
+  id: string;
+  role: string;
+  content: string;
+  sender: { name: string };
+}
+
+/** One generated SSE frame after adding the UI's stable event key fields. */
+export interface LiveEvent {
+  id: string;
+  sequence: Cursor | null;
+  event_type: string;
+  session_id?: string;
+  thread_id?: string;
+  occurred_at?: string;
+  payload: Record<string, unknown>;
+  resource_scope: string;
+  stream_kind: string;
 }
 
 export type LiveStreamStatus = 'idle' | 'connecting' | 'replaying' | 'connected' | 'error';
 
 export interface LiveStreamState {
   status: LiveStreamStatus;
-  cursor: EventCursor;
-  events: AnyOperantEvent[];
-  lastEvent?: AnyOperantEvent;
+  cursor: Cursor | null;
+  events: LiveEvent[];
+  lastEvent?: LiveEvent;
   error?: LiveError;
 }
 
@@ -46,49 +125,59 @@ export interface LiveError {
 export interface LiveCommandState {
   status: 'idle' | 'sending' | 'awaiting_projection' | 'error';
   error?: LiveError;
+  /** The stable key used for the current logical command, when present. */
+  idempotencyKey?: string;
 }
 
 export interface LiveActionState {
   status: 'idle' | 'sending' | 'awaiting_projection' | 'error';
   error?: LiveError;
+  idempotencyKey?: string;
 }
 
-/**
- * Resource-scoped event key.  Cursor is authoritative within a stream scope;
- * event ids are only a fallback for old SDK events that do not carry a cursor.
- */
-export function eventKey(scope: string, event: AnyOperantEvent): string {
-  if (Number.isSafeInteger(event.sequence)) {
-    return `${scope}:cursor:${event.sequence}`;
+export interface LiveCreateSessionInput {
+  /** Exactly one of roleId and newRole must be supplied. */
+  roleId?: string;
+  newRole?: GeneratedCreateRole;
+  modelProfileId?: string;
+  effort?: string;
+  budgetOverrides?: Record<string, unknown>;
+}
+
+/** Event key is scoped by resource, stream kind, and lossless cursor. */
+export function eventKey(scope: string, event: LiveEvent): string {
+  const resourceScope = event.resource_scope || scope;
+  const streamKind = event.stream_kind || 'unknown';
+  if (event.sequence !== null && event.sequence !== undefined) {
+    return `${resourceScope}\0${streamKind}\0${BigInt(event.sequence).toString()}`;
   }
-  return `${scope}:event:${event.id}`;
+  return `${resourceScope}\0${streamKind}\0event:${event.id}`;
 }
 
-export function cursorFromEvent(event: AnyOperantEvent, previous: EventCursor): EventCursor {
-  const nextSequence = Number.isSafeInteger(event.sequence)
-    ? Math.max(previous.sequence ?? 0, event.sequence)
-    : previous.sequence ?? 0;
-  return {
-    sequence: nextSequence,
-    event_id: event.id || previous.event_id,
-    timestamp: event.occurred_at || previous.timestamp,
-  };
+function maxCursor(previous: Cursor | null, next: Cursor | null): Cursor | null {
+  if (next === null || next === undefined) return previous;
+  if (previous === null || previous === undefined) return next;
+  return BigInt(next) >= BigInt(previous) ? next : previous;
+}
+
+export function cursorFromEvent(event: LiveEvent, previous: Cursor | null): Cursor | null {
+  return maxCursor(previous, event.sequence);
 }
 
 export interface EventAccumulator {
-  cursor: EventCursor;
-  events: AnyOperantEvent[];
+  cursor: Cursor | null;
+  events: LiveEvent[];
   seen: ReadonlySet<string>;
 }
 
 /**
- * Reducer used by the GUI stream projection.  It never infers a run/approval
- * terminal state; it only accumulates committed events and their cursor.
+ * Reducer used by the GUI timeline. It only records committed frames and
+ * never treats a frame or receipt as the authoritative run/approval state.
  */
 export function reduceEvent(
   current: EventAccumulator,
   scope: string,
-  event: AnyOperantEvent
+  event: LiveEvent,
 ): EventAccumulator {
   const key = eventKey(scope, event);
   if (current.seen.has(key)) return current;
@@ -102,7 +191,7 @@ export function reduceEvent(
   };
 }
 
-export function emptyEventAccumulator(cursor: EventCursor = { sequence: 0 }): EventAccumulator {
+export function emptyEventAccumulator(cursor: Cursor | null = 0): EventAccumulator {
   return { cursor, events: [], seen: new Set<string>() };
 }
 
@@ -114,19 +203,12 @@ const TERMINAL_EVENT_TYPES = new Set([
   'workflow.completed',
 ]);
 
-export function isTerminalEvent(event: AnyOperantEvent): boolean {
+export function isTerminalEvent(event: LiveEvent): boolean {
   return TERMINAL_EVENT_TYPES.has(event.event_type);
 }
 
-export function isApprovalProjectionEvent(event: AnyOperantEvent): boolean {
-  return (
-    event.event_type === 'approval.requested' ||
-    event.event_type === 'approval.decided' ||
-    event.event_type === 'approval.expired' ||
-    event.event_type === 'approval.revoked' ||
-    event.event_type === 'tool.approval_required' ||
-    event.event_type === 'tool.approval_decided'
-  );
+export function isApprovalProjectionEvent(event: LiveEvent): boolean {
+  return event.event_type.includes('approval');
 }
 
 export function isManualReconcileValue(value: unknown): boolean {
@@ -141,13 +223,35 @@ export function containsManualReconcile(value: unknown, seen = new Set<unknown>(
   return Object.values(value).some((item) => containsManualReconcile(item, seen));
 }
 
-export function threadNeedsManualReconcile(thread: Thread | undefined): boolean {
-  if (!thread) return false;
-  const metadata = thread.metadata;
-  if (!metadata) return false;
-  return containsManualReconcile(metadata);
+export function threadNeedsManualReconcile(_thread: LiveThread | undefined): boolean {
+  // ThreadProjection deliberately has no free-form metadata. Recovery is
+  // therefore sticky in LiveContext and can only be raised by a typed error,
+  // receipt, or committed SSE payload.
+  return false;
 }
 
-export function safeText(value: unknown, fallback = ''): string {
+export function formatCursor(cursor: Cursor | null | undefined): string {
+  return cursor === null || cursor === undefined ? '—' : BigInt(cursor).toString();
+}
+
+export function safeText(value: string | null | undefined, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+/** Generate one stable key for one logical command. */
+let fallbackKeyCounter = 0;
+export function createIdempotencyKey(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID();
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  // The generated client itself will reject an unavailable crypto API. This
+  // fallback is only useful in test doubles and remains unique per process.
+  fallbackKeyCounter += 1;
+  return `gui-test-${Date.now().toString(36)}-${fallbackKeyCounter.toString(36)}`;
 }

@@ -15,8 +15,8 @@ interface LiveSidebarProps {
 
 function projectThreads(project: LiveProjectProjection, threads: ReturnType<typeof useLive>['threads']) {
   return threads
-    .filter((thread) => project.threadIds.includes(thread.id) || thread.workspace === project.workspaceRef)
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    .filter((thread) => project.threadIds.includes(thread.id))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 /**
@@ -41,11 +41,16 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
     lastError,
     projectionStale,
     command,
+    canCreateSession,
+    createSessionUnavailableReason,
   } = useLive();
   const [query, setQuery] = useState('');
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [newRoleName, setNewRoleName] = useState('');
+  const [newRolePrompt, setNewRolePrompt] = useState('');
+  const [newRoleModelId, setNewRoleModelId] = useState('');
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleProjects = useMemo(
@@ -75,10 +80,22 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   };
 
   const handleCreateSession = async () => {
+    if (!canCreateSession || !newRoleName.trim() || !newRolePrompt.trim() || !newRoleModelId.trim()) return;
     setCreatingSession(true);
-    const session = await createSession({});
+    const session = await createSession({
+      newRole: {
+        name: newRoleName.trim(),
+        system_prompt: newRolePrompt.trim(),
+        model_profile_id: newRoleModelId.trim(),
+      },
+    });
     setCreatingSession(false);
-    if (session) setNewSessionOpen(false);
+    if (session) {
+      setNewSessionOpen(false);
+      setNewRoleName('');
+      setNewRolePrompt('');
+      setNewRoleModelId('');
+    }
   };
 
   const phaseLabel = phase === 'ready'
@@ -109,7 +126,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
           onClick={() => setNewSessionOpen(true)}
           aria-label="创建 Core Session"
           title="创建 Core Session"
-          disabled={phase !== 'ready' || creatingSession}
+          disabled={!canCreateSession || creatingSession}
         >
           <Plus size={16} aria-hidden="true" />
         </button>
@@ -199,7 +216,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                         <span className="rail-sidebar-row-title">{thread.title || thread.id}</span>
                         <span className="rail-sidebar-row-sub">{thread.status}</span>
                       </span>
-                      <span className="rail-sidebar-time">{formatRelativeDay(thread.updated_at)}</span>
+                      <span className="rail-sidebar-time">{formatRelativeDay(thread.updatedAt)}</span>
                     </button>
                   )) : (
                     <div className="rail-sidebar-empty">{normalizedQuery ? '无匹配 Thread' : '暂无 Thread'}</div>
@@ -248,7 +265,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
             <button type="button" className="btn btn-secondary" onClick={() => setNewSessionOpen(false)}>
               取消
             </button>
-            <button type="button" className="btn btn-primary" onClick={() => void handleCreateSession()} disabled={creatingSession}>
+            <button type="button" className="btn btn-primary" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !newRoleName.trim() || !newRolePrompt.trim() || !newRoleModelId.trim() || creatingSession} title={createSessionUnavailableReason || '请填写完整 newRole'}>
               {creatingSession ? '提交中…' : '创建并等待 Projection'}
             </button>
           </>
@@ -257,6 +274,12 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
         <p className="live-modal-copy">
           请求会交给当前 Core 的 Session Client。GUI 不会本地生成 Session、Thread 或运行状态；创建成功后等待服务端投影绑定。
         </p>
+        <div className="live-modal-form">
+          <label className="live-select-label"><span>新 Role 名称</span><input className="input" value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} placeholder="例如：编码助手" /></label>
+          <label className="live-select-label"><span>Model Profile ID</span><input className="input" value={newRoleModelId} onChange={(event) => setNewRoleModelId(event.target.value)} placeholder="Core 中已配置的 profile ID" /></label>
+          <label className="live-select-label"><span>System Prompt</span><textarea className="textarea" value={newRolePrompt} onChange={(event) => setNewRolePrompt(event.target.value)} rows={3} placeholder="输入 Role 的系统提示" /></label>
+        </div>
+        {createSessionUnavailableReason && <p className="live-modal-copy">{createSessionUnavailableReason}</p>}
         <div className="live-modal-boundary">
           <span>当前阶段接入</span>
           <strong>Workspace / Project · Thread · Session / Run</strong>

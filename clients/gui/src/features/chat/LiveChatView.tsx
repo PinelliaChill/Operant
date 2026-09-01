@@ -15,12 +15,12 @@ import {
   Wifi,
   X,
 } from 'lucide-react';
-import type { ApprovalCard, ApprovalDecision, AnyOperantEvent, Session } from '@operant/sdk';
 import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
-import type { LiveWorkspaceFile } from '../../live/liveState';
+import type { LiveApproval, LiveEvent, LiveSession, LiveWorkspaceFile } from '../../live/liveState';
+import { formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
 
 function statusLabel(status: string): string {
@@ -45,7 +45,7 @@ function statusLabel(status: string): string {
   return labels[status] ?? status;
 }
 
-function eventSummary(event: AnyOperantEvent): string {
+function eventSummary(event: LiveEvent): string {
   const payload = event.payload;
   if (event.event_type === 'model.delta' && typeof payload === 'object' && payload !== null && 'delta_text' in payload) {
     const delta = (payload as { delta_text?: unknown }).delta_text;
@@ -90,29 +90,29 @@ const LiveErrorBanner: React.FC<{
 );
 
 export const LiveApprovalCard: React.FC<{
-  approval: ApprovalCard;
+  approval: LiveApproval;
   busy: boolean;
-  onDecide: (decision: ApprovalDecision['decision']) => void;
+  onDecide: (decision: 'approve' | 'reject') => void;
 }> = ({ approval, busy, onDecide }) => (
   <article className="live-approval-card">
     <div className="live-approval-head">
       <span className="live-approval-icon" aria-hidden="true"><ShieldCheck size={16} /></span>
       <div>
-        <h3>{approval.action_name}</h3>
-        <p>{approval.role_name} · {approval.target_resource}</p>
+        <h3>{approval.category}</h3>
+        <p>{approval.detail || 'Core 未提供动作详情'}</p>
       </div>
-      <StatusBadge status={approval.risk_tier} size="sm" />
+      <StatusBadge status={approval.status} size="sm" />
     </div>
     <dl className="live-approval-meta">
-      <div><dt>策略</dt><dd>{approval.matched_policy_rule.description}</dd></div>
-      <div><dt>边界</dt><dd>{approval.workspace_boundary}</dd></div>
-      <div><dt>影响</dt><dd>{approval.impact_summary.files_affected.length > 0 ? approval.impact_summary.files_affected.join('、') : '未提供文件清单'}</dd></div>
+      <div><dt>Approval ID</dt><dd>{approval.id}</dd></div>
+      <div><dt>Tool Call</dt><dd>{approval.toolCallId}</dd></div>
+      <div><dt>过期时间</dt><dd>{approval.expiresAt}</dd></div>
     </dl>
     <div className="live-approval-actions">
       <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDecide('reject')} disabled={busy}>
         拒绝
       </button>
-      <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve_once')} disabled={busy}>
+      <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve')} disabled={busy}>
         {busy ? '提交中…' : '批准一次'}
       </button>
     </div>
@@ -160,7 +160,7 @@ const LiveFileBrowser: React.FC<{
                 <span className="live-file-name">{file.name}</span>
               )}
               <span className="live-file-kind">{file.kind === 'directory' ? '目录' : '文件'}</span>
-              {typeof file.size === 'number' && <span className="live-file-size">{file.size} B</span>}
+              {file.size !== null && <span className="live-file-size">{formatCursor(file.size)} B</span>}
             </li>
           ))}
         </ul>
@@ -169,12 +169,12 @@ const LiveFileBrowser: React.FC<{
   );
 };
 
-const LiveEventTimeline: React.FC<{ events: AnyOperantEvent[]; cursor: number; status: string }> = ({ events, cursor, status }) => (
+const LiveEventTimeline: React.FC<{ events: LiveEvent[]; cursor: LiveEvent['sequence']; status: string }> = ({ events, cursor, status }) => (
   <section className="live-panel live-events-panel" aria-labelledby="live-events-title">
     <div className="live-panel-heading">
       <div>
         <h2 id="live-events-title">SSE 回放与连接</h2>
-        <p>已提交 Cursor：{cursor} · {statusLabel(status)}</p>
+        <p>已提交 Cursor：{formatCursor(cursor)} · {statusLabel(status)}</p>
       </div>
       <Wifi size={16} aria-hidden="true" className={status === 'connected' ? 'live-icon-ok' : undefined} />
     </div>
@@ -194,7 +194,7 @@ const LiveEventTimeline: React.FC<{ events: AnyOperantEvent[]; cursor: number; s
   </section>
 );
 
-function sessionLabel(session: Session): string {
+function sessionLabel(session: LiveSession): string {
   const role = session.role_snapshot?.role_name || 'Session';
   return `${role} · ${session.id.slice(0, 12)}`;
 }
@@ -202,7 +202,7 @@ function sessionLabel(session: Session): string {
 export const LiveChatView: React.FC = () => {
   const { conversationId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
-  const { clientMode } = useOperant();
+  const { clientMode, connectionStatus } = useOperant();
   const { showSidebarOpenBtn, openSidebar, isMobile } = useOutletContext<RailOutletContext>();
   const {
     phase,
@@ -223,9 +223,15 @@ export const LiveChatView: React.FC = () => {
     command,
     approvalAction,
     manualReconcileRequired,
+    manualReconcileReason,
+    deepLinkNotFound,
+    canCreateSession,
+    createSessionUnavailableReason,
+    cancelCommandAvailable,
     selectProject,
     selectThread,
     selectSession,
+    resolveDeepLink,
     refresh,
     reconnect,
     createSession,
@@ -246,15 +252,21 @@ export const LiveChatView: React.FC = () => {
   const visibleApprovals = useMemo(() => approvals.filter((approval) => (
     !selectedSessionId || approval.session_id === selectedSessionId
   )), [approvals, selectedSessionId]);
-  const busy = command.status === 'sending' || command.status === 'awaiting_projection' || manualReconcileRequired;
-  const canSend = Boolean(selectedThread?.session_id && selectedThread.workspace && draft.trim()) && !busy && phase === 'ready';
+  const busy = command.status === 'sending'
+    || command.status === 'awaiting_projection'
+    || manualReconcileRequired
+    || connectionStatus !== 'connected'
+    || stream.status !== 'connected';
+  const canSend = Boolean(selectedThread?.sessionId && selectedThread.workspaceRef && draft.trim())
+    && !busy
+    && phase === 'ready';
 
   // A deep link is resolved against the server projection.  Unknown IDs stay
   // visible as an empty live state; they are never replaced with Demo data.
   React.useEffect(() => {
-    if (clientMode !== 'live' || !conversationId || conversationId === selectedThreadId) return;
-    if (threads.some((thread) => thread.id === conversationId)) selectThread(conversationId);
-  }, [clientMode, conversationId, selectThread, selectedThreadId, threads]);
+    if (clientMode !== 'live') return;
+    resolveDeepLink(conversationId ?? null);
+  }, [clientMode, conversationId, resolveDeepLink]);
 
   const loadLiveFiles = useCallback(async (path = '') => {
     if (!selectedProject) return;
@@ -272,11 +284,13 @@ export const LiveChatView: React.FC = () => {
   };
 
   const handleCreateSession = async () => {
+    const roleId = selectedSession?.role_snapshot.role_id;
+    if (!canCreateSession || !roleId) return;
     setCreatingSession(true);
-    const session = await createSession({});
+    const session = await createSession({ roleId });
     setCreatingSession(false);
     if (session) {
-      const projectedThread = threads.find((thread) => thread.session_id === session.id);
+      const projectedThread = threads.find((thread) => thread.sessionId === session.id);
       if (projectedThread) navigate(`/chat/${projectedThread.id}`);
     }
   };
@@ -342,7 +356,7 @@ export const LiveChatView: React.FC = () => {
           <AlertTriangle size={17} aria-hidden="true" />
           <div className="live-alert-content">
             <strong>需要人工核对</strong>
-            <span>Core 返回了 manual_reconcile_required / outcome_unknown。GUI 不会自动重放或猜测运行终态。</span>
+            <span>{manualReconcileReason || 'Core 返回了 manual_reconcile_required / outcome_unknown。GUI 不会自动重放或猜测运行终态。'}</span>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={phase !== 'ready'}>
             重新查询 Projection
@@ -393,7 +407,7 @@ export const LiveChatView: React.FC = () => {
             {sessions.map((session) => <option key={session.id} value={session.id}>{sessionLabel(session)}</option>)}
           </select>
         </label>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={phase !== 'ready' || creatingSession || manualReconcileRequired}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedSession?.role_snapshot.role_id || creatingSession} title={createSessionUnavailableReason || '需要一个明确的 roleId'}>
           <PlusIcon />
           {creatingSession ? '创建中…' : '创建 Session'}
         </button>
@@ -410,14 +424,14 @@ export const LiveChatView: React.FC = () => {
           <EmptyState
             icon={MessageSquare}
             titleAs="h4"
-            title={phase === 'error' ? '无法显示 Core Thread' : '选择一个 Core Thread'}
-            description={phase === 'error' ? '连接失败不会回退为演示数据。请修复 Core 或协议协商后重试。' : '从侧栏或上方选择服务端 Projection 中的 Thread。'}
+            title={deepLinkNotFound ? '未找到该 Core Thread' : phase === 'error' ? '无法显示 Core Thread' : '选择一个 Core Thread'}
+            description={deepLinkNotFound ? `Core Projection 中不存在 Thread ${conversationId}。Live 不会用第一条或演示数据替代它。` : phase === 'error' ? '连接失败不会回退为演示数据。请修复 Core 或协议协商后重试。' : '从侧栏或上方选择服务端 Projection 中的 Thread。'}
             action={(
               <div className="live-empty-actions">
                 <button type="button" className="btn btn-primary" onClick={() => void reconnect()}>
                   <RefreshCw size={14} aria-hidden="true" />重连 Core
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={() => void handleCreateSession()} disabled={phase !== 'ready' || creatingSession}>
+                <button type="button" className="btn btn-secondary" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedSession?.role_snapshot.role_id || creatingSession}>
                   创建 Session
                 </button>
               </div>
@@ -431,11 +445,21 @@ export const LiveChatView: React.FC = () => {
               <span className="live-thread-icon" aria-hidden="true"><MessageSquare size={16} /></span>
               <div>
                 <strong>{liveThreadTitle(selectedThread)}</strong>
-                <span>{selectedThread.workspace} · {selectedThread.id}</span>
+                <span>{selectedThread.workspaceRef || '未绑定 Workspace'} · {selectedThread.id}</span>
               </div>
             </div>
             <StatusBadge status={selectedThread.status} label={statusLabel(selectedThread.status)} size="sm" />
           </section>
+
+          {!selectedThread.sessionId && (
+            <div className="live-alert live-alert-warn" role="alert">
+              <AlertTriangle size={17} aria-hidden="true" />
+              <div className="live-alert-content">
+                <strong>Thread 未绑定 Session</strong>
+                <span>该 Thread 的 legacy_refs 没有 source_type=session。Live 不会按 workspace 或第一条 Session 猜测，运行命令已禁用。</span>
+              </div>
+            </div>
+          )}
 
           {visibleApprovals.length > 0 && (
             <section className="live-approvals-section" aria-labelledby="live-approvals-title">
@@ -448,7 +472,7 @@ export const LiveChatView: React.FC = () => {
                   <LiveApprovalCard
                     key={approval.id}
                     approval={approval}
-                    busy={approvalAction.status === 'sending' || approvalAction.status === 'awaiting_projection'}
+                    busy={approvalAction.status === 'sending' || approvalAction.status === 'awaiting_projection' || busy}
                     onDecide={(decision) => void decideApproval(approval, decision)}
                   />
                 ))}
@@ -461,17 +485,17 @@ export const LiveChatView: React.FC = () => {
               <div className="live-panel-heading">
                 <div>
                   <h2 id="live-messages-title">Thread Messages</h2>
-                  <p>历史消息来自 Core Query，运行状态来自 Projection / SSE。</p>
+                  <p>Phase 1E 暂无消息 Query；运行状态来自 Projection / SSE。</p>
                 </div>
-                {selectedSession && (
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelSession()} disabled={busy || manualReconcileRequired}>
+                {selectedThread.sessionId && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelSession()} disabled={!cancelCommandAvailable || busy || manualReconcileRequired} title="Phase 1E Schema 未提供 cancel Command">
                     <Square size={12} aria-hidden="true" />取消 Session
                   </button>
                 )}
               </div>
               <div className="live-message-list" aria-live="polite">
                 {messages.length === 0 ? (
-                  <p className="live-panel-empty">Core 尚未返回消息 Projection。</p>
+                  <p className="live-panel-empty">Phase 1E Schema 未提供消息 Query；此处仅显示下方已提交 SSE timeline。</p>
                 ) : messages.map((message) => (
                   <article className={`live-message live-message-${message.role}`} key={message.id}>
                     <div className="live-message-meta"><strong>{message.sender.name}</strong><span>{message.role}</span></div>
@@ -489,16 +513,16 @@ export const LiveChatView: React.FC = () => {
                       void handleSubmit();
                     }
                   }}
-                  placeholder={manualReconcileRequired ? '需要人工核对，完成 Projection 校正后才能发送' : selectedSession ? '向当前 Session 发送消息，Enter 发送' : '先选择或创建绑定 Session'}
+                  placeholder={manualReconcileRequired ? '需要人工核对，完成 Projection 校正后才能发送' : selectedThread?.sessionId ? '向当前 Session 发送消息，Enter 发送' : '该 Thread 没有 Session legacy ref，不能运行'}
                   aria-label="向 Core Session 发送消息"
-                  disabled={!selectedSession || busy || phase !== 'ready'}
+                  disabled={!selectedThread?.sessionId || !selectedThread.workspaceRef || busy || phase !== 'ready'}
                   rows={2}
                 />
                 <button type="button" className="btn btn-primary btn-icon" onClick={() => void handleSubmit()} disabled={!canSend} aria-label="发送消息" title="发送消息">
                   {command.status === 'sending' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <SendHorizontal size={16} aria-hidden="true" />}
                 </button>
               </div>
-              <p className="live-composer-note">发送请求只表示命令已提交；GUI 等待 Core 的 Receipt / Projection，不把网络送达当成完成。</p>
+              <p className="live-composer-note">发送请求只表示命令已提交；GUI 等待 Core 的 Receipt / Projection，不把网络送达当成完成。断线、回放或错误期间会禁用命令。</p>
             </section>
 
             <aside className="live-inspector-column" aria-label="Core 实时检查器">
@@ -514,7 +538,7 @@ export const LiveChatView: React.FC = () => {
                   <Folder size={13} aria-hidden="true" />{showFiles ? '隐藏文件' : '浏览文件'}
                 </button>
               </div>
-              {showEvents && <LiveEventTimeline events={stream.events} cursor={stream.cursor.sequence} status={stream.status} />}
+              {showEvents && <LiveEventTimeline events={stream.events} cursor={stream.cursor} status={stream.status} />}
               {showFiles && selectedProject && (
                 <LiveFileBrowser
                   projectId={selectedProject.id}

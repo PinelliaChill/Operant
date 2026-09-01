@@ -54,7 +54,7 @@ export const LiveProjectsView: React.FC = () => {
   const [filesLoadingId, setFilesLoadingId] = useState<string | null>(null);
 
   const getProjectThreads = useCallback((project: LiveProjectProjection) => (
-    threads.filter((thread) => project.threadIds.includes(thread.id) || thread.workspace === project.workspaceRef)
+    threads.filter((thread) => project.threadIds.includes(thread.id))
   ), [threads]);
 
   const showProjectFiles = async (project: LiveProjectProjection) => {
