@@ -10315,6 +10315,7 @@ class SQLiteStore:
         self,
         *,
         status: WorkflowRunStatus | str | None = None,
+        workspace_ref: str | None = None,
         limit: int | None = None,
     ) -> list[WorkflowRun]:
         parameters: list[Any] = []
@@ -10325,6 +10326,12 @@ class SQLiteStore:
             )
             conditions.append("status = ?")
             parameters.append(normalized_status.value)
+        if workspace_ref is not None:
+            # Workflow Run predates the Workspace projection and stores its
+            # normalized workspace only in the immutable JSON body. Keep the
+            # join exact; do not resolve aliases or infer legacy ownership.
+            conditions.append("json_extract(body, '$.workspace') = ?")
+            parameters.append(workspace_ref)
         query = "SELECT body FROM workflow_runs"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -11386,6 +11393,18 @@ class SQLiteStore:
             ).fetchone()
         if row is None:
             raise NotFoundError(f"Workspace initialization not found: {workspace_hash}")
+        return self._workspace_initialization_from_row(row)
+
+    def get_workspace_initialization_by_id(self, workspace_id: str) -> WorkspaceInitialization:
+        """Return one immutable workspace registration by its public projection ID."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workspace_initializations WHERE id = ?",
+                (workspace_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"Workspace initialization not found: {workspace_id}")
         return self._workspace_initialization_from_row(row)
 
     def list_workspace_initializations(

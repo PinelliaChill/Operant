@@ -7,7 +7,7 @@ import json
 import os
 import secrets
 import stat
-from collections.abc import AsyncIterator, Collection
+from collections.abc import AsyncIterator, Collection, Mapping
 from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,6 +15,11 @@ from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
+from operant.application.client_projection import (
+    get_workspace_initialization,
+    list_project_projections,
+    list_workspace_files,
+)
 from operant.application.context import PersistentContextComposer
 from operant.application.defaults import default_role_presets
 from operant.application.factory import AgentFactory
@@ -95,6 +100,7 @@ from operant.domain.models import (
     new_id,
     utc_now,
 )
+from operant.domain.projections import ProjectProjection, WorkspaceFilesPage
 from operant.domain.threads import (
     Artifact,
     ArtifactAccessLevel,
@@ -225,7 +231,7 @@ class _PersistentActionGateway:
         tool_call_id: str,
         category: str,
         detail: str,
-    ) -> dict[str, Any]:
+    ) -> Mapping[str, Any]:
         approval = self.store.create_approval_request(
             ApprovalRequest(
                 session_id=self.session_id,
@@ -319,6 +325,11 @@ class ApplicationService:
         self._approval_details: dict[tuple[str, str], dict[str, str]] = {}
         self._session_run_leases: dict[str, SessionRunLease] = {}
         self._workflow_execution_leases: dict[str, WorkflowExecutionLease] = {}
+        # Workspace registration stores the canonical path, but intentionally
+        # does not add filesystem identity columns or a new Migration. Keep a
+        # process-local identity fence for directory browsing so a root
+        # replacement during this Core lifetime fails closed.
+        self._workspace_file_identities: dict[str, tuple[int, int]] = {}
         self._lease_owner_id = new_id("core")
         self._session_lease_ttl_seconds = session_lease_ttl_seconds
         self._session_lease_heartbeat_seconds = (
@@ -541,6 +552,44 @@ class ApplicationService:
             writable=writable,
         )
         return self.store.register_workspace(initialization)
+
+    # Phase 1E read-only client projections. These methods aggregate existing
+    # durable facts and never create Project entities or infer legacy links.
+
+    def list_project_projections(
+        self,
+        *,
+        after_cursor: int | None = None,
+        limit: int = 100,
+    ) -> list[ProjectProjection]:
+        return list_project_projections(
+            self.store,
+            after_cursor=after_cursor,
+            limit=limit,
+        )
+
+    def list_workspace_files(
+        self,
+        workspace_id: str,
+        *,
+        path: str = ".",
+        limit: int = 100,
+        page_token: str | None = None,
+        snapshot: str | None = None,
+        after_name: str | None = None,
+    ) -> WorkspaceFilesPage:
+        initialization = get_workspace_initialization(self.store, workspace_id)
+        page, identity = list_workspace_files(
+            initialization,
+            path=path,
+            limit=limit,
+            page_token=page_token,
+            snapshot=snapshot,
+            after_name=after_name,
+            expected_identity=self._workspace_file_identities.get(workspace_id),
+        )
+        self._workspace_file_identities.setdefault(workspace_id, identity)
+        return page
 
     def append_context_baseline(
         self,
@@ -2176,9 +2225,14 @@ class ApplicationService:
         self,
         *,
         status: WorkflowRunStatus | str | None = None,
+        workspace_ref: str | None = None,
         limit: int | None = None,
     ) -> list[WorkflowRun]:
-        return self.store.list_workflow_runs(status=status, limit=limit)
+        return self.store.list_workflow_runs(
+            status=status,
+            workspace_ref=workspace_ref,
+            limit=limit,
+        )
 
     def update_workflow_run(self, workflow_run_id: str, **changes: Any) -> WorkflowRun:
         return self.store.update_workflow_run(workflow_run_id, **changes)

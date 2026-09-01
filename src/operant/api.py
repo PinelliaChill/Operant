@@ -26,7 +26,12 @@ from starlette.background import BackgroundTask
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from operant.application.client_projection import WorkspaceProjectionError
 from operant.application.evaluation import EvaluationRunner
+from operant.application.protocol_metadata import (
+    ProtocolSchemaUnavailable,
+    phase1e_protocol_metadata,
+)
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
 from operant.artifacts import (
@@ -1615,6 +1620,93 @@ def create_app(
     @app.get("/healthz")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/protocol", response_model=None)
+    async def get_protocol() -> dict[str, Any] | JSONResponse:
+        try:
+            return phase1e_protocol_metadata()
+        except ProtocolSchemaUnavailable:
+            # Do not return a made-up digest when the generated Schema line
+            # has not installed its manifest yet. Clients must fail closed.
+            return JSONResponse(
+                status_code=503,
+                content=error_payload(
+                    code="protocol_schema_unavailable",
+                    message="generated protocol Schema digest is unavailable",
+                    recovery=RecoveryAction.RETRY_LATER,
+                    retryable=True,
+                ),
+            )
+
+    @app.get("/v1/projects", response_model=None)
+    async def list_projects(
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[dict[str, Any]] | JSONResponse:
+        try:
+            projects = service.list_project_projections(
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+            return [project.model_dump(mode="json") for project in projects]
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content=error_payload(
+                    code="invalid_project_cursor",
+                    message="project cursor or limit is invalid",
+                    recovery=RecoveryAction.REFRESH_AND_RETRY,
+                ),
+            )
+
+    @app.get("/v1/workspaces/{workspace_id}/files", response_model=None)
+    async def list_workspace_file_metadata(
+        workspace_id: str,
+        path: str = Query(default=".", min_length=1, max_length=4_096),
+        limit: int = Query(default=100, ge=1, le=200),
+        page_token: str | None = Query(default=None, max_length=2_000),
+        snapshot: str | None = Query(default=None, max_length=64),
+        after_name: str | None = Query(default=None, max_length=255),
+        after: str | None = Query(default=None, max_length=255),
+    ) -> dict[str, Any] | JSONResponse:
+        if after_name is not None and after is not None and after_name != after:
+            return JSONResponse(
+                status_code=400,
+                content=error_payload(
+                    code="workspace_page_token_invalid",
+                    message="conflicting directory page anchors were provided",
+                    recovery=RecoveryAction.REFRESH_AND_RETRY,
+                ),
+            )
+        try:
+            page = service.list_workspace_files(
+                workspace_id,
+                path=path,
+                limit=limit,
+                page_token=page_token,
+                snapshot=snapshot,
+                after_name=after_name if after_name is not None else after,
+            )
+            return page.model_dump(mode="json")
+        except NotFoundError:
+            return JSONResponse(
+                status_code=404,
+                content=error_payload(
+                    code="workspace_not_registered",
+                    message="workspace is not registered",
+                ),
+            )
+        except WorkspaceProjectionError as exc:
+            recovery = RecoveryAction(exc.recovery)
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=error_payload(
+                    code=exc.code,
+                    message=exc.message,
+                    recovery=recovery,
+                    retryable=exc.status_code in {408, 425, 429, 502, 503, 504},
+                ),
+            )
 
     @app.get("/v1/slash-commands")
     async def list_slash_commands() -> dict[str, Any]:
