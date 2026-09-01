@@ -85,7 +85,7 @@ class _ProjectProjectionTooLarge(ProjectProjectionError):
             "project_projection_too_large",
             f"project projection contains more than {limit} {resource}",
             status_code=413,
-            recovery="refresh_and_retry",
+            recovery="none",
         )
 
 
@@ -697,7 +697,7 @@ def _scan_directory(fd: int, canonical_parts: tuple[str, ...]) -> _DirectoryScan
                         "workspace_directory_too_large",
                         "workspace directory contains too many entries",
                         status_code=413,
-                        recovery="refresh_and_retry",
+                        recovery="none",
                     )
                 name = entry.name
                 if _is_sensitive_name(name):

@@ -392,6 +392,8 @@ def test_workspace_file_projection_rejects_manifest_overflow(
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "workspace_directory_too_large"
+    assert response.json()["error"]["recovery"] == "none"
+    assert response.json()["error"]["retryable"] is False
 
 
 def test_projects_fail_closed_instead_of_silently_omitting_too_many_threads(
@@ -412,6 +414,8 @@ def test_projects_fail_closed_instead_of_silently_omitting_too_many_threads(
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "project_projection_too_large"
+    assert response.json()["error"]["recovery"] == "none"
+    assert response.json()["error"]["retryable"] is False
 
 
 def test_projects_fail_closed_instead_of_silently_omitting_too_many_workflow_runs(
@@ -432,6 +436,8 @@ def test_projects_fail_closed_instead_of_silently_omitting_too_many_workflow_run
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "project_projection_too_large"
+    assert response.json()["error"]["recovery"] == "none"
+    assert response.json()["error"]["retryable"] is False
 
 
 def test_workspace_file_projection_rejects_malformed_or_conflicting_page_state(
