@@ -1,0 +1,162 @@
+/**
+ * Operant 2.0 设计 Tokens 与主题色
+ * 设计方向：克制的中性石灰（stone）底 + 深松绿（pine/emerald）单一强调色
+ * 遵守 WCAG AA 对比度、prefers-reduced-motion 与响应式规约
+ */
+
+:root {
+  /* 浅色主题（默认） */
+  --bg-app: #fafaf9;      /* stone-50 */
+  --bg-surface: #f5f5f4;  /* stone-100，侧栏/检查器底 */
+  --bg-card: #ffffff;
+  --bg-card-hover: #fafaf9;
+  --bg-subtle: #e7e5e4;   /* stone-200，仅小面积徽章/分割 */
+  --bg-glass: rgba(255, 255, 255, 0.9);
+
+  --border-subtle: #e7e5e4;
+  --border-strong: #d6d3d1;
+  --border-focus: #047857;
+
+  --text-primary: #1c1917;   /* stone-900 */
+  --text-secondary: #57534e; /* stone-600 */
+  --text-muted: #a8a29e;     /* stone-400 */
+  --text-inverse: #ffffff;
+
+  --accent-action: #047857;        /* emerald-700 深松绿 */
+  --accent-action-hover: #065f46;
+  --accent-action-active: #064e3b;
+  --accent-subtle: #ecfdf5;        /* 仅选中态/徽标小面积 */
+  --accent-on-subtle: #065f46;
+
+  --focus-ring: #047857;
+
+  /* 语义状态色（图标 + 文本 + 背景组合保证对比度） */
+  --status-safe-bg: #ecfdf5;
+  --status-safe-border: #a7f3d0;
+  --status-safe-text: #065f46;
+
+  --status-warn-bg: #fffbeb;
+  --status-warn-border: #fde68a;
+  --status-warn-text: #92400e;
+
+  --status-error-bg: #fef2f2;
+  --status-error-border: #fecaca;
+  --status-error-text: #b91c1c;
+
+  --status-info-bg: #f0f9ff;
+  --status-info-border: #bae6fd;
+  --status-info-text: #0369a1;
+
+  /* 几何与阴影 */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.05);
+  --shadow-md: 0 1px 3px rgba(28, 25, 23, 0.06), 0 4px 12px rgba(28, 25, 23, 0.05);
+  --shadow-lg: 0 4px 8px rgba(28, 25, 23, 0.06), 0 12px 28px rgba(28, 25, 23, 0.10);
+
+  /* 品牌标识（仅品牌方块允许使用渐变） */
+  --brand-gradient: linear-gradient(135deg, #059669, #047857);
+
+  /* 终端查看器（浅色主题维持深蓝灰 slate 终端） */
+  --terminal-bg: #0f172a;
+  --terminal-header: #1e293b;
+  --terminal-border: #334155;
+  --terminal-text: #cbd5e1;
+  --terminal-text-strong: #f8fafc;
+  --terminal-command-bg: #020617;
+  --terminal-muted: #94a3b8;
+  --terminal-faint: #64748b;
+  --terminal-link: #38bdf8;    /* sky-400，终端内链接/命令强调 */
+  --terminal-success: #4ade80; /* green-400，复制成功/执行图标 */
+
+  /* 差异查看器（浅主题维持现视觉效果） */
+  --diff-add-bg: rgba(16, 185, 129, 0.12);
+  --diff-add-text: #065f46;
+  --diff-del-bg: rgba(239, 68, 68, 0.12);
+  --diff-del-text: #b91c1c;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+[data-theme='dark'] {
+  /* 深色主题 */
+  --bg-app: #0c0a09;      /* stone-950 */
+  --bg-surface: #141210;
+  --bg-card: #1c1917;
+  --bg-card-hover: #292524;
+  --bg-subtle: #292524;
+  --bg-glass: rgba(28, 25, 23, 0.9);
+
+  --border-subtle: #292524;
+  --border-strong: #44403c;
+  --border-focus: #34d399;
+
+  --text-primary: #fafaf9;
+  --text-secondary: #d6d3d1;
+  --text-muted: #78716c;
+  --text-inverse: #1c1917;
+
+  --accent-action: #34d399;
+  --accent-action-hover: #6ee7b7;
+  --accent-action-active: #a7f3d0;
+  --accent-subtle: rgba(52, 211, 153, 0.12);
+  --accent-on-subtle: #6ee7b7;
+
+  --focus-ring: #34d399;
+
+  --status-safe-bg: rgba(52, 211, 153, 0.10);
+  --status-safe-border: #065f46;
+  --status-safe-text: #6ee7b7;
+
+  --status-warn-bg: rgba(251, 191, 36, 0.08);
+  --status-warn-border: #78350f;
+  --status-warn-text: #fcd34d;
+
+  --status-error-bg: rgba(248, 113, 113, 0.08);
+  --status-error-border: #7f1d1d;
+  --status-error-text: #fca5a5;
+
+  --status-info-bg: rgba(56, 189, 248, 0.08);
+  --status-info-border: #075985;
+  --status-info-text: #7dd3fc;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.4), 0 12px 28px rgba(0, 0, 0, 0.5);
+
+  --brand-gradient: linear-gradient(135deg, #34d399, #059669);
+
+  /* 终端查看器（深色主题改为暖黑 stone 系，与卡片色调一致） */
+  --terminal-bg: #0c0a09;
+  --terminal-header: #1c1917;
+  --terminal-border: #292524;
+  --terminal-text: #d6d3d1;
+  --terminal-text-strong: #fafaf9;
+  --terminal-command-bg: #000000;
+  --terminal-muted: #a8a29e;
+  --terminal-faint: #78716c;
+  --terminal-link: #7dd3fc;    /* sky-300，暖黑底上略提亮 */
+  --terminal-success: #86efac; /* green-300 */
+
+  /* 差异查看器（深色主题使用高明度色相，同透明度） */
+  --diff-add-bg: rgba(52, 211, 153, 0.12);
+  --diff-add-text: #6ee7b7;
+  --diff-del-bg: rgba(248, 113, 113, 0.12);
+  --diff-del-text: #fca5a5;
+}
+
+/* 减弱动效偏好：覆盖全部动画与过渡（含 layout.css 中集中定义的 keyframes） */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -19,12 +19,14 @@ class AgentFactory:
         model_profile_id: str | None = None,
         effort: str | None = None,
         budget_overrides: dict[str, Any] | None = None,
+        thread_id: str | None = None,
     ) -> Session:
         return self.store.create_session(
             role_id,
             model_profile_id=model_profile_id,
             effort=effort,
             budget_overrides=budget_overrides,
+            thread_id=thread_id,
         )
 
     def create_agent(self, session_id: str) -> AgentInstance:

@@ -621,6 +621,72 @@ def test_real_session_run_first_frame_creates_replayable_202_receipt(
     )
 
 
+def test_session_run_receipt_rejects_cross_session_first_frame_and_replays_manual_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "cross-session-stream.sqlite3"
+    store = SQLiteStore(database)
+    store.initialize()
+    profile = store.add_model_profile(
+        ModelProfile(
+            name="cross-session-stream",
+            model_id="cross-session-stream",
+            base_url="https://example.invalid/v1",
+            secret_ref="OPERANT_TEST_KEY",
+        )
+    )
+    role = store.create_role(
+        RolePreset(
+            name="Cross Session Stream",
+            system_prompt="Reject cross-session receipts.",
+            model_profile_id=profile.id,
+        )
+    )
+    path_session = store.create_session(role.id)
+    other_session = store.create_session(role.id)
+    store.append_event(
+        Event(session_id=path_session.id, event_type="agent.started", payload={"turn": 0})
+    )
+    other_event = store.append_event(
+        Event(session_id=other_session.id, event_type="agent.started", payload={"turn": 0})
+    )
+    assert other_event.cursor is not None
+
+    app = create_app(database)
+    service: ApplicationService = app.state.operant_service
+
+    async def cross_session_stream(*_args, **_kwargs):
+        yield other_event
+
+    monkeypatch.setattr(service, "run_session", cross_session_stream)
+    request = {"message": "must reject", "workspace": str(tmp_path)}
+    key = "cross-session-stream"
+    with TestClient(app) as client:
+        first = client.post(
+            f"/v1/sessions/{path_session.id}/runs",
+            headers={"Idempotency-Key": key},
+            json=request,
+        )
+        assert first.status_code == 200
+        assert other_session.id in first.text
+
+        retry = client.post(
+            f"/v1/sessions/{path_session.id}/runs",
+            headers={"Idempotency-Key": key},
+            json=request,
+        )
+        assert retry.status_code == 409
+        assert retry.json()["error"]["recovery"] == "manual_reconcile"
+        assert "replay_url" not in retry.json()
+
+    rows = _command_rows(database)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "manual_reconcile_required"
+    assert rows[0]["resource_type"] is None
+    assert rows[0]["resource_id"] is None
+
+
 def test_stream_before_first_frame_and_handler_crash_require_manual_reconcile(
     tmp_path: Path,
 ) -> None:
@@ -708,6 +774,7 @@ def test_stream_acceptance_requires_committed_resource_cursor_and_bounds_first_f
     @app.post("/v1/test-stream-committed")
     async def committed_stream() -> StreamingResponse:
         first_frame = (
+            f"id: {persisted.cursor}\n"
             "event: agent.started\n"
             + "data: "
             + __import__("json").dumps({"session_id": session.id, "cursor": persisted.cursor})
@@ -724,7 +791,40 @@ def test_stream_acceptance_requires_committed_resource_cursor_and_bounds_first_f
     @app.post("/v1/test-stream-unverified")
     async def unverified_stream() -> StreamingResponse:
         async def body() -> AsyncIterator[str]:
-            yield 'event: agent.started\ndata: {"cursor": 999999}\n\n'
+            yield (
+                f"id: {persisted.cursor + 1}\n"
+                "event: agent.started\n"
+                + "data: "
+                + __import__("json").dumps(
+                    {"session_id": session.id, "cursor": persisted.cursor + 1}
+                )
+                + "\n\n"
+            )
+
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    @app.post("/v1/test-stream-missing-id")
+    async def missing_id_stream() -> StreamingResponse:
+        async def body() -> AsyncIterator[str]:
+            yield (
+                "event: agent.started\n"
+                + "data: "
+                + __import__("json").dumps({"session_id": session.id, "cursor": persisted.cursor})
+                + "\n\n"
+            )
+
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    @app.post("/v1/test-stream-invalid-id")
+    async def invalid_id_stream() -> StreamingResponse:
+        async def body() -> AsyncIterator[str]:
+            yield (
+                "id: not-a-cursor\n"
+                "event: agent.started\n"
+                + "data: "
+                + __import__("json").dumps({"session_id": session.id, "cursor": persisted.cursor})
+                + "\n\n"
+            )
 
         return StreamingResponse(body(), media_type="text/event-stream")
 
@@ -768,6 +868,16 @@ def test_stream_acceptance_requires_committed_resource_cursor_and_bounds_first_f
         assert unverified_replay.status_code == 409
         assert unverified_replay.json()["error"]["recovery"] == "manual_reconcile"
 
+        for path, key in (
+            ("/v1/test-stream-missing-id", "missing-id"),
+            ("/v1/test-stream-invalid-id", "invalid-id"),
+        ):
+            first = client.post(path, headers={"Idempotency-Key": key}, json={})
+            assert first.status_code == 200
+            retry = client.post(path, headers={"Idempotency-Key": key}, json={})
+            assert retry.status_code == 409
+            assert retry.json()["error"]["recovery"] == "manual_reconcile"
+
         oversized = client.post(
             "/v1/test-stream-oversized",
             headers={"Idempotency-Key": "oversized"},
@@ -785,6 +895,8 @@ def test_stream_acceptance_requires_committed_resource_cursor_and_bounds_first_f
     assert statuses == {
         "committed": "completed",
         "unverified": "manual_reconcile_required",
+        "missing-id": "manual_reconcile_required",
+        "invalid-id": "manual_reconcile_required",
         "oversized": "manual_reconcile_required",
     }
 

@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-01
+> 最后更新：2026-09-02
 >
-> 对应版本：Operant 2.0 Phase 1D Slash Command、Context Command 与 BTW Sidecar
+> 对应版本：Operant 2.0 Phase 1E 客户端真实接入基线（`phase1e.v1`）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -30,6 +30,8 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 6. 按 Planner → 只读 Explorer → Coder → Reviewer → Main 汇总运行相互隔离的 Agent。
 7. 以 SQLite 任务记录和阶段检查点支持基础恢复，并用 Web 工作台观察完整任务。
 8. 用可复现快照、隔离 artifact、外部验证、指标聚合和 Trace 根因分析对 Session/Workflow 做评测。
+9. 通过单一 Schema 生成客户端，并让 React GUI 在明确的 live 模式中连接本地 Core；Mock 仅作为
+   明确标识的演示模式保留。
 
 ## 2. 当前完成度
 
@@ -75,6 +77,18 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - BTW Sidecar 使用启动时已提交 Item Cursor 的冻结视图、独立 Agent/ContextRevision 和空 ToolPolicy，
   不取得主 Session 执行租约、不写主 Session Event/Thread；只有显式 promote 才原子追加一个 Steering
   Turn/Item，重复或并发 promote 返回同一结果；
+- Phase 1E 冻结 `phase1e.v1` 单一 OpenAPI Schema，离线生成 TypeScript/Python 类型和 Client；正式 live
+  面只保留 8 个 operation，统一版本协商、Schema digest、Receipt、幂等键、类型化错误、`int64`
+  Cursor、SSE 增量解析和同 scope 回放，重复生成可得到完全相同的产物；
+- `GET /v1/protocol` 严格协商版本和生成物 digest；`GET /v1/projects` 将已登记 Workspace 聚合成只读
+  Project Projection，`GET /v1/workspaces/{workspace_id}/files` 使用逐组件 no-follow 校验返回有界、安全的
+  目录 metadata，不返回正文、绝对路径、inode 或敏感文件；
+- `POST /v1/sessions` 可选接收 `thread_id`，提供时在一个 `BEGIN IMMEDIATE` 事务内创建 Session 并写入
+  唯一 `thread_legacy_refs(session)`；不存在、非 active 或已绑定的 Thread 会安全失败且不留下孤儿
+  Session，未提供该字段的旧 CLI/API 行为继续兼容；
+- React GUI 已建立明确分离的 Mock/live 模式；live 只调用生成的 Phase 1E Client，经同源 `/v1` 连接
+  Core，覆盖协议协商、Workspace/Project、Thread、Session 创建与既有绑定、Run SSE 回放/重连、Approval
+  与类型化错误/人工核对状态。请求或重连失败会显式显示，不静默回退或混入 Mock 数据；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
 - v1/v2/v3/v4/v5/v6/v7/v8 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
@@ -126,7 +140,8 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 自动模型价格发现、显著性分析，以及中断 Evaluation Run 的逐 Result 自动续跑；
 - Web 身份认证、设备配对和远程访问控制；
 - 通用 Graph Runtime、Definition Compiler、Team/Mailbox 和智能创建；
-- 类型化 TypeScript/Python Client SDK、React GUI/PWA、Textual TUI 和 Tauri 桌面壳；
+- Phase 1E 以外的完整 TypeScript/Python SDK、完整 React GUI/PWA、Textual TUI 和 Tauri 桌面壳；当前
+  生成 Client 与 React live 面只覆盖冻结的 8 个最小 operation；
 - 复杂 `@` 引用、Provider Cache 的执行/复制，以及面向非可信 HTTP 客户端的 Artifact capability 签发；
 - Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
 
@@ -138,6 +153,8 @@ flowchart LR
     CLI["Typer CLI"]
     API["FastAPI / SSE"]
     Web["内置 Web 工作台"]
+    GUI["React GUI · Phase 1E live / 显式 Mock"]
+    SDK["phase1e.v1 生成 TypeScript/Python Client"]
     Workflow["Planner → Explorer(s) → Coder → Reviewer → Main"]
     Evaluation["Evaluation Runner v1"]
     Service["ApplicationService"]
@@ -156,7 +173,10 @@ flowchart LR
     User --> CLI
     User --> API
     User --> Web
+    User --> GUI
     Web --> API
+    GUI --> SDK
+    SDK --> API
     CLI --> Service
     API --> Service
     Workflow --> Service
@@ -189,14 +209,22 @@ workspace 工具。
 
 ```text
 operant/
+├── clients/gui/                  # React GUI；live 只消费生成的 Phase 1E Client
+├── sdk/
+│   ├── protocol/schema/          # phase1e.v1 单一 OpenAPI Schema 与固定 digest
+│   ├── protocol/generate_phase1e.py # 离线确定性生成器
+│   ├── python_client/            # 生成模型 + Python 传输/SSE Client
+│   └── typescript-client/        # 生成模型 + TypeScript 传输/SSE Client
 ├── src/operant/
 │   ├── api.py                    # FastAPI、Session API、SSE
 │   ├── cli.py                    # Typer CLI
 │   ├── settings.py               # 本地配置入口
 │   ├── application/
+│   │   ├── client_projection.py # 只读 Project/Thread/Workspace File 投影
 │   │   ├── defaults.py           # 五个稳定 ID 的默认角色
 │   │   ├── evaluation.py         # Evaluation Runner、隔离 artifact、指标与 Trace RCA
 │   │   ├── factory.py            # Session / Agent 创建工厂
+│   │   ├── protocol_metadata.py  # phase1e.v1 版本与 Schema digest
 │   │   ├── service.py            # CLI/API/Workflow 共用的用例层
 │   │   ├── trace.py              # Session / Workflow Trace 与脱敏 JSONL
 │   │   └── workflow.py           # 编排、持久化检查点、恢复和 Memory 接入
@@ -225,7 +253,7 @@ operant/
 │   │   └── workspace.py          # workspace 工具与权限检查
 │   ├── protocol.py               # Action Hash、公开错误契约和统一脱敏
 │   └── web/                      # 无 CDN 的 HTML/CSS/JS 工作台
-├── tests/                        # 单元测试与协议测试
+├── tests/                        # 单元、协议、投影和真实 localhost loopback 测试
 ├── examples/buggy_calculator/    # 真实模型验收 fixture
 ├── SECURITY.md                   # 安全边界与威胁模型草案
 ├── docs/PROJECT_ARCHITECTURE.md  # 本文档
@@ -255,6 +283,7 @@ Application Service 负责用例编排：
 - Model Profile 和 Role Preset 的注册表用例；
 - 默认角色初始化；
 - 创建 Session；
+- 可选把新 Session 在同一 SQLite 事务中绑定到一个 active、尚未绑定的 Thread；
 - 创建和更新 AgentInstance；
 - 构造带 Role Tool Policy 的 WorkspaceTools；
 - 启动 AgentLoop；
@@ -269,6 +298,7 @@ Application Service 负责用例编排：
 - 持久化 Workflow 事件、推进任务状态并支持阶段边界恢复；
 - 执行 Memory 作用域、FTS 检索、候选确认和版本管理；
 - 聚合 Session / Workflow Trace，并导出脱敏 JSONL。
+- 生成只读 Project/Thread/Workspace File 客户端投影；
 - 持久化 Evaluation Suite/Run/Result，按固定顺序运行隔离对照，核对声明快照与实际快照，执行外部
   验证并聚合指标和根因证据。
 
@@ -293,9 +323,10 @@ Infrastructure 包含：
 
 ### Interface
 
-CLI、FastAPI 和内置 Web 工作台是外部入口。Web 只调用 FastAPI；CLI/API 的业务用例调用
-Application Service，不自行实现 Agent 循环。FastAPI 的协议中间件会直接使用 SQLiteStore 保存
-REST Command Receipt；CLI 是本地进程内入口，不经过该 REST 中间件。
+CLI、FastAPI、内置 Web 工作台和 Phase 1E React GUI 是外部入口。Web 只调用 FastAPI；React GUI 的
+live 路径只调用由单一 Schema 生成的 Client，并以 Core Query/SSE Projection 为权威。CLI/API 的业务
+用例调用 Application Service，不自行实现 Agent 循环。FastAPI 的协议中间件会直接使用 SQLiteStore
+保存 REST Command Receipt；CLI 是本地进程内入口，不经过该 REST 中间件。
 
 依赖方向保持为：
 
@@ -481,8 +512,11 @@ System Event。Artifact/Approval 引用在插入事务中核对；接受前公�
 Layout 或 Compaction；后续派生摘要不得删除或原地改写这些原始记录。
 
 旧 `Session` 与 `WorkflowRun` 继续保留原表和行为，不会在 Migration 中被猜测性补写为 Thread。
-调用方只能在创建新 Thread 时显式声明 `thread_legacy_refs`；Store 会验证目标旧记录存在，并保证每个
-旧 source 只映射到一个 Thread。该映射用于兼容查询，不转移或覆盖旧状态机的恢复权威。
+调用方可以在创建新 Thread 时显式声明 `thread_legacy_refs`；Phase 1E 还允许创建 Session 时提供一个
+已存在、active 且尚未绑定 Session 的 `thread_id`。后一条路径会在同一个 `BEGIN IMMEDIATE` 事务中
+写 Session 与 `thread_legacy_refs(session)`，因此失败不会留下孤儿 Session，并发竞争也只有一个成功。
+Store 始终验证目标旧记录存在，并保证每个旧 source 只映射到一个 Thread。该映射用于兼容查询，不
+转移或覆盖旧状态机的恢复权威，也不猜测历史 Session 的 Thread 归属。
 
 `Artifact` 公开对象只保存内容 hash、media type、size、sensitivity、source refs、retention policy ref
 和时间；没有本地路径或正文。blob 由独立 Artifact Store 按小写 SHA-256 派生受控相对 key，在同一
@@ -1129,6 +1163,9 @@ workspace 绝对路径。
 | 方法 | 路径 | 功能 |
 |---|---|---|
 | `GET` | `/healthz` | 健康检查 |
+| `GET` | `/v1/protocol` | 协商 `phase1e.v1`、Schema digest、最小 Client 与 capability |
+| `GET` | `/v1/projects` | 查询已登记 Workspace 的只读 Project/Thread/Workflow 聚合投影 |
+| `GET` | `/v1/workspaces/{workspace_id}/files` | 安全列出 Workspace 相对目录的有界 metadata |
 | `GET` | `/v1/slash-commands` | 查询冻结版本的 Slash Command Registry |
 | `GET` | `/v1/slash-commands/resolve` | 把界面别名解析为类型化 Command，不执行命令 |
 | `POST` | `/v1/commands/workspace/init` | 校验并登记 Workspace；公开响应不含本地路径 |
@@ -1152,7 +1189,7 @@ workspace 绝对路径。
 | `GET/PATCH/DELETE` | `/v1/roles/{id}` | 查询、版本化更新或停用 Role |
 | `GET` | `/v1/roles/{id}/versions` | 查询全部历史版本 |
 | `POST` | `/v1/roles/{id}/copy` | 复制角色 |
-| `POST` | `/v1/sessions` | 创建 Session |
+| `POST` | `/v1/sessions` | 创建 Session；可选在同一事务绑定 active、未绑定的 Thread |
 | `GET` | `/v1/sessions/{id}` | 查询 Session 和 Snapshot |
 | `GET` | `/v1/sessions/{id}/events` | 查询持久化事件 |
 | `GET` | `/v1/sessions/{id}/context-revisions` | 按 Cursor 查询不含 prompt 正文的 ContextRevision 证据 |
@@ -1201,6 +1238,21 @@ workspace 绝对路径。
 
 SSE 的 `event` 字段使用 RuntimeEvent 或 Workflow 事件类型，`data` 是完整事件 JSON。Workflow
 事件额外包含角色槽位和 Session ID，使客户端可以区分并行 Explorer，并针对当前角色提交审批。
+
+### Phase 1E 生成 Client 边界
+
+`sdk/protocol/schema/operant-phase1e.openapi.json` 是 Phase 1E 正式 Client 面的唯一协议源。固定生成器
+离线产生 TypeScript/Python 公共模型与调用方法，生成文件不得手工修改；旧 GUI demo 的手写类型只服务
+明确的 Mock 表面，不属于 live 协议，也不继续作为正式契约扩展。冻结的 8 个 operation 是：协议协商、
+Project 查询、Workspace 文件查询、Thread 查询、Session 创建、Session run SSE、Session 待审批查询和
+审批决定。
+
+Client 首次 live 连接必须核对 `protocol_version` 与生成物内嵌的 Schema digest；不匹配即明确失败，
+不能降级到 Mock。修改方法由 Client 生成并保存幂等键，同一逻辑动作重试复用原 key；Python 默认
+传输使用标准库，TypeScript 浏览器传输使用同源 `/v1`。SSE parser 处理分块 UTF-8、CRLF、重复字段、
+有界 frame 和 JSON 错误，Cursor 在 JavaScript 中保持无损 `bigint`，Reducer 以资源 scope、stream kind
+和 Cursor 去重。网络断开后，GUI 先回放同 scope 已提交 Cursor，再查询 Project/Thread/Approval 投影
+校正；本地 Store 只保存选择、UI 布局、有限事件窗口和未提交输入，不裁决运行或恢复终态。
 
 ### REST Command Receipt 与统一错误
 
@@ -1474,6 +1526,18 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
   `Last-Event-ID` 回放、启动前确定性 4xx 失败 Receipt 与同 key 不重执行；BTW 无主 Session
   lease/Event/Thread 写入、空工具、Provider 越权 Tool Call 拒绝、unknown usage/price、超时/取消/
   重启收口、敏感输出清洗和显式提升只追加一个 Steering。
+- Phase 1E Schema digest、8-operation 形状、生成物确定性、Python 3.10/TypeScript 类型、标准/自定义
+  XOR、无损 Cursor、分块 UTF-8/CRLF/畸形/line-frame-data 超限 SSE、错误信封和幂等键复用；
+- Protocol/Project/Thread/Workspace File 后端投影、确定性分页、敏感路径、路径穿越、逐组件软链接、
+  inode/目录替换、大小写别名、超限与类型化非重试错误；
+- Session 与 active Thread 的事务绑定、已绑定/非 active/不存在冲突、失败回滚、并发单胜者、旧无
+  `thread_id` 兼容和 M0 replay；
+- 实际绑定 `127.0.0.1` 的 Uvicorn + 生成 Python Client 闭环覆盖全部 8 个 operation：确定性 Provider
+  产生真实 Session/Run/SSE、批准/拒绝、Action 恰好一次、Receipt replay、SSE `id`/JSON Cursor/SQLite
+  Cursor 三方一致、`Last-Event-ID` 只回放已提交事件且不新建 Command/Agent/Action，以及统一错误信封；
+- React GUI live adapter/state 覆盖显式 Mock 分离、同源连接、持久 Thread→Session 恢复、Cursor scope、
+  SSE 重连/去重、Approval、manual reconcile、有限事件窗口、无静默回退和移动端演示状态；真实浏览器
+  另核对宽/窄屏、暗色、键盘首焦点、缩放、实际 Core 投影、审批动作和断线状态。
 
 本地验证命令：
 
@@ -1482,8 +1546,21 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy src
 uv run pytest
+uv lock --check
 git diff --check
+npm run test --prefix clients/gui
+npm run typecheck --prefix clients/gui
+npm run build --prefix clients/gui
 ```
+
+2026-09-02 的 Phase 1E 验收使用隔离 SQLite/Workspace、确定性 Provider、实际 localhost Uvicorn、
+生成 Python Client 和真实浏览器；完整 pytest 为 402 通过、1 个条件性 Docker 测试跳过、1 个既有
+Starlette 警告，GUI 为 29 项测试通过，独立 TypeScript SDK parser 为 2 项通过；Ruff format/check、
+mypy、`uv lock --check`、GUI typecheck/build、生成物双次复现和 `git diff --check` 均通过。真实浏览器中
+Approval 后 Action 恰好执行一次，SSE 终态
+释放输入区；停止 Core 会显式断线且不回退 Mock，同库重启后自动恢复服务端 Session。该证据证明真实
+本地 Core HTTP/SSE/Approval 闭环，但不是外部真实模型或 Docker E2E；条件性 Docker skip 仍不视为
+容器验收，Vite 的大 chunk 提示保留为已知性能债务。
 
 2026-09-01 的 Phase 1D 后端底座使用确定性 Provider、隔离 v1—v8 SQLite 和临时 Workspace/Artifact
 Store：完整 pytest 为 367 通过、1 个条件性 Docker 测试跳过，并保留 1 个上游 Starlette TestClient
@@ -1581,9 +1658,13 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 5. 已有 v1/v2/v3/v4/v5/v6/v7/v8 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
    但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
    Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
-6. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，但不支持任意模型流位置续传；SSE 断线
-   不保证后台继续，客户端仍需查询持久状态并按安全恢复规则操作；
-7. Web 工作台和 API 没有身份认证、CSRF 防护、设备配对或 Remote Gateway，只能绑定受信任本机地址；
+6. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，Phase 1E GUI 也会按同 scope Cursor
+   回放并查询投影校正，但仍不支持任意模型流位置续传；SSE 断线不保证后台继续。冻结协议没有
+   Session 列表/详情 Query，因此刷新后 GUI 只能从 Thread 的权威 `session_id` 恢复运行入口，并把角色/
+   模型详情明确标为未查询，不能伪造本地详情；
+7. Web 工作台、Phase 1E GUI 和 API 没有身份认证、CSRF 防护、设备配对或 Remote Gateway，只能绑定
+   受信任本机地址。GUI 生产部署还要求受信任的同源反向代理把 `/v1` 转给 Core；开发环境由 Vite
+   proxy 提供该路径，不开放 Core CORS，也不得直接暴露到公网；
 8. Evaluation Runner v1 已有可复现 Suite、隔离 artifact、外部验证、指标和五类 Trace RCA，但模型
    价格仍须由配置/Suite 固定提供，尚无自动价格发现、Evaluation Run 级总预算与调度、统计显著性、
    真实模型 Exp 19—24 结果或逐 Result 断点续跑；中断组合会保留为不可重放的 Interrupted Result，
@@ -1591,9 +1672,11 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 9. Docker Runner 已跑通真实隔离集成用例，第三周六角色 Workflow 也已在可信临时 Host fixture 上
     完成真实模型验收；两者仍是不同证据，尚未完成“真实模型 + Docker Coder”的同一次端到端验收，
     也尚未构建专用 Operant 镜像；
-10. 通用 Graph Runtime、Definition/Revision、Team/Mailbox、React GUI/PWA、TUI、Tauri、Remote
-    Control、Host Connector、自托管 Relay、Remote Gateway 和 Remote Execution Target 均未实现；
-    当前 `/web` 与 `/v1/*` 不能作为这些目标能力的实现证据，也不得直接暴露到公网。
+10. React GUI 只实现 Phase 1E 的 8-operation live 基线；导入草稿中的 Graph、Team、Skill/MCP、
+    Scheduler、Remote 等页面仍是明确的 Mock/demo，不是后端实现证据。通用 Graph Runtime、
+    Definition/Revision、Team/Mailbox、完整 PWA、TUI、Tauri、Remote Control、Host Connector、自托管
+    Relay、Remote Gateway 和 Remote Execution Target 均未实现，当前 `/web` 与 `/v1/*` 也不得直接
+    暴露到公网。
 11. Artifact 已有对象级 Retention、Pin、宽限期、Trash、只读审计和显式孤儿修复，但
     Session/Workflow/Evaluation 事件、Thread Canonical History、Tool/Command Receipt、Approval Audit、
     Memory 和 Context/Compaction 仍没有清理执行器，会随运行持续增长；Artifact 也没有后台自动清扫，
@@ -1610,6 +1693,9 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
     MCP 与 Scheduler 仍按 COM-20260831-004 拆为后续阶段，当前没有动态命令注册、MCP transport 或
     定时副作用执行。BTW Sidecar 的主动取消通知仍是本进程协作式信号；跨进程重启只会安全标为
     `process_interrupted`，不会从任意模型流位置恢复或自动继续。
+15. GUI 当前生产 bundle 约 777 kB，Vite 会给出大 chunk 警告；Phase 1E 尚未做按路由拆包、真实大目录/
+    长事件流性能基准、浏览器矩阵或 Tauri WebView 验收。旧 demo SDK 类型继续只服务明确 Mock 表面，
+    不得扩展为第二套正式协议；后续 live operation 必须先进入单一 Schema 再生成两种 Client。
 
 ## 19. 文档维护规则
 
@@ -1640,6 +1726,30 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-09-02
+
+- 从 `origin/main@27fb387`（PR #9）建立隔离集成与三条独立执行线，清点后只导入 77 个 `clients/`、
+  `sdk/` 源码/配置文件，排除 `node_modules`、`dist`、缓存和构建产物；共享目录中的前端草稿未被修改；
+- 冻结 `phase1e.v1` 单一 OpenAPI Schema 与 8 个正式 operation，加入确定性离线生成器和
+  TypeScript/Python Client；统一严格版本/digest 协商、Receipt/幂等、错误信封、无损 `int64` Cursor、
+  有界增量 SSE 解析和同 scope 回放，生成两次保持 clean diff；
+- 新增只读 Project/Workspace 聚合和安全目录 metadata 浏览；文件遍历逐组件拒绝软链接、敏感文件、
+  越界路径和并发目录替换，不新增 SQLite Migration，也不返回正文或绝对宿主路径；
+- `CreateSessionRequest` 增加兼容的可选 `thread_id`，Store 在单一 `BEGIN IMMEDIATE` 事务中创建 Session
+  与唯一 legacy ref；React GUI live 以 Thread 投影恢复既有 Session，未查询的角色/模型详情保持明确
+  unknown，不让客户端缓存覆盖 Core 绑定事实；
+- React GUI 保留明确标识的演示模式，live 路径只消费生成 Client，并通过同源 `/v1` 接入本地 Core；
+  打通 Project、Thread、Session、Run SSE、Cursor replay/reconnect、Approval 与错误/人工核对显示，任何
+  失败都不静默回退或混合 Mock。Graph、Team、Skill/MCP、Scheduler、OAuth、Remote、TUI 和 Tauri
+  仍明确排除；
+- 最终复核补齐 SSE 首帧 `id`/JSON/SQLite Cursor 三方一致、Session/Thread 稳定 404/409、Python/TS
+  parser line-frame-data 上限，以及 GUI 的 Thread 切换锁、全部已知失败终态、Approval 查询乱序隔离、
+  Session Approval 作用域、Modal/Drawer 标题语义、键盘 separator 和 320 px 窄屏；
+- 两位独立 `luna-max` Reviewer 在返工后分别复核 GUI 与协议/后端集成，最终 P0/P1/P2 均为 0；
+- COM-20260901-001/002 只接受调整后的 Workspace 只读聚合与安全文件 metadata；模板实例、群聊、
+  Provider 批量导入、OAuth、Task/知识库、全局审批模式和 Workspace Skill symlink 均延期到对应阶段，
+  客户端 demo 不能作为后端契约证据。
 
 ### 2026-09-01
 

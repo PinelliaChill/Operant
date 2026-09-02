@@ -1,0 +1,587 @@
+import type { Phase1E } from '@operant/sdk';
+
+/**
+ * Presentation state for the Phase 1E live surface.
+ *
+ * Values received from Core are generated `Phase1E` types. These small view
+ * models only add labels/relationship indexes needed by React; they do not
+ * define another wire protocol or infer relationships from a workspace path.
+ */
+export type Cursor = Phase1E.Cursor;
+export type GeneratedProjectProjection = Phase1E.ProjectProjection;
+export type GeneratedThreadProjection = Phase1E.ThreadProjection;
+export type GeneratedSession = Phase1E.Session;
+export type GeneratedApprovalProjection = Phase1E.ApprovalProjection;
+export type GeneratedRunSessionStream = Phase1E.RunSessionStream;
+export type GeneratedRunSessionRequest = Phase1E.RunSessionRequest;
+export type GeneratedRunSessionOptions = Phase1E.RunSessionStreamOptions;
+export type GeneratedCreateSessionRequest = Phase1E.CreateSessionRequest;
+export type GeneratedCreateSessionOptions = Phase1E.CreateSessionOptions;
+export type GeneratedCreateRole = Phase1E.CreateRole;
+export type GeneratedApprovalDecisionResult = Phase1E.ApprovalDecisionResult;
+
+export interface LiveProjectProjection {
+  /** Exact generated `project_id`. */
+  id: string;
+  /** A safe display label derived from the generated workspace reference. */
+  name: string;
+  workspaceRef: string;
+  readable: boolean;
+  writable: boolean;
+  createdAt: string;
+  /** Exact IDs from `ProjectProjection.threads[]`. */
+  threadIds: string[];
+  /** Exact IDs from `ProjectProjection.workflow_runs[]`. */
+  runIds: string[];
+}
+
+export interface LiveWorkspaceFile {
+  path: string;
+  name: string;
+  kind: 'file' | 'directory';
+  /** Keep int64 values as number|bigint. Never coerce a large value to number. */
+  size: Cursor | null;
+  modifiedAt: string | null;
+}
+
+export interface LiveThread {
+  /** Exact generated `ThreadProjection.id`. */
+  id: string;
+  /** Phase 1E has no title field; the ID is the only honest label. */
+  title: string;
+  workspaceRef: string | null;
+  /** UI aliases keep labels readable; both values are the generated projection. */
+  workspace: string;
+  status: Phase1E.ThreadStatus;
+  createdAt: string;
+  updatedAt: string;
+  created_at: string;
+  updated_at: string;
+  archivedAt: string | null;
+  /** Exact generated `ThreadProjection.legacy_refs`. */
+  legacyRefs: Phase1E.ThreadLegacyRef[];
+  /** Exact `source_id` for the session legacy ref, or null when absent. */
+  sessionId: string | null;
+  session_id: string | null;
+  /** Exact `source_id` for the workflow_run legacy ref, or null when absent. */
+  workflowRunId: string | null;
+}
+
+export interface LiveSession extends GeneratedSession {}
+
+/**
+ * A selectable Session may come from the page-local createSession cache or
+ * from a Thread projection.  Projection-only entries intentionally have no
+ * Session details: Phase 1E has no Session list/detail Query.
+ */
+export interface LiveSessionOption {
+  /** Exact server Session ID used by runSessionStream. */
+  id: string;
+  /** Details are present only when this page created the Session. */
+  details?: LiveSession;
+  /** Null means the cached Session has not yet appeared in a Thread projection. */
+  boundThreadId: string | null;
+}
+
+export interface LiveApproval {
+  /** Generated approval_id, carried with its required session scope. */
+  id: string;
+  sessionId: string;
+  session_id: string;
+  toolCallId: string;
+  category: string;
+  detail: string;
+  actionHash: string;
+  status: Phase1E.ApprovalStatus;
+  requestedAt: string;
+  expiresAt: string;
+  continuationAvailable: boolean;
+}
+
+/** No message Query is in the Schema; this shape is intentionally never populated in live mode. */
+export interface LiveMessage {
+  id: string;
+  role: string;
+  content: string;
+  sender: { name: string };
+}
+
+/** One generated SSE frame after adding the UI's stable event key fields. */
+export interface LiveEvent {
+  id: string;
+  sequence: Cursor | null;
+  event_type: string;
+  session_id?: string;
+  thread_id?: string;
+  occurred_at?: string;
+  payload: Record<string, unknown>;
+  /** Preserve a typed error carried in SSE data, including its detail. */
+  error?: LiveError;
+  detail?: unknown;
+  resource_scope: string;
+  stream_kind: string;
+}
+
+export type LiveStreamStatus = 'idle' | 'connecting' | 'replaying' | 'connected' | 'error';
+
+export interface LiveStreamState {
+  status: LiveStreamStatus;
+  cursor: Cursor | null;
+  events: LiveEvent[];
+  lastEvent?: LiveEvent;
+  error?: LiveError;
+}
+
+export interface LiveError {
+  code: string;
+  message: string;
+  retryable: boolean;
+  recovery?: string;
+  /** Core may attach structured recovery evidence to an error. */
+  detail?: unknown;
+}
+
+export interface LiveConnectionLoss {
+  phase: 'connecting' | 'error';
+  streamStatus: 'replaying';
+  projectionStale: true;
+  error: LiveError;
+}
+
+/** Resolve a newly-created Session only through an exact legacy session ref. */
+export function threadForSession(
+  threads: readonly LiveThread[],
+  sessionId: string,
+): LiveThread | undefined {
+  return threads.find((thread) => thread.sessionId === sessionId);
+}
+
+/**
+ * Merge page-local Session details with authoritative Thread bindings.
+ *
+ * A projection binding is enough to run a Session even after a reload, while
+ * a cached Session must never be treated as bound until the Core returns the
+ * exact Session ID on a Thread.  Keep one option per ID so a just-created
+ * cached Session is upgraded with its binding instead of rendered twice.
+ */
+export function sessionOptionsFor(
+  threads: readonly LiveThread[],
+  sessions: readonly LiveSession[],
+): LiveSessionOption[] {
+  const boundThreadBySessionId = new Map<string, string>();
+  for (const thread of threads) {
+    if (thread.sessionId && !boundThreadBySessionId.has(thread.sessionId)) {
+      boundThreadBySessionId.set(thread.sessionId, thread.id);
+    }
+  }
+
+  const options: LiveSessionOption[] = [];
+  const seen = new Set<string>();
+  for (const session of sessions) {
+    if (!session.id || seen.has(session.id)) continue;
+    seen.add(session.id);
+    options.push({
+      id: session.id,
+      details: session,
+      boundThreadId: boundThreadBySessionId.get(session.id) ?? null,
+    });
+  }
+
+  for (const [sessionId, threadId] of boundThreadBySessionId) {
+    if (seen.has(sessionId)) continue;
+    seen.add(sessionId);
+    options.push({ id: sessionId, boundThreadId: threadId });
+  }
+  return options;
+}
+
+/** A Session Command may target only an explicit, active, unbound Thread. */
+export function canBindSessionToThread(thread: LiveThread | undefined): boolean {
+  return thread !== undefined
+    && thread.status === 'active'
+    && thread.sessionId === null;
+}
+
+export function connectionLossState(
+  status: 'disconnected' | 'reconnecting',
+): LiveConnectionLoss {
+  return {
+    phase: status === 'reconnecting' ? 'connecting' : 'error',
+    streamStatus: 'replaying',
+    projectionStale: true,
+    error: {
+      code: status === 'reconnecting' ? 'core_reconnecting' : 'core_disconnected',
+      message: status === 'reconnecting'
+        ? 'Core 连接正在重建，Projection 可能过期；命令与审批已禁用。'
+        : 'Core 已断开，Projection 可能过期；命令与审批已禁用。',
+      retryable: true,
+      recovery: 'retry_later',
+    },
+  };
+}
+
+export interface LiveCommandState {
+  status: 'idle' | 'sending' | 'awaiting_projection' | 'error';
+  error?: LiveError;
+  /** The stable key used for the current logical command, when present. */
+  idempotencyKey?: string;
+}
+
+export interface LiveActionState {
+  status: 'idle' | 'sending' | 'awaiting_projection' | 'error';
+  error?: LiveError;
+  idempotencyKey?: string;
+}
+
+export type LiveConnectionStatus = 'connected' | 'reconnecting' | 'disconnected' | 'mock_active';
+
+/**
+ * Approval actions have their own lifecycle.  A run command waiting for a
+ * projection is not an approval lock: Core may be waiting for this decision.
+ */
+export function canDecideApproval(
+  approval: Pick<LiveApproval, 'status'>,
+  action: Pick<LiveActionState, 'status'>,
+  connectionStatus: LiveConnectionStatus,
+  streamStatus: LiveStreamStatus,
+  manualReconcileRequired: boolean,
+): boolean {
+  return approval.status === 'pending'
+    && action.status === 'idle'
+    && !manualReconcileRequired
+    && connectionStatus === 'connected'
+    && streamStatus === 'connected';
+}
+
+/** Keep the selected Thread stable while an outcome is still unknown. */
+export function isThreadSelectionLocked(
+  currentThreadId: string | null,
+  nextThreadId: string | null,
+  hasPendingRun: boolean,
+  hasPendingSession: boolean,
+  commandStatus: LiveCommandState['status'],
+  hasPendingApproval = false,
+  approvalStatus: LiveActionState['status'] = 'idle',
+): boolean {
+  if (currentThreadId === nextThreadId) return false;
+  return hasPendingRun
+    || hasPendingSession
+    || hasPendingApproval
+    || commandStatus === 'sending'
+    || commandStatus === 'awaiting_projection'
+    || approvalStatus === 'sending'
+    || approvalStatus === 'awaiting_projection';
+}
+
+/** Explicit refreshes supersede an active stream; projection corrections do not. */
+export function projectionGeneration(current: number, invalidate: boolean): number {
+  return invalidate ? current + 1 : current;
+}
+
+/** A pending approval is cleared only after a successful Query no longer lists it. */
+export function approvalProjectionResolved(
+  sessionId: string,
+  approvalId: string,
+  approvals: readonly Pick<LiveApproval, 'sessionId' | 'id' | 'status'>[],
+): boolean {
+  return !approvals.some((approval) => (
+    approval.sessionId === sessionId
+    && approval.id === approvalId
+    && approval.status === 'pending'
+  ));
+}
+
+/** A correction response may update UI state only while it is the latest request. */
+export function isCurrentProjectionResponse(
+  requestSequence: number,
+  latestRequestSequence: number,
+  requestGeneration: number,
+  currentGeneration: number,
+): boolean {
+  return requestSequence === latestRequestSequence && requestGeneration === currentGeneration;
+}
+
+/** Chat only shows approvals scoped to its selected, server-bound Session. */
+export function approvalsForSession(
+  approvals: readonly LiveApproval[],
+  sessionId: string | null,
+): LiveApproval[] {
+  if (!sessionId) return [];
+  return approvals.filter((approval) => approval.sessionId === sessionId);
+}
+
+export interface LiveCreateSessionInput {
+  /** Exactly one of roleId and newRole must be supplied. */
+  roleId?: string;
+  newRole?: GeneratedCreateRole;
+  /** The exact currently selected active Thread to bind atomically. */
+  threadId: string;
+  modelProfileId?: string;
+  effort?: string;
+  budgetOverrides?: Record<string, unknown>;
+}
+
+/** Event key is scoped by resource, stream kind, and lossless cursor. */
+export function eventKey(scope: string, event: LiveEvent): string {
+  const resourceScope = event.resource_scope || scope;
+  const streamKind = event.stream_kind || 'unknown';
+  if (event.sequence !== null && event.sequence !== undefined) {
+    return `${resourceScope}\0${streamKind}\0${BigInt(event.sequence).toString()}`;
+  }
+  return `${resourceScope}\0${streamKind}\0event:${event.id}`;
+}
+
+function maxCursor(previous: Cursor | null, next: Cursor | null): Cursor | null {
+  if (next === null || next === undefined) return previous;
+  if (previous === null || previous === undefined) return next;
+  return BigInt(next) >= BigInt(previous) ? next : previous;
+}
+
+export function cursorFromEvent(event: LiveEvent, previous: Cursor | null): Cursor | null {
+  return maxCursor(previous, event.sequence);
+}
+
+export interface EventAccumulator {
+  cursor: Cursor | null;
+  events: LiveEvent[];
+  seen: ReadonlySet<string>;
+}
+
+/** Keep the visible timeline bounded while the current stream stays live. */
+export const LIVE_EVENT_WINDOW_SIZE = 256;
+
+/**
+ * Reducer used by the GUI timeline. It only records committed frames and
+ * never treats a frame or receipt as the authoritative run/approval state.
+ */
+export function reduceEvent(
+  current: EventAccumulator,
+  scope: string,
+  event: LiveEvent,
+): EventAccumulator {
+  const key = eventKey(scope, event);
+  if (current.seen.has(key)) return current;
+
+  const seen = new Set(current.seen);
+  seen.add(key);
+  const events = [...current.events, event];
+  if (events.length > LIVE_EVENT_WINDOW_SIZE) {
+    const evicted = events.shift();
+    if (evicted) seen.delete(eventKey(scope, evicted));
+  }
+  return {
+    cursor: cursorFromEvent(event, current.cursor),
+    events,
+    seen,
+  };
+}
+
+export function emptyEventAccumulator(cursor: Cursor | null = 0): EventAccumulator {
+  return { cursor, events: [], seen: new Set<string>() };
+}
+
+const TERMINAL_EVENT_TYPES = new Set([
+  'agent.completed',
+  'agent.failed',
+  'agent.cancelled',
+  'agent.timed_out',
+  'budget.exhausted',
+  'agent.no_progress',
+  'agent.max_turns',
+  'session.run_failed',
+  'workflow.completed',
+]);
+
+export type TerminalRunOutcome = 'completed' | 'failed' | 'cancelled' | 'timed_out';
+
+export function terminalRunOutcome(event: LiveEvent): TerminalRunOutcome | null {
+  switch (event.event_type) {
+    case 'agent.completed':
+    case 'workflow.completed':
+      return 'completed';
+    case 'agent.failed':
+      return 'failed';
+    case 'agent.cancelled':
+      return 'cancelled';
+    case 'agent.timed_out':
+      return 'timed_out';
+    case 'budget.exhausted':
+    case 'agent.no_progress':
+    case 'agent.max_turns':
+    case 'session.run_failed':
+      return 'failed';
+    default:
+      return null;
+  }
+}
+
+export function isTerminalEvent(event: LiveEvent): boolean {
+  return TERMINAL_EVENT_TYPES.has(event.event_type) && terminalRunOutcome(event) !== null;
+}
+
+function payloadText(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+/** Preserve a typed, visible error for a failed terminal SSE event. */
+export function terminalEventError(event: LiveEvent): LiveError | undefined {
+  const outcome = terminalRunOutcome(event);
+  if (outcome === null || outcome === 'completed') return undefined;
+  if (event.error) return event.error;
+
+  if (outcome === 'failed') {
+    const recoverable = event.payload.recoverable === true;
+    const errorCode: Record<string, string> = {
+      'agent.failed': 'agent_failed',
+      'budget.exhausted': 'budget_exhausted',
+      'agent.no_progress': 'agent_no_progress',
+      'agent.max_turns': 'agent_max_turns',
+      'session.run_failed': 'session_run_failed',
+    };
+    const fallbackMessage: Record<string, string> = {
+      'agent.failed': 'Core Agent 运行失败。',
+      'budget.exhausted': 'Core 运行预算已耗尽。',
+      'agent.no_progress': 'Core Agent 因连续无进展而停止。',
+      'agent.max_turns': 'Core Agent 已达到最大轮次。',
+      'session.run_failed': 'Core Session 运行失败。',
+    };
+    return {
+      code: errorCode[event.event_type] || 'agent_failed',
+      message: payloadText(event.payload, 'message')
+        || payloadText(event.payload, 'reason')
+        || payloadText(event.payload, 'reason_code')
+        || fallbackMessage[event.event_type]
+        || `Core ${event.event_type}。`,
+      retryable: recoverable,
+      recovery: recoverable ? 'retry_later' : 'none',
+      detail: event.payload,
+    };
+  }
+  if (outcome === 'cancelled') {
+    return {
+      code: 'agent_cancelled',
+      message: payloadText(event.payload, 'reason') || 'Core Agent 已取消。',
+      retryable: false,
+      recovery: 'none',
+      detail: event.payload,
+    };
+  }
+  const timeoutSeconds = event.payload.timeout_seconds;
+  const timeoutLabel = typeof timeoutSeconds === 'number' || typeof timeoutSeconds === 'string'
+    ? `（${timeoutSeconds} 秒）`
+    : '';
+  return {
+    code: 'agent_timed_out',
+    message: `Core Agent 运行已超时${timeoutLabel}。`,
+    retryable: true,
+    recovery: 'retry_later',
+    detail: event.payload,
+  };
+}
+
+/** A committed terminal event releases only an in-flight run command. */
+export function commandStateAfterTerminalEvent(
+  event: LiveEvent,
+  current: LiveCommandState,
+): LiveCommandState {
+  if (!isTerminalEvent(event)) return current;
+  return current.status === 'sending' || current.status === 'awaiting_projection'
+    ? { status: 'idle' }
+    : current;
+}
+
+export function isApprovalProjectionEvent(event: LiveEvent): boolean {
+  return event.event_type.includes('approval');
+}
+
+export function isManualReconcileValue(value: unknown): boolean {
+  return value === 'manual_reconcile_required'
+    || value === 'manual_reconcile'
+    || value === 'outcome_unknown';
+}
+
+export function containsManualReconcile(value: unknown, seen = new Set<unknown>()): boolean {
+  if (isManualReconcileValue(value)) return true;
+  if (typeof value !== 'object' || value === null || seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) return value.some((item) => containsManualReconcile(item, seen));
+  return Object.values(value).some((item) => containsManualReconcile(item, seen));
+}
+
+/**
+ * A typed, deterministic rejection proves that an approval decision was not
+ * left in an unknown state. Transport/unknown and manual-reconcile errors
+ * must keep the pending lock so the same command can be retried or audited.
+ */
+export function shouldReleaseApprovalPending(
+  error: Pick<LiveError, 'code' | 'retryable' | 'recovery'> & { detail?: unknown },
+): boolean {
+  const code = error.code.toLowerCase();
+  return !error.retryable
+    && error.recovery !== 'manual_reconcile'
+    && !code.includes('manual_reconcile')
+    && !code.includes('unknown')
+    && code !== 'invalid_error_envelope'
+    && code !== 'transport_unavailable'
+    && !containsManualReconcile(error.detail);
+}
+
+/** Normal SSE EOF before a terminal event leaves the run outcome unknown. */
+export function streamEndedBeforeTerminalError(): LiveError {
+  return {
+    code: 'stream_ended_before_terminal',
+    message: 'Live SSE 在收到终态前结束，运行结果未知；请重连并使用原 idempotency key 重放。',
+    retryable: true,
+    recovery: 'retry_same_idempotency_key',
+  };
+}
+
+export function eventNeedsManualReconcile(event: LiveEvent): boolean {
+  return event.error?.recovery === 'manual_reconcile'
+    || containsManualReconcile(event.error)
+    || containsManualReconcile(event.detail)
+    || containsManualReconcile(event.payload);
+}
+
+/** Include the action in an approval idempotency namespace. */
+export function approvalActionKey(
+  sessionId: string,
+  approvalId: string,
+  decision: 'approve' | 'reject',
+): string {
+  return `${sessionId}\0${approvalId}\0${decision}`;
+}
+
+export function threadNeedsManualReconcile(_thread: LiveThread | undefined): boolean {
+  // ThreadProjection deliberately has no free-form metadata. Recovery is
+  // therefore sticky in LiveContext and can only be raised by a typed error,
+  // receipt, or committed SSE payload.
+  return false;
+}
+
+export function formatCursor(cursor: Cursor | null | undefined): string {
+  return cursor === null || cursor === undefined ? '—' : BigInt(cursor).toString();
+}
+
+export function safeText(value: string | null | undefined, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+/** Generate one stable key for one logical command. */
+let fallbackKeyCounter = 0;
+export function createIdempotencyKey(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID();
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  // The generated client itself will reject an unavailable crypto API. This
+  // fallback is only useful in test doubles and remains unique per process.
+  fallbackKeyCounter += 1;
+  return `gui-test-${Date.now().toString(36)}-${fallbackKeyCounter.toString(36)}`;
+}

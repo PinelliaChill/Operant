@@ -6324,6 +6324,7 @@ class SQLiteStore:
         model_profile_id: str | None = None,
         effort: str | None = None,
         budget_overrides: dict[str, Any] | None = None,
+        thread_id: str | None = None,
     ) -> Session:
         role = self.get_role(role_id)
         if role.status is RoleStatus.INACTIVE:
@@ -6375,10 +6376,38 @@ class SQLiteStore:
         )
         session = Session(role_snapshot=snapshot)
         with self._connect() as connection:
-            connection.execute(
-                "INSERT INTO sessions(id, body, created_at) VALUES (?, ?, ?)",
-                (session.id, session.model_dump_json(), session.created_at.isoformat()),
-            )
+            # The session row and its canonical Thread legacy reference are a
+            # single identity boundary.  Validate and write both on the same
+            # transaction so a bad/competing Thread can never leave an
+            # unbound Session behind.
+            connection.execute("BEGIN IMMEDIATE")
+            if thread_id is not None:
+                self._assert_active_thread(connection, thread_id)
+                existing_session_ref = connection.execute(
+                    """
+                    SELECT source_id FROM thread_legacy_refs
+                    WHERE thread_id = ? AND source_type = 'session'
+                    """,
+                    (thread_id,),
+                ).fetchone()
+                if existing_session_ref is not None:
+                    raise ConflictError("thread is already bound to a session")
+            try:
+                connection.execute(
+                    "INSERT INTO sessions(id, body, created_at) VALUES (?, ?, ?)",
+                    (session.id, session.model_dump_json(), session.created_at.isoformat()),
+                )
+                if thread_id is not None:
+                    connection.execute(
+                        """
+                        INSERT INTO thread_legacy_refs(
+                            thread_id, source_type, source_id, created_at
+                        ) VALUES (?, 'session', ?, ?)
+                        """,
+                        (thread_id, session.id, session.created_at.isoformat()),
+                    )
+            except sqlite3.IntegrityError as exc:
+                raise ConflictError("session or Thread legacy mapping already exists") from exc
         return session
 
     def get_session(self, session_id: str) -> Session:
@@ -10315,6 +10344,7 @@ class SQLiteStore:
         self,
         *,
         status: WorkflowRunStatus | str | None = None,
+        workspace_ref: str | None = None,
         limit: int | None = None,
     ) -> list[WorkflowRun]:
         parameters: list[Any] = []
@@ -10325,6 +10355,12 @@ class SQLiteStore:
             )
             conditions.append("status = ?")
             parameters.append(normalized_status.value)
+        if workspace_ref is not None:
+            # Workflow Run predates the Workspace projection and stores its
+            # normalized workspace only in the immutable JSON body. Keep the
+            # join exact; do not resolve aliases or infer legacy ownership.
+            conditions.append("json_extract(body, '$.workspace') = ?")
+            parameters.append(workspace_ref)
         query = "SELECT body FROM workflow_runs"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -11386,6 +11422,18 @@ class SQLiteStore:
             ).fetchone()
         if row is None:
             raise NotFoundError(f"Workspace initialization not found: {workspace_hash}")
+        return self._workspace_initialization_from_row(row)
+
+    def get_workspace_initialization_by_id(self, workspace_id: str) -> WorkspaceInitialization:
+        """Return one immutable workspace registration by its public projection ID."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workspace_initializations WHERE id = ?",
+                (workspace_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"Workspace initialization not found: {workspace_id}")
         return self._workspace_initialization_from_row(row)
 
     def list_workspace_initializations(

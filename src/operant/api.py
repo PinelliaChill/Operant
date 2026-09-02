@@ -26,7 +26,16 @@ from starlette.background import BackgroundTask
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from operant.application.client_projection import (
+    ProjectProjectionCursorError,
+    ProjectProjectionError,
+    WorkspaceProjectionError,
+)
 from operant.application.evaluation import EvaluationRunner
+from operant.application.protocol_metadata import (
+    ProtocolSchemaUnavailable,
+    phase1e_protocol_metadata,
+)
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
 from operant.artifacts import (
@@ -293,6 +302,7 @@ class CreateSessionRequest(BaseModel):
     model_profile_id: str | None = None
     effort: Effort | None = None
     budget_overrides: dict[str, Any] | None = None
+    thread_id: str | None = Field(default=None, min_length=1, max_length=300)
 
     @model_validator(mode="after")
     def validate_role_source(self) -> CreateSessionRequest:
@@ -905,12 +915,18 @@ def _first_sse_frame_end(buffer: bytes) -> int | None:
     return min(boundaries, default=None)
 
 
-def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any]] | None:
+def _parse_sse_frame_fields(frame: bytes) -> tuple[str, dict[str, Any], str | None] | None:
     event_type = "message"
+    event_id: str | None = None
     data_lines: list[str] = []
-    text = frame.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    try:
+        text = frame.decode("utf-8").replace("\r\n", "\n")
+    except UnicodeDecodeError:
+        return None
     for line in text.splitlines():
-        if line.startswith("event:"):
+        if line.startswith("id:"):
+            event_id = line[3:].strip()
+        elif line.startswith("event:"):
             event_type = line[6:].strip()
         elif line.startswith("data:"):
             data_lines.append(line[5:].lstrip())
@@ -922,7 +938,28 @@ def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any]] | None:
         return None
     if not isinstance(payload, dict):
         return None
-    return event_type, payload
+    return event_type, payload, event_id
+
+
+def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any], int] | None:
+    parsed = _parse_sse_frame_fields(frame)
+    if parsed is None:
+        return None
+    event_type, payload, event_id = parsed
+    if event_id is None:
+        return None
+    try:
+        parsed_event_id = _parse_event_cursor(event_id, field_name="SSE id")
+        if isinstance(payload.get("cursor"), bool) or not isinstance(payload.get("cursor"), int):
+            return None
+        payload_cursor = _parse_event_cursor(str(payload["cursor"]), field_name="payload.cursor")
+    except (KeyError, ValueError):
+        return None
+    if parsed_event_id is None:
+        return None
+    if payload_cursor != parsed_event_id:
+        return None
+    return event_type, payload, parsed_event_id
 
 
 def _phase1d_stream_start_error(kind: str, exc: Exception) -> dict[str, Any]:
@@ -990,7 +1027,9 @@ def _stream_resource(
         try:
             if resource_type == "session":
                 events = store.list_events(resource_id, after_cursor=cursor - 1, limit=1)
-                return bool(events and events[0].cursor == cursor)
+                return bool(
+                    events and events[0].cursor == cursor and events[0].session_id == resource_id
+                )
             elif resource_type == "workflow":
                 workflow_events = store.list_workflow_events(
                     resource_id,
@@ -1007,6 +1046,28 @@ def _stream_resource(
                 return bool(evaluation_events and evaluation_events[0].cursor == cursor)
         except (NotFoundError, ValueError):
             return False
+
+    if path.startswith("/v1/sessions/") and path.endswith("/runs"):
+        path_session_id = path[len("/v1/sessions/") : -len("/runs")]
+        payload_session_id = payload.get("session_id")
+        if (
+            not path_session_id
+            or "/" in path_session_id
+            or len(path_session_id) > 300
+            or (
+                payload_session_id is not None
+                and (
+                    not isinstance(payload_session_id, str) or payload_session_id != path_session_id
+                )
+            )
+        ):
+            return None, None, None, None
+        return (
+            "session",
+            path_session_id,
+            f"/v1/sessions/{quote(path_session_id, safe='')}/events",
+            durable_cursor if is_committed("session", path_session_id, durable_cursor) else None,
+        )
 
     for resource_type, key, replay_template in candidates:
         resource_id = payload.get(key)
@@ -1076,7 +1137,10 @@ def _stream_resource(
                 f"/v1/sessions/{quote(encoded_id, safe='')}/events",
                 durable_cursor if is_committed("session", encoded_id, durable_cursor) else None,
             )
-    return None, None, None, durable_cursor
+    # A payload cursor is only a claim until it is tied to a concrete resource
+    # row above.  Never let an unrecognised resource turn that claim into a
+    # SQLite cursor during first-frame receipt acceptance.
+    return None, None, None, None
 
 
 def _first_stream_summary(
@@ -1094,26 +1158,41 @@ def _first_stream_summary(
     str | None,
 ]:
     parsed = _parse_sse_frame(frame)
+    cursor_verified = parsed is not None
     if parsed is None:
-        return (
-            CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
-            None,
-            "stream_first_frame_invalid",
-            409,
-            None,
-            None,
-        )
-    event_type, payload = parsed
-    resource_type, resource_id, replay_url, cursor = _stream_resource(
+        unvalidated = _parse_sse_frame_fields(frame)
+        if unvalidated is None or unvalidated[0] not in _FAILED_FIRST_STREAM_EVENTS:
+            return (
+                CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
+                None,
+                "stream_first_frame_invalid",
+                409,
+                None,
+                None,
+            )
+        event_type, payload, _event_id = unvalidated
+        event_id = None
+    else:
+        event_type, payload, event_id = parsed
+    resource_type, resource_id, replay_url, sqlite_cursor = _stream_resource(
         store=store,
         path=path,
         event_type=event_type,
         payload=payload,
     )
+    if cursor_verified and sqlite_cursor != event_id:
+        return (
+            CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
+            None,
+            "stream_first_frame_invalid",
+            409,
+            resource_type,
+            resource_id,
+        )
     is_failed = event_type in _FAILED_FIRST_STREAM_EVENTS
     is_unknown = event_type in _UNKNOWN_FIRST_STREAM_EVENTS
     replay_available = (
-        resource_id is not None and cursor is not None and not (is_failed or is_unknown)
+        resource_id is not None and sqlite_cursor is not None and not (is_failed or is_unknown)
     )
     summary: dict[str, Any] = {
         "command_kind": "stream",
@@ -1615,6 +1694,104 @@ def create_app(
     @app.get("/healthz")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/protocol", response_model=None)
+    async def get_protocol() -> dict[str, Any] | JSONResponse:
+        try:
+            return phase1e_protocol_metadata()
+        except ProtocolSchemaUnavailable:
+            # Do not return a made-up digest when the generated Schema line
+            # has not installed its manifest yet. Clients must fail closed.
+            return JSONResponse(
+                status_code=503,
+                content=error_payload(
+                    code="protocol_schema_unavailable",
+                    message="generated protocol Schema digest is unavailable",
+                    recovery=RecoveryAction.RETRY_LATER,
+                    retryable=True,
+                ),
+            )
+
+    @app.get("/v1/projects", response_model=None)
+    async def list_projects(
+        after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ) -> list[dict[str, Any]] | JSONResponse:
+        try:
+            projects = service.list_project_projections(
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+            return [project.model_dump(mode="json") for project in projects]
+        except ProjectProjectionCursorError:
+            return JSONResponse(
+                status_code=400,
+                content=error_payload(
+                    code="invalid_project_cursor",
+                    message="project cursor or limit is invalid",
+                    recovery=RecoveryAction.REFRESH_AND_RETRY,
+                ),
+            )
+        except ProjectProjectionError as exc:
+            recovery = RecoveryAction(exc.recovery)
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=error_payload(
+                    code=exc.code,
+                    message=exc.message,
+                    recovery=recovery,
+                    retryable=exc.status_code in {408, 425, 429, 502, 503, 504},
+                ),
+            )
+
+    @app.get("/v1/workspaces/{workspace_id}/files", response_model=None)
+    async def list_workspace_file_metadata(
+        workspace_id: str,
+        path: str = Query(default=".", min_length=1, max_length=4_096),
+        limit: int = Query(default=100, ge=1, le=200),
+        page_token: str | None = Query(default=None, max_length=2_000),
+        snapshot: str | None = Query(default=None, max_length=64),
+        after_name: str | None = Query(default=None, max_length=255),
+        after: str | None = Query(default=None, max_length=255),
+    ) -> dict[str, Any] | JSONResponse:
+        if after_name is not None and after is not None and after_name != after:
+            return JSONResponse(
+                status_code=400,
+                content=error_payload(
+                    code="workspace_page_token_invalid",
+                    message="conflicting directory page anchors were provided",
+                    recovery=RecoveryAction.REFRESH_AND_RETRY,
+                ),
+            )
+        try:
+            page = service.list_workspace_files(
+                workspace_id,
+                path=path,
+                limit=limit,
+                page_token=page_token,
+                snapshot=snapshot,
+                after_name=after_name if after_name is not None else after,
+            )
+            return page.model_dump(mode="json")
+        except NotFoundError:
+            return JSONResponse(
+                status_code=404,
+                content=error_payload(
+                    code="workspace_not_registered",
+                    message="workspace is not registered",
+                ),
+            )
+        except WorkspaceProjectionError as exc:
+            recovery = RecoveryAction(exc.recovery)
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=error_payload(
+                    code=exc.code,
+                    message=exc.message,
+                    recovery=recovery,
+                    retryable=exc.status_code in {408, 425, 429, 502, 503, 504},
+                ),
+            )
 
     @app.get("/v1/slash-commands")
     async def list_slash_commands() -> dict[str, Any]:
@@ -2518,10 +2695,10 @@ def create_app(
         )
         return [observation.model_dump(mode="json") for observation in observations]
 
-    @app.post("/v1/sessions", status_code=201)
+    @app.post("/v1/sessions", status_code=201, response_model=None)
     async def create_session(
         request: CreateSessionRequest,
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | JSONResponse:
         try:
             session = service.create_session(
                 request.role_id,
@@ -2529,8 +2706,32 @@ def create_app(
                 model_profile_id=request.model_profile_id,
                 effort=(None if request.effort is None else request.effort.value),
                 budget_overrides=request.budget_overrides,
+                thread_id=request.thread_id,
             )
-        except (NotFoundError, ConflictError, ValueError) as exc:
+        except NotFoundError as exc:
+            if request.thread_id is not None and str(exc).startswith("thread not found:"):
+                return protocol_response(
+                    status_code=404,
+                    code="thread_not_found",
+                    message="thread not found",
+                )
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictError as exc:
+            conflict = str(exc)
+            if conflict == "thread is not active":
+                return protocol_response(
+                    status_code=409,
+                    code="thread_not_active",
+                    message="thread is not active",
+                )
+            if "thread is already bound" in conflict or "Thread legacy mapping" in conflict:
+                return protocol_response(
+                    status_code=409,
+                    code="thread_already_bound",
+                    message="thread is already bound to a session",
+                )
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return session.model_dump(mode="json")
 

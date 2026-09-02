@@ -1,0 +1,276 @@
+/* ============================================================
+   协作模块：实例行 / 「···」菜单 / 总览双栏（v6 包C）
+   供 WorkflowOverview 与 CollabSidebar 共用；「···」菜单交互惯例
+   对齐 components/ModeSwitchButton（Esc / 点击外部关闭、方向键移焦）。
+   独立文件，避免并行改动 layout.css（该文件归包A所有）。
+   ============================================================ */
+
+/* ---- 实例行：活跃行主区可点进会话，归档行为只读行 ---- */
+.inst-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 34px;
+  padding: 2px 2px 2px 6px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: background-color var(--dur-1) var(--ease-standard);
+}
+
+.inst-row:hover,
+.inst-row:focus-within {
+  background: var(--bg-subtle);
+}
+
+.inst-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inst-row-main:hover .inst-row-name {
+  color: var(--accent-action);
+}
+
+/* 归档只读行主区（非按钮） */
+.inst-row-static {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.inst-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inst-row-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ---- 「···」菜单：行 hover / 焦点落入或菜单展开时显示触发钮 ---- */
+.inst-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+}
+
+.inst-menu-btn {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-1) var(--ease-standard),
+    background-color var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+
+.inst-row:hover .inst-menu-btn,
+.inst-row:focus-within .inst-menu-btn,
+.inst-menu-btn[aria-expanded='true'] {
+  opacity: 1;
+}
+
+.inst-menu-btn:hover,
+.inst-menu-btn:focus-visible {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.inst-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 80;
+  min-width: 112px;
+  padding: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  animation: scaleIn var(--dur-2) var(--ease-out);
+}
+
+/* 靠近容器底部（归档区）时向上弹出 */
+.inst-menu--up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.inst-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background-color var(--dur-1) var(--ease-standard);
+}
+
+.inst-menu-item:hover {
+  background: var(--bg-subtle);
+}
+
+.inst-menu-item--danger {
+  color: var(--status-error-text);
+}
+
+.inst-menu-item--danger:hover {
+  background: var(--status-error-bg);
+}
+
+/* ---- 「已归档（N）」折叠开关：与分组标题 / 区块标题类搭配使用 ---- */
+.inst-arch-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.inst-arch-toggle:hover {
+  color: var(--text-primary);
+}
+
+.inst-arch-toggle-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  transition: transform var(--dur-1) var(--ease-standard);
+}
+
+.inst-arch-toggle[aria-expanded='true'] .inst-arch-toggle-chevron {
+  transform: rotate(90deg);
+}
+
+/* ---- 协作总览双栏（v6 包C）：左=模板列表，右=模板详情 ---- */
+/* 复合选择器压过 .section-inner 的 960px（本文件加载顺序早于 layout.css） */
+.section-inner.collab-overview-inner {
+  max-width: 1080px;
+}
+
+.collab-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.collab-overview-grid.templates-collapsed {
+  grid-template-columns: 1fr;
+}
+
+.collab-overview-grid.templates-expanded {
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+}
+
+@media (max-width: 719px) {
+  .collab-overview-grid,
+  .collab-overview-grid.templates-expanded {
+    grid-template-columns: 1fr;
+  }
+}
+
+.collab-ov-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.collab-ov-panel-title {
+  padding: 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* 模板行内「名称 + 版本徽章」一行 */
+.collab-ov-tpl-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.collab-ov-detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.collab-ov-detail-titlerow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.collab-ov-detail-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.collab-ov-detail-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.collab-ov-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
