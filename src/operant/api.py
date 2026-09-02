@@ -1027,7 +1027,9 @@ def _stream_resource(
         try:
             if resource_type == "session":
                 events = store.list_events(resource_id, after_cursor=cursor - 1, limit=1)
-                return bool(events and events[0].cursor == cursor)
+                return bool(
+                    events and events[0].cursor == cursor and events[0].session_id == resource_id
+                )
             elif resource_type == "workflow":
                 workflow_events = store.list_workflow_events(
                     resource_id,
@@ -1044,6 +1046,28 @@ def _stream_resource(
                 return bool(evaluation_events and evaluation_events[0].cursor == cursor)
         except (NotFoundError, ValueError):
             return False
+
+    if path.startswith("/v1/sessions/") and path.endswith("/runs"):
+        path_session_id = path[len("/v1/sessions/") : -len("/runs")]
+        payload_session_id = payload.get("session_id")
+        if (
+            not path_session_id
+            or "/" in path_session_id
+            or len(path_session_id) > 300
+            or (
+                payload_session_id is not None
+                and (
+                    not isinstance(payload_session_id, str) or payload_session_id != path_session_id
+                )
+            )
+        ):
+            return None, None, None, None
+        return (
+            "session",
+            path_session_id,
+            f"/v1/sessions/{quote(path_session_id, safe='')}/events",
+            durable_cursor if is_committed("session", path_session_id, durable_cursor) else None,
+        )
 
     for resource_type, key, replay_template in candidates:
         resource_id = payload.get(key)
