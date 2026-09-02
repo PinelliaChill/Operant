@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useId } from 'react';
 import { X } from 'lucide-react';
 import { useDialogA11y } from './useDialogA11y';
 
@@ -23,6 +23,7 @@ export const Drawer: React.FC<DrawerProps> = ({
   bodyStyle,
 }) => {
   const panelRef = useDialogA11y<HTMLDivElement>(isOpen, onClose);
+  const titleId = `drawer-title-${useId().replace(/:/g, '')}`;
 
   // 打开时禁止 body 滚动
   useEffect(() => {
@@ -53,6 +54,7 @@ export const Drawer: React.FC<DrawerProps> = ({
         ref={panelRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
         tabIndex={-1}
         style={{
           width,
@@ -80,7 +82,7 @@ export const Drawer: React.FC<DrawerProps> = ({
             backgroundColor: 'var(--bg-surface)',
           }}
         >
-          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
+          <h2 id={titleId} style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</h2>
           <button onClick={onClose} className="btn btn-ghost btn-icon" aria-label="关闭抽屉" style={{ padding: 4 }}>
             <X size={18} />
           </button>

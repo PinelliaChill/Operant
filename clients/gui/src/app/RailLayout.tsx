@@ -313,6 +313,13 @@ export const RailLayout: React.FC = () => {
   const [isResizing, setIsResizing] = useState(false);
   const isResizingRef = React.useRef(false);
 
+  const persistSidebarWidth = React.useCallback((nextWidth: number): number => {
+    const clamped = Math.min(480, Math.max(180, nextWidth));
+    setSidebarWidth(clamped);
+    localStorage.setItem('operant.sidebar.width', clamped.toString());
+    return clamped;
+  }, []);
+
   /** 收起当前分区侧栏：移动端=关闭抽屉；桌面=收起内联侧栏（按模式持久化） */
   const collapseSidebar = React.useCallback(() => {
     if (isMobile) {
@@ -348,9 +355,7 @@ export const RailLayout: React.FC = () => {
           return;
         }
 
-        const clamped = Math.min(480, Math.max(180, newWidth));
-        setSidebarWidth(clamped);
-        localStorage.setItem('operant.sidebar.width', clamped.toString());
+        persistSidebarWidth(newWidth);
       };
 
       const handleMouseUp = () => {
@@ -363,7 +368,7 @@ export const RailLayout: React.FC = () => {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [sidebarWidth, collapseSidebar]
+    [collapseSidebar, persistSidebarWidth, sidebarWidth]
   );
 
   /** 侧栏处于收起折叠状态下，在 Rail 右边缘按住向右拖拽直接展开侧栏 */
@@ -390,9 +395,7 @@ export const RailLayout: React.FC = () => {
         }
 
         if (hasExpanded) {
-          const clamped = Math.min(480, Math.max(180, delta));
-          setSidebarWidth(clamped);
-          localStorage.setItem('operant.sidebar.width', clamped.toString());
+          persistSidebarWidth(delta);
         }
       };
 
@@ -406,7 +409,7 @@ export const RailLayout: React.FC = () => {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     },
-    [isCollabSection, setCollabSidebarExpanded, setChatSidebarExpanded]
+    [isCollabSection, persistSidebarWidth, setCollabSidebarExpanded, setChatSidebarExpanded]
   );
 
   /** 展开当前分区侧栏（与头部"打开侧栏"按钮共用：移动端开抽屉 / 桌面展开内联侧栏） */
@@ -419,6 +422,24 @@ export const RailLayout: React.FC = () => {
       setChatSidebarExpanded(true);
     }
   }, [isMobile, isCollabSection, setCollabSidebarExpanded, setChatSidebarExpanded]);
+
+  const handleResizerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 40 : 16;
+    let nextWidth: number | undefined;
+    if (event.key === 'ArrowLeft') nextWidth = sidebarWidth - step;
+    if (event.key === 'ArrowRight') nextWidth = sidebarWidth + step;
+    if (event.key === 'Home') nextWidth = 180;
+    if (event.key === 'End') nextWidth = 480;
+    if (nextWidth === undefined) return;
+    event.preventDefault();
+    persistSidebarWidth(nextWidth);
+  }, [persistSidebarWidth, sidebarWidth]);
+
+  const handleExpandResizerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowRight' && event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    openSidebar();
+  }, [openSidebar]);
 
   // 协作模式画布摘要（CollabView 经 Outlet context 上抛，供 StatusBar 消费）
   const [collabStatus, setCollabStatus] = useState<CollabStatusInfo | null>(null);
@@ -518,8 +539,14 @@ export const RailLayout: React.FC = () => {
             <div
               className="rail-sidebar-resizer"
               onMouseDown={handleResizerMouseDown}
+              onKeyDown={handleResizerKeyDown}
               role="separator"
               aria-orientation="vertical"
+              aria-valuemin={180}
+              aria-valuemax={480}
+              aria-valuenow={sidebarWidth}
+              aria-valuetext={`${sidebarWidth}px`}
+              tabIndex={0}
               aria-label="拖拽调整侧栏宽度"
               title="拖拽调整侧栏宽度（向左拖至 160px 以下自动折叠收起）"
             />
@@ -530,8 +557,14 @@ export const RailLayout: React.FC = () => {
             <div
               className={`rail-sidebar-expand-resizer${isResizing ? ' resizing' : ''}`}
               onMouseDown={handleExpandResizerMouseDown}
+              onKeyDown={handleExpandResizerKeyDown}
               role="separator"
               aria-orientation="vertical"
+              aria-valuemin={180}
+              aria-valuemax={480}
+              aria-valuenow={sidebarWidth}
+              aria-valuetext={`${sidebarWidth}px；按 Enter 或向右键展开`}
+              tabIndex={0}
               aria-label="向右拖拽展开侧栏"
               title="向右拖拽直接展开侧栏（位移超过 60px 自动展开并随光标缩放宽度）"
             />

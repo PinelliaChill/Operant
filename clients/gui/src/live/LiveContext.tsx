@@ -38,6 +38,8 @@ import {
   emptyEventAccumulator,
   approvalActionKey,
   approvalProjectionResolved,
+  isCurrentProjectionResponse,
+  isThreadSelectionLocked,
   canBindSessionToThread,
   canDecideApproval,
   commandStateAfterTerminalEvent,
@@ -87,10 +89,10 @@ export interface LiveContextValue {
   createSessionUnavailableReason?: string;
   messageQueryAvailable: false;
   cancelCommandAvailable: false;
-  selectProject: (projectId: string | null) => void;
-  selectThread: (threadId: string | null) => void;
-  selectSession: (sessionId: string | null) => void;
-  resolveDeepLink: (threadId: string | null) => void;
+  selectProject: (projectId: string | null) => boolean;
+  selectThread: (threadId: string | null) => boolean;
+  selectSession: (sessionId: string | null) => boolean;
+  resolveDeepLink: (threadId: string | null) => boolean;
   refresh: () => Promise<void>;
   reconnect: () => Promise<void>;
   createSession: (input: LiveCreateSessionInput) => Promise<LiveSession | undefined>;
@@ -173,6 +175,15 @@ function manualReconcileError(value: unknown, fallback: string): LiveError {
   };
 }
 
+function threadSelectionLockedError(): LiveError {
+  return {
+    code: 'thread_switch_blocked',
+    message: '当前 Thread 仍有运行、Session 或 Approval 命令等待 Core 终态/Projection；请等待结果后再切换。',
+    retryable: false,
+    recovery: 'wait_for_projection',
+  };
+}
+
 function frameHasTerminalProjection(event: LiveEvent): boolean {
   return isTerminalEvent(event) || containsManualReconcile(eventPayload(event));
 }
@@ -201,6 +212,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [deepLinkTargetId, setDeepLinkTargetId] = useState<string | null>(initialDeepLinkTarget);
   const [deepLinkNotFound, setDeepLinkNotFound] = useState(false);
   const lifecycleRef = useRef(0);
+  const projectionRequestSequenceRef = useRef(0);
   const accumulatorRef = useRef<EventAccumulator>(emptyEventAccumulator());
   const cursorTrackerRef = useRef(new Phase1E.ScopedCursorTracker());
   const selectedThreadIdRef = useRef<string | null>(null);
@@ -214,6 +226,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const createSessionInputRef = useRef<string | null>(null);
   const pendingApprovalRef = useRef<PendingApprovalDecision | null>(null);
   const terminalErrorRef = useRef<LiveError | undefined>(undefined);
+  const commandRef = useRef<LiveCommandState>({ status: 'idle' });
+  const approvalActionRef = useRef<LiveActionState>({ status: 'idle' });
   const commandDispatchingRef = useRef(false);
   const approvalDispatchingRef = useRef(false);
   const createSessionDispatchingRef = useRef(false);
@@ -228,6 +242,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   deepLinkTargetRef.current = deepLinkTargetId;
   phaseRef.current = phase;
   connectionStatusRef.current = connectionStatus;
+  commandRef.current = command;
+  approvalActionRef.current = approvalAction;
 
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId);
@@ -247,92 +263,152 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return normalized;
   }, [markManualReconcile]);
 
-  const selectProject = useCallback((projectId: string | null) => {
+  const rejectThreadSelection = useCallback((nextThreadId: string | null): boolean => {
+    if (!isThreadSelectionLocked(
+      selectedThreadIdRef.current,
+      nextThreadId,
+      pendingRunRef.current !== null,
+      pendingSessionRef.current !== null,
+      commandRef.current.status,
+      pendingApprovalRef.current !== null,
+      approvalActionRef.current.status,
+    )) return false;
+    setLastError(threadSelectionLockedError());
+    return true;
+  }, []);
+
+  const commitSelection = useCallback((
+    projectId: string | null,
+    threadId: string | null,
+    sessionId: string | null,
+  ) => {
+    selectedProjectIdRef.current = projectId;
+    selectedThreadIdRef.current = threadId;
+    selectedSessionIdRef.current = sessionId;
     setSelectedProjectId(projectId);
-    if (!projectId) return;
-    const project = projects.find((item) => item.id === projectId);
+    setSelectedThreadId(threadId);
+    setSelectedSessionId(sessionId);
+  }, []);
+
+  const selectProject = useCallback((projectId: string | null): boolean => {
+    const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
     const thread = project ? threads.find((item) => projectHasThread(project, item.id)) : undefined;
-    setSelectedThreadId(thread?.id ?? null);
-    setSelectedSessionId(thread?.sessionId ?? null);
+    const nextThreadId = thread?.id ?? null;
+    if (rejectThreadSelection(nextThreadId)) return false;
+    commitSelection(projectId, nextThreadId, thread?.sessionId ?? null);
+    deepLinkTargetRef.current = null;
     setDeepLinkTargetId(null);
     setDeepLinkNotFound(false);
-  }, [projects, threads]);
+    return true;
+  }, [commitSelection, projects, rejectThreadSelection, threads]);
 
-  const selectThread = useCallback((threadId: string | null) => {
+  const selectThread = useCallback((threadId: string | null): boolean => {
     const thread = threads.find((item) => item.id === threadId);
-    setSelectedThreadId(thread?.id ?? null);
-    setSelectedSessionId(thread?.sessionId ?? null);
+    const nextThreadId = thread?.id ?? null;
+    if (rejectThreadSelection(nextThreadId)) return false;
+    const project = thread ? projects.find((item) => item.threadIds.includes(thread.id)) : undefined;
+    commitSelection(project?.id ?? null, nextThreadId, thread?.sessionId ?? null);
+    deepLinkTargetRef.current = null;
     setDeepLinkTargetId(null);
     setDeepLinkNotFound(false);
-    if (thread) {
-      const project = projects.find((item) => item.threadIds.includes(thread.id));
-      setSelectedProjectId(project?.id ?? null);
-    }
-  }, [projects, threads]);
+    return true;
+  }, [commitSelection, projects, rejectThreadSelection, threads]);
 
-  const selectSession = useCallback((sessionId: string | null) => {
+  const selectSession = useCallback((sessionId: string | null): boolean => {
     const selectedThread = selectedThreadIdRef.current
       ? threads.find((item) => item.id === selectedThreadIdRef.current)
       : undefined;
     if (!sessionId) {
       // A bound Thread is authoritative; the placeholder option cannot clear
       // its Session and leave the select out of sync with the run target.
-      setSelectedSessionId(selectedThread?.sessionId ?? null);
-      return;
+      commitSelection(
+        selectedProjectIdRef.current,
+        selectedThread?.id ?? null,
+        selectedThread?.sessionId ?? null,
+      );
+      return true;
     }
     const thread = threadForSession(threads, sessionId);
     if (!thread) {
       // A page-local cached Session has no binding until Core projects it.
       // Ignore it instead of pairing the current Thread with the wrong ID.
-      return;
+      return false;
     }
-    setSelectedThreadId(thread.id);
-    setSelectedSessionId(thread.sessionId);
-    setSelectedProjectId(projects.find((project) => project.threadIds.includes(thread.id))?.id ?? null);
-  }, [projects, threads]);
+    if (rejectThreadSelection(thread.id)) return false;
+    commitSelection(
+      projects.find((project) => project.threadIds.includes(thread.id))?.id ?? null,
+      thread.id,
+      thread.sessionId,
+    );
+    return true;
+  }, [commitSelection, projects, rejectThreadSelection, threads]);
 
-  const resolveDeepLink = useCallback((threadId: string | null) => {
-    setDeepLinkTargetId(threadId);
+  const resolveDeepLink = useCallback((threadId: string | null): boolean => {
     if (!threadId) {
+      if (rejectThreadSelection(null)) return false;
+      deepLinkTargetRef.current = null;
+      setDeepLinkTargetId(null);
       setDeepLinkNotFound(false);
-      return;
+      return true;
     }
     const thread = threads.find((item) => item.id === threadId);
     if (!thread) {
+      if (rejectThreadSelection(null)) return false;
       // An unknown deep link is a real empty state, never the first item.
-      setSelectedThreadId(null);
-      setSelectedSessionId(null);
-      setSelectedProjectId(null);
+      deepLinkTargetRef.current = threadId;
+      setDeepLinkTargetId(threadId);
+      commitSelection(null, null, null);
       setDeepLinkNotFound(true);
-      return;
+      return true;
     }
+    if (rejectThreadSelection(thread.id)) return false;
+    deepLinkTargetRef.current = threadId;
+    setDeepLinkTargetId(threadId);
     setDeepLinkNotFound(false);
-    setSelectedThreadId(thread.id);
-    setSelectedSessionId(thread.sessionId);
-    setSelectedProjectId(projects.find((project) => project.threadIds.includes(thread.id))?.id ?? null);
-  }, [projects, threads]);
+    commitSelection(
+      projects.find((project) => project.threadIds.includes(thread.id))?.id ?? null,
+      thread.id,
+      thread.sessionId,
+    );
+    return true;
+  }, [commitSelection, projects, rejectThreadSelection, threads]);
 
-  const loadProjection = useCallback(async (generation: number) => {
-    const [nextProjects, nextThreads] = await Promise.all([
-      adapter.listProjects(),
-      adapter.listThreads(),
-    ]);
-    if (generation !== lifecycleRef.current) return;
-    if (connectionStatusRef.current !== 'connected' && phaseRef.current === 'ready') return;
+  const loadProjection = useCallback(async (generation: number): Promise<boolean> => {
+    const requestSequence = projectionRequestSequenceRef.current + 1;
+    projectionRequestSequenceRef.current = requestSequence;
+    const responseIsCurrent = () => isCurrentProjectionResponse(
+      requestSequence,
+      projectionRequestSequenceRef.current,
+      generation,
+      lifecycleRef.current,
+    );
+    let nextProjects: LiveProjectProjection[];
+    let nextThreads: LiveThread[];
+    try {
+      [nextProjects, nextThreads] = await Promise.all([
+        adapter.listProjects(),
+        adapter.listThreads(),
+      ]);
+    } catch (error: unknown) {
+      if (!responseIsCurrent()) return false;
+      throw error;
+    }
+    if (!responseIsCurrent()) return false;
+    if (connectionStatusRef.current !== 'connected' && phaseRef.current !== 'connecting') return false;
 
     const sessionIds = [...new Set(nextThreads.map((thread) => thread.sessionId).filter((id): id is string => Boolean(id)))];
-    const approvalPages = await Promise.all(sessionIds.map((sessionId) => adapter.listPendingApprovals(sessionId)));
-    if (generation !== lifecycleRef.current) return;
-    if (connectionStatusRef.current !== 'connected' && phaseRef.current === 'ready') return;
+    let approvalPages: LiveApproval[][];
+    try {
+      approvalPages = await Promise.all(sessionIds.map((sessionId) => adapter.listPendingApprovals(sessionId)));
+    } catch (error: unknown) {
+      if (!responseIsCurrent()) return false;
+      throw error;
+    }
+    if (!responseIsCurrent()) return false;
+    if (connectionStatusRef.current !== 'connected' && phaseRef.current !== 'connecting') return false;
 
     const nextApprovals = approvalPages.flat();
     const nextSessions = adapter.listSessions();
-    setProjects(nextProjects);
-    setThreads(nextThreads);
-    setSessions(nextSessions);
-    setApprovals(nextApprovals);
-    setProjectionStale(false);
-    setLastError((current) => manualReconcileRef.current ? current : terminalErrorRef.current);
 
     const requestedThreadId = deepLinkTargetRef.current;
     const requestedThread = requestedThreadId
@@ -342,17 +418,54 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? nextThreads.find((thread) => thread.id === selectedThreadIdRef.current)
       : undefined;
     const nextThread = requestedThreadId ? requestedThread : retainedThread || nextThreads[0];
-    const nextThreadId = nextThread?.id ?? null;
+    const requestedThreadIdForSelection = nextThread?.id ?? null;
+    const selectionLocked = isThreadSelectionLocked(
+      selectedThreadIdRef.current,
+      requestedThreadIdForSelection,
+      pendingRunRef.current !== null,
+      pendingSessionRef.current !== null,
+      commandRef.current.status,
+      pendingApprovalRef.current !== null,
+      approvalActionRef.current.status,
+    );
+    if (selectionLocked && selectedThreadIdRef.current !== null && !retainedThread) {
+      // Do not replace the visible projection with a list that dropped the
+      // Thread owning an in-flight command.  Its outcome is still unknown;
+      // retaining the prior view is safer than silently selecting another
+      // Thread or treating the missing row as completion.
+      setLastError(threadSelectionLockedError());
+      setProjectionStale(true);
+      return false;
+    }
+    const effectiveThread = selectionLocked ? retainedThread : nextThread;
+    const nextThreadId = effectiveThread?.id ?? null;
     const unknownDeepLink = Boolean(requestedThreadId && !requestedThread);
-    setSelectedThreadId(nextThreadId);
-    setSelectedSessionId(nextThread?.sessionId ?? null);
-    setDeepLinkNotFound(unknownDeepLink);
+    if (!selectionLocked) {
+      selectedThreadIdRef.current = nextThreadId;
+      selectedSessionIdRef.current = effectiveThread?.sessionId ?? null;
+      setSelectedThreadId(nextThreadId);
+      setSelectedSessionId(effectiveThread?.sessionId ?? null);
+      setDeepLinkNotFound(unknownDeepLink);
+    } else {
+      setLastError(threadSelectionLockedError());
+    }
 
     const currentProject = nextProjects.find((project) => project.id === selectedProjectIdRef.current);
     const threadProject = nextProjects.find((project) => project.threadIds.includes(nextThreadId ?? ''));
-    setSelectedProjectId(threadProject?.id ?? (unknownDeepLink
+    const nextProjectId = threadProject?.id ?? (unknownDeepLink
       ? null
-      : nextThreadId ? currentProject?.id ?? null : nextProjects[0]?.id ?? null));
+      : nextThreadId ? currentProject?.id ?? null : nextProjects[0]?.id ?? null);
+
+    setProjects(nextProjects);
+    setThreads(nextThreads);
+    setSessions(nextSessions);
+    setApprovals(nextApprovals);
+    setProjectionStale(false);
+    if (!selectionLocked) {
+      selectedProjectIdRef.current = nextProjectId;
+      setSelectedProjectId(nextProjectId);
+      setLastError((current) => manualReconcileRef.current ? current : terminalErrorRef.current);
+    }
 
     const pendingSession = pendingSessionRef.current;
     const pendingSessionThread = pendingSession ? threadForSession(nextThreads, pendingSession.sessionId) : undefined;
@@ -360,6 +473,9 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       pendingSessionRef.current = null;
       createSessionKeyRef.current = null;
       createSessionInputRef.current = null;
+      selectedThreadIdRef.current = pendingSessionThread.id;
+      selectedSessionIdRef.current = pendingSessionThread.sessionId;
+      selectedProjectIdRef.current = nextProjects.find((project) => project.threadIds.includes(pendingSessionThread.id))?.id ?? null;
       setCommand({ status: 'idle' });
       setSelectedThreadId(pendingSessionThread.id);
       setSelectedSessionId(pendingSessionThread.sessionId);
@@ -389,14 +505,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    // A thread Query status is the only available Phase 1E run projection.
-    // It can release the awaiting state; a 202 receipt alone cannot.
-    const run = pendingRunRef.current;
-    const projectedRunThread = run && nextThreads.find((thread) => thread.id === run.threadId);
-    if (run && projectedRunThread && projectedRunThread.status !== 'active') {
-      pendingRunRef.current = null;
-      setCommand({ status: 'idle' });
-    }
+    return true;
   }, [adapter]);
 
   const refresh = useCallback(async () => {
@@ -405,8 +514,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const generation = projectionGeneration(lifecycleRef.current, true);
     lifecycleRef.current = generation;
     try {
-      await loadProjection(generation);
-      if (generation === lifecycleRef.current && connectionStatusRef.current === 'connected') {
+      const committed = await loadProjection(generation);
+      if (committed && generation === lifecycleRef.current && connectionStatusRef.current === 'connected') {
         phaseRef.current = 'ready';
         setPhase('ready');
       }
@@ -445,8 +554,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await adapter.connect();
       if (generation !== lifecycleRef.current) return false;
-      await loadProjection(generation);
-      if (generation !== lifecycleRef.current) return false;
+      const committed = await loadProjection(generation);
+      if (!committed || generation !== lifecycleRef.current) return false;
       if (connectionStatusRef.current === 'disconnected' || connectionStatusRef.current === 'reconnecting') return false;
       phaseRef.current = 'ready';
       setPhase('ready');
@@ -645,6 +754,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setProjectionStale(false);
     setCommand({ status: 'idle' });
     setApprovalAction({ status: 'idle' });
+    selectedProjectIdRef.current = null;
+    selectedThreadIdRef.current = null;
+    selectedSessionIdRef.current = null;
+    deepLinkTargetRef.current = null;
+    commandRef.current = { status: 'idle' };
+    approvalActionRef.current = { status: 'idle' };
     accumulatorRef.current = emptyEventAccumulator();
     cursorTrackerRef.current = new Phase1E.ScopedCursorTracker();
     pendingRunRef.current = null;
@@ -746,6 +861,11 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return session;
     } catch (error: unknown) {
       const detail = applyError(error, false);
+      if (!detail.retryable && !errorNeedsManualReconcile(detail)) {
+        // A typed non-retryable rejection proves the Session command did not
+        // remain in an unknown state, so it must not strand Thread selection.
+        pendingSessionRef.current = null;
+      }
       setCommand({ status: 'error', error: detail, idempotencyKey: createSessionKeyRef.current ?? undefined });
       return undefined;
     } finally {
@@ -784,6 +904,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (clientMode === 'live') await refresh();
     } catch (error: unknown) {
       const detail = applyError(error, false);
+      if (!detail.retryable && !errorNeedsManualReconcile(detail)) {
+        // A definitive command rejection is not an in-flight run.  Retryable
+        // transport failures intentionally keep the pending key so reconnect
+        // can safely replay it without allowing a cross-Thread race.
+        pendingRunRef.current = null;
+      }
       setStream((current) => ({ ...current, status: 'error', error: detail }));
       setCommand({ status: 'error', error: detail, idempotencyKey: commandKey });
     } finally {

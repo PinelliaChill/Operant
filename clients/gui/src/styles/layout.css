@@ -658,6 +658,13 @@ body.no-scroll {
   background-color: var(--accent-action);
 }
 
+.rail-sidebar-resizer:focus-visible,
+.rail-sidebar-expand-resizer:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+  background-color: var(--accent-subtle);
+}
+
 .rail-sidebar-resizer::after {
   content: '';
   position: absolute;
@@ -5000,7 +5007,7 @@ body.no-scroll {
 .live-project-grid {
   padding: 14px 24px 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   align-items: start;
   gap: 12px;
 }
@@ -5332,6 +5339,10 @@ body.no-scroll {
   .live-project-grid {
     padding-left: 12px;
     padding-right: 12px;
+  }
+
+  .live-project-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .live-alert,

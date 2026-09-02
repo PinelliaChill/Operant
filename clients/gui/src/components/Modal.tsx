@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { X } from 'lucide-react';
 import { useDialogA11y } from './useDialogA11y';
 
@@ -20,6 +20,7 @@ export const Modal: React.FC<ModalProps> = ({
   maxWidth = 560,
 }) => {
   const panelRef = useDialogA11y<HTMLDivElement>(isOpen, onClose);
+  const titleId = `modal-title-${useId().replace(/:/g, '')}`;
 
   if (!isOpen) return null;
 
@@ -44,6 +45,7 @@ export const Modal: React.FC<ModalProps> = ({
         className="card"
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
         tabIndex={-1}
         style={{
           width: '100%',
@@ -70,7 +72,7 @@ export const Modal: React.FC<ModalProps> = ({
             backgroundColor: 'var(--bg-surface)',
           }}
         >
-          <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</h3>
+          <h3 id={titleId} style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</h3>
           <button
             onClick={onClose}
             className="btn btn-ghost btn-icon"

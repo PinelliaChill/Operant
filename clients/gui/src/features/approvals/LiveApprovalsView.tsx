@@ -4,7 +4,7 @@ import { useNavigate, useOutletContext } from 'react-router-dom';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { useLive, type LiveApprovalDecision } from '../../live/LiveContext';
-import { canDecideApproval } from '../../live/liveState';
+import { approvalsForSession, canDecideApproval } from '../../live/liveState';
 import { LiveApprovalCard } from '../chat/LiveChatView';
 import type { RailOutletContext } from '../../app/RailLayout';
 
@@ -15,6 +15,7 @@ export const LiveApprovalsView: React.FC = () => {
   const {
     phase,
     approvals,
+    selectedThread,
     selectedSessionId,
     approvalAction,
     manualReconcileRequired,
@@ -25,7 +26,11 @@ export const LiveApprovalsView: React.FC = () => {
     decideApproval,
   } = useLive();
 
-  const pending = useMemo(() => approvals.filter((approval) => approval.status === 'pending'), [approvals]);
+  const pending = useMemo(
+    () => approvalsForSession(approvals, selectedThread?.sessionId ?? null)
+      .filter((approval) => approval.status === 'pending'),
+    [approvals, selectedThread?.sessionId],
+  );
   const decide = (approval: (typeof approvals)[number], decision: LiveApprovalDecision) => {
     void decideApproval(approval, decision);
   };

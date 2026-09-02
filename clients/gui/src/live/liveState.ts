@@ -253,6 +253,26 @@ export function canDecideApproval(
     && streamStatus === 'connected';
 }
 
+/** Keep the selected Thread stable while an outcome is still unknown. */
+export function isThreadSelectionLocked(
+  currentThreadId: string | null,
+  nextThreadId: string | null,
+  hasPendingRun: boolean,
+  hasPendingSession: boolean,
+  commandStatus: LiveCommandState['status'],
+  hasPendingApproval = false,
+  approvalStatus: LiveActionState['status'] = 'idle',
+): boolean {
+  if (currentThreadId === nextThreadId) return false;
+  return hasPendingRun
+    || hasPendingSession
+    || hasPendingApproval
+    || commandStatus === 'sending'
+    || commandStatus === 'awaiting_projection'
+    || approvalStatus === 'sending'
+    || approvalStatus === 'awaiting_projection';
+}
+
 /** Explicit refreshes supersede an active stream; projection corrections do not. */
 export function projectionGeneration(current: number, invalidate: boolean): number {
   return invalidate ? current + 1 : current;
@@ -269,6 +289,25 @@ export function approvalProjectionResolved(
     && approval.id === approvalId
     && approval.status === 'pending'
   ));
+}
+
+/** A correction response may update UI state only while it is the latest request. */
+export function isCurrentProjectionResponse(
+  requestSequence: number,
+  latestRequestSequence: number,
+  requestGeneration: number,
+  currentGeneration: number,
+): boolean {
+  return requestSequence === latestRequestSequence && requestGeneration === currentGeneration;
+}
+
+/** Chat only shows approvals scoped to its selected, server-bound Session. */
+export function approvalsForSession(
+  approvals: readonly LiveApproval[],
+  sessionId: string | null,
+): LiveApproval[] {
+  if (!sessionId) return [];
+  return approvals.filter((approval) => approval.sessionId === sessionId);
 }
 
 export interface LiveCreateSessionInput {
@@ -346,6 +385,10 @@ const TERMINAL_EVENT_TYPES = new Set([
   'agent.failed',
   'agent.cancelled',
   'agent.timed_out',
+  'budget.exhausted',
+  'agent.no_progress',
+  'agent.max_turns',
+  'session.run_failed',
   'workflow.completed',
 ]);
 
@@ -362,6 +405,11 @@ export function terminalRunOutcome(event: LiveEvent): TerminalRunOutcome | null 
       return 'cancelled';
     case 'agent.timed_out':
       return 'timed_out';
+    case 'budget.exhausted':
+    case 'agent.no_progress':
+    case 'agent.max_turns':
+    case 'session.run_failed':
+      return 'failed';
     default:
       return null;
   }
@@ -384,9 +432,27 @@ export function terminalEventError(event: LiveEvent): LiveError | undefined {
 
   if (outcome === 'failed') {
     const recoverable = event.payload.recoverable === true;
+    const errorCode: Record<string, string> = {
+      'agent.failed': 'agent_failed',
+      'budget.exhausted': 'budget_exhausted',
+      'agent.no_progress': 'agent_no_progress',
+      'agent.max_turns': 'agent_max_turns',
+      'session.run_failed': 'session_run_failed',
+    };
+    const fallbackMessage: Record<string, string> = {
+      'agent.failed': 'Core Agent 运行失败。',
+      'budget.exhausted': 'Core 运行预算已耗尽。',
+      'agent.no_progress': 'Core Agent 因连续无进展而停止。',
+      'agent.max_turns': 'Core Agent 已达到最大轮次。',
+      'session.run_failed': 'Core Session 运行失败。',
+    };
     return {
-      code: 'agent_failed',
-      message: payloadText(event.payload, 'message') || 'Core Agent 运行失败。',
+      code: errorCode[event.event_type] || 'agent_failed',
+      message: payloadText(event.payload, 'message')
+        || payloadText(event.payload, 'reason')
+        || payloadText(event.payload, 'reason_code')
+        || fallbackMessage[event.event_type]
+        || `Core ${event.event_type}。`,
       retryable: recoverable,
       recovery: recoverable ? 'retry_later' : 'none',
       detail: event.payload,

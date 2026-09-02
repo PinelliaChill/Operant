@@ -20,7 +20,7 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
 import type { LiveApproval, LiveEvent, LiveSessionOption, LiveWorkspaceFile } from '../../live/liveState';
-import { canDecideApproval, formatCursor } from '../../live/liveState';
+import { approvalsForSession, canDecideApproval, formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
 
 function statusLabel(status: string): string {
@@ -64,6 +64,13 @@ function eventSummary(event: LiveEvent): string {
     return typeof reason === 'string' && reason.trim() ? `Agent 已取消：${reason}` : 'Agent 已取消';
   }
   if (event.event_type === 'agent.timed_out') return 'Agent 运行超时';
+  if (event.event_type === 'budget.exhausted') {
+    const reason = event.payload.reason;
+    return typeof reason === 'string' && reason.trim() ? `运行预算已耗尽：${reason}` : '运行预算已耗尽';
+  }
+  if (event.event_type === 'agent.no_progress') return 'Agent 因连续无进展而停止';
+  if (event.event_type === 'agent.max_turns') return 'Agent 已达到最大轮次';
+  if (event.event_type === 'session.run_failed') return 'Session 运行失败';
   if (event.event_type.startsWith('agent.')) return 'Agent Projection 已更新';
   return '收到已提交事件';
 }
@@ -261,9 +268,10 @@ export const LiveChatView: React.FC = () => {
   const [creatingSession, setCreatingSession] = useState(false);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
-  const visibleApprovals = useMemo(() => approvals.filter((approval) => (
-    !selectedSessionId || approval.session_id === selectedSessionId
-  )), [approvals, selectedSessionId]);
+  const visibleApprovals = useMemo(
+    () => approvalsForSession(approvals, selectedThread?.sessionId ?? null),
+    [approvals, selectedThread?.sessionId],
+  );
   const busy = command.status === 'sending'
     || command.status === 'awaiting_projection'
     || manualReconcileRequired
@@ -400,8 +408,7 @@ export const LiveChatView: React.FC = () => {
             value={selectedThreadId ?? ''}
             onChange={(event) => {
               const id = event.target.value || null;
-              selectThread(id);
-              if (id) navigate(`/chat/${id}`);
+              if (selectThread(id) && id) navigate(`/chat/${id}`);
             }}
             aria-label="选择 Core Thread"
           >

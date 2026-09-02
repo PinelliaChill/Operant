@@ -102,7 +102,7 @@ export const LiveProjectsView: React.FC = () => {
               <div className="live-project-card-meta"><span>{projectThreads.length} 个 Thread</span><span>{project.runIds.length} 个 Run 摘要</span></div>
               {isSelected && <ProjectFiles files={filesWorkspaceId === project.id ? files : []} loading={filesLoadingId === project.id} onLoad={() => void showProjectFiles(project)} />}
               <div className="live-project-card-actions">
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { selectProject(project.id); navigate('/chat'); }}>查看 Thread</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { if (selectProject(project.id)) navigate('/chat'); }}>查看 Thread</button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => void showProjectFiles(project)} disabled={filesLoadingId === project.id}>浏览文件</button>
               </div>
             </article>

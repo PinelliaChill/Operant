@@ -11,6 +11,10 @@ import {
   containsManualReconcile,
   emptyEventAccumulator,
   eventNeedsManualReconcile,
+  isCurrentProjectionResponse,
+  isThreadSelectionLocked,
+  isTerminalEvent,
+  approvalsForSession,
   reduceEvent,
   sessionOptionsFor,
   terminalEventError,
@@ -199,6 +203,32 @@ test('approval stays pending until its exact Query projection is gone', () => {
   assert.equal(approvalProjectionResolved('session-a', 'approval-a', []), true);
 });
 
+test('projection correction commits only the newest response in its generation', () => {
+  assert.equal(isCurrentProjectionResponse(3, 3, 8, 8), true);
+  assert.equal(isCurrentProjectionResponse(2, 3, 8, 8), false);
+  assert.equal(isCurrentProjectionResponse(3, 3, 7, 8), false);
+});
+
+test('pending run or Session command blocks Thread changes with an explicit state', () => {
+  assert.equal(isThreadSelectionLocked('thread-a', 'thread-b', true, false, 'idle'), true);
+  assert.equal(isThreadSelectionLocked('thread-a', 'thread-b', false, true, 'idle'), true);
+  assert.equal(isThreadSelectionLocked('thread-a', 'thread-b', false, false, 'sending'), true);
+  assert.equal(isThreadSelectionLocked('thread-a', 'thread-b', false, false, 'awaiting_projection'), true);
+  assert.equal(isThreadSelectionLocked('thread-a', 'thread-b', false, false, 'idle', true), true);
+  assert.equal(isThreadSelectionLocked('thread-a', 'thread-b', false, false, 'idle', false, 'awaiting_projection'), true);
+  assert.equal(isThreadSelectionLocked('thread-a', 'thread-b', false, false, 'error'), false);
+  assert.equal(isThreadSelectionLocked('thread-a', 'thread-a', true, true, 'sending'), false);
+});
+
+test('unbound selected Thread has no approvals from another Session', () => {
+  const approvals = [
+    { id: 'approval-a', sessionId: 'session-a', status: 'pending' },
+    { id: 'approval-b', sessionId: 'session-b', status: 'pending' },
+  ] as never;
+  assert.deepEqual(approvalsForSession(approvals, null), []);
+  assert.deepEqual(approvalsForSession(approvals, 'session-a'), [approvals[0]]);
+});
+
 test('only terminal SSE releases a pending run and failures stay typed', () => {
   const failed = {
     ...event(3),
@@ -224,4 +254,29 @@ test('only terminal SSE releases a pending run and failures stay typed', () => {
     detail: failed.payload,
   });
   assert.equal(terminalEventError(approvalRequired), undefined);
+});
+
+test('all known terminal failure events release command state and preserve typed codes', () => {
+  const expectedCodes = {
+    'budget.exhausted': 'budget_exhausted',
+    'agent.no_progress': 'agent_no_progress',
+    'agent.max_turns': 'agent_max_turns',
+    'session.run_failed': 'session_run_failed',
+  } as const;
+
+  for (const [eventType, expectedCode] of Object.entries(expectedCodes)) {
+    const terminal = {
+      ...event(5),
+      event_type: eventType,
+      payload: { reason: 'known terminal reason' },
+    } as never;
+    assert.equal(terminalRunOutcome(terminal), 'failed', eventType);
+    assert.equal(isTerminalEvent(terminal), true, eventType);
+    assert.deepEqual(
+      commandStateAfterTerminalEvent(terminal, { status: 'awaiting_projection', idempotencyKey: 'run-1' }),
+      { status: 'idle' },
+      eventType,
+    );
+    assert.equal(terminalEventError(terminal)?.code, expectedCode, eventType);
+  }
 });

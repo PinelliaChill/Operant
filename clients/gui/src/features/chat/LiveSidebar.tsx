@@ -74,7 +74,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   };
 
   const goThread = (threadId: string) => {
-    selectThread(threadId);
+    if (!selectThread(threadId)) return;
     navigate(`/chat/${threadId}`);
     onNavigate?.();
   };
@@ -181,8 +181,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                   type="button"
                   className="live-sidebar-project-button"
                   onClick={() => {
-                    selectProject(project.id);
-                    toggleProject(project.id);
+                    if (selectProject(project.id)) toggleProject(project.id);
                   }}
                   aria-expanded={!isCollapsed}
                   aria-label={`Project ${project.name}，${projectThreadList.length} 个 Thread`}
