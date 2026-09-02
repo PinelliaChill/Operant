@@ -69,6 +69,20 @@ export interface LiveThread {
 
 export interface LiveSession extends GeneratedSession {}
 
+/**
+ * A selectable Session may come from the page-local createSession cache or
+ * from a Thread projection.  Projection-only entries intentionally have no
+ * Session details: Phase 1E has no Session list/detail Query.
+ */
+export interface LiveSessionOption {
+  /** Exact server Session ID used by runSessionStream. */
+  id: string;
+  /** Details are present only when this page created the Session. */
+  details?: LiveSession;
+  /** Null means the cached Session has not yet appeared in a Thread projection. */
+  boundThreadId: string | null;
+}
+
 export interface LiveApproval {
   /** Generated approval_id, carried with its required session scope. */
   id: string;
@@ -140,6 +154,45 @@ export function threadForSession(
   sessionId: string,
 ): LiveThread | undefined {
   return threads.find((thread) => thread.sessionId === sessionId);
+}
+
+/**
+ * Merge page-local Session details with authoritative Thread bindings.
+ *
+ * A projection binding is enough to run a Session even after a reload, while
+ * a cached Session must never be treated as bound until the Core returns the
+ * exact Session ID on a Thread.  Keep one option per ID so a just-created
+ * cached Session is upgraded with its binding instead of rendered twice.
+ */
+export function sessionOptionsFor(
+  threads: readonly LiveThread[],
+  sessions: readonly LiveSession[],
+): LiveSessionOption[] {
+  const boundThreadBySessionId = new Map<string, string>();
+  for (const thread of threads) {
+    if (thread.sessionId && !boundThreadBySessionId.has(thread.sessionId)) {
+      boundThreadBySessionId.set(thread.sessionId, thread.id);
+    }
+  }
+
+  const options: LiveSessionOption[] = [];
+  const seen = new Set<string>();
+  for (const session of sessions) {
+    if (!session.id || seen.has(session.id)) continue;
+    seen.add(session.id);
+    options.push({
+      id: session.id,
+      details: session,
+      boundThreadId: boundThreadBySessionId.get(session.id) ?? null,
+    });
+  }
+
+  for (const [sessionId, threadId] of boundThreadBySessionId) {
+    if (seen.has(sessionId)) continue;
+    seen.add(sessionId);
+    options.push({ id: sessionId, boundThreadId: threadId });
+  }
+  return options;
 }
 
 /** A Session Command may target only an explicit, active, unbound Thread. */

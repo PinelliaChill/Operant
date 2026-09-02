@@ -28,6 +28,7 @@ import {
   LiveMessage,
   LiveProjectProjection,
   LiveSession,
+  LiveSessionOption,
   LiveStreamState,
   LiveThread,
   LiveWorkspaceFile,
@@ -42,6 +43,7 @@ import {
   isTerminalEvent,
   reduceEvent,
   threadForSession,
+  sessionOptionsFor,
 } from './liveState';
 
 export type LiveProjectionPhase = 'idle' | 'connecting' | 'ready' | 'error';
@@ -52,8 +54,10 @@ export interface LiveContextValue {
   adapter: LiveClientAdapter;
   projects: LiveProjectProjection[];
   threads: LiveThread[];
-  /** Only sessions returned by the generated createSession Command are cached. */
+  /** Session details returned by the generated createSession Command. */
   sessions: LiveSession[];
+  /** Selectable Session IDs merged with authoritative Thread bindings. */
+  sessionOptions: LiveSessionOption[];
   approvals: LiveApproval[];
   selectedProjectId: string | null;
   selectedThreadId: string | null;
@@ -220,6 +224,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId);
+  const sessionOptions = useMemo(() => sessionOptionsFor(threads, sessions), [sessions, threads]);
 
   const markManualReconcile = useCallback((reason: string) => {
     manualReconcileRef.current = true;
@@ -259,12 +264,24 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [projects, threads]);
 
   const selectSession = useCallback((sessionId: string | null) => {
-    const thread = threads.find((item) => item.sessionId === sessionId);
-    setSelectedSessionId(sessionId);
-    if (thread) {
-      setSelectedThreadId(thread.id);
-      setSelectedProjectId(projects.find((project) => project.threadIds.includes(thread.id))?.id ?? null);
+    const selectedThread = selectedThreadIdRef.current
+      ? threads.find((item) => item.id === selectedThreadIdRef.current)
+      : undefined;
+    if (!sessionId) {
+      // A bound Thread is authoritative; the placeholder option cannot clear
+      // its Session and leave the select out of sync with the run target.
+      setSelectedSessionId(selectedThread?.sessionId ?? null);
+      return;
     }
+    const thread = threadForSession(threads, sessionId);
+    if (!thread) {
+      // A page-local cached Session has no binding until Core projects it.
+      // Ignore it instead of pairing the current Thread with the wrong ID.
+      return;
+    }
+    setSelectedThreadId(thread.id);
+    setSelectedSessionId(thread.sessionId);
+    setSelectedProjectId(projects.find((project) => project.threadIds.includes(thread.id))?.id ?? null);
   }, [projects, threads]);
 
   const resolveDeepLink = useCallback((threadId: string | null) => {
@@ -841,6 +858,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     projects,
     threads,
     sessions,
+    sessionOptions,
     approvals,
     selectedProjectId,
     selectedThreadId,
@@ -911,6 +929,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     selectedThreadId,
     sendMessage,
     sessions,
+    sessionOptions,
     stream,
     threads,
   ]);

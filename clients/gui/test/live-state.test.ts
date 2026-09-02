@@ -9,6 +9,7 @@ import {
   emptyEventAccumulator,
   eventNeedsManualReconcile,
   reduceEvent,
+  sessionOptionsFor,
   threadForSession,
 } from '../src/live/liveState.ts';
 
@@ -111,4 +112,39 @@ test('session creation is disabled without an active unbound selected Thread', (
   assert.equal(canBindSessionToThread(activeUnbound), true);
   assert.equal(canBindSessionToThread(bound), false);
   assert.equal(canBindSessionToThread(archived), false);
+});
+
+test('reload exposes a preexisting projected Session without local details', () => {
+  const thread = { id: 'thread-existing', sessionId: 'session-existing' } as never;
+  const options = sessionOptionsFor([thread], []);
+
+  assert.deepEqual(options, [{
+    id: 'session-existing',
+    boundThreadId: 'thread-existing',
+  }]);
+  assert.equal(options[0].details, undefined);
+  // The exact projected ID is the run target; a cached Session object is not
+  // required to construct the Phase 1E run request.
+  assert.equal(options[0].id, 'session-existing');
+});
+
+test('a projected binding upgrades a cached Session without duplicating its option', () => {
+  const thread = { id: 'thread-created', sessionId: 'session-created' } as never;
+  const cached = { id: 'session-created', role_snapshot: { role_name: 'cached role' } } as never;
+  const options = sessionOptionsFor([thread], [cached, cached]);
+
+  assert.equal(options.length, 1);
+  assert.equal(options[0].id, 'session-created');
+  assert.equal(options[0].details, cached);
+  assert.equal(options[0].boundThreadId, 'thread-created');
+});
+
+test('an unbound Thread does not borrow a page-local cached Session', () => {
+  const thread = { id: 'thread-unbound', sessionId: null } as never;
+  const cached = { id: 'session-other' } as never;
+  const options = sessionOptionsFor([thread], [cached]);
+
+  assert.equal(options.length, 1);
+  assert.equal(options[0].id, 'session-other');
+  assert.equal(options[0].boundThreadId, null);
 });

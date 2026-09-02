@@ -19,7 +19,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
-import type { LiveApproval, LiveEvent, LiveSession, LiveWorkspaceFile } from '../../live/liveState';
+import type { LiveApproval, LiveEvent, LiveSessionOption, LiveWorkspaceFile } from '../../live/liveState';
 import { formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
 
@@ -194,9 +194,12 @@ const LiveEventTimeline: React.FC<{ events: LiveEvent[]; cursor: LiveEvent['sequ
   </section>
 );
 
-function sessionLabel(session: LiveSession): string {
-  const role = session.role_snapshot?.role_name || 'Session';
-  return `${role} · ${session.id.slice(0, 12)}`;
+function sessionLabel(option: LiveSessionOption): string {
+  if (option.details) {
+    const role = option.details.role_snapshot?.role_name || 'Session';
+    return `${role} · ${option.id.slice(0, 12)}`;
+  }
+  return `服务端 Session ${option.id.slice(0, 12)} · 详情未查询`;
 }
 
 export const LiveChatView: React.FC = () => {
@@ -208,7 +211,7 @@ export const LiveChatView: React.FC = () => {
     phase,
     projects,
     threads,
-    sessions,
+    sessionOptions,
     approvals,
     selectedProjectId,
     selectedThreadId,
@@ -405,8 +408,12 @@ export const LiveChatView: React.FC = () => {
             onChange={(event) => selectSession(event.target.value || null)}
             aria-label="选择 Core Session"
           >
-            <option value="">未绑定 Session</option>
-            {sessions.map((session) => <option key={session.id} value={session.id}>{sessionLabel(session)}</option>)}
+            <option value="" disabled={Boolean(selectedThread?.sessionId)}>未绑定 Session</option>
+            {sessionOptions.map((option) => (
+              <option key={option.id} value={option.id} disabled={option.boundThreadId === null}>
+                {sessionLabel(option)}
+              </option>
+            ))}
           </select>
         </label>
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedSession?.role_snapshot.role_id || creatingSession} title={createSessionUnavailableReason || '需要一个明确的 roleId'}>
