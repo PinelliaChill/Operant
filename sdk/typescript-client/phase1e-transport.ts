@@ -48,6 +48,13 @@ export interface RawSseFrame {
 
 const MAX_CURSOR = 9223372036854775807n;
 
+// Keep each SSE parser layer bounded.  The frame limit intentionally exceeds
+// the data limit so callers can tell whether a payload or its surrounding
+// fields exhausted the protocol budget.
+export const MAX_SSE_LINE_BYTES = 64 * 1024;
+export const MAX_SSE_DATA_BYTES = 256 * 1024;
+export const MAX_SSE_FRAME_BYTES = 512 * 1024;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -131,8 +138,11 @@ const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 class LosslessJsonParser {
   private index = 0;
+  private readonly source: string;
 
-  constructor(private readonly source: string) {}
+  constructor(source: string) {
+    this.source = source;
+  }
 
   parse(): unknown {
     const value = this.value();
@@ -305,16 +315,36 @@ function dispatchSseFrame(
   return { id: fields.id, event: fields.event, data };
 }
 
+function utf8ByteLength(value: string): number {
+  try {
+    return new TextEncoder().encode(value).byteLength;
+  } catch (error: unknown) {
+    throw new SseProtocolError('sse_invalid_text', 'SSE response contains invalid text', error);
+  }
+}
+
 /** Parse standard SSE id/event/data fields, including multiline data. */
 export async function* parseSse(body: Phase1EBody): AsyncGenerator<RawSseFrame> {
   const source = bodyToSseIterable(body);
   let fields: { id?: string; event?: string; data: string[] } = { data: [] };
   let line = '';
+  let lineBytes = 0;
+  let frameBytes = 0;
+  let dataBytes = 0;
   let pendingCarriageReturn = false;
-  const consumeLine = (value: string): RawSseFrame | null => {
+  const consumeLine = (value: string, lineSize: number): RawSseFrame | null => {
+    if (lineSize > MAX_SSE_LINE_BYTES) {
+      throw new SseProtocolError('sse_line_too_large', 'SSE line exceeds the protocol limit');
+    }
+    frameBytes += lineSize;
+    if (frameBytes > MAX_SSE_FRAME_BYTES) {
+      throw new SseProtocolError('sse_frame_too_large', 'SSE frame exceeds the protocol limit');
+    }
     if (value === '') {
       const frame = dispatchSseFrame(fields);
       fields = { data: [] };
+      frameBytes = 0;
+      dataBytes = 0;
       return frame;
     }
     if (value.startsWith(':')) return null;
@@ -324,37 +354,52 @@ export async function* parseSse(body: Phase1EBody): AsyncGenerator<RawSseFrame> 
     if (fieldValue.startsWith(' ')) fieldValue = fieldValue.slice(1);
     if (name === 'id') fields.id = fieldValue;
     else if (name === 'event') fields.event = fieldValue;
-    else if (name === 'data') fields.data.push(fieldValue);
+    else if (name === 'data') {
+      dataBytes += utf8ByteLength(fieldValue) + (fields.data.length > 0 ? 1 : 0);
+      if (dataBytes > MAX_SSE_DATA_BYTES) {
+        throw new SseProtocolError('sse_data_too_large', 'SSE data exceeds the protocol limit');
+      }
+      fields.data.push(fieldValue);
+    }
     return null;
   };
   for await (const chunk of source) {
     for (const character of chunk) {
       if (pendingCarriageReturn) {
         if (character === '\n') {
-          const frame = consumeLine(line);
+          const frame = consumeLine(line, lineBytes + 2);
           if (frame) yield frame;
           line = '';
+          lineBytes = 0;
           pendingCarriageReturn = false;
           continue;
         }
-        const frame = consumeLine(line);
+        const frame = consumeLine(line, lineBytes + 1);
         if (frame) yield frame;
         line = '';
+        lineBytes = 0;
         pendingCarriageReturn = false;
       }
       if (character === '\r') pendingCarriageReturn = true;
       else if (character === '\n') {
-        const frame = consumeLine(line);
+        const frame = consumeLine(line, lineBytes + 1);
         if (frame) yield frame;
         line = '';
-      } else line += character;
+        lineBytes = 0;
+      } else {
+        line += character;
+        lineBytes += utf8ByteLength(character);
+        if (lineBytes > MAX_SSE_LINE_BYTES) {
+          throw new SseProtocolError('sse_line_too_large', 'SSE line exceeds the protocol limit');
+        }
+      }
     }
   }
   if (pendingCarriageReturn) {
-    const frame = consumeLine(line);
+    const frame = consumeLine(line, lineBytes + 1);
     if (frame) yield frame;
   } else if (line.length > 0) {
-    const frame = consumeLine(line);
+    const frame = consumeLine(line, lineBytes);
     if (frame) yield frame;
   }
   const frame = dispatchSseFrame(fields);
@@ -368,19 +413,37 @@ async function* bodyToSseIterable(body: Phase1EBody): AsyncGenerator<string> {
     return;
   }
   if (body instanceof Uint8Array) {
-    yield new TextDecoder().decode(body);
+    try {
+      yield new TextDecoder('utf-8', { fatal: true }).decode(body);
+    } catch (error: unknown) {
+      throw new SseProtocolError('sse_invalid_utf8', 'SSE response contains invalid UTF-8', error);
+    }
     return;
   }
-  const decoder = new TextDecoder();
+  let decoder = new TextDecoder('utf-8', { fatal: true });
   for await (const chunk of await bodyToAsyncIterable(body)) {
     if (typeof chunk === 'string') {
-      yield decoder.decode();
+      try {
+        yield decoder.decode();
+      } catch (error: unknown) {
+        throw new SseProtocolError('sse_invalid_utf8', 'SSE response contains invalid UTF-8', error);
+      }
       yield chunk;
+      decoder = new TextDecoder('utf-8', { fatal: true });
     } else {
-      yield decoder.decode(chunk, { stream: true });
+      try {
+        yield decoder.decode(chunk, { stream: true });
+      } catch (error: unknown) {
+        throw new SseProtocolError('sse_invalid_utf8', 'SSE response contains invalid UTF-8', error);
+      }
     }
   }
-  const tail = decoder.decode();
+  let tail: string;
+  try {
+    tail = decoder.decode();
+  } catch (error: unknown) {
+    throw new SseProtocolError('sse_invalid_utf8', 'SSE response contains invalid UTF-8', error);
+  }
   if (tail) yield tail;
 }
 
@@ -434,6 +497,13 @@ export class Phase1EError extends Error {
       }
     }
     return new Phase1EError('invalid_error_envelope', 'Core returned an invalid error envelope', false, 'none', payload);
+  }
+}
+
+export class SseProtocolError extends Phase1EError {
+  constructor(code: string, message: string, detail?: unknown) {
+    super(code, message, false, 'manual_reconcile', detail);
+    this.name = 'SseProtocolError';
   }
 }
 

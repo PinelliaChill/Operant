@@ -708,6 +708,7 @@ def test_stream_acceptance_requires_committed_resource_cursor_and_bounds_first_f
     @app.post("/v1/test-stream-committed")
     async def committed_stream() -> StreamingResponse:
         first_frame = (
+            f"id: {persisted.cursor}\n"
             "event: agent.started\n"
             + "data: "
             + __import__("json").dumps({"session_id": session.id, "cursor": persisted.cursor})
@@ -724,7 +725,40 @@ def test_stream_acceptance_requires_committed_resource_cursor_and_bounds_first_f
     @app.post("/v1/test-stream-unverified")
     async def unverified_stream() -> StreamingResponse:
         async def body() -> AsyncIterator[str]:
-            yield 'event: agent.started\ndata: {"cursor": 999999}\n\n'
+            yield (
+                f"id: {persisted.cursor + 1}\n"
+                "event: agent.started\n"
+                + "data: "
+                + __import__("json").dumps(
+                    {"session_id": session.id, "cursor": persisted.cursor + 1}
+                )
+                + "\n\n"
+            )
+
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    @app.post("/v1/test-stream-missing-id")
+    async def missing_id_stream() -> StreamingResponse:
+        async def body() -> AsyncIterator[str]:
+            yield (
+                "event: agent.started\n"
+                + "data: "
+                + __import__("json").dumps({"session_id": session.id, "cursor": persisted.cursor})
+                + "\n\n"
+            )
+
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    @app.post("/v1/test-stream-invalid-id")
+    async def invalid_id_stream() -> StreamingResponse:
+        async def body() -> AsyncIterator[str]:
+            yield (
+                "id: not-a-cursor\n"
+                "event: agent.started\n"
+                + "data: "
+                + __import__("json").dumps({"session_id": session.id, "cursor": persisted.cursor})
+                + "\n\n"
+            )
 
         return StreamingResponse(body(), media_type="text/event-stream")
 
@@ -768,6 +802,16 @@ def test_stream_acceptance_requires_committed_resource_cursor_and_bounds_first_f
         assert unverified_replay.status_code == 409
         assert unverified_replay.json()["error"]["recovery"] == "manual_reconcile"
 
+        for path, key in (
+            ("/v1/test-stream-missing-id", "missing-id"),
+            ("/v1/test-stream-invalid-id", "invalid-id"),
+        ):
+            first = client.post(path, headers={"Idempotency-Key": key}, json={})
+            assert first.status_code == 200
+            retry = client.post(path, headers={"Idempotency-Key": key}, json={})
+            assert retry.status_code == 409
+            assert retry.json()["error"]["recovery"] == "manual_reconcile"
+
         oversized = client.post(
             "/v1/test-stream-oversized",
             headers={"Idempotency-Key": "oversized"},
@@ -785,6 +829,8 @@ def test_stream_acceptance_requires_committed_resource_cursor_and_bounds_first_f
     assert statuses == {
         "committed": "completed",
         "unverified": "manual_reconcile_required",
+        "missing-id": "manual_reconcile_required",
+        "invalid-id": "manual_reconcile_required",
         "oversized": "manual_reconcile_required",
     }
 

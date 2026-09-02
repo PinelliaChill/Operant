@@ -18,7 +18,7 @@ from operant.application.protocol_metadata import (
 from operant.application.service import ApplicationService
 from operant.domain.commands import WorkspaceInitialization
 from operant.domain.models import ModelProfile, RolePreset, ToolPolicy
-from operant.domain.threads import ConversationThread
+from operant.domain.threads import ConversationThread, ThreadStatus
 from operant.domain.workflow import WorkflowRun
 from operant.persistence.sqlite import ConflictError, NotFoundError, SQLiteStore
 from operant.providers.openai_compatible import OpenAICompatibleProvider
@@ -141,6 +141,91 @@ def test_session_thread_binding_conflict_is_atomic(tmp_path: Path) -> None:
     with pytest.raises(NotFoundError, match="thread not found"):
         service.create_session(role.id, thread_id="thread-does-not-exist")
     with sqlite3.connect(service.store.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+
+
+def test_create_session_thread_errors_are_stable_typed_http_responses(tmp_path: Path) -> None:
+    database = tmp_path / "session-thread-errors.sqlite3"
+    service = ApplicationService(
+        SQLiteStore(database),
+        OpenAICompatibleProvider(),
+        artifact_root=tmp_path / "artifacts",
+    )
+    service.initialize()
+    profile = service.add_model_profile(
+        ModelProfile(
+            id="session-http-profile",
+            name="Session HTTP profile",
+            model_id="session-http-model",
+            base_url="http://127.0.0.1:9",
+            secret_ref="OPERANT_SESSION_HTTP_TEST_KEY",
+        )
+    )
+    role = service.create_role(
+        RolePreset(
+            id="session-http-role",
+            name="Session HTTP role",
+            system_prompt="session HTTP errors",
+            model_profile_id=profile.id,
+            tool_policy=ToolPolicy(),
+        )
+    )
+    bound_thread = service.create_thread(ConversationThread(workspace_ref=str(tmp_path.resolve())))
+    inactive_thread = service.create_thread(
+        ConversationThread(workspace_ref=str(tmp_path.resolve()))
+    )
+    service.set_thread_status(inactive_thread.id, ThreadStatus.COMPLETED)
+
+    with TestClient(create_app(database)) as client:
+        missing = client.post(
+            "/v1/sessions",
+            headers={"Idempotency-Key": "session-thread-missing"},
+            json={"role_id": role.id, "thread_id": "thread-missing"},
+        )
+        assert missing.status_code == 404
+        assert missing.json() == {
+            "detail": "thread not found",
+            "error": {
+                "code": "thread_not_found",
+                "message": "thread not found",
+                "retryable": False,
+                "recovery": "none",
+            },
+        }
+
+        inactive = client.post(
+            "/v1/sessions",
+            headers={"Idempotency-Key": "session-thread-inactive"},
+            json={"role_id": role.id, "thread_id": inactive_thread.id},
+        )
+        assert inactive.status_code == 409
+        assert inactive.json()["error"] == {
+            "code": "thread_not_active",
+            "message": "thread is not active",
+            "retryable": False,
+            "recovery": "none",
+        }
+
+        created = client.post(
+            "/v1/sessions",
+            headers={"Idempotency-Key": "session-thread-bound"},
+            json={"role_id": role.id, "thread_id": bound_thread.id},
+        )
+        assert created.status_code == 201
+        bound = client.post(
+            "/v1/sessions",
+            headers={"Idempotency-Key": "session-thread-rebound"},
+            json={"role_id": role.id, "thread_id": bound_thread.id},
+        )
+        assert bound.status_code == 409
+        assert bound.json()["error"] == {
+            "code": "thread_already_bound",
+            "message": "thread is already bound to a session",
+            "retryable": False,
+            "recovery": "none",
+        }
+
+    with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
 
 

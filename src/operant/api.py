@@ -915,12 +915,18 @@ def _first_sse_frame_end(buffer: bytes) -> int | None:
     return min(boundaries, default=None)
 
 
-def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any]] | None:
+def _parse_sse_frame_fields(frame: bytes) -> tuple[str, dict[str, Any], str | None] | None:
     event_type = "message"
+    event_id: str | None = None
     data_lines: list[str] = []
-    text = frame.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    try:
+        text = frame.decode("utf-8").replace("\r\n", "\n")
+    except UnicodeDecodeError:
+        return None
     for line in text.splitlines():
-        if line.startswith("event:"):
+        if line.startswith("id:"):
+            event_id = line[3:].strip()
+        elif line.startswith("event:"):
             event_type = line[6:].strip()
         elif line.startswith("data:"):
             data_lines.append(line[5:].lstrip())
@@ -932,7 +938,28 @@ def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any]] | None:
         return None
     if not isinstance(payload, dict):
         return None
-    return event_type, payload
+    return event_type, payload, event_id
+
+
+def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any], int] | None:
+    parsed = _parse_sse_frame_fields(frame)
+    if parsed is None:
+        return None
+    event_type, payload, event_id = parsed
+    if event_id is None:
+        return None
+    try:
+        parsed_event_id = _parse_event_cursor(event_id, field_name="SSE id")
+        if isinstance(payload.get("cursor"), bool) or not isinstance(payload.get("cursor"), int):
+            return None
+        payload_cursor = _parse_event_cursor(str(payload["cursor"]), field_name="payload.cursor")
+    except (KeyError, ValueError):
+        return None
+    if parsed_event_id is None:
+        return None
+    if payload_cursor != parsed_event_id:
+        return None
+    return event_type, payload, parsed_event_id
 
 
 def _phase1d_stream_start_error(kind: str, exc: Exception) -> dict[str, Any]:
@@ -1086,7 +1113,10 @@ def _stream_resource(
                 f"/v1/sessions/{quote(encoded_id, safe='')}/events",
                 durable_cursor if is_committed("session", encoded_id, durable_cursor) else None,
             )
-    return None, None, None, durable_cursor
+    # A payload cursor is only a claim until it is tied to a concrete resource
+    # row above.  Never let an unrecognised resource turn that claim into a
+    # SQLite cursor during first-frame receipt acceptance.
+    return None, None, None, None
 
 
 def _first_stream_summary(
@@ -1104,26 +1134,41 @@ def _first_stream_summary(
     str | None,
 ]:
     parsed = _parse_sse_frame(frame)
+    cursor_verified = parsed is not None
     if parsed is None:
-        return (
-            CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
-            None,
-            "stream_first_frame_invalid",
-            409,
-            None,
-            None,
-        )
-    event_type, payload = parsed
-    resource_type, resource_id, replay_url, cursor = _stream_resource(
+        unvalidated = _parse_sse_frame_fields(frame)
+        if unvalidated is None or unvalidated[0] not in _FAILED_FIRST_STREAM_EVENTS:
+            return (
+                CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
+                None,
+                "stream_first_frame_invalid",
+                409,
+                None,
+                None,
+            )
+        event_type, payload, _event_id = unvalidated
+        event_id = None
+    else:
+        event_type, payload, event_id = parsed
+    resource_type, resource_id, replay_url, sqlite_cursor = _stream_resource(
         store=store,
         path=path,
         event_type=event_type,
         payload=payload,
     )
+    if cursor_verified and sqlite_cursor != event_id:
+        return (
+            CommandExecutionStatus.MANUAL_RECONCILE_REQUIRED,
+            None,
+            "stream_first_frame_invalid",
+            409,
+            resource_type,
+            resource_id,
+        )
     is_failed = event_type in _FAILED_FIRST_STREAM_EVENTS
     is_unknown = event_type in _UNKNOWN_FIRST_STREAM_EVENTS
     replay_available = (
-        resource_id is not None and cursor is not None and not (is_failed or is_unknown)
+        resource_id is not None and sqlite_cursor is not None and not (is_failed or is_unknown)
     )
     summary: dict[str, Any] = {
         "command_kind": "stream",
@@ -2626,10 +2671,10 @@ def create_app(
         )
         return [observation.model_dump(mode="json") for observation in observations]
 
-    @app.post("/v1/sessions", status_code=201)
+    @app.post("/v1/sessions", status_code=201, response_model=None)
     async def create_session(
         request: CreateSessionRequest,
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | JSONResponse:
         try:
             session = service.create_session(
                 request.role_id,
@@ -2639,7 +2684,30 @@ def create_app(
                 budget_overrides=request.budget_overrides,
                 thread_id=request.thread_id,
             )
-        except (NotFoundError, ConflictError, ValueError) as exc:
+        except NotFoundError as exc:
+            if request.thread_id is not None and str(exc).startswith("thread not found:"):
+                return protocol_response(
+                    status_code=404,
+                    code="thread_not_found",
+                    message="thread not found",
+                )
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictError as exc:
+            conflict = str(exc)
+            if conflict == "thread is not active":
+                return protocol_response(
+                    status_code=409,
+                    code="thread_not_active",
+                    message="thread is not active",
+                )
+            if "thread is already bound" in conflict or "Thread legacy mapping" in conflict:
+                return protocol_response(
+                    status_code=409,
+                    code="thread_already_bound",
+                    message="thread is already bound to a session",
+                )
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return session.model_dump(mode="json")
 

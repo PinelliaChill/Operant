@@ -13,6 +13,15 @@ from urllib.request import Request, urlopen
 Body = str | bytes | bytearray | Iterator[str | bytes] | None
 RawText = str | Callable[[], str]
 
+# These limits are deliberately finite at every layer of the SSE parser.  A
+# line can be large enough for a bounded JSON field, while a frame may contain
+# several lines and a data payload may span multiple ``data:`` fields.  Keep
+# the frame limit above the data limit so the parser can report the narrowest
+# violated protocol bound.
+MAX_SSE_LINE_BYTES = 64 * 1024
+MAX_SSE_DATA_BYTES = 256 * 1024
+MAX_SSE_FRAME_BYTES = 512 * 1024
+
 
 class HeaderCollection(Protocol):
     def items(self) -> Iterable[tuple[str, str]]: ...
@@ -186,68 +195,120 @@ class Phase1EError(RuntimeError):
         )
 
 
+class SseProtocolError(Phase1EError):
+    """A bounded or malformed SSE response from Core."""
+
+    def __init__(self, code: str, message: str, detail: Any = None) -> None:
+        super().__init__(code, message, recovery="manual_reconcile", detail=detail)
+
+
+def _decode_utf8(decoder: codecs.IncrementalDecoder, data: bytes, *, final: bool) -> str:
+    try:
+        return decoder.decode(data, final=final)
+    except UnicodeDecodeError as exc:
+        raise SseProtocolError(
+            "sse_invalid_utf8", "SSE response contains invalid UTF-8", detail=None
+        ) from exc
+
+
 def _chunks(source: Body) -> Iterator[str]:
-    decoder = codecs.getincrementaldecoder("utf-8")()
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
     if source is None:
         return
     if isinstance(source, str):
         yield source
         return
     if isinstance(source, (bytes, bytearray)):
-        decoded = decoder.decode(bytes(source), final=False)
+        decoded = _decode_utf8(decoder, bytes(source), final=False)
         if decoded:
             yield decoded
-        tail = decoder.decode(b"", final=True)
+        tail = _decode_utf8(decoder, b"", final=True)
         if tail:
             yield tail
         return
     for chunk in source:
         if isinstance(chunk, str):
-            tail = decoder.decode(b"", final=True)
+            tail = _decode_utf8(decoder, b"", final=True)
             if tail:
                 yield tail
             yield chunk
-            decoder = codecs.getincrementaldecoder("utf-8")()
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
             continue
-        decoded = decoder.decode(bytes(chunk), final=False)
+        decoded = _decode_utf8(decoder, bytes(chunk), final=False)
         if decoded:
             yield decoded
-    tail = decoder.decode(b"", final=True)
+    tail = _decode_utf8(decoder, b"", final=True)
     if tail:
         yield tail
 
 
-def _sse_lines(source: Body) -> Iterator[str]:
-    """Yield SSE lines for LF, CRLF, and bare CR line endings."""
+def _sse_line_size(text: str, terminator_bytes: int = 0) -> int:
+    try:
+        return len(text.encode("utf-8")) + terminator_bytes
+    except UnicodeEncodeError as exc:
+        raise SseProtocolError("sse_invalid_text", "SSE response contains invalid text") from exc
+
+
+def _sse_lines(source: Body) -> Iterator[tuple[str, int]]:
+    """Yield SSE lines and their raw UTF-8 sizes for LF, CRLF, or CR input."""
 
     line: list[str] = []
+    line_bytes = 0
     pending_cr = False
     for chunk in _chunks(source):
         for character in chunk:
             if pending_cr:
                 if character == "\n":
-                    yield "".join(line)
+                    size = line_bytes + 2
+                    if size > MAX_SSE_LINE_BYTES:
+                        raise SseProtocolError(
+                            "sse_line_too_large", "SSE line exceeds the protocol limit"
+                        )
+                    yield "".join(line), size
                     line = []
+                    line_bytes = 0
                     pending_cr = False
                     continue
-                yield "".join(line)
+                size = line_bytes + 1
+                if size > MAX_SSE_LINE_BYTES:
+                    raise SseProtocolError(
+                        "sse_line_too_large", "SSE line exceeds the protocol limit"
+                    )
+                yield "".join(line), size
                 line = []
+                line_bytes = 0
                 pending_cr = False
             if character == "\r":
                 pending_cr = True
             elif character == "\n":
-                yield "".join(line)
+                size = line_bytes + 1
+                if size > MAX_SSE_LINE_BYTES:
+                    raise SseProtocolError(
+                        "sse_line_too_large", "SSE line exceeds the protocol limit"
+                    )
+                yield "".join(line), size
                 line = []
+                line_bytes = 0
             else:
                 line.append(character)
+                line_bytes += _sse_line_size(character)
+                if line_bytes > MAX_SSE_LINE_BYTES:
+                    raise SseProtocolError(
+                        "sse_line_too_large", "SSE line exceeds the protocol limit"
+                    )
     if pending_cr or line:
-        yield "".join(line)
+        size = line_bytes + (1 if pending_cr else 0)
+        if size > MAX_SSE_LINE_BYTES:
+            raise SseProtocolError("sse_line_too_large", "SSE line exceeds the protocol limit")
+        yield "".join(line), size
 
 
 def parse_sse(source: Body) -> Iterator[dict[str, Any]]:
-    """Parse standard SSE id/event/data fields, preserving JSON data values."""
+    """Parse bounded SSE id/event/data fields, preserving non-JSON data."""
 
     fields: dict[str, Any] = {"data": []}
+    frame_bytes = 0
+    data_bytes = 0
 
     def dispatch() -> dict[str, Any] | None:
         if not fields["data"]:
@@ -264,12 +325,17 @@ def parse_sse(source: Body) -> Iterator[dict[str, Any]]:
             frame["event"] = fields["event"]
         return frame
 
-    for line in _sse_lines(source):
+    for line, line_size in _sse_lines(source):
+        frame_bytes += line_size
+        if frame_bytes > MAX_SSE_FRAME_BYTES:
+            raise SseProtocolError("sse_frame_too_large", "SSE frame exceeds the protocol limit")
         if not line:
             frame = dispatch()
             if frame is not None:
                 yield frame
             fields = {"data": []}
+            frame_bytes = 0
+            data_bytes = 0
             continue
         if line.startswith(":"):
             continue
@@ -281,6 +347,10 @@ def parse_sse(source: Body) -> Iterator[dict[str, Any]]:
         elif name == "event":
             fields["event"] = value
         elif name == "data":
+            value_bytes = _sse_line_size(value)
+            data_bytes += value_bytes + (1 if fields["data"] else 0)
+            if data_bytes > MAX_SSE_DATA_BYTES:
+                raise SseProtocolError("sse_data_too_large", "SSE data exceeds the protocol limit")
             fields["data"].append(value)
     frame = dispatch()
     if frame is not None:

@@ -40,7 +40,11 @@ from sdk.python_client.phase1e_generated import (
     _cursor_value_int,
 )
 from sdk.python_client.transport import (
+    MAX_SSE_DATA_BYTES,
+    MAX_SSE_FRAME_BYTES,
+    MAX_SSE_LINE_BYTES,
     Phase1EError,
+    SseProtocolError,
     TransportRequest,
     TransportResponse,
     parse_sse,
@@ -342,6 +346,34 @@ def test_sse_line_endings_and_cursor_tracker_are_bounded() -> None:
     assert tracker.accept(frame(1))  # cursor 1 was evicted from the bounded window
     assert tracker.accept(frame(4, "s2"))
     assert tracker.last("s1", "run") is None
+
+
+def test_sse_parser_limits_line_frame_and_data_across_chunks() -> None:
+    raw = 'id: 1\ndata: {"text": "é"}\n\n'.encode()
+    split = raw.index(b"\xc3") + 1
+    assert list(parse_sse(iter([raw[:split], raw[split:]]))) == [
+        {"id": "1", "data": {"text": "é"}},
+    ]
+
+    with pytest.raises(SseProtocolError, match="line") as line_error:
+        list(parse_sse("x" * MAX_SSE_LINE_BYTES + "\n"))
+    assert line_error.value.code == "sse_line_too_large"
+
+    frame_line = "x" * (MAX_SSE_LINE_BYTES - 2) + "\n"
+    frame_source = frame_line * (MAX_SSE_FRAME_BYTES // len(frame_line) + 1)
+    with pytest.raises(SseProtocolError, match="frame") as frame_error:
+        list(parse_sse(iter([frame_source[:100], frame_source[100:]])))
+    assert frame_error.value.code == "sse_frame_too_large"
+
+    data_value = "x" * min(
+        MAX_SSE_LINE_BYTES - len("data: ") - 1,
+        MAX_SSE_DATA_BYTES // 4,
+    )
+    data_lines = MAX_SSE_DATA_BYTES // (len(data_value) + 1) + 1
+    data_source = "".join(f"data: {data_value}\n" for _ in range(data_lines))
+    with pytest.raises(SseProtocolError, match="data") as data_error:
+        list(parse_sse(iter([data_source[:77], data_source[77:]])))
+    assert data_error.value.code == "sse_data_too_large"
 
 
 def test_create_session_xor_is_checked_before_transport() -> None:

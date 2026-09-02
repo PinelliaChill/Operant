@@ -14,7 +14,15 @@ export * from './event-reducer';
 // the GUI line switches its provider explicitly.
 export { Phase1EClient, ProtocolNegotiationError } from './phase1e.generated';
 export * as Phase1E from './phase1e.generated';
-export { Phase1EError, parseCursor, parseSse } from './phase1e-transport';
+export {
+  MAX_SSE_DATA_BYTES,
+  MAX_SSE_FRAME_BYTES,
+  MAX_SSE_LINE_BYTES,
+  Phase1EError,
+  SseProtocolError,
+  parseCursor,
+  parseSse,
+} from './phase1e-transport';
 export type {
   Phase1EBody,
   Phase1ERequest,
