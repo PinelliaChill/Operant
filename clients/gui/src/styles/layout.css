@@ -202,6 +202,11 @@ body.no-scroll {
   animation: slideInUp var(--dur-3) var(--ease-out);
 }
 
+/* Mock data source marker: mobile-only because desktop keeps the sidebar mode card. */
+.demo-mode-indicator {
+  display: none;
+}
+
 /* ========== 按钮 ========== */
 .btn {
   display: inline-flex;
@@ -360,6 +365,37 @@ body.no-scroll {
   /* Toast 抬高到底部 Tab Bar 之上 */
   .toast-tray {
     bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* The sidebar is a closed drawer by default on narrow screens. Keep the
+     data-source label visible above the fixed TabBar on every route, including
+     chat's empty state, after transient toasts disappear. */
+  .demo-mode-indicator {
+    position: fixed;
+    right: 12px;
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 8px);
+    z-index: 31;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    padding: 3px 9px;
+    border: 1px solid var(--status-warn-border);
+    border-radius: var(--radius-full);
+    background: var(--status-warn-bg);
+    color: var(--status-warn-text);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .demo-mode-indicator-dot {
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: currentColor;
   }
 }
 

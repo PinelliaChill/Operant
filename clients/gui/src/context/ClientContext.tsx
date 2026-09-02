@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { MockClient, OperantClient, Phase1EClient } from '@operant/sdk';
 import { formatTime } from '../lib/format';
+import { currentBrowserOrigin } from '../lib/liveBaseUrl';
 
 export type ClientMode = 'mock' | 'live';
 export type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected' | 'mock_active';
@@ -72,7 +73,10 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Keep the legacy client isolated to the explicitly selected Demo surface.
   // LiveProvider receives phase1eClient below and never calls this object.
   const mockClient = useMemo(() => new MockClient(), []);
-  const phase1eClient = useMemo(() => new Phase1EClient('http://127.0.0.1:8000'), []);
+  // Live requests stay same-origin: Vite proxies /v1 in development and the
+  // production reverse proxy owns the same path. Core intentionally has no
+  // browser CORS dependency, and Live never falls back to this MockClient.
+  const phase1eClient = useMemo(() => new Phase1EClient(currentBrowserOrigin()), []);
   const client: OperantClient = mockClient;
 
   const setClientMode = (mode: ClientMode) => {

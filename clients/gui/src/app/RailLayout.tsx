@@ -256,6 +256,25 @@ const RailStatusBar: React.FC<{ collabStatus: CollabStatusInfo | null }> = (prop
   return clientMode === 'live' ? <LiveRailStatusBar /> : <DemoRailStatusBar {...props} />;
 };
 
+/**
+ * Mobile keeps the context sidebar in a closed drawer, so its Demo mode card
+ * is not a persistent signal. Keep this status marker outside the drawer and
+ * toast tray; desktop layout remains unchanged while narrow screens always
+ * expose the active data source.
+ */
+const DemoModeIndicator: React.FC = () => (
+  <div
+    className="demo-mode-indicator"
+    data-client-mode="mock"
+    role="status"
+    aria-live="polite"
+    aria-label="当前使用演示数据"
+  >
+    <span className="demo-mode-indicator-dot" aria-hidden="true" />
+    <span>演示数据</span>
+  </div>
+);
+
 export const RailLayout: React.FC = () => {
   const { theme, toggleTheme, notifications, removeNotification, clientMode } = useOperant();
   const location = useLocation();
@@ -579,6 +598,8 @@ export const RailLayout: React.FC = () => {
 
       {/* StatusBar 32px（<960px 隐藏） */}
       <RailStatusBar collabStatus={collabStatus} />
+
+      {clientMode === 'mock' && <DemoModeIndicator />}
 
       {/* 底部 Tab Bar（<960px 显示） */}
       <nav className="bottom-tabbar" aria-label="底部导航">
