@@ -66,7 +66,12 @@ def test_protocol_endpoint_fails_closed_without_digest_and_accepts_generated_dig
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("OPERANT_PHASE1E_SCHEMA_DIGEST_PATH", raising=False)
+    # The integration checkout contains the generated digest by design.  Point
+    # the Core at a definitely missing absolute path so this branch exercises
+    # the fail-closed deployment boundary rather than the source-checkout
+    # fallback.
+    missing_digest = tmp_path / "missing" / "operant-phase1e.openapi.sha256"
+    monkeypatch.setenv("OPERANT_PHASE1E_SCHEMA_DIGEST_PATH", str(missing_digest))
     app = create_app(tmp_path / "protocol.sqlite3", artifact_root=tmp_path / "artifacts")
     with TestClient(app) as client:
         unavailable = client.get("/v1/protocol")
