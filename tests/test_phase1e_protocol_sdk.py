@@ -300,16 +300,29 @@ def test_all_generated_typed_dict_required_sets_match_schema() -> None:
 
 def test_generated_python_sdk_uses_python310_typed_dict_compatibility_import() -> None:
     source = PY_PATH.read_text(encoding="utf-8")
-    assert "from typing import Any, Literal, NotRequired, TypedDict, cast" not in source
-    assert "from typing_extensions import NotRequired, TypedDict" in source
-    assert "try:\n    from typing import NotRequired" not in source
+    assert "from typing import Any, Literal, NotRequired, TypedDict, cast" not in source, (
+        "the generated Python 3.10 SDK must keep NotRequired and TypedDict in the "
+        "typing_extensions compatibility import"
+    )
+    assert "from typing_extensions import NotRequired, TypedDict" in source, (
+        "the generated Python 3.10 SDK must import TypedDict compatibility types "
+        "from typing_extensions"
+    )
+    assert "try:\n    from typing import NotRequired" not in source, (
+        "the generated Python 3.10 SDK must not fall back to a runtime-dependent typing import"
+    )
 
-    python310 = shutil.which("python3.10")
+    # In CI, ``uv run pytest`` already selected the dependency-complete Python
+    # 3.10 environment.  Reuse it so the smoke import sees the locked
+    # ``typing_extensions`` dependency instead of a system interpreter.
+    running_python310 = sys.version_info[:2] == (3, 10)
+    python310 = sys.executable if running_python310 else shutil.which("python3.10")
     if python310 is None:
         return  # Static source check is the available Python 3.10 compatibility gate.
-    probe = subprocess.run([python310, "--version"], capture_output=True, text=True)
-    if probe.returncode != 0:
-        return  # A pyenv shim without an activated 3.10 runtime is not executable.
+    if not running_python310:
+        probe = subprocess.run([python310, "--version"], capture_output=True, text=True)
+        if probe.returncode != 0:
+            return  # A pyenv shim without an activated 3.10 runtime is not executable.
     smoke = subprocess.run(
         [
             python310,
@@ -324,7 +337,10 @@ def test_generated_python_sdk_uses_python310_typed_dict_compatibility_import() -
         capture_output=True,
         text=True,
     )
-    assert smoke.returncode == 0, smoke.stderr
+    assert smoke.returncode == 0, (
+        "Python 3.10 generated SDK smoke import failed; the locked "
+        f"typing_extensions dependency must be importable: {smoke.stderr}"
+    )
 
 
 def test_sse_line_endings_and_cursor_tracker_are_bounded() -> None:
