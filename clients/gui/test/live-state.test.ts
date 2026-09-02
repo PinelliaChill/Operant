@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   canBindSessionToThread,
+  canDecideApproval,
+  commandStateAfterTerminalEvent,
   LIVE_EVENT_WINDOW_SIZE,
   approvalActionKey,
   connectionLossState,
@@ -10,6 +12,8 @@ import {
   eventNeedsManualReconcile,
   reduceEvent,
   sessionOptionsFor,
+  terminalEventError,
+  terminalRunOutcome,
   threadForSession,
 } from '../src/live/liveState.ts';
 
@@ -147,4 +151,58 @@ test('an unbound Thread does not borrow a page-local cached Session', () => {
   assert.equal(options.length, 1);
   assert.equal(options[0].id, 'session-other');
   assert.equal(options[0].boundThreadId, null);
+});
+
+test('an approval remains actionable while its run awaits projection', () => {
+  const approval = { status: 'pending' } as never;
+  const idleAction = { status: 'idle' } as never;
+  const commandStatus = 'awaiting_projection';
+
+  // The run command can be awaiting the next projection while Core waits for
+  // either decision.  Approval gating must not inspect that command status.
+  assert.equal(commandStatus, 'awaiting_projection');
+  for (const decision of ['approve', 'reject'] as const) {
+    assert.equal(canDecideApproval(approval, idleAction, 'connected', 'connected', false), true, decision);
+  }
+});
+
+test('an approval submission in flight prevents duplicate decisions', () => {
+  const approval = { status: 'pending' } as never;
+  for (const status of ['sending', 'awaiting_projection'] as const) {
+    assert.equal(
+      canDecideApproval(approval, { status } as never, 'connected', 'connected', false),
+      false,
+    );
+  }
+  assert.equal(
+    canDecideApproval(approval, { status: 'idle' } as never, 'connected', 'connected', true),
+    false,
+  );
+});
+
+test('only terminal SSE releases a pending run and failures stay typed', () => {
+  const failed = {
+    ...event(3),
+    event_type: 'agent.failed',
+    payload: {
+      error_type: 'ProviderError',
+      message: 'provider unavailable',
+      recoverable: false,
+    },
+  } as never;
+  const approvalRequired = { ...event(4), event_type: 'tool.approval_required' } as never;
+  const awaitingCommand = { status: 'awaiting_projection', idempotencyKey: 'run-1' } as never;
+
+  assert.equal(terminalRunOutcome(failed), 'failed');
+  assert.equal(terminalRunOutcome(approvalRequired), null);
+  assert.deepEqual(commandStateAfterTerminalEvent(failed, awaitingCommand), { status: 'idle' });
+  assert.deepEqual(commandStateAfterTerminalEvent(approvalRequired, awaitingCommand), awaitingCommand);
+  assert.deepEqual(terminalEventError(failed), {
+    code: 'agent_failed',
+    message: 'provider unavailable',
+    retryable: false,
+    recovery: 'none',
+    detail: failed.payload,
+  });
+  assert.equal(terminalEventError(approvalRequired), undefined);
 });

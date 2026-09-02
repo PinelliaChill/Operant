@@ -20,7 +20,7 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
 import type { LiveApproval, LiveEvent, LiveSessionOption, LiveWorkspaceFile } from '../../live/liveState';
-import { formatCursor } from '../../live/liveState';
+import { canDecideApproval, formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
 
 function statusLabel(status: string): string {
@@ -55,6 +55,15 @@ function eventSummary(event: LiveEvent): string {
     return 'Approval Projection 已更新';
   }
   if (event.event_type.startsWith('tool.')) return 'Action Gateway Projection 已更新';
+  if (event.event_type === 'agent.failed') {
+    const message = event.payload.message;
+    return typeof message === 'string' && message.trim() ? `Agent 失败：${message}` : 'Agent 运行失败';
+  }
+  if (event.event_type === 'agent.cancelled') {
+    const reason = event.payload.reason;
+    return typeof reason === 'string' && reason.trim() ? `Agent 已取消：${reason}` : 'Agent 已取消';
+  }
+  if (event.event_type === 'agent.timed_out') return 'Agent 运行超时';
   if (event.event_type.startsWith('agent.')) return 'Agent Projection 已更新';
   return '收到已提交事件';
 }
@@ -109,10 +118,10 @@ export const LiveApprovalCard: React.FC<{
       <div><dt>过期时间</dt><dd>{approval.expiresAt}</dd></div>
     </dl>
     <div className="live-approval-actions">
-      <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDecide('reject')} disabled={busy}>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDecide('reject')} disabled={busy || approval.status !== 'pending'}>
         拒绝
       </button>
-      <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve')} disabled={busy}>
+      <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve')} disabled={busy || approval.status !== 'pending'}>
         {busy ? '提交中…' : '批准一次'}
       </button>
     </div>
@@ -481,7 +490,13 @@ export const LiveChatView: React.FC = () => {
                   <LiveApprovalCard
                     key={approval.id}
                     approval={approval}
-                    busy={approvalAction.status === 'sending' || approvalAction.status === 'awaiting_projection' || busy}
+                    busy={phase !== 'ready' || !canDecideApproval(
+                      approval,
+                      approvalAction,
+                      connectionStatus,
+                      stream.status,
+                      manualReconcileRequired,
+                    )}
                     onDecide={(decision) => void decideApproval(approval, decision)}
                   />
                 ))}

@@ -233,6 +233,26 @@ export interface LiveActionState {
   idempotencyKey?: string;
 }
 
+export type LiveConnectionStatus = 'connected' | 'reconnecting' | 'disconnected' | 'mock_active';
+
+/**
+ * Approval actions have their own lifecycle.  A run command waiting for a
+ * projection is not an approval lock: Core may be waiting for this decision.
+ */
+export function canDecideApproval(
+  approval: Pick<LiveApproval, 'status'>,
+  action: Pick<LiveActionState, 'status'>,
+  connectionStatus: LiveConnectionStatus,
+  streamStatus: LiveStreamStatus,
+  manualReconcileRequired: boolean,
+): boolean {
+  return approval.status === 'pending'
+    && action.status === 'idle'
+    && !manualReconcileRequired
+    && connectionStatus === 'connected'
+    && streamStatus === 'connected';
+}
+
 export interface LiveCreateSessionInput {
   /** Exactly one of roleId and newRole must be supplied. */
   roleId?: string;
@@ -311,8 +331,80 @@ const TERMINAL_EVENT_TYPES = new Set([
   'workflow.completed',
 ]);
 
+export type TerminalRunOutcome = 'completed' | 'failed' | 'cancelled' | 'timed_out';
+
+export function terminalRunOutcome(event: LiveEvent): TerminalRunOutcome | null {
+  switch (event.event_type) {
+    case 'agent.completed':
+    case 'workflow.completed':
+      return 'completed';
+    case 'agent.failed':
+      return 'failed';
+    case 'agent.cancelled':
+      return 'cancelled';
+    case 'agent.timed_out':
+      return 'timed_out';
+    default:
+      return null;
+  }
+}
+
 export function isTerminalEvent(event: LiveEvent): boolean {
-  return TERMINAL_EVENT_TYPES.has(event.event_type);
+  return TERMINAL_EVENT_TYPES.has(event.event_type) && terminalRunOutcome(event) !== null;
+}
+
+function payloadText(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+/** Preserve a typed, visible error for a failed terminal SSE event. */
+export function terminalEventError(event: LiveEvent): LiveError | undefined {
+  const outcome = terminalRunOutcome(event);
+  if (outcome === null || outcome === 'completed') return undefined;
+  if (event.error) return event.error;
+
+  if (outcome === 'failed') {
+    const recoverable = event.payload.recoverable === true;
+    return {
+      code: 'agent_failed',
+      message: payloadText(event.payload, 'message') || 'Core Agent 运行失败。',
+      retryable: recoverable,
+      recovery: recoverable ? 'retry_later' : 'none',
+      detail: event.payload,
+    };
+  }
+  if (outcome === 'cancelled') {
+    return {
+      code: 'agent_cancelled',
+      message: payloadText(event.payload, 'reason') || 'Core Agent 已取消。',
+      retryable: false,
+      recovery: 'none',
+      detail: event.payload,
+    };
+  }
+  const timeoutSeconds = event.payload.timeout_seconds;
+  const timeoutLabel = typeof timeoutSeconds === 'number' || typeof timeoutSeconds === 'string'
+    ? `（${timeoutSeconds} 秒）`
+    : '';
+  return {
+    code: 'agent_timed_out',
+    message: `Core Agent 运行已超时${timeoutLabel}。`,
+    retryable: true,
+    recovery: 'retry_later',
+    detail: event.payload,
+  };
+}
+
+/** A committed terminal event releases only an in-flight run command. */
+export function commandStateAfterTerminalEvent(
+  event: LiveEvent,
+  current: LiveCommandState,
+): LiveCommandState {
+  if (!isTerminalEvent(event)) return current;
+  return current.status === 'sending' || current.status === 'awaiting_projection'
+    ? { status: 'idle' }
+    : current;
 }
 
 export function isApprovalProjectionEvent(event: LiveEvent): boolean {

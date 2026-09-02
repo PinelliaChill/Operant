@@ -4,6 +4,7 @@ import { useNavigate, useOutletContext } from 'react-router-dom';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { useLive, type LiveApprovalDecision } from '../../live/LiveContext';
+import { canDecideApproval } from '../../live/liveState';
 import { LiveApprovalCard } from '../chat/LiveChatView';
 import type { RailOutletContext } from '../../app/RailLayout';
 
@@ -25,11 +26,6 @@ export const LiveApprovalsView: React.FC = () => {
   } = useLive();
 
   const pending = useMemo(() => approvals.filter((approval) => approval.status === 'pending'), [approvals]);
-  const busy = approvalAction.status === 'sending'
-    || approvalAction.status === 'awaiting_projection'
-    || manualReconcileRequired
-    || connectionStatus !== 'connected'
-    || stream.status !== 'connected';
   const decide = (approval: (typeof approvals)[number], decision: LiveApprovalDecision) => {
     void decideApproval(approval, decision);
   };
@@ -62,7 +58,18 @@ export const LiveApprovalsView: React.FC = () => {
       ) : (
         <div className="live-approval-route-list">
           {pending.map((approval) => (
-            <LiveApprovalCard key={approval.id} approval={approval} busy={busy} onDecide={(decision) => decide(approval, decision)} />
+            <LiveApprovalCard
+              key={approval.id}
+              approval={approval}
+              busy={phase !== 'ready' || !canDecideApproval(
+                approval,
+                approvalAction,
+                connectionStatus,
+                stream.status,
+                manualReconcileRequired,
+              )}
+              onDecide={(decision) => decide(approval, decision)}
+            />
           ))}
         </div>
       )}

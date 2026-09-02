@@ -38,10 +38,14 @@ import {
   emptyEventAccumulator,
   approvalActionKey,
   canBindSessionToThread,
+  canDecideApproval,
+  commandStateAfterTerminalEvent,
   eventNeedsManualReconcile,
   isApprovalProjectionEvent,
   isTerminalEvent,
   reduceEvent,
+  terminalEventError,
+  terminalRunOutcome,
   threadForSession,
   sessionOptionsFor,
 } from './liveState';
@@ -207,6 +211,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const createSessionKeyRef = useRef<string | null>(null);
   const createSessionInputRef = useRef<string | null>(null);
   const pendingApprovalRef = useRef<PendingApprovalDecision | null>(null);
+  const terminalErrorRef = useRef<LiveError | undefined>(undefined);
   const commandDispatchingRef = useRef(false);
   const approvalDispatchingRef = useRef(false);
   const createSessionDispatchingRef = useRef(false);
@@ -325,7 +330,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSessions(nextSessions);
     setApprovals(nextApprovals);
     setProjectionStale(false);
-    setLastError(undefined);
+    setLastError((current) => manualReconcileRef.current ? current : terminalErrorRef.current);
 
     const requestedThreadId = deepLinkTargetRef.current;
     const requestedThread = requestedThreadId
@@ -509,6 +514,18 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       lastEvent: event,
       error: undefined,
     }));
+    const terminalOutcome = terminalRunOutcome(event);
+    if (terminalOutcome !== null) {
+      const pendingRun = pendingRunRef.current;
+      if (pendingRun?.threadId === threadId) pendingRunRef.current = null;
+      setCommand((current) => commandStateAfterTerminalEvent(event, current));
+      const terminalError = terminalEventError(event);
+      terminalErrorRef.current = terminalError;
+      if (terminalError) {
+        setLastError(terminalError);
+        setStream((current) => ({ ...current, error: terminalError }));
+      }
+    }
     if (isApprovalProjectionEvent(event) || frameHasTerminalProjection(event)) void correctProjection();
   }, [correctProjection, markManualReconcile]);
 
@@ -630,6 +647,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     pendingRunRef.current = null;
     pendingSessionRef.current = null;
     pendingApprovalRef.current = null;
+    terminalErrorRef.current = undefined;
     approvalKeysRef.current.clear();
     createSessionKeyRef.current = null;
     createSessionInputRef.current = null;
@@ -739,6 +757,9 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (manualReconcileRequired || command.status !== 'idle' || connectionStatus !== 'connected' || stream.status !== 'connected') return;
     if (commandDispatchingRef.current) return;
     commandDispatchingRef.current = true;
+    terminalErrorRef.current = undefined;
+    setLastError(undefined);
+    setStream((current) => ({ ...current, error: undefined }));
     const previousRun = pendingRunRef.current;
     const commandKey = previousRun
       && previousRun.sessionId === thread.sessionId
@@ -778,11 +799,13 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (
       clientMode !== 'live'
       || phase !== 'ready'
-      || manualReconcileRequired
-      || approval.status !== 'pending'
-      || connectionStatus !== 'connected'
-      || stream.status !== 'connected'
-      || approvalAction.status !== 'idle'
+      || !canDecideApproval(
+        approval,
+        approvalAction,
+        connectionStatus,
+        stream.status,
+        manualReconcileRequired,
+      )
       || approvalDispatchingRef.current
     ) return;
     approvalDispatchingRef.current = true;
@@ -821,6 +844,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [adapter, applyError, clientMode, connectionStatus, phase]);
 
   const clearError = useCallback(() => {
+    terminalErrorRef.current = undefined;
     setLastError(undefined);
     setStream((current) => ({ ...current, error: undefined }));
     // Manual reconcile is intentionally not cleared: this prevents a
