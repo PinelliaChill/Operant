@@ -48,6 +48,8 @@ import {
   isTerminalEvent,
   projectionGeneration,
   reduceEvent,
+  shouldReleaseApprovalPending,
+  streamEndedBeforeTerminalError,
   terminalEventError,
   terminalRunOutcome,
   threadForSession,
@@ -152,7 +154,8 @@ function roleIdForSession(session: LiveSession | undefined): string | undefined 
 function errorNeedsManualReconcile(error: LiveError): boolean {
   return error.recovery === 'manual_reconcile'
     || error.code.includes('manual_reconcile')
-    || error.code.includes('outcome_unknown');
+    || error.code.includes('outcome_unknown')
+    || containsManualReconcile(error.detail);
 }
 
 function manualReconcileError(value: unknown, fallback: string): LiveError {
@@ -645,7 +648,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     run: PendingRun,
     replay: boolean,
     generation: number,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const lastEventId: Cursor | undefined = replay && accumulatorRef.current.cursor !== null
       ? accumulatorRef.current.cursor
       : undefined;
@@ -662,7 +665,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         lastEventId,
       },
     );
-    if (generation !== lifecycleRef.current) return;
+    if (generation !== lifecycleRef.current) return false;
 
     if (streamResult.receipt) {
       if (streamResult.receipt.recovery === 'manual_reconcile' || containsManualReconcile(streamResult.receipt)) {
@@ -675,21 +678,42 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setProjectionStale(true);
         setCommand({ status: 'error', error: detail, idempotencyKey: run.idempotencyKey });
         setStream((current) => ({ ...current, status: 'error', error: detail }));
-        return;
+        return false;
       }
       // 202 is only idempotency/command admission evidence, never terminal.
       setCommand({ status: 'awaiting_projection', idempotencyKey: run.idempotencyKey });
       setStream((current) => ({ ...current, status: 'connected', error: undefined }));
-      return;
+      return true;
     }
 
     setCommand({ status: 'awaiting_projection', idempotencyKey: run.idempotencyKey });
+    let terminalSeen = false;
     for await (const frame of streamResult.events) {
+      const event = mapSseFrame(frame, run.sessionId);
+      if (
+        selectedThreadIdRef.current === run.threadId
+        && (!event.thread_id || event.thread_id === run.threadId)
+        && terminalRunOutcome(event) !== null
+      ) {
+        terminalSeen = true;
+      }
       handleFrame(frame, run.threadId, generation);
     }
-    if (generation === lifecycleRef.current && !manualReconcileRef.current) {
-      setStream((current) => ({ ...current, status: 'connected', error: undefined }));
+    if (generation !== lifecycleRef.current || manualReconcileRef.current) return false;
+    const runStillPending = pendingRunRef.current?.idempotencyKey === run.idempotencyKey;
+    if (!terminalSeen || runStillPending) {
+      const detail = streamEndedBeforeTerminalError();
+      setLastError(detail);
+      setProjectionStale(true);
+      setCommand({ status: 'error', error: detail, idempotencyKey: run.idempotencyKey });
+      setStream((current) => ({ ...current, status: 'error', error: detail }));
+      // Keep pendingRunRef and its original idempotency key. An explicit
+      // reconnect can replay this exact logical command without guessing EOF
+      // to be a successful completion.
+      return false;
     }
+    setStream((current) => ({ ...current, status: 'connected', error: undefined }));
+    return true;
   }, [adapter, handleFrame, markManualReconcile]);
 
   const replayThenCorrect = useCallback(async () => {
@@ -698,7 +722,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const pendingRun = pendingRunRef.current;
     try {
       if (pendingRun && pendingRun.threadId === selectedThreadIdRef.current) {
-        await consumeRunStream(pendingRun, true, generation);
+        const replayCompleted = await consumeRunStream(pendingRun, true, generation);
+        if (!replayCompleted) return;
       }
       // Replay is followed by authoritative projection queries.
       await refresh();
@@ -900,8 +925,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     pendingRunRef.current = run;
     setCommand({ status: 'sending', idempotencyKey: commandKey });
     try {
-      await consumeRunStream(run, false, lifecycleRef.current);
-      if (clientMode === 'live') await refresh();
+      const streamCompleted = await consumeRunStream(run, false, lifecycleRef.current);
+      if (clientMode === 'live' && streamCompleted) await refresh();
     } catch (error: unknown) {
       const detail = applyError(error, false);
       if (!detail.retryable && !errorNeedsManualReconcile(detail)) {
@@ -952,6 +977,11 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await correctProjection();
     } catch (error: unknown) {
       const detail = applyError(error, false);
+      if (shouldReleaseApprovalPending(detail)
+        && pendingApprovalRef.current?.sessionId === approval.sessionId
+        && pendingApprovalRef.current?.approvalId === approval.id) {
+        pendingApprovalRef.current = null;
+      }
       setApprovalAction({ status: 'error', error: detail, idempotencyKey });
     } finally {
       approvalDispatchingRef.current = false;

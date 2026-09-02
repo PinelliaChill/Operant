@@ -17,6 +17,8 @@ import {
   approvalsForSession,
   reduceEvent,
   sessionOptionsFor,
+  shouldReleaseApprovalPending,
+  streamEndedBeforeTerminalError,
   terminalEventError,
   terminalRunOutcome,
   threadForSession,
@@ -227,6 +229,42 @@ test('unbound selected Thread has no approvals from another Session', () => {
   ] as never;
   assert.deepEqual(approvalsForSession(approvals, null), []);
   assert.deepEqual(approvalsForSession(approvals, 'session-a'), [approvals[0]]);
+});
+
+test('only deterministic approval failures release the pending lock', () => {
+  assert.equal(shouldReleaseApprovalPending({
+    code: 'approval_conflict',
+    retryable: false,
+    recovery: 'none',
+  }), true);
+  assert.equal(shouldReleaseApprovalPending({
+    code: 'transport_unavailable',
+    retryable: true,
+    recovery: 'retry_later',
+  }), false);
+  assert.equal(shouldReleaseApprovalPending({
+    code: 'session_manual_reconcile_required',
+    retryable: false,
+    recovery: 'manual_reconcile',
+  }), false);
+  assert.equal(shouldReleaseApprovalPending({
+    code: 'approval_unknown_error',
+    retryable: false,
+    recovery: 'none',
+  }), false);
+  assert.equal(shouldReleaseApprovalPending({
+    code: 'approval_conflict',
+    retryable: false,
+    recovery: 'none',
+    detail: { recovery: 'manual_reconcile' },
+  }), false);
+});
+
+test('normal stream EOF is a retryable failure for the original command key', () => {
+  const failure = streamEndedBeforeTerminalError();
+  assert.equal(failure.code, 'stream_ended_before_terminal');
+  assert.equal(failure.retryable, true);
+  assert.equal(failure.recovery, 'retry_same_idempotency_key');
 });
 
 test('only terminal SSE releases a pending run and failures stay typed', () => {

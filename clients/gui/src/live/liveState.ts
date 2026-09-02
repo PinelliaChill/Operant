@@ -509,6 +509,34 @@ export function containsManualReconcile(value: unknown, seen = new Set<unknown>(
   return Object.values(value).some((item) => containsManualReconcile(item, seen));
 }
 
+/**
+ * A typed, deterministic rejection proves that an approval decision was not
+ * left in an unknown state. Transport/unknown and manual-reconcile errors
+ * must keep the pending lock so the same command can be retried or audited.
+ */
+export function shouldReleaseApprovalPending(
+  error: Pick<LiveError, 'code' | 'retryable' | 'recovery'> & { detail?: unknown },
+): boolean {
+  const code = error.code.toLowerCase();
+  return !error.retryable
+    && error.recovery !== 'manual_reconcile'
+    && !code.includes('manual_reconcile')
+    && !code.includes('unknown')
+    && code !== 'invalid_error_envelope'
+    && code !== 'transport_unavailable'
+    && !containsManualReconcile(error.detail);
+}
+
+/** Normal SSE EOF before a terminal event leaves the run outcome unknown. */
+export function streamEndedBeforeTerminalError(): LiveError {
+  return {
+    code: 'stream_ended_before_terminal',
+    message: 'Live SSE 在收到终态前结束，运行结果未知；请重连并使用原 idempotency key 重放。',
+    retryable: true,
+    recovery: 'retry_same_idempotency_key',
+  };
+}
+
 export function eventNeedsManualReconcile(event: LiveEvent): boolean {
   return event.error?.recovery === 'manual_reconcile'
     || containsManualReconcile(event.error)
