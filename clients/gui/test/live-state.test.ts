@@ -4,6 +4,7 @@ import {
   canBindSessionToThread,
   canDecideApproval,
   commandStateAfterTerminalEvent,
+  approvalProjectionResolved,
   LIVE_EVENT_WINDOW_SIZE,
   approvalActionKey,
   connectionLossState,
@@ -15,6 +16,7 @@ import {
   terminalEventError,
   terminalRunOutcome,
   threadForSession,
+  projectionGeneration,
 } from '../src/live/liveState.ts';
 
 function event(sequence: number, id = `evt-${sequence}`) {
@@ -178,6 +180,23 @@ test('an approval submission in flight prevents duplicate decisions', () => {
     canDecideApproval(approval, { status: 'idle' } as never, 'connected', 'connected', true),
     false,
   );
+});
+
+test('approval projection correction keeps the active stream generation', () => {
+  const activeGeneration = 17;
+
+  assert.equal(projectionGeneration(activeGeneration, false), activeGeneration);
+  assert.equal(projectionGeneration(activeGeneration, true), activeGeneration + 1);
+});
+
+test('approval stays pending until its exact Query projection is gone', () => {
+  const pending = { sessionId: 'session-a', id: 'approval-a', status: 'pending' } as never;
+
+  assert.equal(approvalProjectionResolved('session-a', 'approval-a', [pending]), false);
+  assert.equal(approvalProjectionResolved('session-a', 'approval-a', [
+    { sessionId: 'session-other', id: 'approval-a', status: 'pending' },
+  ] as never), true);
+  assert.equal(approvalProjectionResolved('session-a', 'approval-a', []), true);
 });
 
 test('only terminal SSE releases a pending run and failures stay typed', () => {

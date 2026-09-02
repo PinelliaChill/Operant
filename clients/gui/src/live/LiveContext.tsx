@@ -37,12 +37,14 @@ import {
   createIdempotencyKey,
   emptyEventAccumulator,
   approvalActionKey,
+  approvalProjectionResolved,
   canBindSessionToThread,
   canDecideApproval,
   commandStateAfterTerminalEvent,
   eventNeedsManualReconcile,
   isApprovalProjectionEvent,
   isTerminalEvent,
+  projectionGeneration,
   reduceEvent,
   terminalEventError,
   terminalRunOutcome,
@@ -377,12 +379,11 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const pendingApproval = pendingApprovalRef.current;
     if (pendingApproval) {
-      const remainsPending = nextApprovals.some((approval) => (
-        approval.sessionId === pendingApproval.sessionId
-        && approval.id === pendingApproval.approvalId
-        && approval.status === 'pending'
-      ));
-      if (!remainsPending) {
+      if (approvalProjectionResolved(
+        pendingApproval.sessionId,
+        pendingApproval.approvalId,
+        nextApprovals,
+      )) {
         pendingApprovalRef.current = null;
         setApprovalAction({ status: 'idle' });
       }
@@ -401,7 +402,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refresh = useCallback(async () => {
     if (clientMode !== 'live') return;
     if (connectionStatusRef.current !== 'connected' && phaseRef.current !== 'connecting') return;
-    const generation = ++lifecycleRef.current;
+    const generation = projectionGeneration(lifecycleRef.current, true);
+    lifecycleRef.current = generation;
     try {
       await loadProjection(generation);
       if (generation === lifecycleRef.current && connectionStatusRef.current === 'connected') {
@@ -421,7 +423,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // A projection correction must not invalidate the generation captured by
     // the active AsyncIterable. Only an explicit refresh/reconnect supersedes
     // in-flight stream work.
-    const generation = lifecycleRef.current;
+    const generation = projectionGeneration(lifecycleRef.current, false);
     try {
       await loadProjection(generation);
     } catch (error: unknown) {
@@ -431,7 +433,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const connectAndRefresh = useCallback(async (): Promise<boolean> => {
     if (clientMode !== 'live') return false;
-    const generation = ++lifecycleRef.current;
+    const generation = projectionGeneration(lifecycleRef.current, true);
+    lifecycleRef.current = generation;
     phaseRef.current = 'connecting';
     setPhase('connecting');
     setStream((current) => ({
@@ -618,10 +621,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (clientMode === 'live') {
       void connectAndRefresh();
       return () => {
-        lifecycleRef.current += 1;
+        lifecycleRef.current = projectionGeneration(lifecycleRef.current, true);
       };
     }
-    lifecycleRef.current += 1;
+    lifecycleRef.current = projectionGeneration(lifecycleRef.current, true);
     phaseRef.current = 'idle';
     setPhase('idle');
     setProjects([]);
@@ -819,14 +822,15 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Do not clear pending locally. Only the next scoped Query can confirm
       // that the target approval is no longer pending.
       setApprovalAction({ status: 'awaiting_projection', idempotencyKey });
-      await refresh();
+      // Keep the active run stream generation so its terminal frame is still accepted.
+      await correctProjection();
     } catch (error: unknown) {
       const detail = applyError(error, false);
       setApprovalAction({ status: 'error', error: detail, idempotencyKey });
     } finally {
       approvalDispatchingRef.current = false;
     }
-  }, [adapter, approvalAction.status, applyError, clientMode, connectionStatus, manualReconcileRequired, phase, refresh, stream.status]);
+  }, [adapter, approvalAction.status, applyError, clientMode, connectionStatus, correctProjection, manualReconcileRequired, phase, stream.status]);
 
   const loadFiles = useCallback(async (workspaceId: string, relativePath = '') => {
     if (clientMode !== 'live' || phase !== 'ready' || connectionStatus !== 'connected') return;

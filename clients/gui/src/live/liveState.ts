@@ -253,6 +253,24 @@ export function canDecideApproval(
     && streamStatus === 'connected';
 }
 
+/** Explicit refreshes supersede an active stream; projection corrections do not. */
+export function projectionGeneration(current: number, invalidate: boolean): number {
+  return invalidate ? current + 1 : current;
+}
+
+/** A pending approval is cleared only after a successful Query no longer lists it. */
+export function approvalProjectionResolved(
+  sessionId: string,
+  approvalId: string,
+  approvals: readonly Pick<LiveApproval, 'sessionId' | 'id' | 'status'>[],
+): boolean {
+  return !approvals.some((approval) => (
+    approval.sessionId === sessionId
+    && approval.id === approvalId
+    && approval.status === 'pending'
+  ));
+}
+
 export interface LiveCreateSessionInput {
   /** Exactly one of roleId and newRole must be supplied. */
   roleId?: string;
