@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  canBindSessionToThread,
   LIVE_EVENT_WINDOW_SIZE,
   approvalActionKey,
   connectionLossState,
@@ -100,4 +101,14 @@ test('session projection and approval action keys retain exact scopes', () => {
   }
   assert.equal(result.events.length, LIVE_EVENT_WINDOW_SIZE);
   assert.equal(result.seen.size, LIVE_EVENT_WINDOW_SIZE);
+});
+
+test('session creation is disabled without an active unbound selected Thread', () => {
+  const activeUnbound = { status: 'active', sessionId: null } as never;
+  const bound = { status: 'active', sessionId: 'session-a' } as never;
+  const archived = { status: 'archived', sessionId: null } as never;
+  assert.equal(canBindSessionToThread(undefined), false);
+  assert.equal(canBindSessionToThread(activeUnbound), true);
+  assert.equal(canBindSessionToThread(bound), false);
+  assert.equal(canBindSessionToThread(archived), false);
 });

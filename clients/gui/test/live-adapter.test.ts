@@ -48,6 +48,25 @@ test('live adapter negotiates through the generated client instance', async () =
   assert.equal(calls, 1);
 });
 
+test('live createSession forwards the exact selected Thread binding', async () => {
+  let request: unknown;
+  const adapter = new LiveClientAdapter(fakeClient({
+    createSession: async (value: unknown) => {
+      request = value;
+      return { id: 'session-created' };
+    },
+  }) as never);
+  await adapter.createSession({ roleId: 'role-a', threadId: 'thread-selected' });
+  assert.deepEqual(request, {
+    role_id: 'role-a',
+    new_role: undefined,
+    model_profile_id: undefined,
+    effort: undefined,
+    budget_overrides: undefined,
+    thread_id: 'thread-selected',
+  });
+});
+
 test('project and thread relationships use exact generated IDs and legacy refs', () => {
   const project = mapProjectProjection({
     project_id: 'project-a',
@@ -158,8 +177,9 @@ test('missing Schema operations and session scopes fail explicitly', async () =>
   await assert.rejects(() => adapter.listPendingApprovals(''), (error: unknown) => (
     error instanceof LiveAdapterError && error.detail.code === 'session_required'
   ));
-  await assert.rejects(() => adapter.createSession({}));
-  await assert.rejects(() => adapter.createSession({ newRole: { name: '', system_prompt: '', model_profile_id: '' } }));
+  await assert.rejects(() => adapter.createSession({ threadId: '' }));
+  await assert.rejects(() => adapter.createSession({ threadId: 'thread-a' }));
+  await assert.rejects(() => adapter.createSession({ threadId: 'thread-a', newRole: { name: '', system_prompt: '', model_profile_id: '' } }));
   assert.equal(createCalls, 0);
 });
 

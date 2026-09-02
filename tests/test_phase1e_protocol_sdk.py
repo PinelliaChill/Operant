@@ -297,8 +297,8 @@ def test_all_generated_typed_dict_required_sets_match_schema() -> None:
 def test_generated_python_sdk_uses_python310_typed_dict_compatibility_import() -> None:
     source = PY_PATH.read_text(encoding="utf-8")
     assert "from typing import Any, Literal, NotRequired, TypedDict, cast" not in source
-    assert "from typing import NotRequired, TypedDict" in source
     assert "from typing_extensions import NotRequired, TypedDict" in source
+    assert "try:\n    from typing import NotRequired" not in source
 
     python310 = shutil.which("python3.10")
     if python310 is None:

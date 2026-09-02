@@ -142,6 +142,13 @@ export function threadForSession(
   return threads.find((thread) => thread.sessionId === sessionId);
 }
 
+/** A Session Command may target only an explicit, active, unbound Thread. */
+export function canBindSessionToThread(thread: LiveThread | undefined): boolean {
+  return thread !== undefined
+    && thread.status === 'active'
+    && thread.sessionId === null;
+}
+
 export function connectionLossState(
   status: 'disconnected' | 'reconnecting',
 ): LiveConnectionLoss {
@@ -177,6 +184,8 @@ export interface LiveCreateSessionInput {
   /** Exactly one of roleId and newRole must be supplied. */
   roleId?: string;
   newRole?: GeneratedCreateRole;
+  /** The exact currently selected active Thread to bind atomically. */
+  threadId: string;
   modelProfileId?: string;
   effort?: string;
   budgetOverrides?: Record<string, unknown>;

@@ -283,6 +283,9 @@ export class LiveClientAdapter {
   }
 
   async createSession(input: LiveCreateSessionInput | undefined, idempotencyKey?: string): Promise<LiveSession> {
+    const threadId = typeof input?.threadId === 'string' && input.threadId.trim().length > 0
+      ? input.threadId.trim()
+      : undefined;
     const hasRoleId = typeof input?.roleId === 'string' && input.roleId.trim().length > 0;
     const newRole = input?.newRole;
     const validatedNewRole = newRole
@@ -292,6 +295,14 @@ export class LiveClientAdapter {
       ? newRole
       : undefined;
     const hasNewRole = validatedNewRole !== undefined;
+    if (!threadId) {
+      throw new LiveAdapterError({
+        code: 'thread_required',
+        message: '创建 Session 必须绑定当前选中的 Core Thread。',
+        retryable: false,
+        recovery: 'none',
+      });
+    }
     if (Number(hasRoleId) + Number(hasNewRole) !== 1) {
       throw new LiveAdapterError({
         code: 'invalid_create_session_input',
@@ -307,6 +318,7 @@ export class LiveClientAdapter {
         model_profile_id: input?.modelProfileId,
         effort: input?.effort,
         budget_overrides: input?.budgetOverrides,
+        thread_id: threadId,
       };
       const session = await this.client.createSession(request, { idempotencyKey });
       this.sessions.set(session.id, session);

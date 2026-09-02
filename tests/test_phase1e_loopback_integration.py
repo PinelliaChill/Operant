@@ -6,8 +6,8 @@ import sqlite3
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,7 +17,7 @@ import uvicorn
 from operant.api import create_app
 from operant.domain.messages import Message, ModelResponse, ProviderEvent, ToolCall, ToolDefinition
 from operant.domain.models import Budget, ModelProfile, RolePreset, RoleSnapshot, ToolPolicy
-from operant.domain.threads import ConversationThread, LegacySourceType, ThreadLegacyRef
+from operant.domain.threads import ConversationThread
 from operant.providers.base import ModelProvider
 
 # The wheel intentionally packages only ``src/operant``; the generated client
@@ -197,6 +197,22 @@ def _wait_for_approval(
     raise AssertionError(f"approval was not requested for {session_id}")
 
 
+_RUN_WORKERS: list[tuple[threading.Thread, Callable[[], object] | None]] = []
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_run_workers() -> Iterator[None]:
+    yield
+    for thread, cancel in _RUN_WORKERS:
+        if thread.is_alive() and cancel is not None:
+            with suppress(Exception):
+                cancel()
+        thread.join(timeout=20)
+        if thread.is_alive():
+            raise AssertionError(f"run worker did not stop: {thread.name}")
+    _RUN_WORKERS.clear()
+
+
 def _run_in_thread(
     client: Phase1EClient,
     session_id: str,
@@ -204,6 +220,7 @@ def _run_in_thread(
     idempotency_key: str,
     workspace: Path,
     thread_id: str | None = None,
+    cancel: Callable[[], object] | None = None,
 ) -> tuple[threading.Thread, dict[str, Any]]:
     result: dict[str, Any] = {}
 
@@ -223,8 +240,9 @@ def _run_in_thread(
         except BaseException as exc:  # surface the worker failure in the test thread
             result["error"] = exc
 
-    thread = threading.Thread(target=consume, name=f"phase1e-run-{session_id}", daemon=True)
+    thread = threading.Thread(target=consume, name=f"phase1e-run-{session_id}")
     thread.start()
+    _RUN_WORKERS.append((thread, cancel))
     return thread, result
 
 
@@ -303,24 +321,25 @@ def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
         assert protocol["schema_digest"] == PHASE1E_SCHEMA_DIGEST
         assert client.last_response is not None and client.last_response.status == 200
 
-        session = client.create_session({"role_id": role.id}, idempotency_key="session-create")
+        thread = service.create_thread(ConversationThread(workspace_ref=str(workspace.resolve())))
+
+        session = client.create_session(
+            {"role_id": role.id, "thread_id": thread.id},
+            idempotency_key="session-create",
+        )
         _assert_schema_shape("Session", session, schemas)
         _assert_schema_shape("RoleSnapshot", session["role_snapshot"], schemas)
         assert session["role_snapshot"]["role_id"] == role.id
         assert client.last_response is not None and client.last_response.status == 201
         assert client.last_response.idempotency_key == "session-create"
-
-        thread = service.create_thread(
-            ConversationThread(
-                workspace_ref=str(workspace.resolve()),
-                legacy_refs=(
-                    ThreadLegacyRef(
-                        source_type=LegacySourceType.SESSION,
-                        source_id=session["id"],
-                    ),
-                ),
-            )
+        session_replay = client.create_session(
+            {"role_id": role.id, "thread_id": thread.id},
+            idempotency_key="session-create",
         )
+        assert session_replay == session
+        assert client.last_response is not None
+        assert client.last_response.status == 201
+        assert client.last_response.idempotency_replayed is True
 
         projects = client.list_projects(limit=100)
         assert len(projects) == 1
@@ -361,6 +380,7 @@ def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
             idempotency_key="run-once",
             workspace=workspace,
             thread_id=thread.id,
+            cancel=lambda: service.cancel_session(session["id"]),
         )
         pending = _wait_for_approval(control_client, session["id"])
         _assert_schema_shape("ApprovalProjection", pending, schemas)
@@ -427,6 +447,8 @@ def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
         assert action_rows[0][0] == "completed"
         assert action_rows[0][1] is not None
         assert action_rows[0][2] is None
+        marker_before_replay = marker.read_bytes()
+        action_rows_before_replay = action_rows
 
         normal_retry = client.run_session_stream(
             session["id"],
@@ -443,6 +465,16 @@ def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
         assert normal_retry.metadata.idempotency_replayed is True
         assert list(normal_retry.events) == []
         command_rows_before_replay = _assert_command_rows(database)
+        assert marker.read_bytes() == marker_before_replay
+        with sqlite3.connect(database) as connection:
+            assert (
+                connection.execute(
+                    "SELECT status, result_json, error_code FROM tool_action_receipts "
+                    "WHERE session_id = ?",
+                    (session["id"],),
+                ).fetchall()
+                == action_rows_before_replay
+            )
 
         reconnect = client.run_session_stream(
             session["id"],
@@ -456,6 +488,16 @@ def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
         assert replay_events
         assert provider.calls == 2
         assert _assert_command_rows(database) == command_rows_before_replay
+        assert marker.read_bytes() == marker_before_replay
+        with sqlite3.connect(database) as connection:
+            assert (
+                connection.execute(
+                    "SELECT status, result_json, error_code FROM tool_action_receipts "
+                    "WHERE session_id = ?",
+                    (session["id"],),
+                ).fetchall()
+                == action_rows_before_replay
+            )
 
         with pytest.raises(Phase1EError) as missing_workspace:
             client.list_workspace_files("workspace-does-not-exist")
@@ -487,14 +529,20 @@ def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
             schemas,
         )
 
+        denied_core_thread = service.create_thread(
+            ConversationThread(workspace_ref=str(workspace.resolve()))
+        )
         denied_session = client.create_session(
-            {"role_id": role.id}, idempotency_key="session-denied"
+            {"role_id": role.id, "thread_id": denied_core_thread.id},
+            idempotency_key="session-denied",
         )
         denied_thread, denied_result = _run_in_thread(
             Phase1EClient(base_url),
             denied_session["id"],
             idempotency_key="run-denied",
             workspace=workspace,
+            thread_id=denied_core_thread.id,
+            cancel=lambda: service.cancel_session(denied_session["id"]),
         )
         denied_pending = _wait_for_approval(
             control_client,
@@ -524,6 +572,11 @@ def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
         denied_thread.join(timeout=15)
         assert not denied_thread.is_alive()
         _, denied_events = _assert_run_result(denied_result)
+        for frame in denied_events:
+            _assert_schema_shape("SseFrame", frame, schemas)
+            _assert_int64(frame["id"], allow_none=True)
+            assert isinstance(frame["event"], str)
+            assert isinstance(frame["data"], dict)
         assert any(
             frame["event"] == "tool.failed"
             and json.loads(str(frame["data"]["payload"]["result"]))["error"] == "approval_denied"

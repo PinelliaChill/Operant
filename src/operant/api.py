@@ -302,6 +302,7 @@ class CreateSessionRequest(BaseModel):
     model_profile_id: str | None = None
     effort: Effort | None = None
     budget_overrides: dict[str, Any] | None = None
+    thread_id: str | None = Field(default=None, min_length=1, max_length=300)
 
     @model_validator(mode="after")
     def validate_role_source(self) -> CreateSessionRequest:
@@ -2636,6 +2637,7 @@ def create_app(
                 model_profile_id=request.model_profile_id,
                 effort=(None if request.effort is None else request.effort.value),
                 budget_overrides=request.budget_overrides,
+                thread_id=request.thread_id,
             )
         except (NotFoundError, ConflictError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

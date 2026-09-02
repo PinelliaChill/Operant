@@ -36,6 +36,7 @@ import {
   createIdempotencyKey,
   emptyEventAccumulator,
   approvalActionKey,
+  canBindSessionToThread,
   eventNeedsManualReconcile,
   isApprovalProjectionEvent,
   isTerminalEvent,
@@ -652,6 +653,21 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const createSession = useCallback(async (input: LiveCreateSessionInput) => {
     if (clientMode !== 'live' || phase !== 'ready' || manualReconcileRequired || command.status !== 'idle') return undefined;
     if (stream.status === 'replaying' || stream.status === 'error' || connectionStatus !== 'connected') return undefined;
+    const selectedThread = selectedThreadIdRef.current
+      ? threads.find((thread) => thread.id === selectedThreadIdRef.current)
+      : undefined;
+    if (!selectedThread || !canBindSessionToThread(selectedThread)) return undefined;
+    if (input.threadId !== selectedThread.id) {
+      const detail: LiveError = {
+        code: 'thread_selection_changed',
+        message: '当前选中的 Thread 已变化，请重新选择后再创建 Session。',
+        retryable: false,
+        recovery: 'refresh_and_retry',
+      };
+      setLastError(detail);
+      setCommand({ status: 'error', error: detail });
+      return undefined;
+    }
     const roleIdAvailable = typeof input?.roleId === 'string' && input.roleId.trim().length > 0;
     const newRole = input?.newRole;
     const validNewRole = newRole
@@ -697,7 +713,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       createSessionDispatchingRef.current = false;
     }
-  }, [adapter, applyError, clientMode, command.status, connectionStatus, manualReconcileRequired, phase, refresh, stream.status]);
+  }, [adapter, applyError, clientMode, command.status, connectionStatus, manualReconcileRequired, phase, refresh, stream.status, threads]);
 
   const sendMessage = useCallback(async (message: string) => {
     const trimmed = message.trim();
@@ -801,11 +817,18 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     && connectionStatus === 'connected'
     && stream.status === 'connected'
     && command.status === 'idle'
-    && !manualReconcileRequired;
+    && !manualReconcileRequired
+    && canBindSessionToThread(selectedThread);
   const createSessionUnavailableReason = manualReconcileRequired
     ? '需要人工核对，不能创建新命令。'
     : command.status === 'awaiting_projection'
       ? command.error?.message || '等待 Core ThreadProjection 校正，不能重复创建 Session。'
+    : !selectedThread
+      ? '请先选择一个 Core Thread；Session 必须绑定到明确的 Thread。'
+    : selectedThread.status !== 'active'
+      ? '当前 Thread 不是 active，Core 不允许绑定新的 Session。'
+    : selectedThread.sessionId
+      ? '当前 Thread 已绑定 Session，不能再创建第二个 Session。'
     : connectionStatus !== 'connected' || phase !== 'ready'
       ? 'Core 尚未连接或协议尚未协商。'
       : stream.status !== 'connected'

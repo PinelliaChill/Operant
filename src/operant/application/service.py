@@ -468,6 +468,7 @@ class ApplicationService:
         model_profile_id: str | None = None,
         effort: str | None = None,
         budget_overrides: dict[str, Any] | None = None,
+        thread_id: str | None = None,
     ) -> Session:
         if (role_id is None) == (new_role is None):
             raise ValueError("provide exactly one of role_id or new_role")
@@ -479,6 +480,7 @@ class ApplicationService:
             model_profile_id=model_profile_id,
             effort=effort,
             budget_overrides=budget_overrides,
+            thread_id=thread_id,
         )
 
     def get_session(self, session_id: str) -> Session:

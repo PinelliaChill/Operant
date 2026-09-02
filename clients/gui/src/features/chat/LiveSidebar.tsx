@@ -83,6 +83,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
     if (!canCreateSession || !newRoleName.trim() || !newRolePrompt.trim() || !newRoleModelId.trim()) return;
     setCreatingSession(true);
     const session = await createSession({
+      threadId: selectedThreadId || '',
       newRole: {
         name: newRoleName.trim(),
         system_prompt: newRolePrompt.trim(),
@@ -272,7 +273,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
         )}
       >
         <p className="live-modal-copy">
-          请求会交给当前 Core 的 Session Client。GUI 不会本地生成 Session、Thread 或运行状态；创建成功后等待服务端投影绑定。
+          请求会交给当前 Core 的 Session Client，并绑定当前选中的 Thread。GUI 不会本地生成 Session、Thread 或运行状态；未选择 Thread 时不能创建。
         </p>
         <div className="live-modal-form">
           <label className="live-select-label"><span>新 Role 名称</span><input className="input" value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} placeholder="例如：编码助手" /></label>

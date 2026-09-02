@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -16,9 +17,10 @@ from operant.application.protocol_metadata import (
 )
 from operant.application.service import ApplicationService
 from operant.domain.commands import WorkspaceInitialization
+from operant.domain.models import ModelProfile, RolePreset, ToolPolicy
 from operant.domain.threads import ConversationThread
 from operant.domain.workflow import WorkflowRun
-from operant.persistence.sqlite import SQLiteStore
+from operant.persistence.sqlite import ConflictError, NotFoundError, SQLiteStore
 from operant.providers.openai_compatible import OpenAICompatibleProvider
 
 
@@ -88,6 +90,58 @@ def test_protocol_endpoint_fails_closed_without_digest_and_accepts_generated_dig
         response = client.get("/v1/protocol")
     assert response.status_code == 200
     assert response.json()["schema_digest"] == "a" * 64
+
+
+def test_session_thread_binding_conflict_is_atomic(tmp_path: Path) -> None:
+    service = ApplicationService(
+        SQLiteStore(tmp_path / "session-binding.sqlite3"),
+        OpenAICompatibleProvider(),
+        artifact_root=tmp_path / "artifacts",
+    )
+    service.initialize()
+    profile = service.add_model_profile(
+        ModelProfile(
+            id="binding-profile",
+            name="Binding profile",
+            model_id="binding-model",
+            base_url="http://127.0.0.1:9",
+            secret_ref="OPERANT_BINDING_TEST_KEY",
+        )
+    )
+    role = service.create_role(
+        RolePreset(
+            id="binding-role",
+            name="Binding role",
+            system_prompt="binding test",
+            model_profile_id=profile.id,
+            tool_policy=ToolPolicy(),
+        )
+    )
+    thread = service.create_thread(ConversationThread(workspace_ref=str(tmp_path.resolve())))
+
+    first = service.create_session(role.id, thread_id=thread.id)
+    with sqlite3.connect(service.store.path) as connection:
+        before_sessions = connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        before_refs = connection.execute("SELECT COUNT(*) FROM thread_legacy_refs").fetchone()[0]
+
+    with pytest.raises(ConflictError, match="already bound"):
+        service.create_session(role.id, thread_id=thread.id)
+
+    with sqlite3.connect(service.store.path) as connection:
+        after_sessions = connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        after_refs = connection.execute("SELECT COUNT(*) FROM thread_legacy_refs").fetchone()[0]
+        mapping = connection.execute(
+            "SELECT source_type, source_id FROM thread_legacy_refs WHERE thread_id = ?",
+            (thread.id,),
+        ).fetchall()
+    assert after_sessions == before_sessions == 1
+    assert after_refs == before_refs == 1
+    assert mapping == [("session", first.id)]
+
+    with pytest.raises(NotFoundError, match="thread not found"):
+        service.create_session(role.id, thread_id="thread-does-not-exist")
+    with sqlite3.connect(service.store.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
 
 
 def test_projects_only_join_exact_workspace_facts(tmp_path: Path) -> None:

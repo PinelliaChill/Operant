@@ -1,8 +1,8 @@
 # Phase 1E 客户端真实接入基线
 
-> 状态：冻结（`phase1e.v1`）
+> 状态：冻结勘误（`phase1e.v1`，保持 8 个 operation）
 >
-> 冻结日期：2026-09-01
+> 冻结日期：2026-09-02
 >
 > 记录身份：Codex
 >
@@ -78,6 +78,18 @@ Approval、Receipt、Cursor 和恢复状态的权威；客户端只保存选择�
 - 重连发送同 scope 的 `Last-Event-ID`，只回放 `cursor > after_cursor` 的已提交事件。
 - 网络断线后先回放，再通过 Query Projection 校正；断线不等于后台一定继续，也不触发新 Command。
 - Event Reducer 以 `resource_scope + stream_kind + cursor` 去重，不以客户端时间戳或随机 ID 裁决顺序。
+
+### 3.4 冻结勘误：Session 与 Thread 的原子绑定
+
+- `CreateSessionRequest.thread_id` 是可选的公开字段，以保留 CLI 和旧 API 创建未绑定 Session 的兼容性。
+- 提供 `thread_id` 时，Core 只接受已存在且 `active` 的 Thread；Thread 已有其他 Session 的
+  `session` legacy ref 时必须返回类型化冲突错误。
+- Core 在一个 SQLite 事务中写入 Session 与 `thread_legacy_refs`；校验或写入失败不得留下孤儿
+  Session。相同 Idempotency-Key 的 replay 返回原结果，不重复创建 Session 或 legacy ref。
+- GUI live 创建必须传当前明确选中的 Thread ID；没有选中 Thread、Thread 非 active 或已绑定 Session
+  时禁用并说明原因，不创建无归属 Session，也不静默回退到 Mock。
+- 本勘误只扩展既有 `createSession` 请求字段，不新增 operation、不新增 Migration，也不改变本阶段
+  8 个 operation 的集合。
 
 ## 4. 最小 Workspace/Project 投影
 

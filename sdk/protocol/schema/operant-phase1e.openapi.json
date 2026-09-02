@@ -1129,7 +1129,7 @@
       "CreateSessionRequest": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Exactly one of role_id or new_role is required by Core.",
+        "description": "Exactly one of role_id or new_role is required by Core. When thread_id is provided, Core binds the new Session to that existing active Thread in the same transaction; the Thread must not already have a different session legacy ref. Omitting thread_id preserves CLI and older API callers that create an unbound Session.",
         "x-mutually-exclusive": [
           "role_id",
           "new_role"
@@ -1169,6 +1169,15 @@
               "null"
             ],
             "additionalProperties": true
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "Optional exact Thread ID to bind to the new Session. The Thread must exist and be active, and must not already be bound to another session. Session and legacy reference persistence is atomic; idempotency replay does not duplicate the binding."
           }
         }
       },

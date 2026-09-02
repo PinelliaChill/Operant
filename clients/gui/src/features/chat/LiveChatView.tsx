@@ -285,9 +285,9 @@ export const LiveChatView: React.FC = () => {
 
   const handleCreateSession = async () => {
     const roleId = selectedSession?.role_snapshot.role_id;
-    if (!canCreateSession || !roleId) return;
+    if (!canCreateSession || !roleId || !selectedThread) return;
     setCreatingSession(true);
-    const session = await createSession({ roleId });
+    const session = await createSession({ roleId, threadId: selectedThread.id });
     setCreatingSession(false);
     if (session) {
       const projectedThread = threads.find((thread) => thread.sessionId === session.id);
