@@ -25,7 +25,8 @@ import {
   type TriggerKind,
   type LiveRunRequest,
 } from '../../live45/schedulerAdapter';
-import { SchedulerClient, type ScheduleCreateInput } from '../../live45/schedulerClient';
+import { createSchedulerClient } from '../../live45/createSchedulerClient';
+import type { ScheduleCreateInput } from '../../live45/schedulerClient';
 import {
   SchedulerIdempotencyKeys,
   beginSchedulerLoad,
@@ -95,7 +96,7 @@ const RequestCard: React.FC<{
 
 export const LiveSchedulesView: React.FC = () => {
   const { connectionStatus, addNotification } = useOperant();
-  const client = useMemo(() => new SchedulerClient(), []);
+  const client = useMemo(createSchedulerClient, []);
   const keys = useRef(new SchedulerIdempotencyKeys());
   const queryEpoch = useRef(0);
   const [snapshot, setSnapshot] = useState(emptySchedulerSnapshot);
@@ -116,6 +117,7 @@ export const LiveSchedulesView: React.FC = () => {
     if (!quiet) setSnapshot((current) => beginSchedulerLoad(current));
     setError(null);
     try {
+      await client.negotiateProtocol();
       const [schedulesValue, queueValue, deadLetterValue] = await Promise.all([
         client.listSchedules(),
         client.listQueue(),

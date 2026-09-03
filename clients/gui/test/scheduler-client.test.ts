@@ -1,48 +1,72 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SchedulerClient } from '../src/live45/schedulerClient.ts';
+import type { Phase45 } from '@operant/sdk';
+import {
+  SchedulerClient,
+  type GeneratedSchedulerClient,
+} from '../src/live45/schedulerClient.ts';
 
-test('scheduler client uses same-origin Phase 5A paths and exact idempotency body', async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(input), init });
-    return new Response(JSON.stringify({ id: 'request-1' }), {
-      status: 200, headers: { 'Content-Type': 'application/json' },
-    });
-  }) as typeof fetch;
-  try {
-    const client = new SchedulerClient('https://operant.local/');
-    await client.triggerSchedule('schedule / 1', 'stable-key');
-    assert.equal(calls[0]?.url, 'https://operant.local/v1/schedules/schedule%20%2F%201/trigger');
-    assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), { idempotency_key: 'stable-key' });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+function generatedDouble(overrides: Partial<GeneratedSchedulerClient> = {}): {
+  client: GeneratedSchedulerClient;
+  calls: Array<{ method: string; args: unknown[] }>;
+} {
+  const calls: Array<{ method: string; args: unknown[] }> = [];
+  const result = (method: string, value: Record<string, unknown> = {}) => (...args: unknown[]) => {
+    calls.push({ method, args });
+    return Promise.resolve(value);
+  };
+  const client: GeneratedSchedulerClient = {
+    negotiateProtocol: result('negotiateProtocol', {
+      protocol_version: 'phase45.v1', schema_digest: 'digest',
+      min_client_version: 'phase45.v1', capabilities: [],
+    }) as GeneratedSchedulerClient['negotiateProtocol'],
+    listSchedules: result('listSchedules') as GeneratedSchedulerClient['listSchedules'],
+    listSchedulerQueue: result('listSchedulerQueue') as GeneratedSchedulerClient['listSchedulerQueue'],
+    listDeadLetter: result('listDeadLetter') as GeneratedSchedulerClient['listDeadLetter'],
+    createSchedule: result('createSchedule') as GeneratedSchedulerClient['createSchedule'],
+    setScheduleStatus: result('setScheduleStatus') as GeneratedSchedulerClient['setScheduleStatus'],
+    triggerSchedule: result('triggerSchedule') as GeneratedSchedulerClient['triggerSchedule'],
+    replayDeadLetter: result('replayDeadLetter') as GeneratedSchedulerClient['replayDeadLetter'],
+    ...overrides,
+  };
+  return { client, calls };
+}
+
+test('scheduler adapter delegates every operation to generated Phase45Client methods', async () => {
+  const { client: generated, calls } = generatedDouble();
+  const client = new SchedulerClient(generated);
+  const schedule: Phase45.ScheduleDefinition = {
+    name: 'Nightly', trigger_kind: 'cron', cron_expression: '0 3 * * *', timer_at: null,
+    timezone_name: 'UTC', workflow_id: 'workflow-1', workflow_version: 2,
+  };
+
+  await client.negotiateProtocol(true);
+  await client.listSchedules();
+  await client.listQueue();
+  await client.listDeadLetter();
+  await client.createSchedule(schedule);
+  await client.setScheduleStatus('schedule-1', { status: 'paused', expected_version: 2 });
+  await client.triggerSchedule('schedule-1', 'trigger-key');
+  await client.replayDeadLetter('request-1', 'replay-key');
+
+  assert.deepEqual(calls.map((call) => call.method), [
+    'negotiateProtocol', 'listSchedules', 'listSchedulerQueue', 'listDeadLetter',
+    'createSchedule', 'setScheduleStatus', 'triggerSchedule', 'replayDeadLetter',
+  ]);
+  assert.deepEqual(calls[0]?.args, [true]);
+  assert.deepEqual(calls[6]?.args, ['schedule-1', { idempotency_key: 'trigger-key' }]);
+  assert.deepEqual(calls[7]?.args, ['request-1', { idempotency_key: 'replay-key' }]);
 });
 
-test('scheduler client preserves typed safe errors and normalizes legacy HTTP detail', async () => {
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = (async () => new Response(JSON.stringify({
-      error: { code: 'schedule_conflict', message: 'stale version', recovery: 'refresh_and_retry' },
-      detail: {},
-    }), { status: 409, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
-    await assert.rejects(
-      new SchedulerClient('https://operant.local').listSchedules(),
-      (error: unknown) => error instanceof Error
-        && Object.assign(error as Error & { code?: string; recovery?: string }).code === 'schedule_conflict'
-        && (error as Error & { recovery?: string }).recovery === 'refresh_and_retry',
-    );
+test('generated protocol negotiation failure propagates explicitly without fallback queries', async () => {
+  const incompatible = Object.assign(new Error('Core Schema digest mismatch'), {
+    code: 'protocol_incompatible', recovery: 'refresh_and_retry',
+  });
+  const { client: generated, calls } = generatedDouble({
+    negotiateProtocol: async () => { throw incompatible; },
+  });
+  const client = new SchedulerClient(generated);
 
-    globalThis.fetch = (async () => new Response(JSON.stringify({ detail: 'schedule not found' }), {
-      status: 404, headers: { 'Content-Type': 'application/json' },
-    })) as typeof fetch;
-    await assert.rejects(
-      new SchedulerClient('https://operant.local').listSchedules(),
-      /schedule not found/,
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await assert.rejects(client.negotiateProtocol(), (error: unknown) => error === incompatible);
+  assert.deepEqual(calls, []);
 });
