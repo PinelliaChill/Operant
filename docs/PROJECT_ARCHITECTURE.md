@@ -1746,9 +1746,8 @@ Run/SSE、Team 定向 Mailbox 与 Ack、Run/viewer scope 切换即时清空、�
 完成 5 次模型调用，Reviewer 给出 `APPROVED`，总用量为 4,772 tokens，模型请求耗时合计 33.732 秒，
 没有 Tool Call 或 workspace 写入。该 Workflow 的持久 Graph 投影为 `completed`：10 个 NodeRun、7 个
 成功 Attempt、27 个连续 `phase23.v1` Graph Event 均可从隔离 SQLite 重新读取。运行时凭据仅注入目标
-进程，没有复制到隔离 worktree、运行日志、文档或 SQLite；但前置 `.env` 规范化时工具错误曾在本地
-操作输出中回显现有 API Key，因此该 Key 必须轮换。该受控 smoke 证明当前 Provider、Session、Coding
-Workflow 与 Graph bridge 的真实模型链路可用；它不等于真实模型执行工具/写入、真实模型加 Docker
+进程，没有复制到隔离 worktree、运行日志、文档或 SQLite。该受控 smoke 证明当前 Provider、Session、
+Coding Workflow 与 Graph bridge 的真实模型链路可用；它不等于真实模型执行工具/写入、真实模型加 Docker
 Coder、GUI 外部模型端到端或 Exp 19—24 验收，Team 本身也没有独立模型调用入口。
 
 2026-09-02 的 Phase 1E 验收使用隔离 SQLite/Workspace、确定性 Provider、实际 localhost Uvicorn、
