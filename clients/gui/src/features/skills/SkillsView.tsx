@@ -17,6 +17,8 @@ import {
   FileCode,
   Wrench,
   FolderKanban,
+  AlertTriangle,
+  ShieldAlert,
 } from 'lucide-react';
 import { EmptyState } from '../../components/EmptyState';
 import { Modal } from '../../components/Modal';
@@ -24,8 +26,15 @@ import { Drawer } from '../../components/Drawer';
 import { useOperant } from '../../context/ClientContext';
 import { useDemo } from '../../demo/DemoContext';
 import type { DemoSkill } from '../../demo/types';
+import { usePhase45 } from '../../live45/Phase45Context';
+import type { LiveSkillCandidate } from '../../live45/phase45Adapter';
 
 export const SkillsView: React.FC = () => {
+  const { clientMode } = useOperant();
+  return clientMode === 'live' ? <LiveSkillsView /> : <DemoSkillsView />;
+};
+
+const DemoSkillsView: React.FC = () => {
   const {
     skills,
     projects,
@@ -881,4 +890,37 @@ export const SkillsView: React.FC = () => {
       </Modal>
     </div>
   );
+};
+
+const LiveSkillsView: React.FC = () => {
+  const { connectionStatus } = useOperant();
+  const { phase, skills, skillIssues, error, actionLabel, refresh, discoverSkills } = usePhase45();
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<LiveSkillCandidate | null>(null);
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return needle ? skills.filter((item) => `${item.name} ${item.description} ${item.relativeDirectory}`.toLowerCase().includes(needle)) : skills;
+  }, [query, skills]);
+
+  if (phase === 'loading' && skills.length === 0) return <div className="live-route-state" role="status"><RefreshCw size={22} aria-hidden="true" /><h1>正在读取 Skill Projection…</h1><p>Live 模式不会使用演示技能填充页面。</p></div>;
+
+  return <div className="section-view" data-client-mode="live">
+    <header className="section-header" style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+      <div><h1 className="section-title">技能中心</h1><p className="section-sub">Core 发现的候选技能；发现不代表信任、安装或授权。</p></div>
+      <div style={{ display: 'flex', gap: 8 }}><button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={Boolean(actionLabel)}><RefreshCw size={13} aria-hidden="true" />刷新</button><button type="button" className="btn btn-primary btn-sm" onClick={() => void discoverSkills()} disabled={Boolean(actionLabel) || connectionStatus !== 'connected'}><Search size={13} aria-hidden="true" />{actionLabel === '扫描技能' ? '扫描中…' : '扫描受信根目录'}</button></div>
+    </header>
+    <div className="section-scroll"><div className="section-inner">
+      <div aria-live="polite">{connectionStatus !== 'connected' && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />Core 连接已断开；现有 Skill Projection 可能过期，写操作已禁用。</div>}{error && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{error.code}：{error.message}</div>}{skillIssues.length > 0 && <div className="live-alert" role="status"><ShieldAlert size={16} aria-hidden="true" />扫描跳过 {skillIssues.length} 个不安全或无效候选。</div>}</div>
+      <label style={{ display: 'block', maxWidth: 360, marginBottom: 16 }}>搜索候选技能<input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="名称、描述或相对目录" /></label>
+      {visible.length === 0 ? <div className="section-empty-wrap"><EmptyState icon={Sparkles} title="没有 Skill candidate" description="可扫描 Core 已配置的受信根目录；客户端不能提交任意本机路径。" /></div> : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: 14 }}>
+        {visible.map((skill) => <button key={skill.id} type="button" className="card" style={{ textAlign: 'left', padding: 16, color: 'inherit' }} onClick={() => setSelected(skill)} aria-label={`查看候选技能 ${skill.name}`}>
+          <strong>{skill.name}</strong><span className="badge" style={{ marginLeft: 8 }}>未信任候选</span>
+          <p>{skill.description}</p><code>{skill.relativeDirectory}</code><p className="section-footnote">{skill.resources.length} 个已哈希资源</p>
+        </button>)}
+      </div>}
+    </div></div>
+    <Drawer isOpen={Boolean(selected)} onClose={() => setSelected(null)} title={selected ? `候选技能 · ${selected.name}` : '候选技能'} width={540}>
+      {selected && <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}><p>{selected.description}</p><p><strong>信任状态：</strong>untrusted_candidate</p><p><strong>根引用：</strong><code>{selected.rootRef}</code></p><p><strong>相对目录：</strong><code>{selected.relativeDirectory}</code></p><p><strong>Manifest SHA-256：</strong><code style={{ overflowWrap: 'anywhere' }}>{selected.manifestSha256}</code></p><h3>资源</h3>{selected.resources.length === 0 ? <p>无脚本或参考资源。</p> : <ul>{selected.resources.map((resource) => <li key={resource.sha256}><code>{resource.relativePath}</code> · {resource.kind} · {resource.sizeBytes} B</li>)}</ul>}<p className="section-footnote">当前 Phase 4/5 API 只发现候选，不提供信任、安装或项目装载 Command。</p></div>}
+    </Drawer>
+  </div>;
 };

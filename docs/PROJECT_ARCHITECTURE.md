@@ -4,7 +4,7 @@
 >
 > 最后更新：2026-09-03
 >
-> 对应版本：Operant 2.0 Phase 2 Graph Runtime + Phase 3 本地 Team Runtime（`phase23.v1`；`phase1e.v1` 冻结）
+> 对应版本：Operant 2.0 Phase 4/5A 后端与 GUI live 接入（`phase45.v1`；既有协议冻结）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -131,6 +131,11 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   错误或断线不会回退 Mock。切换 Graph Run、Team Run 或 viewer 时先立即清空旧 scope 投影，再以查询
   epoch 丢弃迟到 resolve/reject，避免旧运行状态或定向消息短暂泄漏到新 scope；SSE 正常 EOF 后先做
   权威 Query 校正，只有已持久终态回到 idle，非终态 EOF 明确显示断线并保留 Cursor 重连语义；
+- React GUI 通过生成的 `Phase45Client` 与同源 `/v1` 接通 Policy dry-run/解释、受信根 Skill 候选发现与
+  列表、MCP Server 配置/启停/删除及工具快照；Skill 始终标为未信任候选，MCP 副作用继续由服务端
+  Action Gateway 裁决，客户端不直接执行命令、不解析 Secret、不把 ASK/DENY 当作允许。审批决定仍
+  使用现有 Session scope Approval Command，并等待 Core Projection 校正；Live 加载、空、错误和断线
+  状态不会回退 Demo，危险生命周期操作要求明确确认；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
 - v1/v2/v3/v4/v5/v6/v7/v8/v9 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
@@ -183,8 +188,9 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - Web 身份认证、设备配对和远程访问控制；
 - Graph Proposal/智能创建、通用后台调度器、Timer 执行与任意第三方节点执行器；当前通用 Graph API
   负责定义、状态推进、投影和恢复，只有现有 Coding Workflow 兼容入口接通真实 Agent 执行；
-- Phase 1E/Phase 23 以外的完整 TypeScript/Python SDK、完整 React GUI/PWA、Textual TUI 和 Tauri
-  桌面壳；当前生成 Client 与 React live 面覆盖冻结 Phase 1E 和新增 Graph/本地 Team operation；
+- 完整 React GUI/PWA、Textual TUI 和 Tauri 桌面壳；当前生成 Client 与 React live 面覆盖冻结
+  Phase 1E、Graph/本地 Team 以及 Phase 4/5A 的 Policy、Skill 和 MCP 子集；Skill 信任/安装、Policy
+  修改与 MCP Tool 调用 UI 尚未实现；
 - 复杂 `@` 引用、Provider Cache 的执行/复制，以及面向非可信 HTTP 客户端的 Artifact capability 签发；
 - Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
 
@@ -196,8 +202,8 @@ flowchart LR
     CLI["Typer CLI"]
     API["FastAPI / SSE"]
     Web["内置 Web 工作台"]
-    GUI["React GUI · Phase 1E + Graph/Team live / 显式 Mock"]
-    SDK["phase1e.v1 冻结 + phase23.v1 生成 Client"]
+    GUI["React GUI · Phase 1E + Graph/Team + Phase 4/5A live / 显式 Mock"]
+    SDK["冻结 Client + phase23.v1 / phase45.v1 生成 Client"]
     Graph["Graph Compiler / Runtime / Recovery"]
     Team["Local Team / Mailbox / Boards"]
     Workflow["Coding Workflow 兼容协调入口"]
@@ -1924,6 +1930,15 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-09-03（Phase 4/5A GUI 安全、Skill 与 MCP live 接入）
+
+- GUI 复用生成的 `Phase45Client`、同源 Base URL 和显式 Client mode，增加独立 Phase 4/5A 适配与状态层；
+- Live 安全设置只提供 Policy dry-run/解释，不伪造可修改策略；Approval 继续按 Session scope 走正式
+  Command，ASK 与 DENY 不在客户端放行；
+- Skill 页只展示 Core 受信根扫描出的未信任候选及安全 metadata；MCP 页接通配置、生命周期和工具
+  Projection，启停/删除带确认，参数数组不经 Shell，端点与 Secret 仅接收引用名；
+- Demo 页面保持原有分支；新增 Node 适配/状态测试，并验证 typecheck 与生产 build。
 
 ### 2026-09-03（Phase 2 Graph Runtime + Phase 3 本地 Team Runtime）
 
