@@ -24,6 +24,7 @@ import { Modal } from '../../components/Modal';
 import { useOperant } from '../../context/ClientContext';
 import { useDemo } from '../../demo/DemoContext';
 import { formatDateTime } from '../../lib/format';
+import { LiveSchedulesView } from './LiveSchedulesView';
 
 const CRON_PRESETS = [
   { label: '每小时整点', value: '0 * * * *' },
@@ -32,7 +33,7 @@ const CRON_PRESETS = [
   { label: '每 15 分钟', value: '*/15 * * * *' },
 ];
 
-export const SchedulesView: React.FC = () => {
+const DemoSchedulesView: React.FC = () => {
   const { schedules, toggleSchedule, createSchedule, deleteSchedule, triggerSchedule, getWorkflowDirectory } = useDemo();
   const { addNotification } = useOperant();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -443,4 +444,9 @@ export const SchedulesView: React.FC = () => {
       </Modal>
     </div>
   );
+};
+
+export const SchedulesView: React.FC = () => {
+  const { clientMode } = useOperant();
+  return clientMode === 'live' ? <LiveSchedulesView /> : <DemoSchedulesView />;
 };
