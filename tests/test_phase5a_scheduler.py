@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from operant.application.scheduler import CronExpression, SchedulerConflictError, TriggerService
+from operant.application.scheduler import (
+    CronExpression,
+    SchedulerConflictError,
+    SchedulerValidationError,
+    TriggerService,
+)
 from operant.domain.scheduler import (
     AttemptStatus,
     DispatchIdempotency,
@@ -105,6 +110,24 @@ def test_cron_uses_iana_timezone_and_handles_dst_gap_and_fold() -> None:
         _schedule().model_copy(update={"timezone_name": "not/a-zone"}).model_validate(
             {**_schedule().model_dump(), "timezone_name": "not/a-zone"}
         )
+
+
+def test_cron_rejects_impossible_dates_and_scans_a_century_without_minute_walk() -> None:
+    with pytest.raises(SchedulerValidationError, match="no satisfiable calendar date"):
+        CronExpression("0 0 31 2 *")
+
+    expression = CronExpression("0 0 29 2 *")
+    occurrences = expression.occurrences_between(
+        start_exclusive=datetime(1926, 1, 1, tzinfo=UTC),
+        end_inclusive=datetime(2026, 1, 1, tzinfo=UTC),
+        timezone_name="UTC",
+        limit=3,
+    )
+    assert occurrences == (
+        datetime(2016, 2, 29, tzinfo=UTC),
+        datetime(2020, 2, 29, tzinfo=UTC),
+        datetime(2024, 2, 29, tzinfo=UTC),
+    )
 
 
 @pytest.mark.parametrize(

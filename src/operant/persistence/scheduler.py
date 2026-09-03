@@ -635,6 +635,99 @@ class SQLiteSchedulerStore:
             if changed != 1:
                 raise SchedulerConflictError("attempt is cancelled or no longer running")
 
+    def mark_workflow_dispatched(
+        self,
+        lease: JobLease,
+        *,
+        workflow_run_id: str,
+        now: datetime | None = None,
+    ) -> RunRequest:
+        """Bind a leased request to its GraphRun without releasing concurrency."""
+        if not workflow_run_id:
+            raise ValueError("workflow_run_id must not be empty")
+        current_time = require_aware_utc(now or datetime.now(timezone.utc), field="now")
+        with self._transaction() as connection:
+            self._assert_job_lease(connection, lease, current_time)
+            changed = connection.execute(
+                "UPDATE job_attempts SET workflow_run_id=? WHERE run_request_id=? "
+                "AND attempt_number=? AND status='running' AND side_effect_started=1 "
+                "AND (workflow_run_id IS NULL OR workflow_run_id=?)",
+                (
+                    workflow_run_id,
+                    lease.run_request_id,
+                    lease.attempt_number,
+                    workflow_run_id,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise SchedulerConflictError("workflow dispatch binding conflict")
+            changed = connection.execute(
+                "UPDATE run_requests SET workflow_run_id=?, updated_at=? "
+                "WHERE request_id=? AND status='leased' "
+                "AND (workflow_run_id IS NULL OR workflow_run_id=?)",
+                (workflow_run_id, _dt(current_time), lease.run_request_id, workflow_run_id),
+            ).rowcount
+            if changed != 1:
+                raise SchedulerConflictError("run request dispatch binding conflict")
+            row = connection.execute(
+                "SELECT * FROM run_requests WHERE request_id=?", (lease.run_request_id,)
+            ).fetchone()
+        return self._run_request(row)
+
+    def renew_dispatched_jobs(
+        self,
+        writer_lease: SchedulerLease,
+        *,
+        owner: str,
+        ttl_seconds: int,
+        now: datetime | None = None,
+    ) -> tuple[tuple[RunRequest, JobLease], ...]:
+        """Atomically recover expired work and renew every live dispatched lease."""
+        if ttl_seconds < 1:
+            raise ValueError("ttl_seconds must be positive")
+        if writer_lease.kind != "runtime_writer" or writer_lease.owner != owner:
+            raise SchedulerConflictError("a matching runtime writer lease is required")
+        current_time = require_aware_utc(now or datetime.now(timezone.utc), field="now")
+        expires = min(current_time + timedelta(seconds=ttl_seconds), writer_lease.expires_at)
+        with self._transaction() as connection:
+            self._assert_authority(connection, writer_lease, current_time)
+            self._recover_expired_jobs(connection, current_time)
+            rows = connection.execute(
+                "SELECT r.*, l.owner AS lease_owner, l.token AS lease_token, "
+                "l.fencing AS lease_fencing, l.attempt_number AS lease_attempt_number "
+                "FROM run_requests r JOIN job_leases l ON l.run_request_id=r.request_id "
+                "WHERE r.status='leased' AND r.workflow_run_id IS NOT NULL "
+                "AND l.owner=? AND l.expires_at>? ORDER BY r.created_at, r.request_id",
+                (owner, _dt(current_time)),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    "UPDATE job_leases SET expires_at=? WHERE run_request_id=? AND owner=? "
+                    "AND token=? AND fencing=? AND attempt_number=?",
+                    (
+                        _dt(expires),
+                        row["request_id"],
+                        owner,
+                        row["lease_token"],
+                        row["lease_fencing"],
+                        row["lease_attempt_number"],
+                    ),
+                )
+        return tuple(
+            (
+                self._run_request(row),
+                JobLease(
+                    run_request_id=row["request_id"],
+                    owner=owner,
+                    token=row["lease_token"],
+                    fencing=row["lease_fencing"],
+                    expires_at=expires,
+                    attempt_number=row["lease_attempt_number"],
+                ),
+            )
+            for row in rows
+        )
+
     def cancel_claimed_job(self, lease: JobLease, *, now: datetime | None = None) -> RunRequest:
         current_time = require_aware_utc(now or datetime.now(timezone.utc), field="now")
         with self._transaction() as connection:
@@ -694,6 +787,57 @@ class SQLiteSchedulerStore:
             ).fetchone()
         return self._run_request(row)
 
+    def finish_dispatched_job(
+        self,
+        lease: JobLease,
+        *,
+        request_status: RunRequestStatus,
+        error_code: str,
+        now: datetime | None = None,
+    ) -> RunRequest:
+        if request_status not in {
+            RunRequestStatus.CANCELLED,
+            RunRequestStatus.DEAD_LETTER,
+            RunRequestStatus.MANUAL_RECONCILE_REQUIRED,
+        }:
+            raise ValueError("invalid dispatched terminal status")
+        current_time = require_aware_utc(now or datetime.now(timezone.utc), field="now")
+        attempt_status = (
+            AttemptStatus.OUTCOME_UNKNOWN
+            if request_status is RunRequestStatus.MANUAL_RECONCILE_REQUIRED
+            else AttemptStatus.FAILED
+        )
+        with self._transaction() as connection:
+            self._assert_job_lease(connection, lease, current_time)
+            connection.execute(
+                "UPDATE job_attempts SET status=?, error_code=?, finished_at=? "
+                "WHERE run_request_id=? AND attempt_number=? AND status='running'",
+                (
+                    attempt_status.value,
+                    error_code,
+                    _dt(current_time),
+                    lease.run_request_id,
+                    lease.attempt_number,
+                ),
+            )
+            connection.execute(
+                "UPDATE run_requests SET status=?, last_error_code=?, updated_at=? "
+                "WHERE request_id=? AND status='leased'",
+                (
+                    request_status.value,
+                    error_code,
+                    _dt(current_time),
+                    lease.run_request_id,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM job_leases WHERE run_request_id=?", (lease.run_request_id,)
+            )
+            row = connection.execute(
+                "SELECT * FROM run_requests WHERE request_id=?", (lease.run_request_id,)
+            ).fetchone()
+        return self._run_request(row)
+
     def fail_job(
         self,
         lease: JobLease,
@@ -714,10 +858,12 @@ class SQLiteSchedulerStore:
             ).fetchone()
             if row is None:
                 raise SchedulerConflictError("request attempt is missing")
-            non_idempotent_unknown = row[
-                "dispatch_idempotency"
-            ] == DispatchIdempotency.NON_IDEMPOTENT.value and (
-                outcome_unknown or bool(row["side_effect_started"])
+            # An explicit known failure (for example Policy DENY/ASK) remains
+            # retryable even though the generic gateway boundary was entered.
+            # Only the caller's unknown verdict requires manual reconciliation.
+            non_idempotent_unknown = (
+                row["dispatch_idempotency"] == DispatchIdempotency.NON_IDEMPOTENT.value
+                and outcome_unknown
             )
             if non_idempotent_unknown:
                 request_status = RunRequestStatus.MANUAL_RECONCILE_REQUIRED
@@ -883,9 +1029,11 @@ class SQLiteSchedulerStore:
             (_dt(now),),
         ).fetchall()
         for row in rows:
-            unsafe = row[
-                "dispatch_idempotency"
-            ] == DispatchIdempotency.NON_IDEMPOTENT.value and bool(row["side_effect_started"])
+            unsafe = (
+                row["dispatch_idempotency"] == DispatchIdempotency.NON_IDEMPOTENT.value
+                and bool(row["side_effect_started"])
+                and row["workflow_run_id"] is None
+            )
             if unsafe:
                 status = RunRequestStatus.MANUAL_RECONCILE_REQUIRED
                 attempt = AttemptStatus.OUTCOME_UNKNOWN

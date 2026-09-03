@@ -44,19 +44,27 @@ export class SchedulerClient {
     return this.generated.listDeadLetter();
   }
 
-  createSchedule(input: ScheduleCreateInput): Promise<Record<string, unknown>> {
-    return this.generated.createSchedule(input);
+  createSchedule(input: ScheduleCreateInput, idempotencyKey: string): Promise<Record<string, unknown>> {
+    return this.generated.createSchedule(input, { idempotencyKey });
   }
 
-  setScheduleStatus(scheduleId: string, input: ScheduleStatusInput): Promise<Record<string, unknown>> {
-    return this.generated.setScheduleStatus(scheduleId, input);
+  setScheduleStatus(scheduleId: string, input: ScheduleStatusInput, idempotencyKey: string): Promise<Record<string, unknown>> {
+    return this.generated.setScheduleStatus(scheduleId, input, { idempotencyKey });
   }
 
   triggerSchedule(scheduleId: string, idempotencyKey: string): Promise<Record<string, unknown>> {
-    return this.generated.triggerSchedule(scheduleId, { idempotency_key: idempotencyKey });
+    return this.generated.triggerSchedule(
+      scheduleId,
+      { idempotency_key: idempotencyKey },
+      { idempotencyKey },
+    );
   }
 
   replayDeadLetter(requestId: string, idempotencyKey: string): Promise<Record<string, unknown>> {
-    return this.generated.replayDeadLetter(requestId, { idempotency_key: idempotencyKey });
+    return this.generated.replayDeadLetter(
+      requestId,
+      { idempotency_key: idempotencyKey },
+      { idempotencyKey },
+    );
   }
 }

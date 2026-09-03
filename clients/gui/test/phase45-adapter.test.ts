@@ -122,3 +122,33 @@ test('adapter delegates to the generated Phase45 client', async () => {
   assert.deepEqual(await adapter.listSecurityAudit('f'.repeat(64), 7, 25), []);
   assert.deepEqual(auditOptions, { afterCursor: 7, limit: 25 });
 });
+
+test('adapter retains a mutation key through response loss and releases after outcome', async () => {
+  const options: unknown[] = [];
+  let attempt = 0;
+  const client = {
+    createMcpServer: async (_request: unknown, value: unknown) => {
+      options.push(value);
+      attempt += 1;
+      if (attempt === 1) {
+        throw Object.assign(new Error('response lost'), {
+          recovery: 'retry_same_idempotency_key',
+        });
+      }
+      return {
+        server_id: 'local', transport: 'stdio', stdio_argv: ['node', 'server.js'],
+        environment_refs: {}, allow_loopback_http: false, lifecycle_status: 'stopped',
+        created_at: 'x', updated_at: 'y',
+      };
+    },
+  };
+  const adapter = new Phase45LiveAdapter(client as never);
+  const request = {
+    server_id: 'local', transport: 'stdio' as const, stdio_argv: ['node', 'server.js'],
+  };
+
+  await assert.rejects(adapter.createMcpServer(request), /response lost/);
+  assert.equal((await adapter.createMcpServer(request)).id, 'local');
+  assert.equal(typeof (options[0] as { idempotencyKey: unknown }).idempotencyKey, 'string');
+  assert.deepEqual(options[1], options[0]);
+});

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
@@ -15,6 +16,7 @@ from fastapi import FastAPI
 from operant.application.graph import GraphRepository, GraphRuntime
 from operant.application.scheduler import SchedulerConflictError, TriggerService
 from operant.application.security import ActionNormalizer, CapabilityBroker, PolicyEngine
+from operant.domain.graph import GraphRunStatus, WorkflowDefinitionStatus
 from operant.domain.scheduler import RunRequest, SchedulerLease, require_aware_utc
 from operant.domain.security import (
     ActionRequest,
@@ -314,7 +316,26 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
         self.workspace_resolver = workspace_resolver or (lambda _dispatch: None)
 
     def dispatch_workflow(self, action: WorkflowDispatch) -> str:
+        # Definition existence, publication, compilation/input validity and policy
+        # are deterministic failures. They must not leave a pending dispatch.
+        try:
+            definition = self.graph_repository.get_definition(
+                action.workflow_id, action.workflow_version
+            )
+        except KeyError as exc:
+            raise DispatchError("scheduler.workflow_not_found", outcome_unknown=False) from exc
+        if definition.status is not WorkflowDefinitionStatus.PUBLISHED:
+            raise DispatchError("scheduler.workflow_not_published", outcome_unknown=False)
+        try:
+            self.graph_runtime.validate_run(definition, input=dict(action.workflow_input))
+        except Exception as exc:
+            raise DispatchError(
+                f"scheduler.workflow_invalid.{type(exc).__name__}", outcome_unknown=False
+            ) from exc
         authorized = self.security.authorize(action)
+        graph_run_id = self._graph_run_id(
+            action.source_run_request_id, authorized.action.action_hash
+        )
         binding, created = self.dispatch_registry.reserve(
             source_run_request_id=action.source_run_request_id,
             idempotency_key=action.idempotency_key,
@@ -324,15 +345,37 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
             if binding.status is DispatchBindingStatus.COMPLETED and binding.graph_run_id:
                 self.graph_repository.get_run(binding.graph_run_id)
                 return binding.graph_run_id
-            raise DispatchError("scheduler.graph_dispatch_outcome_unknown", outcome_unknown=True)
+            # A deterministic GraphRun ID makes the crash window recoverable.
+            # Missing means the create transaction did not commit, so the same
+            # idempotent binding can safely continue instead of becoming unknown.
+            try:
+                recovered = self.graph_repository.get_run(graph_run_id)
+            except KeyError:
+                recovered = None
+            if recovered is not None:
+                if (
+                    recovered.workflow_definition_id != action.workflow_id
+                    or recovered.workflow_definition_version != action.workflow_version
+                    or recovered.input != action.workflow_input
+                ):
+                    raise DispatchError(
+                        "scheduler.graph_dispatch_binding_conflict", outcome_unknown=True
+                    )
+                if recovered.status in {
+                    GraphRunStatus.CREATED,
+                    GraphRunStatus.QUEUED,
+                    GraphRunStatus.INTERRUPTED,
+                }:
+                    recovered = self.graph_runtime.start_run(recovered.id)
+                completed = self.dispatch_registry.complete(binding, graph_run_id=recovered.id)
+                assert completed.graph_run_id is not None
+                return completed.graph_run_id
         try:
-            definition = self.graph_repository.get_definition(
-                action.workflow_id, action.workflow_version
-            )
             run = self.graph_runtime.create_run(
                 definition,
                 input=dict(action.workflow_input),
                 workspace_or_target=self.workspace_resolver(action),
+                run_id=graph_run_id,
             )
             started = self.graph_runtime.start_run(run.id)
             completed = self.dispatch_registry.complete(binding, graph_run_id=started.id)
@@ -362,6 +405,14 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
         )
         assert completed.graph_run_id is not None
         return completed.graph_run_id
+
+    def workflow_status(self, workflow_run_id: str) -> GraphRunStatus:
+        return self.graph_repository.get_run(workflow_run_id).status
+
+    @staticmethod
+    def _graph_run_id(source_run_request_id: str, action_hash: str) -> str:
+        digest = hashlib.sha256(f"{source_run_request_id}\0{action_hash}".encode()).hexdigest()
+        return f"graph_run_scheduler_{digest}"
 
 
 @dataclass(frozen=True)

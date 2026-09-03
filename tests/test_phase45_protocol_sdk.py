@@ -3,9 +3,34 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 from sdk.protocol.generate_phase45 import generate
 from sdk.python_client import PHASE45_PROTOCOL_VERSION, PHASE45_SCHEMA_DIGEST, Phase45Client
+from sdk.python_client.transport import TransportRequest, TransportResponse
+
+
+class QueueTransport:
+    def __init__(self, *responses: TransportResponse) -> None:
+        self.responses = list(responses)
+        self.requests: list[TransportRequest] = []
+
+    def __call__(self, request: TransportRequest) -> TransportResponse:
+        self.requests.append(request)
+        return self.responses.pop(0)
+
+
+def _response(payload: Any, *, headers: dict[str, str] | None = None) -> TransportResponse:
+    return TransportResponse(status=200, headers=headers or {}, json=json.dumps(payload))
+
+
+def _metadata() -> dict[str, Any]:
+    return {
+        "protocol_version": PHASE45_PROTOCOL_VERSION,
+        "schema_digest": PHASE45_SCHEMA_DIGEST,
+        "min_client_version": PHASE45_PROTOCOL_VERSION,
+        "capabilities": ["scheduler"],
+    }
 
 
 def test_phase45_schema_and_clients_are_reproducible_and_additive() -> None:
@@ -67,6 +92,14 @@ def test_phase45_schema_and_clients_are_reproducible_and_additive() -> None:
     serialized = json.dumps(document, sort_keys=True).lower()
     for excluded in ("remote", "relay", "oauth", "tui", "tauri", "browser", "computer"):
         assert excluded not in serialized
+    for path_item in document["paths"].values():
+        for method, operation in path_item.items():
+            if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            assert any(
+                parameter.get("in") == "header" and parameter.get("name") == "Idempotency-Key"
+                for parameter in operation.get("parameters", [])
+            )
 
 
 def test_phase45_generated_clients_expose_phase45_operations() -> None:
@@ -108,8 +141,44 @@ def test_phase45_generated_clients_expose_phase45_operations() -> None:
     for unused_scaffolding in (
         "  parseSse,",
         "  readText,",
-        "function newIdempotencyKey(",
-        "function requireIdempotencyKey(",
         "function cursorQuery(",
     ):
         assert unused_scaffolding not in typescript_source
+    assert "function newIdempotencyKey(" in typescript_source
+    assert "function requireIdempotencyKey(" in typescript_source
+
+
+def test_phase45_client_reuses_mutation_key_and_exposes_replayed_response() -> None:
+    created = {
+        "id": "schedule-1",
+        "version": 1,
+        "name": "nightly",
+        "trigger_kind": "cron",
+        "cron_expression": "0 3 * * *",
+        "timer_at": None,
+        "timezone_name": "UTC",
+        "workflow_id": "workflow-1",
+        "workflow_version": 1,
+    }
+    transport = QueueTransport(
+        _response(_metadata()),
+        _response(created, headers={"Idempotency-Key": "create-stable"}),
+        _response(
+            created,
+            headers={
+                "Idempotency-Key": "create-stable",
+                "Idempotency-Replayed": "true",
+            },
+        ),
+    )
+    client = Phase45Client("http://core.test", transport=transport)
+
+    assert client.create_schedule(created, idempotency_key="create-stable") == created
+    assert client.create_schedule(created, idempotency_key="create-stable") == created
+
+    first, retry = transport.requests[1:]
+    assert first.url == retry.url == "http://core.test/v1/schedules"
+    assert first.headers["Idempotency-Key"] == "create-stable"
+    assert retry.headers["Idempotency-Key"] == "create-stable"
+    assert client.last_response is not None
+    assert client.last_response.idempotency_replayed is True

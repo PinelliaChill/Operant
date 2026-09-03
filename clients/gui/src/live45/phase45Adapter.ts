@@ -3,14 +3,14 @@ import type * as Phase45 from '../../../../sdk/typescript-client/phase45.generat
 export interface Phase45ClientLike {
   negotiateProtocol(force?: boolean): Promise<unknown>;
   listSkills(options?: Phase45.ListSkillsOptions): Promise<Record<string, unknown>>;
-  discoverSkills(request: Phase45.SkillDiscoverBody): Promise<Record<string, unknown>>;
+  discoverSkills(request: Phase45.SkillDiscoverBody, options?: Phase45.DiscoverSkillsOptions): Promise<Record<string, unknown>>;
   listMcpServers(): Promise<Record<string, unknown>>;
-  createMcpServer(request: Phase45.McpServerBody): Promise<Record<string, unknown>>;
-  startMcpServer(id: string): Promise<Record<string, unknown>>;
-  stopMcpServer(id: string): Promise<Record<string, unknown>>;
-  deleteMcpServer(id: string): Promise<Record<string, unknown>>;
+  createMcpServer(request: Phase45.McpServerBody, options?: Phase45.CreateMcpServerOptions): Promise<Record<string, unknown>>;
+  startMcpServer(id: string, options?: Phase45.StartMcpServerOptions): Promise<Record<string, unknown>>;
+  stopMcpServer(id: string, options?: Phase45.StopMcpServerOptions): Promise<Record<string, unknown>>;
+  deleteMcpServer(id: string, options?: Phase45.DeleteMcpServerOptions): Promise<Record<string, unknown>>;
   listMcpTools(id: string): Promise<Record<string, unknown>>;
-  explainPolicy(request: Phase45.NormalizeActionBody): Promise<Record<string, unknown>>;
+  explainPolicy(request: Phase45.NormalizeActionBody, options?: Phase45.ExplainPolicyOptions): Promise<Record<string, unknown>>;
   listSecurityAudit(
     actionHash: string,
     options?: Phase45.ListSecurityAuditOptions,
@@ -250,21 +250,76 @@ export function normalizePhase45Error(error: unknown): Phase45UiError {
 
 export class Phase45LiveAdapter {
   private readonly client: Phase45ClientLike;
+  private readonly mutationKeys = new Map<string, string>();
 
   constructor(client: Phase45ClientLike) {
     this.client = client;
   }
   connect() { return this.client.negotiateProtocol(true); }
   async listSkills() { return mapSkillList(await this.client.listSkills({ limit: 200 })); }
-  async discoverSkills(rootRefs: string[] = []) { return mapSkillDiscovery(await this.client.discoverSkills({ root_refs: rootRefs })); }
+  async discoverSkills(rootRefs: string[] = []) {
+    const action = `discover:${JSON.stringify(rootRefs)}`;
+    return mapSkillDiscovery(await this.mutate(action, (idempotencyKey) => (
+      this.client.discoverSkills({ root_refs: rootRefs }, { idempotencyKey })
+    )));
+  }
   async listMcpServers() { return mapMcpServerList(await this.client.listMcpServers()); }
-  async createMcpServer(request: Phase45.McpServerBody) { return mapMcpServer(await this.client.createMcpServer(request)); }
-  async startMcpServer(id: string) { return mapMcpServer(await this.client.startMcpServer(id)); }
-  async stopMcpServer(id: string) { return mapMcpServer(await this.client.stopMcpServer(id)); }
-  async deleteMcpServer(id: string) { await this.client.deleteMcpServer(id); }
+  async createMcpServer(request: Phase45.McpServerBody) {
+    return mapMcpServer(await this.mutate(
+      `mcp:create:${JSON.stringify(request)}`,
+      (idempotencyKey) => this.client.createMcpServer(request, { idempotencyKey }),
+    ));
+  }
+  async startMcpServer(id: string) {
+    return mapMcpServer(await this.mutate(
+      `mcp:start:${id}`,
+      (idempotencyKey) => this.client.startMcpServer(id, { idempotencyKey }),
+    ));
+  }
+  async stopMcpServer(id: string) {
+    return mapMcpServer(await this.mutate(
+      `mcp:stop:${id}`,
+      (idempotencyKey) => this.client.stopMcpServer(id, { idempotencyKey }),
+    ));
+  }
+  async deleteMcpServer(id: string) {
+    await this.mutate(
+      `mcp:delete:${id}`,
+      (idempotencyKey) => this.client.deleteMcpServer(id, { idempotencyKey }),
+    );
+  }
   async listMcpTools(id: string) { return mapMcpTools(await this.client.listMcpTools(id)); }
-  async explainPolicy(request: Phase45.NormalizeActionBody) { return mapPolicyEvaluation(await this.client.explainPolicy(request)); }
+  async explainPolicy(request: Phase45.NormalizeActionBody) {
+    return mapPolicyEvaluation(await this.mutate(
+      `policy:explain:${request.idempotency_key}`,
+      (idempotencyKey) => this.client.explainPolicy(request, { idempotencyKey }),
+      request.idempotency_key,
+    ));
+  }
   async listSecurityAudit(actionHash: string, afterCursor = 0, limit = 100) {
     return mapSecurityAudit(await this.client.listSecurityAudit(actionHash, { afterCursor, limit }));
+  }
+
+  private async mutate<T>(
+    action: string,
+    operation: (idempotencyKey: string) => Promise<T>,
+    preferredKey?: string,
+  ): Promise<T> {
+    let key = this.mutationKeys.get(action);
+    if (!key) {
+      key = preferredKey ?? globalThis.crypto.randomUUID();
+      this.mutationKeys.set(action, key);
+    }
+    try {
+      const result = await operation(key);
+      this.mutationKeys.delete(action);
+      return result;
+    } catch (error: unknown) {
+      const recovery = error && typeof error === 'object'
+        ? (error as { recovery?: unknown }).recovery
+        : undefined;
+      if (recovery === 'use_new_idempotency_key') this.mutationKeys.delete(action);
+      throw error;
+    }
   }
 }

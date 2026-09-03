@@ -46,4 +46,5 @@ test('idempotency registry reuses a key for retries and releases it after known 
   keys.release('trigger:schedule-1');
   assert.equal(keys.acquire('trigger:schedule-1'), 'key-2');
   assert.equal(keys.acquire('replay:request-1'), 'key-3');
+  assert.deepEqual(keys.actions('replay:'), ['replay:request-1']);
 });

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -205,11 +206,13 @@ def _graph_gateway(
     *,
     decision: PolicyDecision,
     definition_status: WorkflowDefinitionStatus = WorkflowDefinitionStatus.PUBLISHED,
+    include_definition: bool = True,
 ) -> tuple[GraphSchedulerActionGateway, SQLiteGraphRepository, SQLiteSecurityRepository]:
     core_store = SQLiteStore(tmp_path / "core.sqlite3")
     core_store.initialize()
     graph_repository = SQLiteGraphRepository(core_store)
-    graph_repository.put_definition(_definition(status=definition_status))
+    if include_definition:
+        graph_repository.put_definition(_definition(status=definition_status))
     security_repository = SQLiteSecurityRepository(core_store)
     security = SchedulerSecurityService(
         repository=security_repository,
@@ -281,6 +284,95 @@ def test_graph_gateway_authorizes_persists_starts_and_deduplicates(tmp_path: Pat
     }.issubset(event_types)
 
 
+def test_worker_keeps_request_leased_until_graph_terminal_and_holds_limit(
+    tmp_path: Path,
+) -> None:
+    gateway, graph_repository, _security_repository = _graph_gateway(
+        tmp_path, decision=PolicyDecision.ALLOW
+    )
+    store = _scheduler_store(tmp_path)
+    service = TriggerService(store)
+    now = datetime.now(UTC)
+    service.create_schedule(
+        ScheduleDefinition(
+            id="graph-lifecycle",
+            name="graph lifecycle",
+            trigger_kind=TriggerKind.TIMER,
+            timer_at=now + timedelta(days=1),
+            timezone_name="UTC",
+            workflow_id="scheduled.graph",
+            workflow_version=2,
+            concurrency_limit=1,
+            created_at=now,
+        )
+    )
+    first = service.manual_trigger("graph-lifecycle", idempotency_key="one", now=now)
+    second = service.manual_trigger("graph-lifecycle", idempotency_key="two", now=now)
+    writer = store.acquire_authority("runtime_writer", owner="runtime", ttl_seconds=300, now=now)
+    worker = SchedulerWorker(store=store, gateway=gateway, owner="runtime")
+
+    dispatched = worker.run_one(writer)
+    assert dispatched is not None
+    assert dispatched.id == first.id
+    assert dispatched.status is RunRequestStatus.LEASED
+    assert dispatched.workflow_run_id is not None
+    assert store.claim_due(writer, owner="runtime", ttl_seconds=30) is None
+    assert store.get_request(second.id).status is RunRequestStatus.QUEUED
+
+    node = graph_repository.list_node_runs(dispatched.workflow_run_id)[0]
+    attempt = gateway.graph_runtime.start_attempt(node.id)
+    gateway.graph_runtime.complete_attempt(attempt, succeeded=True)
+    terminal = worker.run_one(writer)
+    assert terminal is not None and terminal.id == first.id
+    assert terminal.status is RunRequestStatus.SUCCEEDED
+
+    next_dispatched = worker.run_one(writer)
+    assert next_dispatched is not None and next_dispatched.id == second.id
+    assert next_dispatched.status is RunRequestStatus.LEASED
+
+
+def test_pending_dispatch_with_no_graph_run_resumes_same_binding(tmp_path: Path) -> None:
+    gateway, graph_repository, _security_repository = _graph_gateway(
+        tmp_path, decision=PolicyDecision.ALLOW
+    )
+    dispatch = _dispatch()
+    authorized = gateway.security.authorize(dispatch)
+    binding, created = gateway.dispatch_registry.reserve(
+        source_run_request_id=dispatch.source_run_request_id,
+        idempotency_key=dispatch.idempotency_key,
+        action_hash=authorized.action.action_hash,
+    )
+    assert created is True and binding.status.value == "pending"
+
+    run_id = gateway.dispatch_workflow(dispatch)
+
+    assert graph_repository.get_run(run_id).status.value == "running"
+    with graph_repository.store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM graph_workflow_runs").fetchone()[0] == 1
+
+
+def test_missing_definition_can_be_added_before_retry_without_unknown_binding(
+    tmp_path: Path,
+) -> None:
+    gateway, graph_repository, _security_repository = _graph_gateway(
+        tmp_path, decision=PolicyDecision.ALLOW, include_definition=False
+    )
+
+    with pytest.raises(DispatchError) as missing:
+        gateway.dispatch_workflow(_dispatch())
+    assert missing.value.error_code == "scheduler.workflow_not_found"
+    assert missing.value.outcome_unknown is False
+    with sqlite3.connect(tmp_path / "dispatch.sqlite3") as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM scheduler_graph_dispatches").fetchone()[0] == 0
+        )
+
+    graph_repository.put_definition(_definition())
+    assert (
+        graph_repository.get_run(gateway.dispatch_workflow(_dispatch())).status.value == "running"
+    )
+
+
 @pytest.mark.parametrize("decision", [PolicyDecision.DENY, PolicyDecision.ASK])
 def test_policy_deny_and_ask_fail_closed_before_graph_creation(
     tmp_path: Path, decision: PolicyDecision
@@ -296,7 +388,37 @@ def test_policy_deny_and_ask_fail_closed_before_graph_creation(
         assert connection.execute("SELECT COUNT(*) FROM graph_workflow_runs").fetchone()[0] == 0
 
 
-def test_unknown_graph_creation_is_not_dispatched_twice(tmp_path: Path) -> None:
+def test_policy_deny_does_not_make_non_idempotent_request_unknown(tmp_path: Path) -> None:
+    gateway, _graph_repository, _security_repository = _graph_gateway(
+        tmp_path, decision=PolicyDecision.DENY
+    )
+    store = _scheduler_store(tmp_path)
+    now = datetime.now(UTC)
+    service = TriggerService(store)
+    service.create_schedule(
+        ScheduleDefinition(
+            id="policy-deny",
+            name="policy deny",
+            trigger_kind=TriggerKind.TIMER,
+            timer_at=now + timedelta(days=1),
+            timezone_name="UTC",
+            workflow_id="scheduled.graph",
+            workflow_version=2,
+            dispatch_idempotency=DispatchIdempotency.NON_IDEMPOTENT,
+            created_at=now,
+        )
+    )
+    service.manual_trigger("policy-deny", idempotency_key="deny", now=now)
+    writer = store.acquire_authority("runtime_writer", owner="runtime", ttl_seconds=60, now=now)
+
+    result = SchedulerWorker(store=store, gateway=gateway, owner="runtime").run_one(writer)
+
+    assert result is not None
+    assert result.status is RunRequestStatus.RETRY_WAIT
+    assert result.last_error_code == "scheduler.policy_deny"
+
+
+def test_unpublished_graph_fails_deterministically_without_pending_dispatch(tmp_path: Path) -> None:
     gateway, graph_repository, _security_repository = _graph_gateway(
         tmp_path,
         decision=PolicyDecision.ALLOW,
@@ -308,7 +430,11 @@ def test_unknown_graph_creation_is_not_dispatched_twice(tmp_path: Path) -> None:
     with pytest.raises(DispatchError) as replay:
         gateway.dispatch_workflow(_dispatch())
 
-    assert first.value.outcome_unknown is True
-    assert replay.value.error_code == "scheduler.graph_dispatch_outcome_unknown"
+    assert first.value.outcome_unknown is False
+    assert replay.value.error_code == "scheduler.workflow_not_published"
     with graph_repository.store._connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM graph_workflow_runs").fetchone()[0] == 0
+    with sqlite3.connect(tmp_path / "dispatch.sqlite3") as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM scheduler_graph_dispatches").fetchone()[0] == 0
+        )

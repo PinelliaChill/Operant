@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
+from operant.domain.graph import WorkflowDefinition, WorkflowDefinitionStatus
 from operant.domain.scheduler import (
     MisfirePolicy,
     RunRequest,
@@ -31,9 +32,10 @@ class _CronField:
 
 
 class CronExpression:
-    """Bounded five-field cron evaluated against aware local wall time."""
+    """Five-field cron evaluated by bounded calendar candidates, never minute scans."""
 
     _RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+    _MAX_LOOKBACK_DAYS = 146_097  # one complete Gregorian 400-year cycle
 
     def __init__(self, expression: str) -> None:
         pieces = expression.split()
@@ -46,6 +48,8 @@ class CronExpression:
                 zip(pieces, self._RANGES, strict=True)
             )
         )
+        if not self._has_satisfiable_calendar_day():
+            raise SchedulerValidationError("cron_expression has no satisfiable calendar date")
 
     @staticmethod
     def _parse_field(text: str, minimum: int, maximum: int, *, day_of_week: bool) -> _CronField:
@@ -93,6 +97,28 @@ class CronExpression:
             return dom_match and dow_match
         return dom_match or dow_match
 
+    def _date_matches(self, value: date) -> bool:
+        _minute, _hour, day_of_month, month, day_of_week = self.fields
+        if value.month not in month.values:
+            return False
+        dom_match = value.day in day_of_month.values
+        cron_weekday = (value.weekday() + 1) % 7
+        dow_match = cron_weekday in day_of_week.values
+        if day_of_month.wildcard or day_of_week.wildcard:
+            return dom_match and dow_match
+        return dom_match or dow_match
+
+    def _has_satisfiable_calendar_day(self) -> bool:
+        # Gregorian dates repeat every 400 years. Checking one full cycle makes
+        # impossible combinations such as 31 February fail at definition time.
+        cursor = date(2000, 1, 1)
+        end = date(2400, 1, 1)
+        while cursor < end:
+            if self._date_matches(cursor):
+                return True
+            cursor += timedelta(days=1)
+        return False
+
     def occurrences_between(
         self,
         *,
@@ -106,18 +132,43 @@ class CronExpression:
         if end <= start or limit < 1:
             return ()
         zone = ZoneInfo(timezone_name)
-        # Walk backwards so a bounded result is the most recent catch-up window,
-        # not the oldest occurrences after a long scheduler outage.
-        cursor = end.replace(second=0, microsecond=0)
+        local_start = start.astimezone(zone)
+        local_end = end.astimezone(zone)
+        scan_days = (local_end.date() - local_start.date()).days + 1
+        if scan_days > self._MAX_LOOKBACK_DAYS:
+            raise SchedulerValidationError("cron lookback exceeds the bounded 400-year window")
+        minute, hour, *_ = self.fields
         occurrences: list[datetime] = []
-        while cursor > start:
-            if self.matches(cursor.astimezone(zone)):
-                occurrences.append(cursor)
+        local_day = local_end.date()
+        while local_day >= local_start.date() and len(occurrences) < limit:
+            candidates: set[datetime] = set()
+            if self._date_matches(local_day):
+                for hour_value in hour.values:
+                    for minute_value in minute.values:
+                        naive = datetime.combine(
+                            local_day, time(hour=hour_value, minute=minute_value)
+                        )
+                        for fold in (0, 1):
+                            local = naive.replace(tzinfo=zone, fold=fold)
+                            candidate = local.astimezone(timezone.utc)
+                            # Round-trip rejects DST gaps. A set collapses fold=1
+                            # for ordinary wall times while retaining both fold instants.
+                            round_trip = candidate.astimezone(zone)
+                            if round_trip.replace(tzinfo=None) != naive:
+                                continue
+                            if start < candidate <= end:
+                                candidates.add(candidate)
+            for candidate in sorted(candidates, reverse=True):
+                occurrences.append(candidate)
                 if len(occurrences) >= limit:
                     break
-            cursor -= timedelta(minutes=1)
+            local_day -= timedelta(days=1)
         occurrences.reverse()
         return tuple(occurrences)
+
+
+class WorkflowDefinitionRepository(Protocol):
+    def get_definition(self, workflow_id: str, version: int) -> WorkflowDefinition: ...
 
 
 class SchedulerRepository(Protocol):
@@ -161,13 +212,34 @@ class SchedulerRepository(Protocol):
 
 
 class TriggerService:
-    def __init__(self, repository: SchedulerRepository) -> None:
+    def __init__(
+        self,
+        repository: SchedulerRepository,
+        *,
+        workflow_repository: WorkflowDefinitionRepository | None = None,
+    ) -> None:
         self._repository = repository
+        self._workflow_repository = workflow_repository
 
     def create_schedule(self, schedule: ScheduleDefinition) -> None:
+        self.validate_schedule(schedule)
+        self._repository.put_schedule(schedule)
+
+    def validate_schedule(self, schedule: ScheduleDefinition) -> None:
+        """Validate deterministic trigger and pinned Workflow facts without writes."""
         if schedule.trigger_kind is TriggerKind.CRON:
             CronExpression(schedule.cron_expression or "")
-        self._repository.put_schedule(schedule)
+        if self._workflow_repository is not None:
+            try:
+                definition = self._workflow_repository.get_definition(
+                    schedule.workflow_id, schedule.workflow_version
+                )
+            except KeyError as exc:
+                raise SchedulerValidationError(
+                    "schedule workflow definition does not exist"
+                ) from exc
+            if definition.status is not WorkflowDefinitionStatus.PUBLISHED:
+                raise SchedulerValidationError("schedule workflow definition must be published")
 
     def set_status(
         self,

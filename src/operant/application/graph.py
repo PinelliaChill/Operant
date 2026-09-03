@@ -33,6 +33,7 @@ from operant.domain.graph import (
     PortSpec,
     WorkflowDefinition,
     WorkflowDefinitionStatus,
+    new_graph_id,
     utc_now,
 )
 
@@ -784,19 +785,12 @@ class GraphRuntime:
         input: dict[str, Any] | None = None,
         workspace_or_target: str | None = None,
         legacy_workflow_run_id: str | None = None,
+        run_id: str | None = None,
     ) -> GraphWorkflowRun:
-        compiled = self.compiler.compile(definition)
-        if definition.status is not WorkflowDefinitionStatus.PUBLISHED:
-            raise GraphStateError("only published definitions can run")
+        compiled = self.validate_run(definition, input=input)
         run_input = input or {}
-        nodes_by_id = {node.node_id: node for node in definition.nodes}
-        for entry_node_id in compiled.entry_node_ids:
-            _validate_port_values(
-                nodes_by_id[entry_node_id].input_ports,
-                run_input,
-                context=f"entry node {entry_node_id} input",
-            )
         run = GraphWorkflowRun(
+            id=run_id or new_graph_id("graph_run"),
             workflow_definition_id=definition.workflow_id,
             workflow_definition_version=definition.version,
             input=run_input,
@@ -818,6 +812,23 @@ class GraphRuntime:
         )
         self.repository.create_run(run, node_runs)
         return run
+
+    def validate_run(
+        self, definition: WorkflowDefinition, *, input: dict[str, Any] | None = None
+    ) -> CompiledWorkflow:
+        """Run every deterministic definition/input check without persistence."""
+        compiled = self.compiler.compile(definition)
+        if definition.status is not WorkflowDefinitionStatus.PUBLISHED:
+            raise GraphStateError("only published definitions can run")
+        run_input = input or {}
+        nodes_by_id = {node.node_id: node for node in definition.nodes}
+        for entry_node_id in compiled.entry_node_ids:
+            _validate_port_values(
+                nodes_by_id[entry_node_id].input_ports,
+                run_input,
+                context=f"entry node {entry_node_id} input",
+            )
+        return compiled
 
     def start_run(self, run_id: str) -> GraphWorkflowRun:
         run = self.repository.get_run(run_id)

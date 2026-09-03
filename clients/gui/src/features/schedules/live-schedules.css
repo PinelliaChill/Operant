@@ -1,6 +1,7 @@
 .live-scheduler-view { min-width: 0; }
 .scheduler-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .scheduler-header-actions, .scheduler-card-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scheduler-connection-announcement { width: 1px; height: 1px; position: absolute; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .scheduler-content { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
 .scheduler-alert { margin: 0; display: flex; align-items: center; gap: 8px; }
 .scheduler-alert span { min-width: 0; flex: 1; overflow-wrap: anywhere; }

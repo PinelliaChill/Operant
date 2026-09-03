@@ -6,7 +6,8 @@ from typing import Protocol
 from pydantic import JsonValue
 
 from operant.application.scheduler import SchedulerConflictError
-from operant.domain.scheduler import RunRequest, SchedulerLease
+from operant.domain.graph import GraphRunStatus
+from operant.domain.scheduler import JobLease, RunRequest, RunRequestStatus, SchedulerLease
 from operant.persistence.scheduler import SQLiteSchedulerStore
 
 
@@ -28,6 +29,10 @@ class SchedulerActionGateway(Protocol):
 
     def dispatch_workflow(self, action: WorkflowDispatch) -> str:
         """Return the durable WorkflowRun ID created for this exact action."""
+        ...
+
+    def workflow_status(self, workflow_run_id: str) -> GraphRunStatus:
+        """Return the authoritative GraphRun status for a dispatched workflow."""
         ...
 
 
@@ -55,6 +60,9 @@ class SchedulerWorker:
         self._job_ttl_seconds = job_ttl_seconds
 
     def run_one(self, writer_lease: SchedulerLease) -> RunRequest | None:
+        terminal = self._reconcile_dispatched(writer_lease)
+        if terminal is not None:
+            return terminal
         claimed = self._store.claim_due(
             writer_lease, owner=self._owner, ttl_seconds=self._job_ttl_seconds
         )
@@ -106,4 +114,59 @@ class SchedulerWorker:
                 retry_base_seconds=schedule.retry_base_seconds,
                 retry_max_seconds=schedule.retry_max_seconds,
             )
-        return self._store.complete_job(lease, workflow_run_id=workflow_run_id)
+        dispatched = self._store.mark_workflow_dispatched(lease, workflow_run_id=workflow_run_id)
+        status_reader = getattr(self._gateway, "workflow_status", None)
+        if status_reader is None:
+            # Compatibility for non-Graph test gateways. Production composition
+            # always implements workflow_status and retains the lease.
+            return self._store.complete_job(lease, workflow_run_id=workflow_run_id)
+        status = status_reader(workflow_run_id)
+        return self._finish_if_terminal(dispatched, lease, status)
+
+    def _reconcile_dispatched(self, writer_lease: SchedulerLease) -> RunRequest | None:
+        status_reader = getattr(self._gateway, "workflow_status", None)
+        if status_reader is None:
+            return None
+        jobs = self._store.renew_dispatched_jobs(
+            writer_lease,
+            owner=self._owner,
+            ttl_seconds=self._job_ttl_seconds,
+        )
+        for request, lease in jobs:
+            assert request.workflow_run_id is not None
+            result = self._finish_if_terminal(
+                request, lease, status_reader(request.workflow_run_id)
+            )
+            if result.status is not RunRequestStatus.LEASED:
+                return result
+        return None
+
+    def _finish_if_terminal(
+        self,
+        request: RunRequest,
+        lease: JobLease,
+        status: GraphRunStatus,
+    ) -> RunRequest:
+        workflow_run_id = request.workflow_run_id
+        assert workflow_run_id is not None
+        if status is GraphRunStatus.COMPLETED:
+            return self._store.complete_job(lease, workflow_run_id=workflow_run_id)
+        if status is GraphRunStatus.CANCELLED:
+            return self._store.finish_dispatched_job(
+                lease,
+                request_status=RunRequestStatus.CANCELLED,
+                error_code="graph.cancelled",
+            )
+        if status is GraphRunStatus.FAILED:
+            return self._store.finish_dispatched_job(
+                lease,
+                request_status=RunRequestStatus.DEAD_LETTER,
+                error_code="graph.failed",
+            )
+        if status is GraphRunStatus.MANUAL_RECONCILE_REQUIRED:
+            return self._store.finish_dispatched_job(
+                lease,
+                request_status=RunRequestStatus.MANUAL_RECONCILE_REQUIRED,
+                error_code="graph.manual_reconcile_required",
+            )
+        return request

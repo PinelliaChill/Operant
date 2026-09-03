@@ -157,11 +157,17 @@ export const LiveSchedulesView: React.FC = () => {
     && (triggerKind === 'cron' ? Boolean(cronExpression.trim()) : !Number.isNaN(timerDate.getTime()));
 
   const updateStatus = async (scheduleId: string, version: number, status: ScheduleStatus) => {
-    const action = `status:${scheduleId}`;
+    const action = `status:${scheduleId}:v${version}:${status}`;
+    const key = keys.current.acquire(action);
     setBusyAction(action);
     setError(null);
     try {
-      const value = await client.setScheduleStatus(scheduleId, { status, expected_version: version });
+      const value = await client.setScheduleStatus(
+        scheduleId,
+        { status, expected_version: version },
+        key,
+      );
+      keys.current.release(action);
       const updated = mapSchedule(value);
       setSnapshot((current) => ({
         ...current,
@@ -170,7 +176,9 @@ export const LiveSchedulesView: React.FC = () => {
       addNotification('success', status === 'paused' ? `已暂停「${updated.name}」` : `已恢复「${updated.name}」`);
       await refresh(true);
     } catch (caught) {
-      setError(schedulerError(caught));
+      const nextError = schedulerError(caught);
+      if (nextError.recovery === 'use_new_idempotency_key') keys.current.release(action);
+      setError(nextError);
     } finally {
       setBusyAction(null);
     }
@@ -211,14 +219,21 @@ export const LiveSchedulesView: React.FC = () => {
         workflow_id: workflowId.trim(),
         workflow_version: parsedWorkflowVersion,
       };
-      const created = mapSchedule(await client.createSchedule(request));
+      const action = `create:${JSON.stringify(request)}`;
+      const key = keys.current.acquire(action);
+      const created = mapSchedule(await client.createSchedule(request, key));
+      keys.current.release(action);
       setSnapshot((current) => ({ ...current, schedules: replaceSchedule(current.schedules, created) }));
       setCreateOpen(false);
       setName('');
       addNotification('success', `已创建调度「${created.name}」`);
       await refresh(true);
     } catch (caught) {
-      setError(schedulerError(caught));
+      const nextError = schedulerError(caught);
+      if (nextError.recovery === 'use_new_idempotency_key') {
+        for (const action of keys.current.actions('create:')) keys.current.release(action);
+      }
+      setError(nextError);
     } finally {
       setBusyAction(null);
     }
@@ -277,6 +292,9 @@ export const LiveSchedulesView: React.FC = () => {
             label={snapshot.phase === 'ready' && connectionStatus === 'connected' ? 'Core 已连接' : '连接不可用'}
             size="sm"
           />
+          <span className="scheduler-connection-announcement" role="status" aria-live="polite">
+            {connectionStatus === 'connected' ? 'Core 已连接' : 'Core 连接已断开，调度修改暂不可用'}
+          </span>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={snapshot.phase === 'loading'}>
             <RefreshCw size={13} className={snapshot.phase === 'loading' ? 'animate-spin' : undefined} aria-hidden="true" />
             刷新
@@ -306,7 +324,7 @@ export const LiveSchedulesView: React.FC = () => {
             ) : (
               <div className="scheduler-card-list">
                 {snapshot.schedules.map((schedule) => {
-                  const statusBusy = busyAction === `status:${schedule.id}`;
+                  const statusBusy = busyAction?.startsWith(`status:${schedule.id}:`) ?? false;
                   const triggerBusy = busyAction === `trigger:${schedule.id}`;
                   return (
                     <article className="scheduler-schedule-card" key={schedule.id}>

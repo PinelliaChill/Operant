@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from operant.application.graph import GraphRuntime
 from operant.application.phase45_gateway import Phase45ActionGateway
-from operant.application.scheduler import SchedulerConflictError, TriggerService
+from operant.application.scheduler import (
+    SchedulerConflictError,
+    SchedulerValidationError,
+    TriggerService,
+)
 from operant.application.security import (
     ActionNormalizer,
     CapabilityBroker,
@@ -176,7 +180,6 @@ def install_phase45_routes(
     repository = SQLiteSecurityRepository(store)
     phase_repository = SQLitePhase45Repository(store)
     scheduler_store = SQLiteSchedulerStore(store.path)
-    trigger_service = TriggerService(scheduler_store)
     normalizer = ActionNormalizer()
     engine = policy_engine or PolicyEngine(balanced_policy_bundle())
     broker = CapabilityBroker(repository)
@@ -193,6 +196,7 @@ def install_phase45_routes(
     phase_repository.reconcile_mcp_lifecycle()
     graph_repository = SQLiteGraphRepository(store)
     graph_runtime = GraphRuntime(graph_repository)
+    trigger_service = TriggerService(scheduler_store, workflow_repository=graph_repository)
     scheduler_security = SchedulerSecurityService(
         repository=repository,
         normalizer=normalizer,
@@ -673,9 +677,15 @@ def install_phase45_routes(
     @app.post("/v1/schedules", operation_id="createSchedule", status_code=201)
     async def create_schedule(schedule: ScheduleDefinition) -> dict[str, Any]:
         payload = schedule.model_dump(mode="json")
+        try:
+            trigger_service.validate_schedule(schedule)
+        except SchedulerValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         guard_schedule("create", schedule.id, payload, f"schedule-create:{schedule.id}:v1")
         try:
             trigger_service.create_schedule(schedule)
+        except SchedulerValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SchedulerConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return scheduler_store.get_schedule(schedule.id).model_dump(mode="json")
@@ -685,11 +695,17 @@ def install_phase45_routes(
         if schedule.id != schedule_id:
             raise HTTPException(status_code=409, detail="schedule ID does not match path")
         payload = schedule.model_dump(mode="json")
+        try:
+            trigger_service.validate_schedule(schedule)
+        except SchedulerValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         guard_schedule(
             "update", schedule.id, payload, f"schedule-update:{schedule.id}:v{schedule.version}"
         )
         try:
             trigger_service.create_schedule(schedule)
+        except SchedulerValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SchedulerConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return scheduler_store.get_schedule(schedule.id).model_dump(mode="json")

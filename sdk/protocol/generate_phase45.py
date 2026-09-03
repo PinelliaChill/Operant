@@ -69,6 +69,31 @@ def _document() -> dict[str, Any]:
         if operations:
             selected[path] = operations
     selected["/v1/protocol/phase45"]["get"]["operationId"] = "negotiateProtocol"
+    # FastAPI's command middleware accepts this header outside endpoint
+    # signatures. Make it explicit in the additive schema so generated clients
+    # always send a stable key and callers can reuse it after response loss.
+    for path_item in selected.values():
+        for method, operation in path_item.items():
+            if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            parameters = operation.setdefault("parameters", [])
+            if not any(
+                parameter.get("in") == "header"
+                and str(parameter.get("name", "")).lower() == "idempotency-key"
+                for parameter in parameters
+            ):
+                parameters.append(
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": False,
+                        "schema": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 300,
+                        },
+                    }
+                )
     schemas = copy.deepcopy(document.get("components", {}).get("schemas", {}))
     frozen = json.loads(
         (ROOT / "sdk/protocol/schema/operant-phase1e.openapi.json").read_text(encoding="utf-8")

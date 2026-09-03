@@ -44,8 +44,8 @@ test('scheduler adapter delegates every operation to generated Phase45Client met
   await client.listSchedules();
   await client.listQueue();
   await client.listDeadLetter();
-  await client.createSchedule(schedule);
-  await client.setScheduleStatus('schedule-1', { status: 'paused', expected_version: 2 });
+  await client.createSchedule(schedule, 'create-key');
+  await client.setScheduleStatus('schedule-1', { status: 'paused', expected_version: 2 }, 'status-key');
   await client.triggerSchedule('schedule-1', 'trigger-key');
   await client.replayDeadLetter('request-1', 'replay-key');
 
@@ -54,8 +54,41 @@ test('scheduler adapter delegates every operation to generated Phase45Client met
     'createSchedule', 'setScheduleStatus', 'triggerSchedule', 'replayDeadLetter',
   ]);
   assert.deepEqual(calls[0]?.args, [true]);
-  assert.deepEqual(calls[6]?.args, ['schedule-1', { idempotency_key: 'trigger-key' }]);
-  assert.deepEqual(calls[7]?.args, ['request-1', { idempotency_key: 'replay-key' }]);
+  assert.deepEqual(calls[4]?.args, [schedule, { idempotencyKey: 'create-key' }]);
+  assert.deepEqual(calls[5]?.args, [
+    'schedule-1', { status: 'paused', expected_version: 2 }, { idempotencyKey: 'status-key' },
+  ]);
+  assert.deepEqual(calls[6]?.args, [
+    'schedule-1', { idempotency_key: 'trigger-key' }, { idempotencyKey: 'trigger-key' },
+  ]);
+  assert.deepEqual(calls[7]?.args, [
+    'request-1', { idempotency_key: 'replay-key' }, { idempotencyKey: 'replay-key' },
+  ]);
+});
+
+test('response-loss retry can reuse the exact REST idempotency key', async () => {
+  let calls = 0;
+  const seen: unknown[][] = [];
+  const { client: generated } = generatedDouble({
+    createSchedule: (async (...args: unknown[]) => {
+      seen.push(args);
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('response lost'), { recovery: 'retry_same_idempotency_key' });
+      return { id: 'schedule-1' };
+    }) as GeneratedSchedulerClient['createSchedule'],
+  });
+  const client = new SchedulerClient(generated);
+  const schedule = {
+    name: 'Nightly', trigger_kind: 'cron' as const, cron_expression: '0 3 * * *', timer_at: null,
+    timezone_name: 'UTC', workflow_id: 'workflow-1', workflow_version: 2,
+  };
+
+  await assert.rejects(client.createSchedule(schedule, 'stable-create-key'), /response lost/);
+  assert.deepEqual(await client.createSchedule(schedule, 'stable-create-key'), { id: 'schedule-1' });
+  assert.deepEqual(seen, [
+    [schedule, { idempotencyKey: 'stable-create-key' }],
+    [schedule, { idempotencyKey: 'stable-create-key' }],
+  ]);
 });
 
 test('generated protocol negotiation failure propagates explicitly without fallback queries', async () => {

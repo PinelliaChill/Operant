@@ -9,8 +9,10 @@ from fastapi.testclient import TestClient
 
 from operant.api import create_app
 from operant.application.security import PolicyEngine
+from operant.domain.graph import NodeKind, NodeSpec, WorkflowDefinition, WorkflowDefinitionStatus
 from operant.domain.security import PolicyBundle, PolicyDecision
 from operant.mcp import GatewayDecision
+from operant.persistence.graph_team import SQLiteGraphRepository
 from operant.protocol import canonical_action_hash
 
 
@@ -182,17 +184,85 @@ def test_schedule_manual_trigger_is_durable_and_idempotent(tmp_path: Path) -> No
         "workflow_version": 1,
         "workflow_input": {"task": "bounded"},
     }
-    with TestClient(create_app(tmp_path / "operant.sqlite3")) as client:
-        created = client.post("/v1/schedules", json=schedule)
+    app = create_app(tmp_path / "operant.sqlite3")
+    graph_repository = SQLiteGraphRepository(app.state.operant_service.store)
+    graph_repository.put_definition(
+        WorkflowDefinition(
+            workflow_id="workflow-api",
+            version=1,
+            name="API workflow",
+            nodes=(NodeSpec(node_id="artifact", node_kind=NodeKind.ARTIFACT),),
+            status=WorkflowDefinitionStatus.PUBLISHED,
+        )
+    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/v1/schedules",
+            headers={"Idempotency-Key": "schedule-create-stable"},
+            json=schedule,
+        )
         assert created.status_code == 201, created.text
+        replayed_create = client.post(
+            "/v1/schedules",
+            headers={"Idempotency-Key": "schedule-create-stable"},
+            json=schedule,
+        )
+        assert replayed_create.status_code == 201
+        assert replayed_create.json() == created.json()
+        assert replayed_create.headers["Idempotency-Replayed"] == "true"
         first = client.post(
-            "/v1/schedules/schedule-api/trigger", json={"idempotency_key": "manual-1"}
+            "/v1/schedules/schedule-api/trigger",
+            headers={"Idempotency-Key": "schedule-trigger-stable"},
+            json={"idempotency_key": "schedule-trigger-stable"},
         )
         second = client.post(
-            "/v1/schedules/schedule-api/trigger", json={"idempotency_key": "manual-1"}
+            "/v1/schedules/schedule-api/trigger",
+            headers={"Idempotency-Key": "schedule-trigger-stable"},
+            json={"idempotency_key": "schedule-trigger-stable"},
         )
         assert first.status_code == second.status_code == 200
         assert first.json()["id"] == second.json()["id"]
+        assert second.headers["Idempotency-Replayed"] == "true"
         assert client.get("/v1/schedules/schedule-api").status_code == 200
         queue = client.get("/v1/scheduler/queue").json()["items"]
         assert [item["id"] for item in queue] == [first.json()["id"]]
+
+
+def test_schedule_creation_requires_existing_published_workflow(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "operant.sqlite3")
+    graph_repository = SQLiteGraphRepository(app.state.operant_service.store)
+    schedule = {
+        "id": "schedule-contract",
+        "version": 1,
+        "name": "Pinned workflow",
+        "trigger_kind": "cron",
+        "cron_expression": "0 3 * * *",
+        "timezone_name": "UTC",
+        "workflow_id": "workflow-contract",
+        "workflow_version": 1,
+    }
+    with TestClient(app) as client:
+        missing = client.post(
+            "/v1/schedules",
+            headers={"Idempotency-Key": "schedule-missing"},
+            json=schedule,
+        )
+        assert missing.status_code == 422
+        assert "does not exist" in missing.json()["detail"]
+
+        graph_repository.put_definition(
+            WorkflowDefinition(
+                workflow_id="workflow-contract",
+                version=1,
+                name="draft",
+                nodes=(NodeSpec(node_id="artifact", node_kind=NodeKind.ARTIFACT),),
+                status=WorkflowDefinitionStatus.DRAFT,
+            )
+        )
+        draft = client.post(
+            "/v1/schedules",
+            headers={"Idempotency-Key": "schedule-draft"},
+            json=schedule,
+        )
+        assert draft.status_code == 422
+        assert "must be published" in draft.json()["detail"]

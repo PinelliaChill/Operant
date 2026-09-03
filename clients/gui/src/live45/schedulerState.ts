@@ -64,4 +64,8 @@ export class SchedulerIdempotencyKeys {
   has(action: string): boolean {
     return this.keys.has(action);
   }
+
+  actions(prefix: string): string[] {
+    return [...this.keys.keys()].filter((action) => action.startsWith(prefix));
+  }
 }
