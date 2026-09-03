@@ -280,9 +280,13 @@ export const RailLayout: React.FC = () => {
   const location = useLocation();
   const section = location.pathname.split('/')[1] || 'chat';
 
-  // Only the three Phase 1E live surfaces may render while in live mode.
-  // Other routes remain available as explicitly labelled demo-only boundaries.
-  const liveSupportedSection = section === 'chat' || section === 'projects' || section === 'approvals';
+  // Phase 1E surfaces plus the additive Phase 2/3 collaboration runtime may
+  // render in live mode. Other routes stay explicitly demo-only.
+  const liveSupportedSection =
+    section === 'chat' ||
+    section === 'projects' ||
+    section === 'approvals' ||
+    section === 'collab';
 
   const isMobile = useMediaQuery('(max-width: 959px)');
 

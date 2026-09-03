@@ -15,6 +15,11 @@ Operant 已打通一条能运行、能测试、能追溯，并具备基础自我
 - 通过 Tool Policy 控制 workspace 工具和审批事件；
 - CLI 与 FastAPI/SSE 共用同一个 Application Service；
 - 完成 Planner → 一个或多个只读 Explorer → Coder → Reviewer → Main 汇总编排；
+- 提供 Graph IR、Compiler、Definition Revision、Graph Run、NodeRun/Attempt、有限 Loop、边界与持久恢复；
+- 既有 Coding Workflow 已投影到 Graph Runtime，保留兼容 CLI/API 和单 Writer Coder 边界；
+- 提供本地 Team、Roster、定向 Mailbox、消息投影、Task/Artifact Board 和幂等 Ack；
+- 冻结 `phase1e.v1`，新增 `phase23.v1` 生成 TypeScript/Python Client，并让 React GUI live 接入 Graph、
+  运行监控和本地 Team；
 - 支持最多 4 个只读 Explorer 的有限并行、自定义角色替换和结构化失败汇总；
 - Reviewer 明确要求时可触发有限返工，必需角色失败时会安全停止；
 - 通过 SQLite 保存 Workflow 状态和事件，并从已提交的阶段检查点恢复中断任务；
@@ -44,6 +49,9 @@ uv sync --extra dev
 uv run pytest
 uv run ruff check .
 uv run mypy src
+npm run test --prefix clients/gui
+npm run typecheck --prefix clients/gui
+npm run build --prefix clients/gui
 ```
 
 真实模型集成测试需要一个 OpenAI-compatible API 中转服务。将 `.env.example` 复制为
@@ -152,9 +160,10 @@ Docker，只有明确填写 `--command-runner host` 才会直接运行宿主机�
   响应式 PWA、远程操控、无障碍和实施顺序，不代表当前已经实现；
 - [安全边界](SECURITY.md)：当前安全前提、执行隔离、恢复、Memory 和本地部署限制。
 
-当前 `/web` 仍是无前端框架、无 CDN 的基础本地工作台。React GUI、Textual TUI、Tauri 桌面壳、
-通用 Graph 编辑器、Team 群聊、Host Connector、自托管 Relay 和 Remote PWA 属于目标设计，不能仅凭
-设计文档描述为已完成。当前 `/web` 和 `/v1/*` 没有设备配对或 Remote Gateway，不得直接暴露到公网。
+当前 `/web` 仍是无前端框架、无 CDN 的基础本地工作台。React GUI 已在 live 模式接入 Graph 定义与
+启动、运行监控和本地 Team；通用后台 Scheduler、Skill/MCP、Textual TUI、Tauri、Host Connector、自托管
+Relay 和 Remote PWA 仍只属于目标设计或 Mock，不能描述为已完成。当前 `/web` 和 `/v1/*` 没有设备
+配对或 Remote Gateway，不得直接暴露到公网。
 
 Operant 2.0 的目标是单用户、单个本地 Core 和本地 SQLite 权威。用户可以通过直连或自托管 Relay 从
 手机/浏览器远程启动、引导、审批和审查本地任务，也可以连接受控远程执行 Target；这不等于建设 SaaS、

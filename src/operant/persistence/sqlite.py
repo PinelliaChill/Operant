@@ -235,6 +235,7 @@ class SQLiteStore:
         6: "e12f7993df336c97f2a97532615abfcda457bfba4b10d902223634417e59d373",
         7: "b8516d3a7deec9a93867c45f323992238b17968829001c6af2cf61831fe70df4",
         8: "f3295d7911214ce19f2a6dc7fda63e21eebfe79c7cb4b3a16934ef40297da11b",
+        9: "884512be9442684acd9b76a9f478b658e5b3d9fb3a576c52a0fe893baab769d5",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -245,6 +246,7 @@ class SQLiteStore:
         6: "5430fb415059679846e3f0c18a3b6c998573a053b81c1b4ce4a67719f6f60f66",
         7: "15496ba9e4cde4e1dd622abdc141ca2dc63f5b155c3b2eb57a24472c9df3e06b",
         8: "bfd4f8367d6232d39b1fd9e9c916cc6de95fcfb8c89dfedd13d22f3da70b70e0",
+        9: "acf376be788cefcdb4640ebd6a282faaf921735a4b0903f071180a3b5e3ef273",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -545,6 +547,12 @@ class SQLiteStore:
                 "phase1d_command_context_sidecar",
                 self._upgrade_v8,
                 self._downgrade_v8,
+            ),
+            build(
+                9,
+                "phase2_graph_phase3_team_runtime",
+                self._upgrade_v9,
+                self._downgrade_v9,
             ),
         )
 
@@ -1346,6 +1354,173 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v9_required_columns() -> dict[str, set[str]]:
+        return {
+            "workflow_definitions": {
+                "sequence",
+                "id",
+                "workflow_id",
+                "version",
+                "status",
+                "body",
+                "body_hash",
+                "created_at",
+            },
+            "graph_workflow_runs": {
+                "sequence",
+                "id",
+                "workflow_definition_id",
+                "workflow_definition_version",
+                "team_run_id",
+                "legacy_workflow_run_id",
+                "status",
+                "body",
+                "created_at",
+                "updated_at",
+                "completed_at",
+            },
+            "graph_run_leases": {
+                "graph_run_id",
+                "lease_token",
+                "owner_id",
+                "generation",
+                "cancel_requested",
+                "acquired_at",
+                "renewed_at",
+                "expires_at",
+                "released_at",
+            },
+            "node_runs": {
+                "sequence",
+                "id",
+                "workflow_run_id",
+                "node_id",
+                "status",
+                "active_attempt_id",
+                "body",
+                "created_at",
+                "updated_at",
+            },
+            "node_attempts": {
+                "sequence",
+                "id",
+                "node_run_id",
+                "attempt_number",
+                "status",
+                "side_effect_state",
+                "idempotency_key",
+                "body",
+                "created_at",
+                "updated_at",
+                "completed_at",
+            },
+            "graph_run_events": {
+                "sequence",
+                "id",
+                "workflow_run_id",
+                "node_run_id",
+                "attempt_id",
+                "run_sequence",
+                "schema_version",
+                "event_type",
+                "body",
+                "created_at",
+            },
+            "team_definitions": {
+                "sequence",
+                "id",
+                "team_id",
+                "version",
+                "status",
+                "body",
+                "body_hash",
+                "created_at",
+            },
+            "team_runs": {
+                "sequence",
+                "id",
+                "team_definition_id",
+                "team_definition_version",
+                "workflow_run_id",
+                "status",
+                "body",
+                "created_at",
+                "updated_at",
+                "completed_at",
+            },
+            "team_roster": {
+                "team_run_id",
+                "agent_id",
+                "thread_id",
+                "role",
+                "status",
+                "body",
+                "joined_at",
+                "left_at",
+            },
+            "team_messages": {
+                "sequence",
+                "id",
+                "team_run_id",
+                "workflow_run_id",
+                "sender_agent_id",
+                "audience",
+                "message_kind",
+                "requires_ack",
+                "status",
+                "body",
+                "created_at",
+                "delivered_at",
+                "expires_at",
+            },
+            "mailbox_deliveries": {
+                "sequence",
+                "id",
+                "message_id",
+                "team_run_id",
+                "recipient_agent_id",
+                "status",
+                "ack_idempotency_key",
+                "ack_body",
+                "created_at",
+                "delivered_at",
+                "acknowledged_at",
+            },
+            "team_tasks": {
+                "sequence",
+                "id",
+                "team_run_id",
+                "assignee_agent_id",
+                "status",
+                "version",
+                "body",
+                "body_hash",
+                "created_at",
+                "updated_at",
+            },
+            "artifact_board_items": {
+                "sequence",
+                "id",
+                "team_run_id",
+                "artifact_id",
+                "published_by_agent_id",
+                "message_id",
+                "body",
+                "created_at",
+            },
+            "team_run_events": {
+                "sequence",
+                "id",
+                "team_run_id",
+                "run_sequence",
+                "schema_version",
+                "event_type",
+                "body",
+                "created_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -1367,6 +1542,8 @@ class SQLiteStore:
             tables.update(cls._v7_required_columns())
         if version >= 8:
             tables.update(cls._v8_required_columns())
+        if version >= 9:
+            tables.update(cls._v9_required_columns())
         return tables
 
     @staticmethod
@@ -1444,6 +1621,28 @@ class SQLiteStore:
                 ("btw_sidecar_runs", "error_code"),
                 ("phase1d_command_audit_events", "resource_type"),
                 ("phase1d_command_audit_events", "resource_id"),
+                ("graph_workflow_runs", "team_run_id"),
+                ("graph_workflow_runs", "legacy_workflow_run_id"),
+                ("graph_workflow_runs", "completed_at"),
+                ("graph_run_leases", "released_at"),
+                ("node_runs", "active_attempt_id"),
+                ("node_attempts", "completed_at"),
+                ("graph_run_events", "node_run_id"),
+                ("graph_run_events", "attempt_id"),
+                ("team_runs", "workflow_run_id"),
+                ("team_runs", "completed_at"),
+                ("team_roster", "thread_id"),
+                ("team_roster", "left_at"),
+                ("team_messages", "workflow_run_id"),
+                ("team_messages", "delivered_at"),
+                ("team_messages", "expires_at"),
+                ("mailbox_deliveries", "ack_idempotency_key"),
+                ("mailbox_deliveries", "ack_body"),
+                ("mailbox_deliveries", "delivered_at"),
+                ("mailbox_deliveries", "acknowledged_at"),
+                ("team_tasks", "assignee_agent_id"),
+                ("artifact_board_items", "published_by_agent_id"),
+                ("artifact_board_items", "message_id"),
             }
         )
 
@@ -1486,6 +1685,11 @@ class SQLiteStore:
                 "writable",
                 "item_cursor_end",
                 "source_item_cursor_end",
+                "attempt_number",
+                "run_sequence",
+                "requires_ack",
+                "workflow_definition_version",
+                "team_definition_version",
             }
         )
 
@@ -1710,6 +1914,8 @@ class SQLiteStore:
                 store._upgrade_v7(connection)
             if version >= 8:
                 store._upgrade_v8(connection)
+            if version >= 9:
+                store._upgrade_v9(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -1818,6 +2024,25 @@ class SQLiteStore:
                     "phase1d_command_audit_events": ("sequence",),
                 }
             )
+        if version >= 9:
+            contract.update(
+                {
+                    "workflow_definitions": ("sequence",),
+                    "graph_workflow_runs": ("sequence",),
+                    "graph_run_leases": ("graph_run_id",),
+                    "node_runs": ("sequence",),
+                    "node_attempts": ("sequence",),
+                    "graph_run_events": ("sequence",),
+                    "team_definitions": ("sequence",),
+                    "team_runs": ("sequence",),
+                    "team_roster": ("team_run_id", "agent_id"),
+                    "team_messages": ("sequence",),
+                    "mailbox_deliveries": ("sequence",),
+                    "team_tasks": ("sequence",),
+                    "artifact_board_items": ("sequence",),
+                    "team_run_events": ("sequence",),
+                }
+            )
         return contract
 
     @staticmethod
@@ -1904,6 +2129,41 @@ class SQLiteStore:
                     ),
                     "btw_sidecar_events": (("id",),),
                     "phase1d_command_audit_events": (("id",),),
+                }
+            )
+        if version >= 9:
+            contract.update(
+                {
+                    "workflow_definitions": (("id",), ("workflow_id", "version")),
+                    "graph_workflow_runs": (
+                        ("id",),
+                        ("legacy_workflow_run_id",),
+                    ),
+                    "graph_run_leases": (("lease_token",),),
+                    "node_runs": (("id",), ("workflow_run_id", "node_id")),
+                    "node_attempts": (
+                        ("id",),
+                        ("node_run_id", "attempt_number"),
+                        ("node_run_id", "idempotency_key"),
+                    ),
+                    "graph_run_events": (
+                        ("id",),
+                        ("workflow_run_id", "run_sequence"),
+                    ),
+                    "team_definitions": (("id",), ("team_id", "version")),
+                    "team_runs": (("id",),),
+                    "team_messages": (("id",),),
+                    "mailbox_deliveries": (
+                        ("id",),
+                        ("message_id", "recipient_agent_id"),
+                        ("recipient_agent_id", "ack_idempotency_key"),
+                    ),
+                    "team_tasks": (("id",),),
+                    "artifact_board_items": (
+                        ("id",),
+                        ("team_run_id", "artifact_id"),
+                    ),
+                    "team_run_events": (("id",), ("team_run_id", "run_sequence")),
                 }
             )
         return contract
@@ -2079,6 +2339,56 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 9:
+            contract.update(
+                {
+                    "graph_workflow_runs": (
+                        ("workflow_definition_id", "workflow_definitions", "id", "NO ACTION"),
+                        ("team_run_id", "team_runs", "id", "NO ACTION"),
+                        ("legacy_workflow_run_id", "workflow_runs", "id", "NO ACTION"),
+                    ),
+                    "graph_run_leases": (
+                        ("graph_run_id", "graph_workflow_runs", "id", "NO ACTION"),
+                    ),
+                    "node_runs": (("workflow_run_id", "graph_workflow_runs", "id", "NO ACTION"),),
+                    "node_attempts": (("node_run_id", "node_runs", "id", "NO ACTION"),),
+                    "graph_run_events": (
+                        ("workflow_run_id", "graph_workflow_runs", "id", "NO ACTION"),
+                        ("node_run_id", "node_runs", "id", "NO ACTION"),
+                        ("attempt_id", "node_attempts", "id", "NO ACTION"),
+                    ),
+                    "team_runs": (
+                        ("team_definition_id", "team_definitions", "id", "NO ACTION"),
+                        ("workflow_run_id", "graph_workflow_runs", "id", "NO ACTION"),
+                    ),
+                    "team_roster": (
+                        ("team_run_id", "team_runs", "id", "NO ACTION"),
+                        ("agent_id", "agents", "id", "NO ACTION"),
+                        ("thread_id", "threads", "id", "NO ACTION"),
+                    ),
+                    "team_messages": (
+                        ("team_run_id", "team_runs", "id", "NO ACTION"),
+                        ("workflow_run_id", "graph_workflow_runs", "id", "NO ACTION"),
+                        ("sender_agent_id", "agents", "id", "NO ACTION"),
+                    ),
+                    "mailbox_deliveries": (
+                        ("message_id", "team_messages", "id", "NO ACTION"),
+                        ("team_run_id", "team_runs", "id", "NO ACTION"),
+                        ("recipient_agent_id", "agents", "id", "NO ACTION"),
+                    ),
+                    "team_tasks": (
+                        ("team_run_id", "team_runs", "id", "NO ACTION"),
+                        ("assignee_agent_id", "agents", "id", "NO ACTION"),
+                    ),
+                    "artifact_board_items": (
+                        ("team_run_id", "team_runs", "id", "NO ACTION"),
+                        ("artifact_id", "artifacts", "id", "NO ACTION"),
+                        ("published_by_agent_id", "agents", "id", "NO ACTION"),
+                        ("message_id", "team_messages", "id", "NO ACTION"),
+                    ),
+                    "team_run_events": (("team_run_id", "team_runs", "id", "NO ACTION"),),
+                }
+            )
         return contract
 
     @staticmethod
@@ -2200,6 +2510,45 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 9:
+            indexes.update(
+                {
+                    "idx_workflow_definitions_workflow_status_version": (
+                        "workflow_id",
+                        "status",
+                        "version",
+                    ),
+                    "idx_graph_workflow_runs_status_sequence": ("status", "sequence"),
+                    "idx_graph_run_leases_active": ("released_at", "expires_at"),
+                    "idx_node_runs_workflow_status_sequence": (
+                        "workflow_run_id",
+                        "status",
+                        "sequence",
+                    ),
+                    "idx_node_attempts_node_sequence": ("node_run_id", "sequence"),
+                    "idx_graph_run_events_run_sequence": ("workflow_run_id", "run_sequence"),
+                    "idx_team_definitions_team_status_version": (
+                        "team_id",
+                        "status",
+                        "version",
+                    ),
+                    "idx_team_runs_status_sequence": ("status", "sequence"),
+                    "idx_team_roster_agent": ("agent_id", "team_run_id"),
+                    "idx_team_messages_run_sequence": ("team_run_id", "sequence"),
+                    "idx_mailbox_recipient_status_sequence": (
+                        "recipient_agent_id",
+                        "status",
+                        "sequence",
+                    ),
+                    "idx_team_tasks_run_status_sequence": (
+                        "team_run_id",
+                        "status",
+                        "sequence",
+                    ),
+                    "idx_artifact_board_run_sequence": ("team_run_id", "sequence"),
+                    "idx_team_run_events_run_sequence": ("team_run_id", "run_sequence"),
+                }
+            )
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -2291,6 +2640,9 @@ class SQLiteStore:
 
     def _validate_v8_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=8)
+
+    def _validate_v9_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=9)
 
     def _validate_schema_contract(
         self,
@@ -5635,6 +5987,504 @@ class SQLiteStore:
             allow_thread_items_cross_agent=True,
         )
         self._create_phase1d_run_scope_guards(connection)
+
+    def _upgrade_v9(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE workflow_definitions (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                workflow_id TEXT NOT NULL CHECK (length(workflow_id) BETWEEN 1 AND 300),
+                version INTEGER NOT NULL CHECK (version >= 1),
+                status TEXT NOT NULL CHECK (status IN ('draft', 'published', 'deprecated')),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                body_hash TEXT NOT NULL CHECK (
+                    length(body_hash) = 64 AND body_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                created_at TEXT NOT NULL,
+                UNIQUE (workflow_id, version)
+            );
+
+            CREATE INDEX idx_workflow_definitions_workflow_status_version
+                ON workflow_definitions(workflow_id, status, version);
+
+            CREATE TABLE team_definitions (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                team_id TEXT NOT NULL CHECK (length(team_id) BETWEEN 1 AND 300),
+                version INTEGER NOT NULL CHECK (version >= 1),
+                status TEXT NOT NULL CHECK (status IN ('draft', 'published', 'deprecated')),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                body_hash TEXT NOT NULL CHECK (
+                    length(body_hash) = 64 AND body_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                created_at TEXT NOT NULL,
+                UNIQUE (team_id, version)
+            );
+
+            CREATE INDEX idx_team_definitions_team_status_version
+                ON team_definitions(team_id, status, version);
+
+            CREATE TABLE graph_workflow_runs (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                workflow_definition_id TEXT NOT NULL,
+                workflow_definition_version INTEGER NOT NULL CHECK (
+                    workflow_definition_version >= 1
+                ),
+                team_run_id TEXT,
+                legacy_workflow_run_id TEXT UNIQUE,
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'created', 'queued', 'running', 'waiting_input',
+                        'waiting_approval', 'interrupted',
+                        'manual_reconcile_required', 'completed', 'failed', 'cancelled'
+                    )
+                ),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY (workflow_definition_id) REFERENCES workflow_definitions(id),
+                FOREIGN KEY (team_run_id) REFERENCES team_runs(id),
+                FOREIGN KEY (legacy_workflow_run_id) REFERENCES workflow_runs(id)
+            );
+
+            CREATE INDEX idx_graph_workflow_runs_status_sequence
+                ON graph_workflow_runs(status, sequence);
+
+            CREATE TABLE graph_run_leases (
+                graph_run_id TEXT PRIMARY KEY,
+                lease_token TEXT UNIQUE NOT NULL,
+                owner_id TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK (generation >= 1),
+                cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1)),
+                acquired_at TEXT NOT NULL,
+                renewed_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                FOREIGN KEY (graph_run_id) REFERENCES graph_workflow_runs(id)
+            );
+
+            CREATE INDEX idx_graph_run_leases_active
+                ON graph_run_leases(released_at, expires_at);
+
+            CREATE TABLE node_runs (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                workflow_run_id TEXT NOT NULL,
+                node_id TEXT NOT NULL CHECK (length(node_id) BETWEEN 1 AND 300),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'pending', 'ready', 'running', 'waiting_approval',
+                        'waiting_input', 'waiting', 'retry_wait', 'succeeded', 'failed',
+                        'cancelled', 'skipped', 'manual_reconcile_required'
+                    )
+                ),
+                active_attempt_id TEXT,
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (workflow_run_id, node_id),
+                FOREIGN KEY (workflow_run_id) REFERENCES graph_workflow_runs(id)
+            );
+
+            CREATE INDEX idx_node_runs_workflow_status_sequence
+                ON node_runs(workflow_run_id, status, sequence);
+
+            CREATE TABLE node_attempts (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                node_run_id TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'created', 'running', 'waiting_approval', 'waiting_input',
+                        'succeeded', 'failed', 'cancelled', 'interrupted',
+                        'manual_reconcile_required'
+                    )
+                ),
+                side_effect_state TEXT NOT NULL CHECK (
+                    side_effect_state IN ('none', 'not_started', 'committed', 'outcome_unknown')
+                ),
+                idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 300),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE (node_run_id, attempt_number),
+                UNIQUE (node_run_id, idempotency_key),
+                FOREIGN KEY (node_run_id) REFERENCES node_runs(id)
+            );
+
+            CREATE INDEX idx_node_attempts_node_sequence
+                ON node_attempts(node_run_id, sequence);
+
+            CREATE TABLE graph_run_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                workflow_run_id TEXT NOT NULL,
+                node_run_id TEXT,
+                attempt_id TEXT,
+                run_sequence INTEGER NOT NULL CHECK (run_sequence >= 1),
+                schema_version TEXT NOT NULL CHECK (schema_version = 'phase23.v1'),
+                event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 200),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                UNIQUE (workflow_run_id, run_sequence),
+                FOREIGN KEY (workflow_run_id) REFERENCES graph_workflow_runs(id),
+                FOREIGN KEY (node_run_id) REFERENCES node_runs(id),
+                FOREIGN KEY (attempt_id) REFERENCES node_attempts(id)
+            );
+
+            CREATE INDEX idx_graph_run_events_run_sequence
+                ON graph_run_events(workflow_run_id, run_sequence);
+
+            CREATE TABLE team_runs (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                team_definition_id TEXT NOT NULL,
+                team_definition_version INTEGER NOT NULL CHECK (team_definition_version >= 1),
+                workflow_run_id TEXT,
+                status TEXT NOT NULL CHECK (
+                    status IN ('created', 'running', 'completed', 'failed', 'cancelled')
+                ),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY (team_definition_id) REFERENCES team_definitions(id),
+                FOREIGN KEY (workflow_run_id) REFERENCES graph_workflow_runs(id)
+            );
+
+            CREATE INDEX idx_team_runs_status_sequence
+                ON team_runs(status, sequence);
+
+            CREATE TABLE team_roster (
+                team_run_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                thread_id TEXT,
+                role TEXT NOT NULL CHECK (length(role) BETWEEN 1 AND 200),
+                status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'failed', 'left')),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                joined_at TEXT NOT NULL,
+                left_at TEXT,
+                PRIMARY KEY (team_run_id, agent_id),
+                FOREIGN KEY (team_run_id) REFERENCES team_runs(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id)
+            );
+
+            CREATE INDEX idx_team_roster_agent
+                ON team_roster(agent_id, team_run_id);
+
+            CREATE TABLE team_messages (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                team_run_id TEXT NOT NULL,
+                workflow_run_id TEXT,
+                sender_agent_id TEXT NOT NULL,
+                audience TEXT NOT NULL CHECK (audience IN ('direct', 'broadcast', 'audit_only')),
+                message_kind TEXT NOT NULL CHECK (
+                    message_kind IN (
+                        'task_assignment', 'finding', 'artifact_published', 'decision',
+                        'blocker', 'question', 'approval_requested', 'status_update', 'completion'
+                    )
+                ),
+                requires_ack INTEGER NOT NULL CHECK (requires_ack IN (0, 1)),
+                status TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'expired')),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                delivered_at TEXT,
+                expires_at TEXT,
+                FOREIGN KEY (team_run_id) REFERENCES team_runs(id),
+                FOREIGN KEY (workflow_run_id) REFERENCES graph_workflow_runs(id),
+                FOREIGN KEY (sender_agent_id) REFERENCES agents(id)
+            );
+
+            CREATE INDEX idx_team_messages_run_sequence
+                ON team_messages(team_run_id, sequence);
+
+            CREATE TABLE mailbox_deliveries (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                message_id TEXT NOT NULL,
+                team_run_id TEXT NOT NULL,
+                recipient_agent_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('pending', 'delivered', 'acknowledged', 'expired')
+                ),
+                ack_idempotency_key TEXT,
+                ack_body TEXT CHECK (ack_body IS NULL OR json_valid(ack_body)),
+                created_at TEXT NOT NULL,
+                delivered_at TEXT,
+                acknowledged_at TEXT,
+                UNIQUE (message_id, recipient_agent_id),
+                UNIQUE (recipient_agent_id, ack_idempotency_key),
+                FOREIGN KEY (message_id) REFERENCES team_messages(id),
+                FOREIGN KEY (team_run_id) REFERENCES team_runs(id),
+                FOREIGN KEY (recipient_agent_id) REFERENCES agents(id)
+            );
+
+            CREATE INDEX idx_mailbox_recipient_status_sequence
+                ON mailbox_deliveries(recipient_agent_id, status, sequence);
+
+            CREATE TABLE team_tasks (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                team_run_id TEXT NOT NULL,
+                assignee_agent_id TEXT,
+                status TEXT NOT NULL CHECK (
+                    status IN ('open', 'in_progress', 'blocked', 'completed', 'cancelled')
+                ),
+                version INTEGER NOT NULL CHECK (version >= 1),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                body_hash TEXT NOT NULL CHECK (
+                    length(body_hash) = 64 AND body_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (team_run_id) REFERENCES team_runs(id),
+                FOREIGN KEY (assignee_agent_id) REFERENCES agents(id)
+            );
+
+            CREATE INDEX idx_team_tasks_run_status_sequence
+                ON team_tasks(team_run_id, status, sequence);
+
+            CREATE TABLE artifact_board_items (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                team_run_id TEXT NOT NULL,
+                artifact_id TEXT NOT NULL,
+                published_by_agent_id TEXT,
+                message_id TEXT,
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                UNIQUE (team_run_id, artifact_id),
+                FOREIGN KEY (team_run_id) REFERENCES team_runs(id),
+                FOREIGN KEY (artifact_id) REFERENCES artifacts(id),
+                FOREIGN KEY (published_by_agent_id) REFERENCES agents(id),
+                FOREIGN KEY (message_id) REFERENCES team_messages(id)
+            );
+
+            CREATE INDEX idx_artifact_board_run_sequence
+                ON artifact_board_items(team_run_id, sequence);
+
+            CREATE TABLE team_run_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                team_run_id TEXT NOT NULL,
+                run_sequence INTEGER NOT NULL CHECK (run_sequence >= 1),
+                schema_version TEXT NOT NULL CHECK (schema_version = 'phase23.v1'),
+                event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 200),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                UNIQUE (team_run_id, run_sequence),
+                FOREIGN KEY (team_run_id) REFERENCES team_runs(id)
+            );
+
+            CREATE INDEX idx_team_run_events_run_sequence
+                ON team_run_events(team_run_id, run_sequence);
+
+            CREATE TRIGGER workflow_definitions_body_hash_guard
+            BEFORE INSERT ON workflow_definitions
+            WHEN NEW.body_hash != sha256_text(NEW.body)
+            BEGIN
+                SELECT RAISE(ABORT, 'Workflow Definition body hash mismatch');
+            END;
+
+            CREATE TRIGGER workflow_definitions_no_update
+            BEFORE UPDATE ON workflow_definitions
+            BEGIN
+                SELECT RAISE(ABORT, 'Workflow Definitions are immutable');
+            END;
+
+            CREATE TRIGGER workflow_definitions_no_delete
+            BEFORE DELETE ON workflow_definitions
+            BEGIN
+                SELECT RAISE(ABORT, 'Workflow Definitions are immutable');
+            END;
+
+            CREATE TRIGGER team_definitions_body_hash_guard
+            BEFORE INSERT ON team_definitions
+            WHEN NEW.body_hash != sha256_text(NEW.body)
+            BEGIN
+                SELECT RAISE(ABORT, 'Team Definition body hash mismatch');
+            END;
+
+            CREATE TRIGGER team_definitions_no_update
+            BEFORE UPDATE ON team_definitions
+            BEGIN
+                SELECT RAISE(ABORT, 'Team Definitions are immutable');
+            END;
+
+            CREATE TRIGGER team_definitions_no_delete
+            BEFORE DELETE ON team_definitions
+            BEGIN
+                SELECT RAISE(ABORT, 'Team Definitions are immutable');
+            END;
+
+            CREATE TRIGGER node_runs_active_attempt_guard
+            BEFORE UPDATE OF active_attempt_id ON node_runs
+            WHEN NEW.active_attempt_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM node_attempts
+                WHERE id = NEW.active_attempt_id AND node_run_id = NEW.id
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Active Node Attempt does not belong to Node Run');
+            END;
+
+            CREATE TRIGGER graph_run_events_no_update
+            BEFORE UPDATE ON graph_run_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Graph events are append-only');
+            END;
+
+            CREATE TRIGGER graph_run_events_no_delete
+            BEFORE DELETE ON graph_run_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Graph events are append-only');
+            END;
+
+            CREATE TRIGGER team_messages_no_update
+            BEFORE UPDATE ON team_messages
+            BEGIN
+                SELECT RAISE(ABORT, 'Team messages are immutable');
+            END;
+
+            CREATE TRIGGER team_messages_no_delete
+            BEFORE DELETE ON team_messages
+            BEGIN
+                SELECT RAISE(ABORT, 'Team messages are immutable');
+            END;
+
+            CREATE TRIGGER mailbox_delivery_scope_guard
+            BEFORE INSERT ON mailbox_deliveries
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM team_messages
+                    WHERE id = NEW.message_id AND team_run_id = NEW.team_run_id
+                )
+                OR NOT EXISTS (
+                    SELECT 1 FROM team_roster
+                    WHERE team_run_id = NEW.team_run_id
+                        AND agent_id = NEW.recipient_agent_id
+                        AND status = 'active'
+                )
+            BEGIN
+                SELECT RAISE(ABORT, 'Mailbox delivery scope is invalid');
+            END;
+
+            CREATE TRIGGER team_tasks_body_hash_insert_guard
+            BEFORE INSERT ON team_tasks
+            WHEN NEW.body_hash != sha256_text(NEW.body)
+            BEGIN
+                SELECT RAISE(ABORT, 'Team Task body hash mismatch');
+            END;
+
+            CREATE TRIGGER team_tasks_body_hash_update_guard
+            BEFORE UPDATE OF body, body_hash ON team_tasks
+            WHEN NEW.body_hash != sha256_text(NEW.body)
+            BEGIN
+                SELECT RAISE(ABORT, 'Team Task body hash mismatch');
+            END;
+
+            CREATE TRIGGER artifact_board_scope_guard
+            BEFORE INSERT ON artifact_board_items
+            WHEN NEW.message_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM team_messages
+                WHERE id = NEW.message_id AND team_run_id = NEW.team_run_id
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Artifact Board message scope is invalid');
+            END;
+
+            CREATE TRIGGER team_run_events_no_update
+            BEFORE UPDATE ON team_run_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Team events are append-only');
+            END;
+
+            CREATE TRIGGER team_run_events_no_delete
+            BEFORE DELETE ON team_run_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Team events are append-only');
+            END;
+            """,
+        )
+
+    def _downgrade_v9(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM workflow_definitions)
+                + (SELECT COUNT(*) FROM graph_workflow_runs)
+                + (SELECT COUNT(*) FROM graph_run_leases)
+                + (SELECT COUNT(*) FROM node_runs)
+                + (SELECT COUNT(*) FROM node_attempts)
+                + (SELECT COUNT(*) FROM graph_run_events)
+                + (SELECT COUNT(*) FROM team_definitions)
+                + (SELECT COUNT(*) FROM team_runs)
+                + (SELECT COUNT(*) FROM team_roster)
+                + (SELECT COUNT(*) FROM team_messages)
+                + (SELECT COUNT(*) FROM mailbox_deliveries)
+                + (SELECT COUNT(*) FROM team_tasks)
+                + (SELECT COUNT(*) FROM artifact_board_items)
+                + (SELECT COUNT(*) FROM team_run_events) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back Graph/Team tables while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER team_run_events_no_delete;
+            DROP TRIGGER team_run_events_no_update;
+            DROP TRIGGER artifact_board_scope_guard;
+            DROP TRIGGER team_tasks_body_hash_update_guard;
+            DROP TRIGGER team_tasks_body_hash_insert_guard;
+            DROP TRIGGER mailbox_delivery_scope_guard;
+            DROP TRIGGER team_messages_no_delete;
+            DROP TRIGGER team_messages_no_update;
+            DROP TRIGGER graph_run_events_no_delete;
+            DROP TRIGGER graph_run_events_no_update;
+            DROP TRIGGER node_runs_active_attempt_guard;
+            DROP TRIGGER team_definitions_no_delete;
+            DROP TRIGGER team_definitions_no_update;
+            DROP TRIGGER team_definitions_body_hash_guard;
+            DROP TRIGGER workflow_definitions_no_delete;
+            DROP TRIGGER workflow_definitions_no_update;
+            DROP TRIGGER workflow_definitions_body_hash_guard;
+            DROP INDEX idx_team_run_events_run_sequence;
+            DROP TABLE team_run_events;
+            DROP INDEX idx_artifact_board_run_sequence;
+            DROP TABLE artifact_board_items;
+            DROP INDEX idx_team_tasks_run_status_sequence;
+            DROP TABLE team_tasks;
+            DROP INDEX idx_mailbox_recipient_status_sequence;
+            DROP TABLE mailbox_deliveries;
+            DROP INDEX idx_team_messages_run_sequence;
+            DROP TABLE team_messages;
+            DROP INDEX idx_team_roster_agent;
+            DROP TABLE team_roster;
+            DROP INDEX idx_team_runs_status_sequence;
+            DROP TABLE team_runs;
+            DROP INDEX idx_graph_run_events_run_sequence;
+            DROP TABLE graph_run_events;
+            DROP INDEX idx_node_attempts_node_sequence;
+            DROP TABLE node_attempts;
+            DROP INDEX idx_node_runs_workflow_status_sequence;
+            DROP TABLE node_runs;
+            DROP INDEX idx_graph_run_leases_active;
+            DROP TABLE graph_run_leases;
+            DROP INDEX idx_graph_workflow_runs_status_sequence;
+            DROP TABLE graph_workflow_runs;
+            DROP INDEX idx_team_definitions_team_status_version;
+            DROP TABLE team_definitions;
+            DROP INDEX idx_workflow_definitions_workflow_status_version;
+            DROP TABLE workflow_definitions;
+            """,
+        )
 
     def _downgrade_v8(self, connection: sqlite3.Connection) -> None:
         populated = connection.execute(

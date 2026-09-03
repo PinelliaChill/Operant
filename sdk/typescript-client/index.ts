@@ -30,3 +30,17 @@ export type {
   Phase1ETransport,
   RawSseFrame,
 } from './phase1e-transport';
+
+// Phase 2 Graph Runtime and Phase 3 local Team Runtime are additive. Phase 1E
+// remains available unchanged for existing live clients.
+export {
+  Phase23Client,
+  ProtocolNegotiationError as Phase23ProtocolNegotiationError,
+} from './phase23.generated';
+export * as Phase23 from './phase23.generated';
+export type {
+  Phase23Body,
+  Phase23Request,
+  Phase23Response,
+  Phase23Transport,
+} from './phase23-transport';

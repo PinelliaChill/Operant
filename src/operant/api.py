@@ -26,6 +26,7 @@ from starlette.background import BackgroundTask
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from operant.api_phase23 import install_phase23_routes
 from operant.application.client_projection import (
     ProjectProjectionCursorError,
     ProjectProjectionError,
@@ -35,6 +36,7 @@ from operant.application.evaluation import EvaluationRunner
 from operant.application.protocol_metadata import (
     ProtocolSchemaUnavailable,
     phase1e_protocol_metadata,
+    phase23_protocol_metadata,
 )
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
@@ -798,6 +800,11 @@ def _is_sse_replay_route(method: str, path: str) -> bool:
         return True
     if method == "GET" and path.startswith("/v1/sidecars/btw/") and path.endswith("/events/stream"):
         return True
+    if method == "GET" and (
+        (path.startswith("/v1/graph/runs/") and path.endswith("/events/stream"))
+        or (path.startswith("/v1/teams/runs/") and path.endswith("/events/stream"))
+    ):
+        return True
     if (
         method == "GET"
         and path.startswith("/v1/command-executions/")
@@ -822,6 +829,10 @@ def _is_event_cursor_query_route(method: str, path: str) -> bool:
         or (path == "/v1/threads")
         or (path in {"/v1/artifacts", "/v1/cache-observations"})
         or (path.startswith("/v1/threads/") and path.endswith("/items/stream"))
+        or (
+            path.startswith("/v1/teams/runs/")
+            and (path.endswith("/messages") or "/mailbox/" in path)
+        )
         or (
             path.startswith("/v1/sidecars/btw/")
             and (path.endswith("/events") or path.endswith("/events/stream"))
@@ -1707,6 +1718,21 @@ def create_app(
                 content=error_payload(
                     code="protocol_schema_unavailable",
                     message="generated protocol Schema digest is unavailable",
+                    recovery=RecoveryAction.RETRY_LATER,
+                    retryable=True,
+                ),
+            )
+
+    @app.get("/v1/protocol/phase23", response_model=None)
+    async def get_phase23_protocol() -> dict[str, Any] | JSONResponse:
+        try:
+            return phase23_protocol_metadata()
+        except ProtocolSchemaUnavailable:
+            return JSONResponse(
+                status_code=503,
+                content=error_payload(
+                    code="protocol_schema_unavailable",
+                    message="generated Phase 2/3 protocol Schema digest is unavailable",
                     recovery=RecoveryAction.RETRY_LATER,
                     retryable=True,
                 ),
@@ -3391,6 +3417,8 @@ def create_app(
         except (PermissionError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return memory.model_dump(mode="json")
+
+    install_phase23_routes(app, store)
 
     # Added last so this pure ASGI guard wraps the BaseHTTP command middleware:
     # oversized chunked bodies fail before request.body() can buffer them.

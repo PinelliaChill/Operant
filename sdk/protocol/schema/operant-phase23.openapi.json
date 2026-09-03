@@ -1,0 +1,256 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Operant Phase 2 Graph and Phase 3 Team Protocol",
+    "version": "phase23.v1"
+  },
+  "paths": {
+    "/v1/protocol/phase23": {
+      "get": {
+        "operationId": "negotiateProtocol",
+        "responses": {"200": {"description": "Protocol metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProtocolNegotiation"}}}}}
+      }
+    },
+    "/v1/graph/workflows/drafts": {
+      "post": {
+        "operationId": "createWorkflowDraft",
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateWorkflowDraftRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/graph/workflows/{workflow_id}/compile": {
+      "post": {
+        "operationId": "compileWorkflowDraft",
+        "parameters": [{"$ref": "#/components/parameters/WorkflowId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CompileWorkflowRequest"}}}},
+        "responses": {"200": {"description": "Compiler diagnostics", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowCompileResult"}}}}}
+      }
+    },
+    "/v1/graph/workflows/{workflow_id}/publish": {
+      "post": {
+        "operationId": "publishWorkflow",
+        "parameters": [{"$ref": "#/components/parameters/WorkflowId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PublishWorkflowRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/graph/workflows/{workflow_id}/definitions/{version}": {
+      "get": {
+        "operationId": "getWorkflowDefinition",
+        "parameters": [{"$ref": "#/components/parameters/WorkflowId"}, {"$ref": "#/components/parameters/DefinitionVersion"}],
+        "responses": {"200": {"description": "Published immutable definition", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowDefinition"}}}}}
+      }
+    },
+    "/v1/graph/runs": {
+      "post": {
+        "operationId": "startGraphRun",
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StartGraphRunRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/graph/runs/{run_id}": {
+      "get": {
+        "operationId": "getGraphRun",
+        "parameters": [{"$ref": "#/components/parameters/RunId"}],
+        "responses": {"200": {"description": "Persisted Graph Run projection", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GraphWorkflowRun"}}}}}
+      }
+    },
+    "/v1/graph/runs/by-legacy/{legacy_workflow_run_id}": {
+      "get": {
+        "operationId": "getGraphRunByLegacyWorkflow",
+        "parameters": [{"$ref": "#/components/parameters/LegacyWorkflowRunId"}],
+        "responses": {"200": {"description": "Graph Run linked to a frozen Coding Workflow Run", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GraphWorkflowRun"}}}}}
+      }
+    },
+    "/v1/graph/runs/{run_id}/nodes": {
+      "get": {
+        "operationId": "listNodeRuns",
+        "parameters": [{"$ref": "#/components/parameters/RunId"}],
+        "responses": {"200": {"description": "Persisted Node Run projections", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/NodeRun"}}}}}}
+      }
+    },
+    "/v1/graph/runs/{run_id}/events/stream": {
+      "get": {
+        "operationId": "streamGraphRunEvents",
+        "x-sse": {"resource_scope": "graph_run:{run_id}", "stream_kind": "graph.run"},
+        "parameters": [{"$ref": "#/components/parameters/RunId"}, {"$ref": "#/components/parameters/LastEventId"}],
+        "responses": {"200": {"description": "Cursor-scoped Graph events", "content": {"text/event-stream": {"schema": {"$ref": "#/components/schemas/GraphEvent"}}}}}
+      }
+    },
+    "/v1/graph/runs/{run_id}/resume": {
+      "post": {
+        "operationId": "resumeGraphRun",
+        "parameters": [{"$ref": "#/components/parameters/RunId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResumeGraphRunRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/graph/runs/{run_id}/cancel": {
+      "post": {
+        "operationId": "cancelGraphRun",
+        "parameters": [{"$ref": "#/components/parameters/RunId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/graph/runs/{run_id}/nodes/{node_id}/input": {
+      "post": {
+        "operationId": "provideNodeInput",
+        "parameters": [{"$ref": "#/components/parameters/RunId"}, {"$ref": "#/components/parameters/NodeId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NodeInputRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/teams/definitions": {
+      "post": {
+        "operationId": "createTeamDefinition",
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateTeamDefinitionRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/teams/runs": {
+      "post": {
+        "operationId": "startTeamRun",
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StartTeamRunRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/teams/runs/{team_run_id}": {
+      "get": {
+        "operationId": "getTeamRun",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}],
+        "responses": {"200": {"description": "Persisted Team Run projection", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TeamRunProjection"}}}}}
+      }
+    },
+    "/v1/teams/runs/{team_run_id}/messages": {
+      "post": {
+        "operationId": "sendTeamMessage",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SendTeamMessageRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      },
+      "get": {
+        "operationId": "listTeamMessages",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}, {"$ref": "#/components/parameters/ViewerId"}, {"$ref": "#/components/parameters/AfterCursor"}, {"$ref": "#/components/parameters/Limit"}],
+        "responses": {"200": {"description": "Team timeline projection", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/TeamMessage"}}}}}}
+      }
+    },
+    "/v1/teams/runs/{team_run_id}/mailbox/{agent_id}": {
+      "get": {
+        "operationId": "getMailbox",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}, {"$ref": "#/components/parameters/AgentId"}, {"$ref": "#/components/parameters/AfterCursor"}, {"$ref": "#/components/parameters/Limit"}],
+        "responses": {"200": {"description": "Recipient-scoped mailbox", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MailboxProjection"}}}}}
+      }
+    },
+    "/v1/teams/runs/{team_run_id}/mailbox/{agent_id}/{delivery_id}/ack": {
+      "post": {
+        "operationId": "acknowledgeMailboxDelivery",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}, {"$ref": "#/components/parameters/AgentId"}, {"$ref": "#/components/parameters/DeliveryId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "responses": {"202": {"description": "Durable idempotent Ack receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/teams/runs/{team_run_id}/tasks": {
+      "get": {
+        "operationId": "getTaskBoard",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}],
+        "responses": {"200": {"description": "Persisted Task Board", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskBoardProjection"}}}}}
+      }
+    },
+    "/v1/teams/runs/{team_run_id}/tasks/{task_id}": {
+      "post": {
+        "operationId": "updateTeamTask",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}, {"$ref": "#/components/parameters/TaskId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateTeamTaskRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/teams/runs/{team_run_id}/artifacts": {
+      "get": {
+        "operationId": "getArtifactBoard",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}, {"$ref": "#/components/parameters/ViewerId"}],
+        "responses": {"200": {"description": "Persisted Artifact Board", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArtifactBoardProjection"}}}}}
+      },
+      "post": {
+        "operationId": "publishArtifactBoardItem",
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}, {"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PublishArtifactBoardItemRequest"}}}},
+        "responses": {"202": {"description": "Durable command receipt", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandReceipt"}}}}}
+      }
+    },
+    "/v1/teams/runs/{team_run_id}/events/stream": {
+      "get": {
+        "operationId": "streamTeamRunEvents",
+        "x-sse": {"resource_scope": "team_run:{team_run_id}", "stream_kind": "team.run"},
+        "parameters": [{"$ref": "#/components/parameters/TeamRunId"}, {"$ref": "#/components/parameters/LastEventId"}],
+        "responses": {"200": {"description": "Cursor-scoped Team events", "content": {"text/event-stream": {"schema": {"$ref": "#/components/schemas/TeamEvent"}}}}}
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "IdempotencyKey": {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}},
+      "LastEventId": {"name": "Last-Event-ID", "in": "header", "required": false, "schema": {"$ref": "#/components/schemas/Cursor"}},
+      "AfterCursor": {"name": "after_cursor", "in": "query", "required": false, "schema": {"$ref": "#/components/schemas/Cursor"}},
+      "Limit": {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}},
+      "WorkflowId": {"name": "workflow_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}},
+      "DefinitionVersion": {"name": "version", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1}},
+      "RunId": {"name": "run_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}},
+      "LegacyWorkflowRunId": {"name": "legacy_workflow_run_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}},
+      "NodeId": {"name": "node_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}},
+      "TeamRunId": {"name": "team_run_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}},
+      "AgentId": {"name": "agent_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}},
+      "DeliveryId": {"name": "delivery_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}},
+      "TaskId": {"name": "task_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}}
+      ,"ViewerId": {"name": "viewer_id", "in": "query", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}}
+    },
+    "schemas": {
+      "Cursor": {"type": "integer", "format": "int64", "minimum": 0, "maximum": 9223372036854775807},
+      "ProtocolNegotiation": {"type": "object", "additionalProperties": false, "required": ["protocol_version", "schema_digest", "min_client_version", "capabilities"], "properties": {"protocol_version": {"const": "phase23.v1"}, "schema_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "min_client_version": {"const": "phase23.v1"}, "capabilities": {"type": "array", "items": {"type": "string"}}}},
+      "ReceiptResource": {"type": "object", "additionalProperties": false, "required": ["type", "id"], "properties": {"type": {"type": "string"}, "id": {"type": "string"}}},
+      "CommandReceipt": {"type": "object", "additionalProperties": false, "required": ["command_kind", "accepted", "command_id"], "properties": {"command_kind": {"type": "string", "enum": ["command", "stream"]}, "accepted": {"type": "boolean"}, "command_id": {"type": "string"}, "resource_type": {"type": ["string", "null"]}, "resource_id": {"type": ["string", "null"]}, "resource": {"oneOf": [{"$ref": "#/components/schemas/ReceiptResource"}, {"type": "null"}]}, "recovery": {"type": "string", "enum": ["none", "replay_events", "not_available", "manual_reconcile"]}}},
+      "SseFrame": {"type": "object", "additionalProperties": false, "required": ["id", "event", "data"], "properties": {"id": {"anyOf": [{"$ref": "#/components/schemas/Cursor"}, {"type": "null"}]}, "event": {"type": "string", "minLength": 1}, "data": {}, "resource_scope": {"type": "string", "minLength": 1}, "stream_kind": {"type": "string", "minLength": 1}}},
+      "Budget": {"type": "object", "additionalProperties": false, "properties": {"max_turns": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12}, "max_consecutive_test_failures": {"type": "integer", "minimum": 2, "maximum": 10, "default": 2}, "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300}, "max_output_tokens": {"type": ["integer", "null"], "minimum": 1}, "max_cost_usd": {"type": ["number", "null"], "exclusiveMinimum": 0}, "max_tool_calls": {"type": ["integer", "null"], "minimum": 0}}},
+      "PortSpec": {"type": "object", "additionalProperties": false, "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 100}, "value_type": {"type": "string", "default": "any"}, "required": {"type": "boolean", "default": true}}},
+      "RetryPolicy": {"type": "object", "additionalProperties": false, "properties": {"max_attempts": {"type": "integer", "minimum": 1, "maximum": 20, "default": 1}, "delay_seconds": {"type": "number", "minimum": 0, "maximum": 86400, "default": 0}}},
+      "TimeoutPolicy": {"type": "object", "additionalProperties": false, "properties": {"timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 300}, "on_timeout_node_id": {"type": ["string", "null"]}}},
+      "LoopPolicy": {"type": "object", "additionalProperties": false, "required": ["max_iterations", "max_wall_seconds", "max_output_tokens", "max_cost_usd", "max_subagents", "max_recursion_depth", "exit_expression", "on_limit_node_id"], "properties": {"max_iterations": {"type": "integer", "minimum": 1, "maximum": 1000}, "max_wall_seconds": {"type": "integer", "minimum": 1, "maximum": 86400}, "max_output_tokens": {"type": "integer", "minimum": 1}, "max_cost_usd": {"type": "number", "exclusiveMinimum": 0}, "max_subagents": {"type": "integer", "minimum": 0, "maximum": 100}, "max_recursion_depth": {"type": "integer", "minimum": 1, "maximum": 32}, "max_no_progress_repeats": {"type": "integer", "minimum": 1, "maximum": 20, "default": 2}, "exit_expression": {"type": "string"}, "on_limit_node_id": {"type": "string"}, "on_manual_reconcile_node_id": {"type": ["string", "null"]}}},
+      "GraphLimits": {"type": "object", "additionalProperties": false, "properties": {"max_nodes": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 256}, "max_edges": {"type": "integer", "minimum": 0, "maximum": 50000, "default": 1024}, "max_parallel_nodes": {"type": "integer", "minimum": 1, "maximum": 256, "default": 8}, "max_subagents": {"type": "integer", "minimum": 0, "maximum": 256, "default": 8}, "max_recursion_depth": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4}}},
+      "NodeSpec": {"type": "object", "additionalProperties": false, "required": ["node_id", "node_kind"], "properties": {"node_id": {"type": "string", "minLength": 1, "maxLength": 200}, "node_kind": {"type": "string", "enum": ["agent", "tool", "script", "condition", "fan_out", "join", "loop", "human_input", "approval", "wait", "timer", "subworkflow", "artifact"]}, "input_ports": {"type": "array", "items": {"$ref": "#/components/schemas/PortSpec"}}, "output_ports": {"type": "array", "items": {"$ref": "#/components/schemas/PortSpec"}}, "agent_or_action_ref": {"type": ["string", "null"]}, "model_override": {"type": ["string", "null"]}, "context_policy": {"type": "object", "additionalProperties": true}, "capability_requirements": {"type": "array", "items": {"type": "string"}}, "retry_policy": {"$ref": "#/components/schemas/RetryPolicy"}, "timeout_policy": {"oneOf": [{"$ref": "#/components/schemas/TimeoutPolicy"}, {"type": "null"}]}, "budget": {"oneOf": [{"$ref": "#/components/schemas/Budget"}, {"type": "null"}]}, "idempotency_class": {"type": "string", "enum": ["pure", "idempotent", "non_idempotent"], "default": "pure"}, "workspace_or_target": {"type": ["string", "null"]}, "failure_policy": {"type": "string", "enum": ["fail_workflow", "skip", "manual_reconcile"], "default": "fail_workflow"}, "writes_workspace": {"type": "boolean", "default": false}, "loop_policy": {"oneOf": [{"$ref": "#/components/schemas/LoopPolicy"}, {"type": "null"}]}, "subworkflow_id": {"type": ["string", "null"]}, "subworkflow_version": {"type": ["integer", "null"], "minimum": 1}, "metadata": {"type": "object", "additionalProperties": true}}},
+      "EdgeSpec": {"type": "object", "additionalProperties": false, "required": ["edge_id", "source_node", "source_port", "target_node", "target_port"], "properties": {"edge_id": {"type": "string", "minLength": 1, "maxLength": 200}, "source_node": {"type": "string"}, "source_port": {"type": "string"}, "target_node": {"type": "string"}, "target_port": {"type": "string"}, "condition": {"type": ["string", "null"]}, "join_mode": {"type": "string", "enum": ["all", "any"], "default": "all"}, "delivery_mode": {"type": "string", "enum": ["value", "reference"], "default": "reference"}, "loop_back": {"type": "boolean", "default": false}}},
+      "CreateWorkflowDraftRequest": {"type": "object", "additionalProperties": false, "required": ["name", "nodes"], "properties": {"workflow_id": {"type": "string"}, "version": {"type": "integer", "minimum": 1, "default": 1}, "name": {"type": "string", "minLength": 1, "maxLength": 200}, "description": {"type": "string"}, "input_schema": {"type": "object", "additionalProperties": true}, "output_schema": {"type": "object", "additionalProperties": true}, "nodes": {"type": "array", "items": {"$ref": "#/components/schemas/NodeSpec"}}, "edges": {"type": "array", "items": {"$ref": "#/components/schemas/EdgeSpec"}}, "graph_limits": {"$ref": "#/components/schemas/GraphLimits"}, "default_budget": {"$ref": "#/components/schemas/Budget"}, "default_policy": {"type": "object", "additionalProperties": true}, "required_plugins": {"type": "array", "items": {"type": "string"}}, "required_capabilities": {"type": "array", "items": {"type": "string"}}, "locked_role_versions": {"type": "object", "additionalProperties": {"type": "integer"}}, "locked_provider_versions": {"type": "object", "additionalProperties": {"type": "string"}}, "status": {"type": "string", "enum": ["draft", "published", "deprecated"], "default": "draft"}, "created_at": {"type": "string", "format": "date-time"}}},
+      "CompileWorkflowRequest": {"type": "object", "additionalProperties": false, "required": ["definition_version"], "properties": {"definition_version": {"type": "integer", "minimum": 1}}},
+      "PublishWorkflowRequest": {"type": "object", "additionalProperties": false, "required": ["draft_version"], "properties": {"draft_version": {"type": "integer", "minimum": 1}}},
+      "CompileDiagnostic": {"type": "object", "additionalProperties": false, "required": ["severity", "code", "message"], "properties": {"severity": {"type": "string", "enum": ["error", "warning"]}, "code": {"type": "string"}, "message": {"type": "string"}, "node_id": {"type": ["string", "null"]}, "edge_id": {"type": ["string", "null"]}}},
+      "WorkflowCompileResult": {"type": "object", "additionalProperties": false, "required": ["workflow_id", "definition_version", "valid", "diagnostics", "definition_hash"], "properties": {"workflow_id": {"type": "string"}, "definition_version": {"type": "integer"}, "valid": {"type": "boolean"}, "diagnostics": {"type": "array", "items": {"$ref": "#/components/schemas/CompileDiagnostic"}}, "definition_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+      "WorkflowDefinition": {"type": "object", "additionalProperties": false, "required": ["workflow_id", "version", "name", "nodes", "status", "created_at"], "properties": {"workflow_id": {"type": "string"}, "version": {"type": "integer"}, "name": {"type": "string"}, "description": {"type": "string"}, "input_schema": {"type": "object", "additionalProperties": true}, "output_schema": {"type": "object", "additionalProperties": true}, "nodes": {"type": "array", "items": {"$ref": "#/components/schemas/NodeSpec"}}, "edges": {"type": "array", "items": {"$ref": "#/components/schemas/EdgeSpec"}}, "graph_limits": {"$ref": "#/components/schemas/GraphLimits"}, "default_budget": {"$ref": "#/components/schemas/Budget"}, "default_policy": {"type": "object", "additionalProperties": true}, "required_plugins": {"type": "array", "items": {"type": "string"}}, "required_capabilities": {"type": "array", "items": {"type": "string"}}, "locked_role_versions": {"type": "object", "additionalProperties": {"type": "integer"}}, "locked_provider_versions": {"type": "object", "additionalProperties": {"type": "string"}}, "status": {"type": "string", "enum": ["draft", "published", "deprecated"]}, "created_at": {"type": "string", "format": "date-time"}}},
+      "StartGraphRunRequest": {"type": "object", "additionalProperties": false, "required": ["workflow_id", "definition_version"], "properties": {"workflow_id": {"type": "string"}, "definition_version": {"type": "integer", "minimum": 1}, "input": {"type": "object", "additionalProperties": true}, "workspace_or_target": {"type": ["string", "null"]}}},
+      "ResumeGraphRunRequest": {"type": "object", "additionalProperties": false, "required": ["allow_unknown_side_effect_replay"], "properties": {"allow_unknown_side_effect_replay": {"const": false}}},
+      "NodeInputRequest": {"type": "object", "additionalProperties": false, "required": ["value"], "properties": {"value": {}, "approval_id": {"type": ["string", "null"]}}},
+      "GraphRunStatus": {"type": "string", "enum": ["created", "queued", "running", "waiting_input", "waiting_approval", "interrupted", "manual_reconcile_required", "completed", "failed", "cancelled"]},
+      "NodeRunStatus": {"type": "string", "enum": ["pending", "ready", "running", "waiting_approval", "waiting_input", "waiting", "retry_wait", "succeeded", "failed", "cancelled", "skipped", "manual_reconcile_required"]},
+      "GraphWorkflowRun": {"type": "object", "additionalProperties": false, "required": ["id", "workflow_definition_id", "workflow_definition_version", "status", "current_node_ids", "input", "budget_snapshot", "policy_snapshot", "output", "revision", "created_at", "updated_at"], "properties": {"id": {"type": "string"}, "workflow_definition_id": {"type": "string"}, "workflow_definition_version": {"type": "integer"}, "workspace_or_target": {"type": ["string", "null"]}, "team_run_id": {"type": ["string", "null"]}, "legacy_workflow_run_id": {"type": ["string", "null"]}, "status": {"$ref": "#/components/schemas/GraphRunStatus"}, "current_node_ids": {"type": "array", "items": {"type": "string"}}, "input": {"type": "object", "additionalProperties": true}, "budget_snapshot": {"$ref": "#/components/schemas/Budget"}, "policy_snapshot": {"type": "object", "additionalProperties": true}, "output": {"type": "object", "additionalProperties": true}, "consumed_output_tokens": {"type": "integer"}, "consumed_cost_usd": {"type": "number"}, "consumed_tool_calls": {"type": "integer"}, "revision": {"type": "integer"}, "started_at": {"type": ["string", "null"], "format": "date-time"}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}, "completed_at": {"type": ["string", "null"], "format": "date-time"}}},
+      "NodeAttempt": {"type": "object", "additionalProperties": false, "required": ["id", "node_run_id", "attempt_number", "started_at", "result", "result_payload", "side_effect_state"], "properties": {"id": {"type": "string"}, "node_run_id": {"type": "string"}, "attempt_number": {"type": "integer"}, "agent_instance_id": {"type": ["string", "null"]}, "started_at": {"type": "string", "format": "date-time"}, "completed_at": {"type": ["string", "null"], "format": "date-time"}, "result": {"type": "string", "enum": ["running", "succeeded", "failed", "cancelled", "interrupted"]}, "result_payload": {"type": "object", "additionalProperties": true}, "failure_class": {"type": ["string", "null"]}, "side_effect_state": {"type": "string", "enum": ["none", "not_started", "started", "committed", "unknown"]}, "idempotency_key": {"type": ["string", "null"]}}},
+      "NodeRun": {"type": "object", "additionalProperties": false, "required": ["id", "workflow_run_id", "node_id", "status", "input_refs", "output_refs", "retry_count", "iteration", "no_progress_repeats", "revision", "attempts", "created_at", "updated_at"], "properties": {"id": {"type": "string"}, "workflow_run_id": {"type": "string"}, "node_id": {"type": "string"}, "status": {"$ref": "#/components/schemas/NodeRunStatus"}, "input_refs": {"type": "object", "additionalProperties": true}, "output_refs": {"type": "object", "additionalProperties": true}, "active_attempt_id": {"type": ["string", "null"]}, "retry_count": {"type": "integer"}, "iteration": {"type": "integer"}, "no_progress_signature": {"type": ["string", "null"]}, "no_progress_repeats": {"type": "integer"}, "worker_id": {"type": ["string", "null"]}, "lease_id": {"type": ["string", "null"]}, "wait_token": {"type": ["string", "null"]}, "revision": {"type": "integer"}, "attempts": {"type": "array", "items": {"$ref": "#/components/schemas/NodeAttempt"}}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}},
+      "GraphEvent": {"type": "object", "additionalProperties": false, "required": ["event_id", "cursor", "run_sequence", "schema_version", "event_type", "resource_scope", "stream_kind", "payload", "occurred_at"], "properties": {"event_id": {"type": "string", "minLength": 1}, "cursor": {"$ref": "#/components/schemas/Cursor"}, "run_sequence": {"type": "integer", "minimum": 1}, "schema_version": {"const": "phase23.v1"}, "event_type": {"type": "string"}, "resource_scope": {"type": "string"}, "stream_kind": {"const": "graph.run"}, "node_run_id": {"type": ["string", "null"]}, "attempt_id": {"type": ["string", "null"]}, "payload": {"type": "object", "additionalProperties": true}, "occurred_at": {"type": "string", "format": "date-time"}}},
+      "TeamMemberSpec": {"type": "object", "additionalProperties": false, "required": ["member_id", "agent_definition_id", "role"], "properties": {"member_id": {"type": "string"}, "agent_definition_id": {"type": "string"}, "role": {"type": "string"}, "can_coordinate": {"type": "boolean", "default": false}}},
+      "CreateTeamDefinitionRequest": {"type": "object", "additionalProperties": false, "required": ["members", "default_coordinator"], "properties": {"team_id": {"type": "string"}, "version": {"type": "integer", "minimum": 1, "default": 1}, "members": {"type": "array", "items": {"$ref": "#/components/schemas/TeamMemberSpec"}, "maxItems": 64}, "default_coordinator": {"type": "string"}, "mailbox_policy": {"type": "object", "additionalProperties": true}, "task_board_policy": {"type": "object", "additionalProperties": true}, "artifact_visibility": {"type": "string", "default": "team"}, "message_visibility_policy": {"type": "string", "default": "owner_audit"}, "max_active_agents": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4}, "max_spawn_depth": {"type": "integer", "minimum": 0, "maximum": 16, "default": 1}}},
+      "TeamRosterMember": {"type": "object", "additionalProperties": false, "required": ["member_id", "agent_instance_id", "thread_id"], "properties": {"member_id": {"type": "string"}, "agent_instance_id": {"type": "string"}, "thread_id": {"type": "string"}, "status": {"type": "string", "enum": ["invited", "active", "idle", "completed", "failed", "cancelled"], "default": "active"}, "joined_at": {"type": ["string", "null"], "format": "date-time"}, "left_at": {"type": ["string", "null"], "format": "date-time"}}},
+      "StartTeamRunRequest": {"type": "object", "additionalProperties": false, "required": ["team_id", "team_version", "workflow_run_id", "roster"], "properties": {"team_id": {"type": "string"}, "team_version": {"type": "integer", "minimum": 1}, "workflow_run_id": {"type": "string"}, "roster": {"type": "array", "items": {"$ref": "#/components/schemas/TeamRosterMember"}, "minItems": 1, "maxItems": 64}}},
+      "TeamRunProjection": {"type": "object", "additionalProperties": false, "required": ["team_run_id", "team_id", "team_version", "workflow_run_id", "status", "roster", "created_at", "updated_at"], "properties": {"team_run_id": {"type": "string"}, "team_id": {"type": "string"}, "team_version": {"type": "integer"}, "workflow_run_id": {"type": "string"}, "status": {"type": "string", "enum": ["created", "active", "completed", "failed", "cancelled"]}, "roster": {"type": "array", "items": {"$ref": "#/components/schemas/TeamRosterMember"}}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}},
+      "SendTeamMessageRequest": {"type": "object", "additionalProperties": false, "required": ["sender_id", "recipient_ids", "message_kind"], "properties": {"sender_id": {"type": "string"}, "recipient_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 64}, "audience": {"type": "string", "enum": ["direct", "team"], "default": "direct"}, "message_kind": {"type": "string", "enum": ["TaskAssignment", "Finding", "ArtifactPublished", "Decision", "Blocker", "Question", "ApprovalRequested", "StatusUpdate", "Completion"]}, "payload": {"type": "object", "additionalProperties": true}, "artifact_refs": {"type": "array", "items": {"type": "string"}, "maxItems": 100}, "reply_to": {"type": ["string", "null"]}, "causation_id": {"type": ["string", "null"]}, "correlation_id": {"type": ["string", "null"]}, "requires_ack": {"type": "boolean", "default": true}}},
+      "TeamMessage": {"type": "object", "additionalProperties": false, "required": ["message_id", "workflow_run_id", "team_run_id", "sender_id", "recipient_ids", "audience", "message_kind", "schema_version", "payload", "artifact_refs", "delivery_mode", "ui_visibility", "model_delivery", "audit_visibility", "context_effect", "trust_level", "requires_ack", "status", "created_at"], "properties": {"message_id": {"type": "string"}, "cursor": {"$ref": "#/components/schemas/Cursor"}, "workflow_run_id": {"type": "string"}, "team_run_id": {"type": "string"}, "sender_id": {"type": "string"}, "recipient_ids": {"type": "array", "items": {"type": "string"}}, "audience": {"type": "string", "enum": ["direct", "team"]}, "message_kind": {"type": "string"}, "schema_version": {"type": "integer"}, "payload": {"type": "object", "additionalProperties": true}, "artifact_refs": {"type": "array", "items": {"type": "string"}}, "reply_to": {"type": ["string", "null"]}, "causation_id": {"type": ["string", "null"]}, "correlation_id": {"type": ["string", "null"]}, "delivery_mode": {"type": "string", "enum": ["durable", "best_effort"]}, "ui_visibility": {"type": "string", "enum": ["hidden", "recipients", "team", "owner_audit"]}, "model_delivery": {"type": "string", "enum": ["none", "next_turn"]}, "audit_visibility": {"type": "string", "enum": ["hidden", "recipients", "team", "owner_audit"]}, "context_effect": {"type": "string", "enum": ["none", "append_untrusted"]}, "trust_level": {"type": "string", "enum": ["untrusted", "system"]}, "requires_ack": {"type": "boolean"}, "ttl": {"type": ["integer", "null"], "minimum": 1}, "status": {"type": "string", "enum": ["pending", "delivered", "expired"]}, "created_at": {"type": "string", "format": "date-time"}, "delivered_at": {"type": ["string", "null"], "format": "date-time"}}},
+      "MailboxDelivery": {"type": "object", "additionalProperties": false, "required": ["delivery_id", "cursor", "message_id", "team_run_id", "recipient_id", "idempotency_key", "status", "message"], "properties": {"delivery_id": {"type": "string"}, "cursor": {"$ref": "#/components/schemas/Cursor"}, "message_id": {"type": "string"}, "team_run_id": {"type": "string"}, "recipient_id": {"type": "string"}, "idempotency_key": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "delivered", "acked", "expired"]}, "delivery_attempts": {"type": "integer"}, "delivered_at": {"type": ["string", "null"], "format": "date-time"}, "acked_at": {"type": ["string", "null"], "format": "date-time"}, "message": {"$ref": "#/components/schemas/TeamMessage"}}},
+      "MailboxProjection": {"type": "object", "additionalProperties": false, "required": ["team_run_id", "recipient_id", "deliveries"], "properties": {"team_run_id": {"type": "string"}, "recipient_id": {"type": "string"}, "deliveries": {"type": "array", "items": {"$ref": "#/components/schemas/MailboxDelivery"}}}},
+      "TeamTask": {"type": "object", "additionalProperties": false, "required": ["task_id", "team_run_id", "title", "summary", "assignee_ids", "status", "artifact_refs", "revision", "updated_at"], "properties": {"task_id": {"type": "string"}, "team_run_id": {"type": "string"}, "title": {"type": "string"}, "summary": {"type": "string"}, "assignee_ids": {"type": "array", "items": {"type": "string"}}, "status": {"type": "string", "enum": ["open", "in_progress", "blocked", "completed", "cancelled"]}, "artifact_refs": {"type": "array", "items": {"type": "string"}}, "source_message_id": {"type": ["string", "null"]}, "revision": {"type": "integer", "minimum": 1}, "updated_at": {"type": "string", "format": "date-time"}}},
+      "UpdateTeamTaskRequest": {"type": "object", "additionalProperties": false, "required": ["title", "expected_revision"], "properties": {"title": {"type": "string", "minLength": 1, "maxLength": 500}, "summary": {"type": "string", "maxLength": 4000}, "assignee_ids": {"type": "array", "items": {"type": "string"}}, "status": {"type": "string", "enum": ["open", "in_progress", "blocked", "completed", "cancelled"]}, "artifact_refs": {"type": "array", "items": {"type": "string"}}, "source_message_id": {"type": ["string", "null"]}, "expected_revision": {"type": "integer", "minimum": 0}}},
+      "TaskBoardProjection": {"type": "object", "additionalProperties": false, "required": ["team_run_id", "tasks"], "properties": {"team_run_id": {"type": "string"}, "tasks": {"type": "array", "items": {"$ref": "#/components/schemas/TeamTask"}}}},
+      "ArtifactBoardItem": {"type": "object", "additionalProperties": false, "required": ["artifact_id", "team_run_id", "title", "media_type", "publisher_id", "visibility", "recipient_ids", "revision", "published_at"], "properties": {"artifact_id": {"type": "string"}, "team_run_id": {"type": "string"}, "title": {"type": "string"}, "media_type": {"type": "string"}, "publisher_id": {"type": "string"}, "visibility": {"type": "string", "enum": ["hidden", "recipients", "team", "owner_audit"]}, "recipient_ids": {"type": "array", "items": {"type": "string"}}, "source_message_id": {"type": ["string", "null"]}, "revision": {"type": "integer"}, "published_at": {"type": "string", "format": "date-time"}}},
+      "PublishArtifactBoardItemRequest": {"type": "object", "additionalProperties": false, "required": ["artifact_id", "title", "publisher_id"], "properties": {"artifact_id": {"type": "string"}, "title": {"type": "string"}, "publisher_id": {"type": "string"}, "recipient_ids": {"type": "array", "items": {"type": "string"}}, "source_message_id": {"type": ["string", "null"]}, "expected_revision": {"type": "integer", "minimum": 0, "default": 0}}},
+      "ArtifactBoardProjection": {"type": "object", "additionalProperties": false, "required": ["team_run_id", "artifacts"], "properties": {"team_run_id": {"type": "string"}, "artifacts": {"type": "array", "items": {"$ref": "#/components/schemas/ArtifactBoardItem"}}}},
+      "TeamEvent": {"type": "object", "additionalProperties": false, "required": ["event_id", "cursor", "run_sequence", "schema_version", "event_type", "resource_scope", "stream_kind", "payload", "occurred_at"], "properties": {"event_id": {"type": "string", "minLength": 1}, "cursor": {"$ref": "#/components/schemas/Cursor"}, "run_sequence": {"type": "integer", "minimum": 1}, "schema_version": {"const": "phase23.v1"}, "event_type": {"type": "string"}, "resource_scope": {"type": "string"}, "stream_kind": {"const": "team.run"}, "payload": {"type": "object", "additionalProperties": true}, "occurred_at": {"type": "string", "format": "date-time"}}}
+    }
+  }
+}

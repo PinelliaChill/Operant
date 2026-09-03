@@ -34,11 +34,12 @@ import { removeNodeWithEdges } from './canvas/graph-utils';
 import { WorkflowOverview } from './WorkflowOverview';
 import { MonitorPanel } from './MonitorPanel';
 import { GRAPH_DRAFTS_CHANGED_EVENT } from './CollabSidebar';
+import { LiveGraphTeamView } from './LiveGraphTeamView';
 
 type CollabTab = 'home' | 'canvas' | 'runs';
 
 export const CollabView: React.FC = () => {
-  const { client, activeWorkspace, addNotification } = useOperant();
+  const { client, clientMode, activeWorkspace, addNotification } = useOperant();
   const { canPublishTemplate, getWorkflowDirectory } = useDemo();
   const { showSidebarOpenBtn, openSidebar, isMobile, setCollabStatus } =
     useOutletContext<RailOutletContext>();
@@ -305,17 +306,21 @@ export const CollabView: React.FC = () => {
             aria-pressed={activeTab === 'runs'}
             onClick={() => setTab('runs')}
           >
-            运行进度（{runs.length}）
+            运行进度{clientMode === 'mock' ? `（${runs.length}）` : ''}
           </button>
         </div>
       </header>
 
       <div className="collab-main">
         <div className="collab-tab-body">
-          {activeTab === 'home' && <WorkflowOverview />}
-
-          {activeTab === 'canvas' && (
+          {clientMode === 'live' ? (
+            <LiveGraphTeamView activeTab={activeTab} />
+          ) : (
             <>
+              {activeTab === 'home' && <WorkflowOverview />}
+
+              {activeTab === 'canvas' && (
+                <>
               {/* 工具行：草稿名（可改名）| 删除 | 校验 | 发布版本 | 保存草稿 */}
               <div className="collab-toolbar">
                 <input
@@ -385,15 +390,17 @@ export const CollabView: React.FC = () => {
                 onChangeNodes={setNodes}
                 onChangeEdges={setEdges}
               />
+                </>
+              )}
+
+              {activeTab === 'runs' && <MonitorPanel runs={runs} />}
             </>
           )}
-
-          {activeTab === 'runs' && <MonitorPanel runs={runs} />}
         </div>
       </div>
 
       {/* 发布版本 Modal（复用原 WorkflowView 逻辑与文案） */}
-      <Modal
+      {clientMode === 'mock' && <Modal
         isOpen={publishModalOpen}
         onClose={() => setPublishModalOpen(false)}
         title="发布工作流定义"
@@ -434,7 +441,7 @@ export const CollabView: React.FC = () => {
             />
           </div>
         </div>
-      </Modal>
+      </Modal>}
     </div>
   );
 };
