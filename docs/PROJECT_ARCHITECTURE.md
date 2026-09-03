@@ -1740,6 +1740,17 @@ Run/SSE、Team 定向 Mailbox 与 Ack、Run/viewer scope 切换即时清空、�
 首焦点、reduced motion 以及 Core 断线显式失败且不回退 Mock。该证据不包含外部真实模型或 Docker E2E；
 条件性 Docker skip 不视为容器验收，Vite 814.79 kB 主 chunk 提示保留为性能债务。
 
+同日按正式门禁先在项目根目录执行 `uv run operant model discover`，再使用发现结果中的精确模型 ID
+`gpt-5.6-luna`，通过正式 ModelProfile 完成一次只读 Session 调用和一次 Coding Workflow 调用。Session
+返回 `REAL_MODEL_OK`，用量为 537 tokens；Workflow 的 Planner、Explorer、Coder、Reviewer、Main 共
+完成 5 次模型调用，Reviewer 给出 `APPROVED`，总用量为 4,772 tokens，模型请求耗时合计 33.732 秒，
+没有 Tool Call 或 workspace 写入。该 Workflow 的持久 Graph 投影为 `completed`：10 个 NodeRun、7 个
+成功 Attempt、27 个连续 `phase23.v1` Graph Event 均可从隔离 SQLite 重新读取。运行时凭据仅注入目标
+进程，没有复制到隔离 worktree、运行日志、文档或 SQLite；但前置 `.env` 规范化时工具错误曾在本地
+操作输出中回显现有 API Key，因此该 Key 必须轮换。该受控 smoke 证明当前 Provider、Session、Coding
+Workflow 与 Graph bridge 的真实模型链路可用；它不等于真实模型执行工具/写入、真实模型加 Docker
+Coder、GUI 外部模型端到端或 Exp 19—24 验收，Team 本身也没有独立模型调用入口。
+
 2026-09-02 的 Phase 1E 验收使用隔离 SQLite/Workspace、确定性 Provider、实际 localhost Uvicorn、
 生成 Python Client 和真实浏览器；完整 pytest 为 402 通过、1 个条件性 Docker 测试跳过、1 个既有
 Starlette 警告，GUI 为 29 项测试通过，独立 TypeScript SDK parser 为 2 项通过；Ruff format/check、
@@ -1941,6 +1952,10 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 - 独立 `gpt-5.6-sol` medium Reviewer 连续三轮检查边缘情况、并发、回滚、恢复、性能与协议一致性；前两轮
   的 P1/P2 已全部返工，第三轮复跑最小复现、100 个后端聚焦测试和 44 个 GUI 测试后给出
   `VERDICT: APPROVED`，未发现 P0/P1/P2；
+- 先执行 `uv run operant model discover`，再以发现的精确模型 `gpt-5.6-luna` 通过正式 ModelProfile
+  完成只读 Session 与五阶段 Coding Workflow 真实调用；Reviewer 为 `APPROVED`，持久 Graph 投影包含
+  10 个 NodeRun、7 个成功 Attempt 和 27 个连续 `phase23.v1` Event。该 smoke 不含工具执行、workspace
+  写入、Docker Coder、GUI 外部模型端到端或 Exp 19—24；
 
 ### 2026-09-02
 
