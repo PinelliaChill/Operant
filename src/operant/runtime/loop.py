@@ -344,9 +344,21 @@ class AgentLoop:
                     else:
                         if claim is not None:
                             assert action_gateway is not None
+                            approval_requirement = getattr(
+                                action_gateway, "approval_requirement", None
+                            )
+                            if approval_requirement is not None:
+                                requirement = approval_requirement(claim)
+                                if requirement is not None:
+                                    raise ApprovalRequired(*requirement)
                             verify_execution = getattr(action_gateway, "verify_execution", None)
                             if verify_execution is not None:
                                 verify_execution()
+                            authorize_tool_action = getattr(
+                                action_gateway, "authorize_tool_action", None
+                            )
+                            if authorize_tool_action is not None:
+                                authorize_tool_action(claim)
                         result = self._safe_tool_result(
                             await self.tools.execute(call.name, arguments)
                         )
@@ -405,6 +417,11 @@ class AgentLoop:
                                 verify_execution = getattr(action_gateway, "verify_execution", None)
                                 if verify_execution is not None:
                                     verify_execution()
+                                authorize_tool_action = getattr(
+                                    action_gateway, "authorize_tool_action", None
+                                )
+                                if authorize_tool_action is not None:
+                                    authorize_tool_action(claim)
                             result = self._safe_tool_result(
                                 await self.tools.execute(
                                     call.name,

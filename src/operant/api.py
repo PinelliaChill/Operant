@@ -27,6 +27,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from operant.api_phase23 import install_phase23_routes
+from operant.api_phase45 import install_phase45_routes
 from operant.application.client_projection import (
     ProjectProjectionCursorError,
     ProjectProjectionError,
@@ -37,6 +38,7 @@ from operant.application.protocol_metadata import (
     ProtocolSchemaUnavailable,
     phase1e_protocol_metadata,
     phase23_protocol_metadata,
+    phase45_protocol_metadata,
 )
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
@@ -1738,6 +1740,17 @@ def create_app(
                 ),
             )
 
+    @app.get("/v1/protocol/phase45", response_model=None, operation_id="negotiatePhase45")
+    async def get_phase45_protocol() -> dict[str, Any] | Response:
+        try:
+            return phase45_protocol_metadata()
+        except ProtocolSchemaUnavailable:
+            return protocol_response(
+                status_code=503,
+                code="protocol_schema_unavailable",
+                message="generated Phase 4/5A protocol schema is unavailable",
+            )
+
     @app.get("/v1/projects", response_model=None)
     async def list_projects(
         after_cursor: int | None = Query(default=None, ge=0, le=MAX_EVENT_CURSOR),
@@ -3419,6 +3432,7 @@ def create_app(
         return memory.model_dump(mode="json")
 
     install_phase23_routes(app, store)
+    install_phase45_routes(app, store)
 
     # Added last so this pure ASGI guard wraps the BaseHTTP command middleware:
     # oversized chunked bodies fail before request.body() can buffer them.

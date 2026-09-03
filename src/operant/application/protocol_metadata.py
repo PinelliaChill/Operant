@@ -29,6 +29,15 @@ PHASE23_CAPABILITIES: tuple[str, ...] = (
     "team_task_board",
     "team_artifact_board",
 )
+PHASE45_PROTOCOL_VERSION = "phase45.v1"
+PHASE45_MIN_CLIENT_VERSION = "phase45.v1"
+PHASE45_CAPABILITIES: tuple[str, ...] = (
+    "action_normalization",
+    "layered_policy",
+    "capability_lease",
+    "security_audit",
+    "policy_remediation",
+)
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -71,6 +80,18 @@ def phase23_protocol_metadata() -> dict[str, Any]:
         min_client_version=PHASE23_MIN_CLIENT_VERSION,
         capabilities=PHASE23_CAPABILITIES,
         label="Phase 2/3",
+    )
+
+
+def phase45_protocol_metadata() -> dict[str, Any]:
+    """Return additive Phase 4/5A negotiation metadata."""
+
+    return _protocol_metadata(
+        digest_path=_phase45_digest_path(),
+        protocol_version=PHASE45_PROTOCOL_VERSION,
+        min_client_version=PHASE45_MIN_CLIENT_VERSION,
+        capabilities=PHASE45_CAPABILITIES,
+        label="Phase 4/5A",
     )
 
 
@@ -121,4 +142,16 @@ def _phase23_digest_path() -> Path:
         return candidate
     return (
         Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase23.openapi.sha256"
+    )
+
+
+def _phase45_digest_path() -> Path:
+    configured = os.environ.get("OPERANT_PHASE45_SCHEMA_DIGEST_PATH")
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            raise ProtocolSchemaUnavailable("protocol digest path must be absolute")
+        return candidate
+    return (
+        Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase45.openapi.sha256"
     )

@@ -23,6 +23,13 @@ from operant.application.client_projection import (
 from operant.application.context import PersistentContextComposer
 from operant.application.defaults import default_role_presets
 from operant.application.factory import AgentFactory
+from operant.application.security import (
+    ActionNormalizer,
+    CapabilityBroker,
+    DenialRemediator,
+    PolicyEngine,
+    balanced_policy_bundle,
+)
 from operant.application.slash_commands import SlashCommandRegistry
 from operant.application.trace import (
     WorkflowTraceSummary,
@@ -101,6 +108,13 @@ from operant.domain.models import (
     utc_now,
 )
 from operant.domain.projections import ProjectProjection, WorkspaceFilesPage
+from operant.domain.security import (
+    ActionRequest,
+    Capability,
+    PolicyDecision,
+    PolicyEvaluation,
+    SecurityAuditEvent,
+)
 from operant.domain.threads import (
     Artifact,
     ArtifactAccessLevel,
@@ -123,6 +137,7 @@ from operant.domain.threads import (
     Turn,
 )
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
+from operant.persistence.security import SQLiteSecurityRepository
 from operant.persistence.sqlite import (
     ActionOutcomeUnknownError,
     ConflictError,
@@ -159,6 +174,51 @@ class _PersistentActionGateway:
         self.tools = tools
         self.lease = lease
         self.scope = f"session:{session_id}:agent:{agent_id}:attempt:1"
+        self.security_repository = SQLiteSecurityRepository(store)
+        self.policy_engine = PolicyEngine(balanced_policy_bundle())
+        self.capability_broker = CapabilityBroker(self.security_repository)
+        self.denial_remediator = DenialRemediator(self.security_repository)
+        self._security_claims: dict[str, tuple[ActionRequest, PolicyEvaluation]] = {}
+        self._authorized_claims: set[str] = set()
+
+    def _capabilities_for(self, name: str, arguments: dict[str, Any]) -> tuple[Capability, ...]:
+        if name == "apply_patch":
+            return (Capability.WORKSPACE_WRITE,)
+        category = self.tools.required_approval_category(name, arguments)
+        if category == "privileged":
+            return (Capability.POLICY_MODIFY, Capability.PROCESS_EXEC)
+        if category == "network":
+            return (Capability.NETWORK_EGRESS, Capability.PROCESS_EXEC)
+        if category == "destructive":
+            return (Capability.WORKSPACE_DELETE, Capability.PROCESS_EXEC_NO_NETWORK)
+        if category == "git_write":
+            argv = arguments.get("argv", [])
+            if isinstance(argv, list) and len(argv) > 1 and argv[1] == "push":
+                return (Capability.GIT_PUSH, Capability.NETWORK_EGRESS, Capability.PROCESS_EXEC)
+            return (Capability.GIT_COMMIT, Capability.PROCESS_EXEC_NO_NETWORK)
+        runner = self.tools.policy.command_execution_policy.runner.value
+        if runner == "docker":
+            return (Capability.PROCESS_EXEC_NO_NETWORK,)
+        return (Capability.PROCESS_EXEC,)
+
+    def _audit(
+        self,
+        action: ActionRequest,
+        event_type: str,
+        *,
+        evaluation: PolicyEvaluation | None = None,
+        detail: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.security_repository.append_security_audit(
+            SecurityAuditEvent(
+                action_hash=action.action_hash,
+                principal=action.principal,
+                event_type=event_type,
+                decision=None if evaluation is None else evaluation.decision,
+                rule_ids=() if evaluation is None else evaluation.matched_rule_ids,
+                detail={} if detail is None else dict(detail),
+            )
+        )
 
     def reserve_tool_action(
         self,
@@ -167,6 +227,50 @@ class _PersistentActionGateway:
         name: str,
         arguments: dict[str, Any],
     ) -> ToolActionClaim:
+        capabilities = self._capabilities_for(name, arguments)
+        action = ActionNormalizer().normalize(
+            principal=f"agent:{self.agent_id}",
+            tool=name,
+            operation="execute",
+            arguments=arguments,
+            requested_capabilities=capabilities,
+            idempotency_key=f"{self.scope}:{tool_call_id}",
+            policy_version=self.policy_engine.bundle.version,
+            workspace=self.tools.root,
+            session_id=self.session_id,
+            agent_instance_id=self.agent_id,
+            sandbox_profile=self.tools.policy.command_execution_policy.runner.value,
+            network_profile=("egress" if Capability.NETWORK_EGRESS in capabilities else "none"),
+        )
+        action = self.security_repository.record_security_action(action)
+        evaluation = self.policy_engine.evaluate(action)
+        self._audit(
+            action,
+            "policy.evaluated",
+            evaluation=evaluation,
+            detail={
+                "reason_code": evaluation.reason_code,
+                "risk_level": evaluation.risk_level.value,
+                "hard_deny": evaluation.hard_deny,
+            },
+        )
+        if evaluation.decision is PolicyDecision.DENY:
+            remediation = self.denial_remediator.build(action, evaluation)
+            self._audit(
+                action,
+                "policy.denied",
+                evaluation=evaluation,
+                detail={
+                    "reason_code": remediation.reason_code,
+                    "denial_signature": remediation.denial_signature,
+                    "repeated_count": remediation.repeated_count,
+                    "no_progress": remediation.no_progress,
+                },
+            )
+            raise ToolError(
+                f"security policy denied action: {evaluation.reason_code}; "
+                f"no_progress={str(remediation.no_progress).lower()}"
+            )
         action_hash = self.tools.action_hash(name, arguments)
         try:
             receipt, created = self.store.reserve_tool_action(
@@ -187,7 +291,9 @@ class _PersistentActionGateway:
                 "tool action outcome is unknown; manual reconciliation required"
             ) from exc
         if created:
-            return ToolActionClaim(receipt_id=receipt.id, action_hash=action_hash)
+            claim = ToolActionClaim(receipt_id=receipt.id, action_hash=action_hash)
+            self._security_claims[receipt.id] = (action, evaluation)
+            return claim
         if receipt.status is ToolActionReceiptStatus.COMPLETED and receipt.result_json is not None:
             return ToolActionClaim(
                 receipt_id=receipt.id,
@@ -203,12 +309,33 @@ class _PersistentActionGateway:
             )
         raise ToolError("tool action outcome is unknown; manual reconciliation required")
 
+    def approval_requirement(self, claim: ToolActionClaim) -> tuple[str, str] | None:
+        bound = self._security_claims.get(claim.receipt_id)
+        if bound is None:
+            return None
+        action, evaluation = bound
+        if evaluation.decision is not PolicyDecision.ASK:
+            return None
+        category = (
+            self.tools.required_approval_category(action.tool, action.normalized_arguments)
+            or "security_policy"
+        )
+        return (
+            category,
+            self.tools.safe_action_summary(
+                action.tool, action.normalized_arguments, category=category
+            ),
+        )
+
     def complete_tool_action(self, claim: ToolActionClaim, result: str) -> None:
         self.store.complete_tool_action(
             claim.receipt_id,
             action_hash=claim.action_hash,
             result_json=redact_public_text(result),
         )
+        bound = self._security_claims.get(claim.receipt_id)
+        if bound is not None:
+            self._audit(bound[0], "action.completed", detail={"receipt_id": claim.receipt_id})
 
     def fail_tool_action(
         self,
@@ -223,6 +350,13 @@ class _PersistentActionGateway:
             error_code=redact_public_text(error_code, max_chars=200),
             result_json=redact_public_text(result),
         )
+        bound = self._security_claims.get(claim.receipt_id)
+        if bound is not None:
+            self._audit(
+                bound[0],
+                "action.failed",
+                detail={"receipt_id": claim.receipt_id, "error_code": error_code},
+            )
 
     def request_approval(
         self,
@@ -287,6 +421,28 @@ class _PersistentActionGateway:
         ):
             raise ToolError("approval is not valid for execution")
 
+        bound = self._security_claims.get(claim.receipt_id)
+        if bound is None or bound[1].decision is PolicyDecision.DENY:
+            raise ToolError("security policy approval binding is unavailable")
+        action, evaluation = bound
+        allowed = evaluation
+        if evaluation.decision is PolicyDecision.ASK:
+            allowed = evaluation.model_copy(
+                update={
+                    "decision": PolicyDecision.ALLOW,
+                    "reviewer_eligible": False,
+                    "reason_code": "approval.allowed",
+                    "explanation": "exact action was approved",
+                }
+            )
+        self._security_claims[claim.receipt_id] = (action, allowed)
+        self._audit(
+            action,
+            "approval.allowed",
+            evaluation=allowed,
+            detail={"approval_id": approval.id},
+        )
+
     def verify_execution(self) -> None:
         if self.lease is None:
             return
@@ -294,6 +450,38 @@ class _PersistentActionGateway:
             self.store.assert_session_run_lease(self.lease)
         except ConflictError as exc:
             raise ToolError("session run lease is expired, cancelled, or fenced") from exc
+
+    def authorize_tool_action(self, claim: ToolActionClaim) -> None:
+        if claim.receipt_id in self._authorized_claims:
+            return
+        bound = self._security_claims.get(claim.receipt_id)
+        if bound is None:
+            raise ToolError("security action binding is unavailable")
+        action, evaluation = bound
+        if evaluation.decision is not PolicyDecision.ALLOW:
+            raise ToolError("security policy approval is required before execution")
+        lease_ids: list[str] = []
+        for capability in action.requested_capabilities:
+            capability_lease = self.capability_broker.issue(
+                action,
+                evaluation,
+                capability,
+                issued_by="action_gateway",
+                ttl_seconds=60,
+            )
+            self.capability_broker.consume(
+                capability_lease.lease_id,
+                action=action,
+                capability=capability,
+            )
+            lease_ids.append(capability_lease.lease_id)
+        self._authorized_claims.add(claim.receipt_id)
+        self._audit(
+            action,
+            "capability.consumed",
+            evaluation=evaluation,
+            detail={"lease_ids": lease_ids, "receipt_id": claim.receipt_id},
+        )
 
 
 class ApplicationService:

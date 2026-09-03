@@ -197,6 +197,8 @@ class Phase1EError(RuntimeError):
 
 # Phase 2/3 reuses this bounded transport but exposes a protocol-specific name.
 Phase23Error = Phase1EError
+# Phase 4/5A reuses the same bounded wire transport and typed error envelope.
+Phase45Error = Phase1EError
 
 
 class SseProtocolError(Phase1EError):

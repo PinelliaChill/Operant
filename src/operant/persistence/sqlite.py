@@ -236,6 +236,7 @@ class SQLiteStore:
         7: "b8516d3a7deec9a93867c45f323992238b17968829001c6af2cf61831fe70df4",
         8: "f3295d7911214ce19f2a6dc7fda63e21eebfe79c7cb4b3a16934ef40297da11b",
         9: "884512be9442684acd9b76a9f478b658e5b3d9fb3a576c52a0fe893baab769d5",
+        10: "cc99b8ac7b8f7b7898d807adb3252ea993a9c435ce8ac31b1109183776c32680",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -247,6 +248,7 @@ class SQLiteStore:
         7: "15496ba9e4cde4e1dd622abdc141ca2dc63f5b155c3b2eb57a24472c9df3e06b",
         8: "bfd4f8367d6232d39b1fd9e9c916cc6de95fcfb8c89dfedd13d22f3da70b70e0",
         9: "acf376be788cefcdb4640ebd6a282faaf921735a4b0903f071180a3b5e3ef273",
+        10: "5153ded0e3637722fc9972c17cca5c9ca55e737e0993e5d46bf5486e041a5765",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -554,6 +556,12 @@ class SQLiteStore:
                 self._upgrade_v9,
                 self._downgrade_v9,
             ),
+            build(
+                10,
+                "phase4_security_control_plane",
+                self._upgrade_v10,
+                self._downgrade_v10,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -815,6 +823,10 @@ class SQLiteStore:
             self._validate_v7_schema_shape(connection)
         elif migration.version == 8:
             self._validate_v8_schema_shape(connection)
+        elif migration.version == 9:
+            self._validate_v9_schema_shape(connection)
+        elif migration.version == 10:
+            self._validate_v10_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -1521,6 +1533,59 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v10_required_columns() -> dict[str, set[str]]:
+        return {
+            "security_action_requests": {
+                "sequence",
+                "id",
+                "action_hash",
+                "principal",
+                "tool",
+                "operation",
+                "target_type",
+                "target_id",
+                "policy_version",
+                "idempotency_key",
+                "body",
+                "created_at",
+            },
+            "capability_leases": {
+                "sequence",
+                "id",
+                "action_hash",
+                "principal",
+                "capability",
+                "target_id",
+                "policy_version",
+                "issued_by",
+                "constraints",
+                "issued_at",
+                "expires_at",
+                "max_uses",
+                "uses",
+                "revoked_at",
+            },
+            "security_audit_events": {
+                "sequence",
+                "id",
+                "action_hash",
+                "principal",
+                "event_type",
+                "decision",
+                "rule_ids",
+                "detail",
+                "created_at",
+            },
+            "policy_denial_observations": {
+                "signature",
+                "last_action_hash",
+                "occurrences",
+                "created_at",
+                "updated_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -1544,6 +1609,8 @@ class SQLiteStore:
             tables.update(cls._v8_required_columns())
         if version >= 9:
             tables.update(cls._v9_required_columns())
+        if version >= 10:
+            tables.update(cls._v10_required_columns())
         return tables
 
     @staticmethod
@@ -1643,6 +1710,8 @@ class SQLiteStore:
                 ("team_tasks", "assignee_agent_id"),
                 ("artifact_board_items", "published_by_agent_id"),
                 ("artifact_board_items", "message_id"),
+                ("capability_leases", "revoked_at"),
+                ("security_audit_events", "decision"),
             }
         )
 
@@ -1690,6 +1759,9 @@ class SQLiteStore:
                 "requires_ack",
                 "workflow_definition_version",
                 "team_definition_version",
+                "max_uses",
+                "uses",
+                "occurrences",
             }
         )
 
@@ -1916,6 +1988,8 @@ class SQLiteStore:
                 store._upgrade_v8(connection)
             if version >= 9:
                 store._upgrade_v9(connection)
+            if version >= 10:
+                store._upgrade_v10(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2043,6 +2117,15 @@ class SQLiteStore:
                     "team_run_events": ("sequence",),
                 }
             )
+        if version >= 10:
+            contract.update(
+                {
+                    "security_action_requests": ("sequence",),
+                    "capability_leases": ("sequence",),
+                    "security_audit_events": ("sequence",),
+                    "policy_denial_observations": ("signature",),
+                }
+            )
         return contract
 
     @staticmethod
@@ -2164,6 +2247,18 @@ class SQLiteStore:
                         ("team_run_id", "artifact_id"),
                     ),
                     "team_run_events": (("id",), ("team_run_id", "run_sequence")),
+                }
+            )
+        if version >= 10:
+            contract.update(
+                {
+                    "security_action_requests": (
+                        ("id",),
+                        ("action_hash",),
+                        ("principal", "idempotency_key"),
+                    ),
+                    "capability_leases": (("id",),),
+                    "security_audit_events": (("id",),),
                 }
             )
         return contract
@@ -2389,6 +2484,25 @@ class SQLiteStore:
                     "team_run_events": (("team_run_id", "team_runs", "id", "NO ACTION"),),
                 }
             )
+        if version >= 10:
+            contract.update(
+                {
+                    "capability_leases": (
+                        ("action_hash", "security_action_requests", "action_hash", "NO ACTION"),
+                    ),
+                    "security_audit_events": (
+                        ("action_hash", "security_action_requests", "action_hash", "NO ACTION"),
+                    ),
+                    "policy_denial_observations": (
+                        (
+                            "last_action_hash",
+                            "security_action_requests",
+                            "action_hash",
+                            "NO ACTION",
+                        ),
+                    ),
+                }
+            )
         return contract
 
     @staticmethod
@@ -2549,6 +2663,14 @@ class SQLiteStore:
                     "idx_team_run_events_run_sequence": ("team_run_id", "run_sequence"),
                 }
             )
+        if version >= 10:
+            indexes.update(
+                {
+                    "idx_security_actions_principal_sequence": ("principal", "sequence"),
+                    "idx_capability_leases_action_expiry": ("action_hash", "expires_at"),
+                    "idx_security_audit_action_sequence": ("action_hash", "sequence"),
+                }
+            )
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -2643,6 +2765,9 @@ class SQLiteStore:
 
     def _validate_v9_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=9)
+
+    def _validate_v10_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=10)
 
     def _validate_schema_contract(
         self,
@@ -6483,6 +6608,138 @@ class SQLiteStore:
             DROP TABLE team_definitions;
             DROP INDEX idx_workflow_definitions_workflow_status_version;
             DROP TABLE workflow_definitions;
+            """,
+        )
+
+    def _upgrade_v10(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE security_action_requests (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                action_hash TEXT UNIQUE NOT NULL CHECK (
+                    length(action_hash) = 64 AND action_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                principal TEXT NOT NULL CHECK (length(principal) BETWEEN 1 AND 300),
+                tool TEXT NOT NULL CHECK (length(tool) BETWEEN 1 AND 200),
+                operation TEXT NOT NULL CHECK (length(operation) BETWEEN 1 AND 200),
+                target_type TEXT NOT NULL CHECK (length(target_type) BETWEEN 1 AND 100),
+                target_id TEXT NOT NULL CHECK (length(target_id) BETWEEN 1 AND 500),
+                policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+                idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 300),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                UNIQUE (principal, idempotency_key)
+            );
+
+            CREATE INDEX idx_security_actions_principal_sequence
+                ON security_action_requests(principal, sequence);
+
+            CREATE TABLE capability_leases (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                action_hash TEXT NOT NULL,
+                principal TEXT NOT NULL CHECK (length(principal) BETWEEN 1 AND 300),
+                capability TEXT NOT NULL CHECK (length(capability) BETWEEN 1 AND 100),
+                target_id TEXT NOT NULL CHECK (length(target_id) BETWEEN 1 AND 500),
+                policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+                issued_by TEXT NOT NULL CHECK (length(issued_by) BETWEEN 1 AND 300),
+                constraints TEXT NOT NULL CHECK (
+                    json_valid(constraints) AND json_type(constraints) = 'object'
+                ),
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                max_uses INTEGER NOT NULL CHECK (max_uses BETWEEN 1 AND 100),
+                uses INTEGER NOT NULL DEFAULT 0 CHECK (uses >= 0 AND uses <= max_uses),
+                revoked_at TEXT,
+                FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash)
+            );
+
+            CREATE INDEX idx_capability_leases_action_expiry
+                ON capability_leases(action_hash, expires_at);
+
+            CREATE TABLE security_audit_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                action_hash TEXT NOT NULL,
+                principal TEXT NOT NULL CHECK (length(principal) BETWEEN 1 AND 300),
+                event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 200),
+                decision TEXT CHECK (decision IS NULL OR decision IN ('deny', 'ask', 'allow')),
+                rule_ids TEXT NOT NULL CHECK (
+                    json_valid(rule_ids) AND json_type(rule_ids) = 'array'
+                ),
+                detail TEXT NOT NULL CHECK (json_valid(detail) AND json_type(detail) = 'object'),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash)
+            );
+
+            CREATE INDEX idx_security_audit_action_sequence
+                ON security_audit_events(action_hash, sequence);
+
+            CREATE TABLE policy_denial_observations (
+                signature TEXT PRIMARY KEY CHECK (
+                    length(signature) = 64 AND signature NOT GLOB '*[^0-9a-f]*'
+                ),
+                last_action_hash TEXT NOT NULL,
+                occurrences INTEGER NOT NULL CHECK (occurrences >= 1),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (last_action_hash) REFERENCES security_action_requests(action_hash)
+            );
+
+            CREATE TRIGGER security_action_requests_no_update
+            BEFORE UPDATE ON security_action_requests
+            BEGIN
+                SELECT RAISE(ABORT, 'Security action requests are immutable');
+            END;
+
+            CREATE TRIGGER security_action_requests_no_delete
+            BEFORE DELETE ON security_action_requests
+            BEGIN
+                SELECT RAISE(ABORT, 'Security action requests are immutable');
+            END;
+
+            CREATE TRIGGER security_audit_events_no_update
+            BEFORE UPDATE ON security_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Security audit events are append-only');
+            END;
+
+            CREATE TRIGGER security_audit_events_no_delete
+            BEFORE DELETE ON security_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Security audit events are append-only');
+            END;
+            """,
+        )
+
+    def _downgrade_v10(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM security_action_requests)
+                + (SELECT COUNT(*) FROM capability_leases)
+                + (SELECT COUNT(*) FROM security_audit_events)
+                + (SELECT COUNT(*) FROM policy_denial_observations) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back security control-plane tables with data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER security_audit_events_no_delete;
+            DROP TRIGGER security_audit_events_no_update;
+            DROP TRIGGER security_action_requests_no_delete;
+            DROP TRIGGER security_action_requests_no_update;
+            DROP INDEX idx_security_audit_action_sequence;
+            DROP TABLE security_audit_events;
+            DROP TABLE policy_denial_observations;
+            DROP INDEX idx_capability_leases_action_expiry;
+            DROP TABLE capability_leases;
+            DROP INDEX idx_security_actions_principal_sequence;
+            DROP TABLE security_action_requests;
             """,
         )
 
