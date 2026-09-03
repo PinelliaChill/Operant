@@ -1,9 +1,49 @@
 # Operant 安全边界
 
-> 最后更新：2026-08-27
+> 最后更新：2026-09-03
 
 Operant 会把模型输出视为不可信输入。模型只能请求由当前 `RoleSnapshot` 的 Tool Policy
 允许的工具；Runtime 和工具层会再次校验，不把“模型遵守提示词”当作安全边界。
+
+Phase 4 又在 Tool Policy 之上增加统一的 Action Policy/Capability 栅栏。这一层不取代既有
+RoleSnapshot、workspace 路径保护、Docker Runner、Receipt 和 Session Approval；两层中任一层拒绝，
+副作用都不能执行。
+
+## Phase 4 Action Policy 与 Capability
+
+每个受管副作用首先规范化为 `ActionRequest`，并把以下事实绑定到稳定 Action Hash：
+
+- principal 和可选 Session/Workflow/Node/Agent scope；
+- tool、operation、规范化 target/arguments 与 workspace identity；
+- 数据分类、所需 Capability、sandbox/network profile 与幂等等级；
+- Secret Ref、dry-run、Policy Version 和调用方幂等键。
+
+路径必须在已解析 workspace 内；URL 要求 HTTP(S)、无 userinfo，并规范化 scheme/host/port、
+去除 fragment。Secret 只能用受限环境变量名形式的 reference 声明，不允许把真值放入 Action。
+
+Policy 规则按 System、Workspace、Role、Workflow、Session、Approval 和 Default 层匹配。同一 Action 中：
+
+- 任一 Capability 命中 DENY，整体 DENY；
+- 无 DENY 时 ASK 优先于 ALLOW；
+- 无规则命中默认 DENY；
+- System hard DENY 不能被低层规则、客户端、人工审批或 LLM Reviewer 覆盖。
+
+`ApprovalReviewerAdapter` 只能审查 `reviewer_eligible` 的 ASK，只获得脱敏的最小 Action 摘要，且只能
+返回 ALLOW 或 DENY。超时、异常、非法 JSON 或仍返回 ASK 都固定收口为 DENY。当前 Phase 45
+MCP/Scheduler API 没有独立的持久 Approval continuation；既有 Session Tool Approval 不能被当作 Phase 45
+ASK 的续传。因此这些后台或外部副作用在 ASK/DENY 时都会 fail-closed，不会静默自批。
+
+Capability Lease 只能从精确 ALLOW 的 Action 发放，并绑定 Action Hash、principal、Capability、target、
+workspace、Policy Version、TTL、约束和最大使用次数。消费使用 SQLite CAS 重新核对这些字段、
+过期、撤销和用量；旧、越目标、超量或被撤销 Lease 均失败关闭。
+
+Secret Broker 只在精确 ALLOW 且包含 `secret.use` 的 Action 执行时解析已声明 `secret_ref`，并生成
+短 TTL、单目标 Secret Lease。真实 Secret 值只进入目标执行环境，不写入 SQLite、API、Policy 解释、
+Audit 或错误；返回输出还会按实际注入值再次脱敏。
+
+Security Action 和 Audit 是不可变/只追加事实。Audit 仅保存决策、规则 ID、有界详情、结果 hash
+和安全错误码，不保存原始参数/结果或 Secret。重复拒绝仅通过不含参数值的 signature 计数，
+达到 no-progress 阈值也不会自动放宽 Policy。
 
 ## 默认角色与命令执行
 
@@ -107,12 +147,78 @@ Docker Runner。
 - Eval 模式会禁用 Workflow 的 Memory 候选回写；Memory 关闭时不查询项目知识，开启时只读取源
   workspace 精确作用域的 active Project Memory，并把实际引用版本与哈希写入结果快照。
 
+## 受控 Skill Discovery
+
+Skill Discovery 只接受 Core 启动时配置的有界受信根 reference，API 调用者不能提交任意宿主
+路径扩大扫描范围。每个根必须是绝对、已存在、非软链接真实目录，并用 device/inode 去重。
+
+发现器只检查根和一层子目录中的 `SKILL.md`，对根、候选、`scripts/`、`references/` 中的
+每个组件拒绝软链接、路径逃逸和非普通文件。文件用 no-follow 打开，读取后复核 device/inode/
+size/mtime，避免把替换竞态当作稳定快照。候选数、层级、文件数、单件/总字节、frontmatter/body
+和 JSON 集合全部有上限；仅允许简单、白名单 frontmatter，拒绝 YAML tag/anchor/alias/调用或变量替换形状。
+
+发现和持久只产生 `untrusted_candidate` 及 manifest/resource hash，不会因为候选位于“受信根”就自动
+信任内容、安装 Skill、加载代码或执行脚本。受信根只限定可见范围，不是对候选内容的安全背书。
+
+## MCP 边界
+
+MCP Server、工具描述、JSON Schema、工具输入和结果全部是不可信输入。MCP Server 本身不是沙箱、
+Policy 或权限边界；“连接成功”也不等于任何工具获得执行权。
+
+当前支持：
+
+- `stdio`：显式 argv 直接启动，不经 Shell；子进程不继承 Core 的整个环境，只获得显式映射的
+  environment reference。但它仍是宿主机进程，未受 Docker 或 OS 网络沙箱隔离；
+- `legacy_sse`：兼容旧 MCP SSE 接收流 + POST 消息端点。它明确是 legacy transport，不是新推荐的
+  远程安全协议。默认拒绝 redirect、userinfo、query/fragment、非 HTTP(S)、不安全 HTTP 和未明确允许的
+  loopback HTTP；从 SSE 推导的 POST 端点还必须与已校验端点保持安全绑定。
+
+两种 transport 都限制启停/请求超时、frame/Schema/stderr 大小、工具数、JSON 深度/总项/字符长度、
+request ID 和 content type。`initialize`/`tools/list` 的结果经验证后持久为版本化工具快照。每次
+`tools/call` 仍必须命中快照、通过本地有界 Schema 验证、重算 Action Hash，并在外部请求前经
+Action Gateway 发放和一次消费精确 Capability Lease。结果先有界校验和脱敏，Audit 只记录结果 hash/
+耗时/错误码，不保存原始参数和原始结果。
+
+默认 balanced Policy 把 stdio 启动/调用视为 `process.exec`，把 legacy SSE 视为 `network.egress`，显式
+Secret Ref 另需 `secret.use`；这些默认都是 ASK。因当前 Phase 45 无独立审批 continuation，ASK 和 DENY
+都会在启动或工具调用前失败关闭。
+
+## Scheduler 边界
+
+Phase 5A Scheduler 只调度本地 SQLite 中已发布的 Graph Workflow Revision。它不是 Shell、不是任意函数执行器，
+也不会给 Graph 中任意节点或 MCP 工具自动授权。Graph IR 里的 Timer 节点仍被 Compiler 拒绝；
+Schedule Timer 是独立的单次绝对 UTC 触发。
+
+Cron 只支持受限五段表达式和 IANA 时区，用 UTC occurrence 遍历并映射到本地时间，使 DST gap 不伪造
+时刻、fold 中的两次真实发生保持可区分。停机后的 due occurrence 只按 `skip`、`fire_once` 或有界
+`catch_up` 具象化。Schedule Version + occurrence 生成稳定幂等键，重复 tick 不会重复入队。
+
+RunRequest、JobAttempt、重试次数、副作用开始点、DLQ、取消与 Graph Run 绑定均持久化。Scheduler Leader
+仅负责把 due occurrence 物化到 Queue，Runtime Writer 仅负责 claim/dispatch。两个全局租约和每个 Job Lease
+都绑定 owner、随机 token、单调 fencing 和 TTL；旧、过期或不匹配的执行者不能续租、取消或提交。
+Job 续租不得超过 Runtime Writer 到期时间，claim 在同一事务中强制 Schedule `concurrency_limit`。
+当前是单 Leader/单 Writer 模型，不是多 Writer 或高可用集群。
+
+Worker 在调用外部 Gateway 前先持久 `side_effect_started`。可确定失败用有界指数退避，达 `max_attempts`
+后进 DLQ；DLQ 只能通过显式、幂等 replay 创建一个指向原请求的新事实。已开始的非幂等
+dispatch 如果 lease 过期或返回结果未知，只能进 `manual_reconcile_required`，不自动 retry/replay。
+
+Scheduler 派发本身还要经 Phase 4 Policy/Capability/Audit；后台调度不会等待或自行批准 ASK。
+`scheduler_graph_dispatches` 在创建 Graph Run 前保留 RunRequest/幂等键/Action Hash 绑定：已完成绑定
+重放返回同一 Graph Run，pending 绑定的结果未知不会创建第二个 Run。FastAPI 停机只释放当前
+Coordinator 精确持有的租约；崩溃接管仍以 SQLite 已提交事实和 fencing 为准。
+
 ## Web 与 API 部署边界
 
 `/web` 和 `/v1/*` 当前没有身份认证、CSRF 防护或多租户隔离。Web 页面虽然不使用 CDN，并通过
 `textContent` 等 DOM API 展示模型输出，但这不构成网络访问控制。默认只能绑定受信任的本机地址；
 不得直接暴露到公网、共享局域网或不受信任的反向代理后面。若必须远程访问，应由外层受信任网关
 提供 TLS、强身份认证、来源限制和审计。
+
+Phase 45 的 Policy、Capability、Skill、MCP 和 Scheduler API 同样不构成身份认证。SQLite 中的 Action、
+Audit、MCP 配置引用、Schedule/Queue/Attempt 和 Graph 绑定均是敏感本地运行事实，不应上传或公开。
+本阶段不包含 OAuth、Remote/Relay、TUI、Tauri、Browser/Computer 工具或通用多 Writer；相关页面、
+模型或目标文档不是已实现安全能力。
 
 ## 目标 Remote Control 边界（尚未实现）
 
@@ -152,6 +258,11 @@ Operant 2.0 不以此为由建设 SaaS、多个人类用户协作、多租户、
 Evaluation Runner 的自动化测试使用隔离 fixture、确定性 Provider 和 Fake Runner，覆盖快照、
 SQLite 契约、超时、软链接、指标、根因分类及 CLI/API 脱敏。它们不等同于真实 Provider、真实费用、
 Exp 19—24 实验结论或“真实模型 + Docker Coder”的联合验收。
+
+Phase 4/5A 自动化测试覆盖 Policy/Capability/Secret/Audit、Skill 路径与读取竞态、stdio/legacy SSE MCP、
+Cron/Timer/DST/misfire、Queue/Lease/fencing/retry/DLQ/manual reconcile、Scheduler→Graph 幂等绑定、SQLite v10/v11
+升级/回滚与 27-operation 生成 Client。这些确定性测试不等于真实第三方 MCP Server 安全审计、
+长时稳定 Scheduler 运维、多进程压力/故障演练或真实模型联合验收。
 
 2026-08-22 的六角色真实模型 Workflow 在可信的临时 fixture 中使用 Host Coder 完成，并由模型外
 unittest 和 diff 再次复核。它证明编排、持久化、Trace 和 Memory 主链路可工作，不证明 Host Runner
