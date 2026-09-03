@@ -195,6 +195,10 @@ class Phase1EError(RuntimeError):
         )
 
 
+# Phase 2/3 reuses this bounded transport but exposes a protocol-specific name.
+Phase23Error = Phase1EError
+
+
 class SseProtocolError(Phase1EError):
     """A bounded or malformed SSE response from Core."""
 

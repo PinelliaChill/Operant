@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { MockClient, OperantClient, Phase1EClient } from '@operant/sdk';
+import { MockClient, OperantClient, Phase1EClient, Phase23Client } from '@operant/sdk';
 import { formatTime } from '../lib/format';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
 
@@ -19,6 +19,8 @@ interface ClientContextValue {
   client: OperantClient;
   /** The generated Phase 1E client used by every live surface. */
   phase1eClient: Phase1EClient;
+  /** Additive Phase 2/3 Graph and local Team client; Phase 1E stays frozen. */
+  phase23Client: Phase23Client;
   clientMode: ClientMode;
   setClientMode: (mode: ClientMode) => void;
   connectionStatus: ConnectionStatus;
@@ -77,6 +79,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // production reverse proxy owns the same path. Core intentionally has no
   // browser CORS dependency, and Live never falls back to this MockClient.
   const phase1eClient = useMemo(() => new Phase1EClient(currentBrowserOrigin()), []);
+  const phase23Client = useMemo(() => new Phase23Client(currentBrowserOrigin()), []);
   const client: OperantClient = mockClient;
 
   const setClientMode = (mode: ClientMode) => {
@@ -142,7 +145,10 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         try {
           // Protocol negotiation is the live connection check and validates
           // both the supported version and generated Schema digest.
-          await phase1eClient.negotiateProtocol(true);
+          await Promise.all([
+            phase1eClient.negotiateProtocol(true),
+            phase23Client.negotiateProtocol(true),
+          ]);
           if (isMounted) setConnectionStatus('connected');
         } catch {
           if (isMounted) setConnectionStatus('disconnected');
@@ -157,13 +163,14 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       isMounted = false;
       clearInterval(interval);
     };
-  }, [client, clientMode, phase1eClient, theme]);
+  }, [client, clientMode, phase1eClient, phase23Client, theme]);
 
   return (
     <ClientContext.Provider
       value={{
         client,
         phase1eClient,
+        phase23Client,
         clientMode,
         setClientMode,
         connectionStatus,

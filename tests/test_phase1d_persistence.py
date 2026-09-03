@@ -134,7 +134,7 @@ def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
     assert store.migrate(starting_version) == starting_version
     store.initialize()
     store.initialize()
-    assert store.schema_version() == 8
+    assert store.schema_version() == 9
 
 
 def test_v8_failure_is_atomic_and_rollback_requires_empty_phase1d_tables(
@@ -186,7 +186,7 @@ def test_v8_failure_is_atomic_and_rollback_requires_empty_phase1d_tables(
         rolled_back_ddl["prompt_blocks_source_refs_guard"]
         == v7_ddl["prompt_blocks_source_refs_guard"]
     )
-    assert empty.migrate() == 8
+    assert empty.migrate() == 9
     with empty._connect() as connection:
         upgraded_ddl = {
             row["name"]: empty._normalize_schema_sql(row["sql"])
@@ -237,7 +237,7 @@ def test_exact_phase1d_previews_upgrade_both_context_provenance_guards(
 
     database = tmp_path / f"preview-{int(strict_context_guard)}.sqlite3"
     preview = SQLiteStore(database)
-    preview.initialize()
+    preview.migrate(target_version=8)
     with preview._connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         preview._replace_phase1d_prompt_compaction_agent_guard(
@@ -262,11 +262,9 @@ def test_exact_phase1d_previews_upgrade_both_context_provenance_guards(
 
     upgraded = SQLiteStore(database)
     upgraded.initialize()
-    assert upgraded.schema_version() == 8
-    assert (
-        upgraded.list_applied_migrations()[-1]["checksum"]
-        == (SQLiteStore._FROZEN_MIGRATION_CHECKSUMS[8])
-    )
+    assert upgraded.schema_version() == 9
+    applied_v8 = next(item for item in upgraded.list_applied_migrations() if item["version"] == 8)
+    assert applied_v8["checksum"] == SQLiteStore._FROZEN_MIGRATION_CHECKSUMS[8]
     _objects, expected = upgraded._canonical_schema_objects(8)
     with upgraded._connect() as connection:
         actual = {

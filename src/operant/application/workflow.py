@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import shlex
@@ -12,7 +13,15 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from operant.application.graph import GraphRuntime, coding_workflow_definition
 from operant.application.service import ApplicationService
+from operant.domain.graph import (
+    AttemptSideEffectState,
+    NodeAttempt,
+    NodeRun,
+    NodeRunStatus,
+    WorkflowDefinitionStatus,
+)
 from operant.domain.memory import MemoryKind
 from operant.domain.models import AgentStatus, RolePreset
 from operant.domain.workflow import (
@@ -21,6 +30,7 @@ from operant.domain.workflow import (
     WorkflowRunStatus,
     WorkflowStage,
 )
+from operant.persistence.graph_team import SQLiteGraphRepository
 from operant.persistence.sqlite import ConflictError
 
 
@@ -29,6 +39,10 @@ class WorkflowEvent(BaseModel):
 
     workflow_run_id: str = ""
     cursor: int | None = Field(default=None, ge=1)
+    # Internal bridge metadata. These values are intentionally excluded from
+    # the frozen legacy Workflow event representation.
+    role_id: str | None = Field(default=None, exclude=True)
+    agent_id: str | None = Field(default=None, exclude=True)
     role: str
     session_id: str
     event_type: str
@@ -111,6 +125,259 @@ class RoleRunCapture:
         )
 
 
+class CodingWorkflowGraphBridge:
+    """Project the frozen Coding Workflow coordinator into the Phase 2 graph authority."""
+
+    def __init__(self, runtime: GraphRuntime, graph_run_id: str, main_role_id: str | None) -> None:
+        self.runtime = runtime
+        self.graph_run_id = graph_run_id
+        self.main_role_id = main_role_id
+        self._attempts: dict[str, NodeAttempt] = {}
+        self._attempt_sessions: dict[str, str] = {}
+
+    @classmethod
+    def create(
+        cls,
+        runtime: GraphRuntime,
+        *,
+        legacy_workflow_run_id: str,
+        task: str,
+        workspace: Path,
+        planner_role_id: str,
+        explorer_role_ids: tuple[str, ...],
+        coder_role_id: str,
+        reviewer_role_id: str,
+        main_role_id: str | None,
+        max_parallel_explorers: int,
+        max_rework_rounds: int,
+        resumed_from_id: str | None,
+    ) -> CodingWorkflowGraphBridge:
+        identity = hashlib.sha256(
+            json.dumps(
+                {
+                    "compatibility": "phase2.coding-workflow.v1",
+                    "planner": planner_role_id,
+                    "explorers": explorer_role_ids,
+                    "coder": coder_role_id,
+                    "reviewer": reviewer_role_id,
+                    "main": main_role_id,
+                    "max_parallel_explorers": max_parallel_explorers,
+                    "max_rework_rounds": max_rework_rounds,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        compatibility_definition = coding_workflow_definition(
+            planner_role_id=planner_role_id,
+            explorer_role_ids=explorer_role_ids,
+            coder_role_id=coder_role_id,
+            reviewer_role_id=reviewer_role_id,
+            main_role_id=main_role_id,
+            max_parallel_explorers=max_parallel_explorers,
+            max_rework_rounds=max_rework_rounds,
+        )
+        role_id_by_node = {
+            "planner": planner_role_id,
+            "coder": coder_role_id,
+            "reviewer": reviewer_role_id,
+            **({"main": main_role_id} if main_role_id is not None else {}),
+        }
+        compatibility_nodes = tuple(
+            spec.model_copy(
+                update={
+                    "metadata": {
+                        **spec.metadata,
+                        "legacy_role": spec.node_id,
+                        "role_id": role_id_by_node[spec.node_id],
+                    }
+                }
+            )
+            if spec.node_id in role_id_by_node
+            else spec
+            for spec in compatibility_definition.nodes
+        )
+        proposed = compatibility_definition.model_copy(
+            update={
+                "workflow_id": f"builtin.coding-review.{identity}",
+                "status": WorkflowDefinitionStatus.PUBLISHED,
+                "nodes": compatibility_nodes,
+            }
+        )
+        try:
+            definition = runtime.repository.get_definition(proposed.workflow_id, proposed.version)
+        except KeyError:
+            definition = proposed
+        graph_run = runtime.create_run(
+            definition,
+            input={"task": task, "resumed_from_id": resumed_from_id},
+            workspace_or_target=str(workspace),
+            legacy_workflow_run_id=legacy_workflow_run_id,
+        )
+        runtime.start_run(graph_run.id)
+        return cls(runtime, graph_run.id, main_role_id)
+
+    def before_role(
+        self,
+        *,
+        role: str,
+        role_id: str,
+        checkpoint: WorkflowSubtaskResult | None = None,
+    ) -> None:
+        node_id = self._node_id(role, role_id)
+        node = self._node(node_id)
+        if node.status is not NodeRunStatus.READY:
+            raise RuntimeError(f"graph node {node_id} is not ready")
+        self._attempt_sessions.pop(node_id, None)
+        attempt_number = len(self.runtime.repository.list_attempts(node.id)) + 1
+        attempt = self.runtime.start_attempt(
+            node.id,
+            idempotency_key=f"{self.graph_run_id}:{node_id}:{attempt_number}",
+        )
+        if role == "coder" and checkpoint is None:
+            attempt = self.runtime.mark_side_effect_started(attempt.id)
+        self._attempts[node_id] = attempt
+        if checkpoint is not None:
+            self._complete_role(role=role, role_id=role_id, result=checkpoint)
+
+    def start_explorer_stage(self) -> None:
+        self._complete_synthetic("explorer_fanout", {"dispatched": True})
+
+    def finish_explorer_stage(self) -> None:
+        self._complete_synthetic("explorer_join", {"joined": True})
+
+    def select_verdict(self, verdict: str) -> None:
+        node = self._node("verdict")
+        normalized = verdict.lower()
+        if node.status is NodeRunStatus.SUCCEEDED:
+            if node.output_refs.get("selected_port") == normalized:
+                return
+            raise RuntimeError("graph verdict was already selected")
+        self.runtime.select_condition(
+            node.id,
+            selected_port=normalized,
+            output_refs={
+                "selected_port": normalized,
+                "verdict": normalized,
+                "legacy_verdict": verdict,
+            },
+        )
+
+    def observe(self, event: WorkflowEvent) -> None:
+        self._bind_agent_instance(event)
+        if event.event_type == "workflow.subtask_result":
+            raw = event.payload.get("result")
+            if isinstance(raw, dict):
+                result = WorkflowSubtaskResult.model_validate(raw)
+                self._complete_role(role=result.role, role_id=result.role_id, result=result)
+            return
+        if event.event_type == "workflow.rework_started":
+            self.select_verdict("REWORK")
+            loop = self._node("rework_loop")
+            self.runtime.advance_loop(
+                loop.id,
+                continue_loop=True,
+                progress_signature=f"rework:{event.payload.get('round', 0)}",
+                output_refs={"round": event.payload.get("round")},
+            )
+            return
+        if event.event_type == "workflow.review_verdict_missing":
+            self.select_verdict("MISSING")
+            self.runtime.fail_run(self.graph_run_id)
+            return
+        if event.event_type in {"workflow.failed", "workflow.rework_limit_reached"}:
+            self.runtime.fail_run(self.graph_run_id)
+            return
+        if event.event_type == "workflow.completed" and self.main_role_id is None:
+            self.select_verdict("APPROVED")
+            self._complete_synthetic("main", {"verdict": event.payload.get("verdict")})
+
+    def _bind_agent_instance(self, event: WorkflowEvent) -> None:
+        """Bind only an AgentInstance proven by this role's persisted Session event."""
+        if event.role_id is None or event.agent_id is None or not event.session_id:
+            return
+        try:
+            node_id = self._node_id(event.role, event.role_id)
+        except KeyError:
+            return
+        attempt = self._attempts.get(node_id)
+        if attempt is None:
+            return
+        known_session = self._attempt_sessions.setdefault(node_id, event.session_id)
+        if known_session != event.session_id:
+            return
+        if attempt.agent_instance_id is not None:
+            return
+        bound = attempt.model_copy(update={"agent_instance_id": event.agent_id})
+        self.runtime.repository.update_attempt(bound)
+        self._attempts[node_id] = bound
+
+    def interrupt(self) -> None:
+        self.runtime.interrupt_run(self.graph_run_id)
+
+    def cancel(self) -> None:
+        self.runtime.cancel_run(self.graph_run_id)
+
+    def _complete_role(self, *, role: str, role_id: str, result: WorkflowSubtaskResult) -> None:
+        node_id = self._node_id(role, role_id)
+        attempt = self._attempts.pop(node_id, None)
+        if attempt is None:
+            node = self._node(node_id)
+            if node.status in {
+                NodeRunStatus.SUCCEEDED,
+                NodeRunStatus.SKIPPED,
+                NodeRunStatus.MANUAL_RECONCILE_REQUIRED,
+            }:
+                return
+            raise RuntimeError(f"graph node {node_id} has no active attempt")
+        effect = None
+        if role == "coder":
+            effect = (
+                AttemptSideEffectState.COMMITTED
+                if result.succeeded
+                else AttemptSideEffectState.UNKNOWN
+            )
+        self.runtime.complete_attempt(
+            attempt,
+            succeeded=result.succeeded,
+            output_refs={"subtask": result.model_dump(mode="json")},
+            failure_class=result.failure_reason,
+            side_effect_state=effect,
+        )
+
+    def _complete_synthetic(self, node_id: str, output: dict[str, Any]) -> None:
+        node = self._node(node_id)
+        if node.status is NodeRunStatus.SUCCEEDED:
+            return
+        if node.status is not NodeRunStatus.READY:
+            raise RuntimeError(f"graph node {node_id} is not ready")
+        attempt = self.runtime.start_attempt(node.id, worker_id="legacy-workflow-coordinator")
+        self.runtime.complete_attempt(attempt, succeeded=True, output_refs=output)
+
+    def _node_id(self, role: str, role_id: str) -> str:
+        if role != "explorer":
+            return role
+        definition = self.runtime.repository.get_definition(
+            self.runtime.repository.get_run(self.graph_run_id).workflow_definition_id,
+            self.runtime.repository.get_run(self.graph_run_id).workflow_definition_version,
+        )
+        for spec in definition.nodes:
+            if (
+                spec.metadata.get("legacy_role") == "explorer"
+                and spec.metadata.get("role_id") == role_id
+            ):
+                return spec.node_id
+        raise KeyError(role_id)
+
+    def _node(self, node_id: str) -> NodeRun:
+        return next(
+            node
+            for node in self.runtime.repository.list_node_runs(self.graph_run_id)
+            if node.node_id == node_id
+        )
+
+
 class SequentialCodingWorkflow:
     """Role-driven coding workflow with isolated sessions and read-only parallelism.
 
@@ -122,8 +389,11 @@ class SequentialCodingWorkflow:
 
     _MAX_EXPLORERS = 4
 
-    def __init__(self, service: ApplicationService) -> None:
+    def __init__(
+        self, service: ApplicationService, graph_runtime: GraphRuntime | None = None
+    ) -> None:
         self.service = service
+        self.graph_runtime = graph_runtime or GraphRuntime(SQLiteGraphRepository(service.store))
 
     def validate_configuration(
         self,
@@ -217,6 +487,31 @@ class SequentialCodingWorkflow:
             self.service.release_workflow_execution_lease(execution_lease)
             raise
 
+        try:
+            graph_bridge = CodingWorkflowGraphBridge.create(
+                self.graph_runtime,
+                legacy_workflow_run_id=run.id,
+                task=task,
+                workspace=workspace_path,
+                planner_role_id=planner_role_id,
+                explorer_role_ids=explorer_role_ids,
+                coder_role_id=coder_role_id,
+                reviewer_role_id=reviewer_role_id,
+                main_role_id=main_role_id,
+                max_parallel_explorers=max_parallel_explorers,
+                max_rework_rounds=max_rework_rounds,
+                resumed_from_id=resumed_from_id,
+            )
+        except BaseException:
+            self.service.update_workflow_run_if_status(
+                run.id,
+                expected_status=WorkflowRunStatus.RUNNING,
+                status=WorkflowRunStatus.INTERRUPTED,
+                last_error_type="graph_projection_initialization_failed",
+            )
+            self.service.release_workflow_execution_lease(execution_lease)
+            raise
+
         terminal = False
         guard_lost = asyncio.Event()
         steps = self._run_steps(
@@ -234,6 +529,7 @@ class SequentialCodingWorkflow:
             resumed_from_id=resumed_from_id,
             memory_enabled=memory_enabled,
             memory_project_scope=memory_scope_path,
+            graph_bridge=graph_bridge,
         )
 
         async def heartbeat_execution_lease() -> None:
@@ -271,6 +567,7 @@ class SequentialCodingWorkflow:
                     break
                 if self.service.get_workflow_run(run.id).status is WorkflowRunStatus.CANCELLED:
                     terminal = True
+                    graph_bridge.cancel()
                     break
                 if not self.service.verify_workflow_execution_lease(execution_lease):
                     guard_lost.set()
@@ -287,6 +584,7 @@ class SequentialCodingWorkflow:
                         yield persisted_memory_event
                 event = raw_event.model_copy(update={"workflow_run_id": run.id})
                 event = self._persist_workflow_event(run.id, event)
+                graph_bridge.observe(event)
                 transition_terminal = self._advance_workflow_run(run.id, event)
                 terminal = transition_terminal or terminal
                 yield event
@@ -318,6 +616,12 @@ class SequentialCodingWorkflow:
                     status=WorkflowRunStatus.INTERRUPTED,
                     last_error_type="stream_interrupted",
                 )
+                current = self.service.get_workflow_run(run.id)
+            if current.status in {
+                WorkflowRunStatus.INTERRUPTED,
+                WorkflowRunStatus.MANUAL_RECONCILE_REQUIRED,
+            }:
+                graph_bridge.interrupt()
             self.service.release_workflow_execution_lease(execution_lease)
 
     async def resume(
@@ -383,6 +687,7 @@ class SequentialCodingWorkflow:
         resumed_from_id: str | None = None,
         memory_enabled: bool = True,
         memory_project_scope: str | Path | None = None,
+        graph_bridge: CodingWorkflowGraphBridge,
     ) -> AsyncGenerator[WorkflowEvent, None]:
         if not 0 <= max_rework_rounds <= 3:
             raise ValueError("max_rework_rounds must be between 0 and 3")
@@ -416,6 +721,7 @@ class SequentialCodingWorkflow:
             role="planner",
             role_id=planner_role_id,
         )
+        graph_bridge.before_role(role="planner", role_id=planner_role_id, checkpoint=planner_result)
         if planner_result is None:
             async for event in self._stream_role(
                 workflow_run_id=workflow_run_id,
@@ -445,6 +751,13 @@ class SequentialCodingWorkflow:
             )
             for role_id in explorer_role_ids
         ]
+        graph_bridge.start_explorer_stage()
+        for capture in explorers:
+            graph_bridge.before_role(
+                role="explorer",
+                role_id=capture.role_id,
+                checkpoint=explorer_checkpoints.get(capture.role_id),
+            )
         pending_explorers = [
             capture for capture in explorers if capture.role_id not in explorer_checkpoints
         ]
@@ -468,6 +781,7 @@ class SequentialCodingWorkflow:
                     yield event
         explorer_results = [capture.result() for capture in explorers]
         results.extend(explorer_results)
+        graph_bridge.finish_explorer_stage()
 
         coder_result = self._checkpoint_for(checkpoint_results, "coder", coder_role_id)
         coder = self._capture_from_checkpoint(
@@ -475,6 +789,7 @@ class SequentialCodingWorkflow:
             role="coder",
             role_id=coder_role_id,
         )
+        graph_bridge.before_role(role="coder", role_id=coder_role_id, checkpoint=coder_result)
         if coder_result is None:
             coder_message = self._coder_message(
                 task=task,
@@ -506,6 +821,9 @@ class SequentialCodingWorkflow:
             reviewer_result,
             role="reviewer",
             role_id=reviewer_role_id,
+        )
+        graph_bridge.before_role(
+            role="reviewer", role_id=reviewer_role_id, checkpoint=reviewer_result
         )
         if reviewer_result is None:
             async for event in self._stream_role(
@@ -555,6 +873,7 @@ class SequentialCodingWorkflow:
                         role_id=main_role_id,
                         after_role="reviewer",
                     ),
+                    graph_bridge=graph_bridge,
                 ):
                     yield event
                 return
@@ -567,6 +886,7 @@ class SequentialCodingWorkflow:
             )
             previous_coder_output = coder.final_content
             coder = RoleRunCapture(role="coder", role_id=coder_role_id)
+            graph_bridge.before_role(role="coder", role_id=coder_role_id)
             rework_message = (
                 f"原始任务：\n{task}\n\nPlanner 输出：\n{planner.final_content}\n\n"
                 f"Explorer 结构化结果：\n{self._results_json(explorer_results)}\n\n"
@@ -591,6 +911,7 @@ class SequentialCodingWorkflow:
                 return
 
             reviewer = RoleRunCapture(role="reviewer", role_id=reviewer_role_id)
+            graph_bridge.before_role(role="reviewer", role_id=reviewer_role_id)
             async for event in self._stream_role(
                 workflow_run_id=workflow_run_id,
                 message=self._reviewer_message(
@@ -638,6 +959,7 @@ class SequentialCodingWorkflow:
             memory_enabled=memory_enabled,
             memory_project_scope=memory_project_scope,
             main_checkpoint=None,
+            graph_bridge=graph_bridge,
         ):
             yield event
 
@@ -750,13 +1072,16 @@ class SequentialCodingWorkflow:
         memory_enabled: bool,
         memory_project_scope: str | Path | None,
         main_checkpoint: WorkflowSubtaskResult | None,
+        graph_bridge: CodingWorkflowGraphBridge,
     ) -> AsyncGenerator[WorkflowEvent, None]:
+        graph_bridge.select_verdict("APPROVED")
         if main_role_id is not None:
             main = self._capture_from_checkpoint(
                 main_checkpoint,
                 role="main",
                 role_id=main_role_id,
             )
+            graph_bridge.before_role(role="main", role_id=main_role_id, checkpoint=main_checkpoint)
             if main_checkpoint is None:
                 message = (
                     f"原始任务：\n{task}\n\nReviewer 结论：{verdict}\n\n"
@@ -822,8 +1147,11 @@ class SequentialCodingWorkflow:
                 workflow_execution_lease=execution_lease,
             ):
                 capture.observe(event.event_type, event.payload)
+                agent_id = self._persisted_runtime_agent_id(session.id, event.cursor)
                 yield WorkflowEvent(
                     role=capture.role,
+                    role_id=capture.role_id,
+                    agent_id=agent_id,
                     session_id=session.id,
                     event_type=event.event_type,
                     payload=event.payload,
@@ -833,10 +1161,19 @@ class SequentialCodingWorkflow:
             capture.failure_reason = type(exc).__name__
         yield WorkflowEvent(
             role=capture.role,
+            role_id=capture.role_id,
             session_id=capture.session_id,
             event_type="workflow.subtask_result",
             payload={"result": capture.result().model_dump(mode="json")},
         )
+
+    def _persisted_runtime_agent_id(self, session_id: str, cursor: int | None) -> str | None:
+        if cursor is None:
+            return None
+        events = self.service.list_events(session_id, after_cursor=cursor - 1, limit=1)
+        if not events or events[0].cursor != cursor:
+            return None
+        return events[0].agent_id
 
     @staticmethod
     def _require_readonly_role(slot: str, role: RolePreset) -> None:

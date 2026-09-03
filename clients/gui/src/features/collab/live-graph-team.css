@@ -1,0 +1,173 @@
+.live23-shell {
+  display: grid;
+  gap: 16px;
+  max-width: 1080px;
+}
+
+.live23-status,
+.live23-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.live23-error {
+  border-color: var(--status-error-text);
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+}
+
+.live23-card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.live23-card h2,
+.live23-card h3,
+.live23-card p,
+.live23-card ul,
+.live23-card ol {
+  margin: 0;
+}
+
+.live23-card h2 {
+  font-size: 18px;
+}
+
+.live23-card h3 {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.live23-form-grid,
+.live23-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.live23-form-grid label,
+.live23-card > label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.live23-form-grid input,
+.live23-card > label input,
+.live23-card textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.live23-card textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.live23-form-grid input:focus-visible,
+.live23-card > label input:focus-visible,
+.live23-card textarea:focus-visible {
+  outline: 2px solid var(--accent-action);
+  outline-offset: 2px;
+}
+
+.live23-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.live23-muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.live23-definition {
+  display: grid;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.live23-grid > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.live23-grid ul {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.live23-grid li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  overflow-wrap: anywhere;
+}
+
+.live23-grid li > span {
+  min-width: 0;
+}
+
+.live23-grid li > strong {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 719px) {
+  .live23-form-grid,
+  .live23-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .live23-card {
+    padding: 16px;
+  }
+
+  .live23-actions .btn {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live23-shell *,
+  .live23-shell *::before,
+  .live23-shell *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

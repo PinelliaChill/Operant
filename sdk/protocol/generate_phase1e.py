@@ -1415,6 +1415,12 @@ def _validate_document(document: dict[str, Any]) -> None:
             raise ValueError(f"{operation.operation_id} request body has no content")
 
 
+def _python_package_init() -> str:
+    """Keep the frozen Phase 1E symbols while exposing the additive Phase 2/3 line."""
+
+    return '''"""Generated Operant Python SDK entry points."""\n\nfrom .phase1e_generated import (\n    PHASE1E_MAX_CURSOR,\n    PHASE1E_PROTOCOL_VERSION,\n    PHASE1E_SCHEMA_DIGEST,\n    Phase1EClient,\n    ProtocolNegotiationError,\n)\nfrom .phase23_generated import (\n    PHASE23_MAX_CURSOR,\n    PHASE23_PROTOCOL_VERSION,\n    PHASE23_SCHEMA_DIGEST,\n    Phase23Client,\n)\nfrom .phase23_generated import (\n    ProtocolNegotiationError as Phase23ProtocolNegotiationError,\n)\nfrom .transport import Phase23Error\n\n__all__ = [\n    "PHASE1E_MAX_CURSOR",\n    "PHASE1E_PROTOCOL_VERSION",\n    "PHASE1E_SCHEMA_DIGEST",\n    "PHASE23_MAX_CURSOR",\n    "PHASE23_PROTOCOL_VERSION",\n    "PHASE23_SCHEMA_DIGEST",\n    "Phase1EClient",\n    "Phase23Client",\n    "Phase23Error",\n    "Phase23ProtocolNegotiationError",\n    "ProtocolNegotiationError",\n]\n'''
+
+
 def generate() -> str:
     document = _read_schema()
     _validate_document(document)
@@ -1424,10 +1430,7 @@ def generate() -> str:
         TS_PATH, _ts_models(document, digest) + "\n" + _render_ts_client(document, digest)
     )
     _write_if_changed(PY_PATH, _render_py_models(document, digest))
-    _write_if_changed(
-        PY_INIT_PATH,
-        '''"""Generated Phase 1E Python SDK."""\n\nfrom .phase1e_generated import (\n    PHASE1E_MAX_CURSOR,\n    PHASE1E_PROTOCOL_VERSION,\n    PHASE1E_SCHEMA_DIGEST,\n    Phase1EClient,\n    ProtocolNegotiationError,\n)\n\n__all__ = [\n    "PHASE1E_MAX_CURSOR",\n    "PHASE1E_PROTOCOL_VERSION",\n    "PHASE1E_SCHEMA_DIGEST",\n    "Phase1EClient",\n    "ProtocolNegotiationError",\n]\n''',
-    )
+    _write_if_changed(PY_INIT_PATH, _python_package_init())
     return digest
 
 

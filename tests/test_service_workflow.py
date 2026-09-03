@@ -7,6 +7,7 @@ import pytest
 
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow
+from operant.domain.graph import GraphRunStatus
 from operant.domain.messages import (
     Message,
     ModelResponse,
@@ -15,6 +16,7 @@ from operant.domain.messages import (
     ToolDefinition,
 )
 from operant.domain.models import Budget, ModelProfile, RolePreset, RoleSnapshot, ToolPolicy
+from operant.persistence.graph_team import SQLiteGraphRepository
 from operant.persistence.sqlite import SQLiteStore
 
 
@@ -290,6 +292,70 @@ async def test_readonly_explorers_run_in_parallel_and_handoff_results(tmp_path: 
     assert events[-1].event_type == "workflow.completed"
     assert events[-1].payload["verdict"] == "APPROVED"
 
+    graph_repository = SQLiteGraphRepository(service.store)
+    graph_run = graph_repository.get_run_by_legacy_workflow_run_id(events[-1].workflow_run_id)
+    definition = graph_repository.get_definition(
+        graph_run.workflow_definition_id, graph_run.workflow_definition_version
+    )
+    node_by_role_id = {
+        str(spec.metadata["role_id"]): spec.node_id
+        for spec in definition.nodes
+        if spec.metadata.get("role_id") is not None
+    }
+    completed_by_role_id = {
+        event.role_id: event for event in completed if event.role_id is not None
+    }
+    assert set(completed_by_role_id) == {
+        "role_planner",
+        "role_explorer",
+        "role_api_explorer",
+        "role_coder",
+        "role_reviewer",
+        "role_main",
+    }
+    for role_id, completed_event in completed_by_role_id.items():
+        assert completed_event.agent_id is not None
+        assert completed_event.agent_id != role_id
+        node = next(
+            node
+            for node in graph_repository.list_node_runs(graph_run.id)
+            if node.node_id == node_by_role_id[role_id]
+        )
+        attempt = graph_repository.list_attempts(node.id)[-1]
+        assert attempt.agent_instance_id == completed_event.agent_id
+
+
+@pytest.mark.asyncio
+async def test_graph_bridge_leaves_agent_instance_null_when_agent_creation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = service_with_roles(tmp_path, ImmediateProvider())
+
+    def fail_agent_creation(session_id: str):
+        del session_id
+        raise RuntimeError("agent factory unavailable")
+
+    monkeypatch.setattr(service.factory, "create_agent", fail_agent_creation)
+    events = [
+        event
+        async for event in SequentialCodingWorkflow(service).run(
+            task="Fix calculator",
+            workspace=tmp_path,
+            planner_role_id="role_planner",
+            coder_role_id="role_coder",
+            reviewer_role_id="role_reviewer",
+        )
+    ]
+
+    graph_repository = SQLiteGraphRepository(service.store)
+    graph_run = graph_repository.get_run_by_legacy_workflow_run_id(events[-1].workflow_run_id)
+    planner_node = next(
+        node for node in graph_repository.list_node_runs(graph_run.id) if node.node_id == "planner"
+    )
+    planner_attempt = graph_repository.list_attempts(planner_node.id)[-1]
+    assert planner_attempt.agent_instance_id is None
+    assert planner_attempt.agent_instance_id != "role_planner"
+
 
 @pytest.mark.asyncio
 async def test_explorer_timeout_is_structured_and_nonfatal(tmp_path: Path) -> None:
@@ -323,6 +389,9 @@ async def test_explorer_timeout_is_structured_and_nonfatal(tmp_path: Path) -> No
     assert explorer_result["completed_steps"] == ["agent.started", "agent.timed_out"]
     assert '"status":"timed_out"' in provider.user_messages["Coder"].replace(" ", "")
     assert events[-1].event_type == "workflow.completed"
+    graph_repository = SQLiteGraphRepository(service.store)
+    graph_run = graph_repository.get_run_by_legacy_workflow_run_id(events[-1].workflow_run_id)
+    assert graph_run.status is GraphRunStatus.COMPLETED
 
 
 def test_parallel_slots_reject_writable_explorer(tmp_path: Path) -> None:
@@ -375,6 +444,13 @@ async def test_rework_is_explicit_and_bounded(tmp_path: Path) -> None:
     ]
     assert [event.event_type for event in events].count("workflow.rework_started") == 1
     assert [event.event_type for event in events].count("workflow.rework_limit_reached") == 1
+    graph_repository = SQLiteGraphRepository(service.store)
+    graph_run = graph_repository.get_run_by_legacy_workflow_run_id(events[-1].workflow_run_id)
+    coder_node = next(
+        node for node in graph_repository.list_node_runs(graph_run.id) if node.node_id == "coder"
+    )
+    assert graph_run.status is GraphRunStatus.FAILED
+    assert len(graph_repository.list_attempts(coder_node.id)) == 2
 
 
 @pytest.mark.asyncio

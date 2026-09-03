@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-02
+> 最后更新：2026-09-03
 >
-> 对应版本：Operant 2.0 Phase 1E 客户端真实接入基线（`phase1e.v1`）
+> 对应版本：Operant 2.0 Phase 2 Graph Runtime + Phase 3 本地 Team Runtime（`phase23.v1`；`phase1e.v1` 冻结）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -32,6 +32,10 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 8. 用可复现快照、隔离 artifact、外部验证、指标聚合和 Trace 根因分析对 Session/Workflow 做评测。
 9. 通过单一 Schema 生成客户端，并让 React GUI 在明确的 live 模式中连接本地 Core；Mock 仅作为
    明确标识的演示模式保留。
+10. 把 Workflow Definition、发布 Revision、Graph Run、NodeRun 与 NodeAttempt 分开持久化，以编译期
+    校验、运行边界和已提交事实支持 Graph 恢复；现有 Coding Workflow 作为兼容入口投影到同一运行时。
+11. 用本地 Team、Roster、定向 Mailbox、Task/Artifact Board 和幂等 Ack 支持单 Core 内协作；消息只做
+    投影与上下文输入，不裁决 Graph、Approval 或副作用。
 
 ## 2. 当前完成度
 
@@ -86,11 +90,49 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - `POST /v1/sessions` 可选接收 `thread_id`，提供时在一个 `BEGIN IMMEDIATE` 事务内创建 Session 并写入
   唯一 `thread_legacy_refs(session)`；不存在、非 active 或已绑定的 Thread 会安全失败且不留下孤儿
   Session，未提供该字段的旧 CLI/API 行为继续兼容；
-- React GUI 已建立明确分离的 Mock/live 模式；live 只调用生成的 Phase 1E Client，经同源 `/v1` 连接
-  Core，覆盖协议协商、Workspace/Project、Thread、Session 创建与既有绑定、Run SSE 回放/重连、Approval
-  与类型化错误/人工核对状态。请求或重连失败会显式显示，不静默回退或混入 Mock 数据；
+- React GUI 已建立明确分离的 Mock/live 模式；Phase 1E 表面只调用冻结的生成 Client，Graph/Team 表面
+  只调用 additive Phase 23 生成 Client，均经同源 `/v1` 连接 Core。请求或重连失败会显式显示，
+  不静默回退或混入 Mock 数据；
+- Phase 2 新增 Graph IR 与 Compiler：严格区分 Draft Definition、Published Revision、Graph Run、
+  NodeRun 和 NodeAttempt；校验端口、边、条件、Loop 上限、并行/递归/子 Agent 上限、写入幂等等级和
+  插件/Scheduler 排除项，发布后的版本不可变；
+- Graph Runtime 持久化运行、节点、尝试和只追加事件；以已提交输出做 fixed-point 依赖推进，明确
+  区分未选 Condition 分支、ALL/ANY Join、timeout/Loop limit 路由，并在开始 Attempt 时强制
+  `max_parallel_nodes`。节点进入 Human Input/Approval 等边界时会聚合检查其他 READY/RUNNING/
+  RETRY_WAIT 节点，不会把可运行的并行兄弟一起冻结；只有没有其他活跃节点时 Run 才进入等待。
+  Entry、实际下游输入和成功输出都会在任何状态写入前校验 required port、声明类型和有限 JSON；
+  缺失的可选源输出会禁用对应边，不以 `None` 冒充值。Condition DSL 只按 Token 转换布尔字面量，
+  不改写字符串内容；Loop 成功输出与时间、Token、费用、子 Agent、递归遥测均 fail-closed 校验。
+  Timer 保留为 IR 枚举但 Compiler 在本阶段明确拒绝，未实现后台 Scheduler；
+- Graph 恢复只从已提交事实重算派生 READY/SKIPPED 状态：Attempt 已提交成功但尚未推进下游的崩溃
+  窗口可恢复；幂等未知结果沿用首次逻辑动作键安全重试，未知非幂等写节点进入
+  `manual_reconcile_required`，API 不提供强制重放开关。取消、失败或预算超限会在同一收口中终结其他
+  未完成节点；迟到的边界输入不能复活终态 Run，同时保留未知非幂等副作用的人工核对状态；
+- 既有 `SequentialCodingWorkflow` 已迁移为 Graph Runtime 的兼容协调入口。每个 legacy WorkflowRun
+  绑定一个 GraphWorkflowRun，Planner、Explorer、Coder、Reviewer、Main 和有限返工都形成 NodeRun/
+  Attempt；Attempt 只绑定实际持久化的 AgentInstance ID，不用 RolePreset ID 冒充。Coder 在调用现有
+  Application Service 前记录副作用开始，仍由 Action Gateway 执行工具；
+- Phase 3 新增本地 Team Definition/Run、Roster、单条 canonical Message 与逐接收人 Mailbox Delivery。
+  消息正文按显式接收人投影为不可信上下文；消息或 `ApprovalRequested` 通知不能改写 Graph 状态或
+  代替 Approval 决定；
+- Team Run、初始非空 Roster、Team Event、Graph 绑定回填与 Graph Event 在同一事务创建，并以
+  `BEGIN IMMEDIATE` + `team_run_id IS NULL` CAS 保证单 Core 下一个 Graph 只绑定一个 Team；冲突、
+  并发竞争或后续写入失败会整体回滚。该入口受 `max_active_agents` 约束。消息时间线要求明确
+  viewer，在 SQLite 分页前过滤：定向消息仅发送者与接收者可见，owner/audit 行不进入普通 UI；
+  Task/Artifact Board 使用 revision 和幂等键更新，Mailbox Ack 持久保存首次事实，同 key 重试返回
+  完全相同的 Ack；
+- 新增 `phase23.v1` additive OpenAPI Schema 和确定性 TypeScript/Python Client，共 25 个 Graph/Team
+  operation；两个生成器共同维护兼容的 Python 包入口，Phase 1E 的 Schema、digest、专属 TS/Python
+  Client 文件和 8-operation 行为保持逐字冻结。Graph/Team Event 固定公开 `event_id`、
+  `schema_version=phase23.v1`、资源内 `run_sequence`、Cursor 和 scope；Graph 先创建，Team 再通过唯一
+  原子入口绑定，`StartGraphRunRequest` 不暴露无法成立的反向 Team 输入；
+- React GUI live 模式已接通 Graph 定义/启动、运行节点与 SSE 监控、legacy Coding Workflow Run 映射，
+  以及本地 Team/Roster/消息/Mailbox Ack/Task/Artifact Board；Core Projection 与 Cursor 仍是权威，
+  错误或断线不会回退 Mock。切换 Graph Run、Team Run 或 viewer 时先立即清空旧 scope 投影，再以查询
+  epoch 丢弃迟到 resolve/reject，避免旧运行状态或定向消息短暂泄漏到新 scope；SSE 正常 EOF 后先做
+  权威 Query 校正，只有已持久终态回到 idle，非终态 EOF 明确显示断线并保留 Cursor 重连语义；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1/v2/v3/v4/v5/v6/v7/v8 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1/v2/v3/v4/v5/v6/v7/v8/v9 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -139,9 +181,10 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 使用真实 Provider 完成 Exp 19—24、形成统计性实验结论和用户学习验收；
 - 自动模型价格发现、显著性分析，以及中断 Evaluation Run 的逐 Result 自动续跑；
 - Web 身份认证、设备配对和远程访问控制；
-- 通用 Graph Runtime、Definition Compiler、Team/Mailbox 和智能创建；
-- Phase 1E 以外的完整 TypeScript/Python SDK、完整 React GUI/PWA、Textual TUI 和 Tauri 桌面壳；当前
-  生成 Client 与 React live 面只覆盖冻结的 8 个最小 operation；
+- Graph Proposal/智能创建、通用后台调度器、Timer 执行与任意第三方节点执行器；当前通用 Graph API
+  负责定义、状态推进、投影和恢复，只有现有 Coding Workflow 兼容入口接通真实 Agent 执行；
+- Phase 1E/Phase 23 以外的完整 TypeScript/Python SDK、完整 React GUI/PWA、Textual TUI 和 Tauri
+  桌面壳；当前生成 Client 与 React live 面覆盖冻结 Phase 1E 和新增 Graph/本地 Team operation；
 - 复杂 `@` 引用、Provider Cache 的执行/复制，以及面向非可信 HTTP 客户端的 Artifact capability 签发；
 - Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
 
@@ -153,9 +196,11 @@ flowchart LR
     CLI["Typer CLI"]
     API["FastAPI / SSE"]
     Web["内置 Web 工作台"]
-    GUI["React GUI · Phase 1E live / 显式 Mock"]
-    SDK["phase1e.v1 生成 TypeScript/Python Client"]
-    Workflow["Planner → Explorer(s) → Coder → Reviewer → Main"]
+    GUI["React GUI · Phase 1E + Graph/Team live / 显式 Mock"]
+    SDK["phase1e.v1 冻结 + phase23.v1 生成 Client"]
+    Graph["Graph Compiler / Runtime / Recovery"]
+    Team["Local Team / Mailbox / Boards"]
+    Workflow["Coding Workflow 兼容协调入口"]
     Evaluation["Evaluation Runner v1"]
     Service["ApplicationService"]
     Store["SQLiteStore"]
@@ -177,9 +222,14 @@ flowchart LR
     Web --> API
     GUI --> SDK
     SDK --> API
+    API --> Graph
+    API --> Team
     CLI --> Service
     API --> Service
-    Workflow --> Service
+    Workflow --> Graph
+    Graph --> Service
+    Graph --> Store
+    Team --> Store
     CLI --> Evaluation
     API --> Evaluation
     Evaluation --> Service
@@ -209,14 +259,15 @@ workspace 工具。
 
 ```text
 operant/
-├── clients/gui/                  # React GUI；live 只消费生成的 Phase 1E Client
+├── clients/gui/                  # React GUI；live 消费冻结 Phase 1E 与新增 Phase 23 Client
 ├── sdk/
-│   ├── protocol/schema/          # phase1e.v1 单一 OpenAPI Schema 与固定 digest
-│   ├── protocol/generate_phase1e.py # 离线确定性生成器
+│   ├── protocol/schema/          # phase1e.v1 冻结 Schema + phase23.v1 additive Schema/digest
+│   ├── protocol/generate_phase*.py # 两个协议面的离线确定性生成器
 │   ├── python_client/            # 生成模型 + Python 传输/SSE Client
 │   └── typescript-client/        # 生成模型 + TypeScript 传输/SSE Client
 ├── src/operant/
-│   ├── api.py                    # FastAPI、Session API、SSE
+│   ├── api.py                    # FastAPI 主入口、Session API、SSE
+│   ├── api_phase23.py            # Graph/Team REST、Projection 与 SSE
 │   ├── cli.py                    # Typer CLI
 │   ├── settings.py               # 本地配置入口
 │   ├── application/
@@ -224,16 +275,20 @@ operant/
 │   │   ├── defaults.py           # 五个稳定 ID 的默认角色
 │   │   ├── evaluation.py         # Evaluation Runner、隔离 artifact、指标与 Trace RCA
 │   │   ├── factory.py            # Session / Agent 创建工厂
-│   │   ├── protocol_metadata.py  # phase1e.v1 版本与 Schema digest
+│   │   ├── graph.py              # Graph Compiler、状态机、边界和恢复
+│   │   ├── protocol_metadata.py  # phase1e.v1/phase23.v1 版本与 Schema digest
 │   │   ├── service.py            # CLI/API/Workflow 共用的用例层
+│   │   ├── team.py               # Team 消息、Mailbox、Task/Artifact Board 用例
 │   │   ├── trace.py              # Session / Workflow Trace 与脱敏 JSONL
-│   │   └── workflow.py           # 编排、持久化检查点、恢复和 Memory 接入
+│   │   └── workflow.py           # Coding Workflow Graph bridge、兼容协调与 Memory 接入
 │   ├── domain/
 │   │   ├── actions.py            # Tool/REST Receipt、Approval 与审计领域模型
 │   │   ├── evaluation.py         # Suite/Case/Variant/Run/Result、快照、指标和失败分类
+│   │   ├── graph.py              # Definition/IR、GraphRun、NodeRun/Attempt 与边界
 │   │   ├── memory.py             # 三类 Memory、作用域和激活规则
 │   │   ├── models.py             # Model、Role、Snapshot、Session、Agent、Event
 │   │   ├── messages.py           # 模型消息、Tool Call、Provider usage/cache facts
+│   │   ├── team.py               # Team/Roster/Mailbox/消息/Task/Artifact Board
 │   │   ├── threads.py            # Thread/Item、Artifact、Retention 与 CacheObservation
 │   │   └── workflow.py           # WorkflowRun、状态、阶段和任务事件
 │   ├── artifacts/
@@ -241,7 +296,8 @@ operant/
 │   │   ├── export.py             # Workspace 目录身份绑定的不覆盖显式导出
 │   │   └── store.py              # 内容寻址 blob、审计枚举、原子发布/删除与路径边界
 │   ├── persistence/
-│   │   └── sqlite.py             # Registry、Session、Agent、Event Store
+│   │   ├── graph_team.py         # Graph/Team SQLite Repository 与投影
+│   │   └── sqlite.py             # Registry、Session、Agent、Migration 与 Event Store
 │   ├── providers/
 │   │   ├── base.py               # ModelProvider 协议
 │   │   └── openai_compatible.py  # OpenAI-compatible 实现
@@ -275,6 +331,8 @@ Domain 定义数据和约束，不依赖 FastAPI、Typer、SQLite 或具体模�
 - `src/operant/domain/memory.py`
 - `src/operant/domain/workflow.py`
 - `src/operant/domain/evaluation.py`
+- `src/operant/domain/graph.py`
+- `src/operant/domain/team.py`
 
 ### Application
 
@@ -296,15 +354,18 @@ Application Service 负责用例编排：
 - 为副作用 Tool Call 注入持久化 Action Gateway，管理 Receipt、精确 Action Hash 与审批记录；
 - 根据最终事件更新 Agent 状态；
 - 持久化 Workflow 事件、推进任务状态并支持阶段边界恢复；
+- 编译、启动和恢复 Graph，推进 NodeRun/Attempt、Condition/Loop/边界状态，并以 revision 防止陈旧写入；
+- 维护本地 Team/Roster、定向消息投影、Mailbox/Ack 和带 revision 的 Task/Artifact Board；
 - 执行 Memory 作用域、FTS 检索、候选确认和版本管理；
 - 聚合 Session / Workflow Trace，并导出脱敏 JSONL。
 - 生成只读 Project/Thread/Workspace File 客户端投影；
 - 持久化 Evaluation Suite/Run/Result，按固定顺序运行隔离对照，核对声明快照与实际快照，执行外部
   验证并聚合指标和根因证据。
 
-`SequentialCodingWorkflow` 是固定、可解释的应用层协调器。它只通过 Application Service
-选择 Role Preset、创建隔离 Session 和运行 Agent，不直接访问 SQLite；Reviewer 批准后，可再运行
-一个可替换的只读 Main Role 生成最终汇总。动态模型路由和自治委派不属于 v1.0 范围。
+`SequentialCodingWorkflow` 保留为固定、可解释的兼容协调入口，通过 `CodingWorkflowGraphBridge`
+把每个 legacy WorkflowRun 和角色阶段映射到 Graph Run/NodeRun/Attempt。Agent 实际执行仍只通过
+Application Service 选择 Role Preset、创建隔离 Session 和调用 Agent Loop；Graph 记录编排状态，
+不会复制 Action Gateway、Approval 或工具执行。动态模型路由和自治委派不属于当前范围。
 
 ### Runtime
 
@@ -323,8 +384,8 @@ Infrastructure 包含：
 
 ### Interface
 
-CLI、FastAPI、内置 Web 工作台和 Phase 1E React GUI 是外部入口。Web 只调用 FastAPI；React GUI 的
-live 路径只调用由单一 Schema 生成的 Client，并以 Core Query/SSE Projection 为权威。CLI/API 的业务
+CLI、FastAPI、内置 Web 工作台和 React GUI 是外部入口。Web 只调用 FastAPI；React GUI 的 live 路径
+只调用冻结 Phase 1E 与新增 Phase 23 Schema 生成的 Client，并以 Core Query/SSE Projection 为权威。CLI/API 的业务
 用例调用 Application Service，不自行实现 Agent 循环。FastAPI 的协议中间件会直接使用 SQLiteStore
 保存 REST Command Receipt；CLI 是本地进程内入口，不经过该 REST 中间件。
 
@@ -650,6 +711,51 @@ heartbeat；每个新 child Session 在同一 admission 事务中同时核对 Wo
 时，第二实例 `initialize()` 不会中断该 run；TTL 到期后才转为 `interrupted`，随后显式 resume 创建新的
 WorkflowRun ID 并从阶段检查点恢复。没有 v4 guard/child lease 的 legacy 或孤立 `running` row 在
 `initialize()` 时立即转为 `interrupted`，不使用会掩盖真实崩溃的时间宽限。
+
+### Graph Definition、Run、NodeRun 与 Attempt
+
+`WorkflowDefinition` 保存不可变版本、输入/输出 Schema、NodeSpec、EdgeSpec、GraphLimits、预算、Policy
+和锁定的 Role/Provider 版本。Draft 可以先编译；publish 会生成新的 Published Revision，不原地改写
+Draft。Compiler 拒绝重复或缺失节点/端口、类型不匹配、非法条件、无边界 Loop、未声明写入语义、
+插件依赖和 Timer/Scheduler，并固定所有 Subworkflow 版本。
+
+`GraphWorkflowRun` 固定 Definition Revision、输入、workspace/target、Team 关联、预算与 Policy Snapshot；
+`NodeRun` 保存节点状态、输入/输出引用、retry/iteration、wait token、活动 Attempt 和 revision；
+`NodeAttempt` 保存执行序号、Agent/Action Receipt 关联、结果、错误与副作用状态。副作用状态从
+`not_started` 到 `started`/`committed`，无法证明结果时只允许 `unknown` 并把节点和 Run 转为人工核对。
+
+Condition 只开放不使用 Python `eval` 的受限表达式。Runtime 从已提交输出做 fixed-point 依赖推进：
+未选分支会沿依赖链变为 SKIPPED，ANY 在任一有效输入后就绪，ALL 等待所有输入完成，Join 会聚合实际
+运行的分支而不因未选分支死锁。Loop 同时受迭代、时间、Token、费用、子 Agent、递归和无进展签名
+限制；时间和费用必须是有限非负数，Token、子 Agent 与递归深度必须是非负整数，成功终止 Loop 前还要
+满足 required output。时间、Token、费用和子 Agent 数是调用方提供的累计遥测，不冒充自动计量。
+所有入口、实际下游输入和成功输出都在 Attempt/状态写入前按 port required/type 与可持久化 JSON 校验；
+可选源端口缺失会禁用边。Human Input 通过节点 wait token 恢复；Approval Node 只保存等待关联，必须由
+既有 Approval Request/Decision 路径裁决。
+
+启动 Core 时，Repository 会找出可恢复的 Graph Run，并从 Attempt/Node 已提交事实重算派生路由；
+即使进程在成功 Attempt 与下游推进之间崩溃，也不会重放成功动作。STARTED/UNKNOWN 的幂等 Attempt
+沿用首次 key 重试；未知非幂等写进入 `manual_reconcile_required`。通用 Graph API 本阶段没有后台
+Scheduler 或任意节点执行器；现有 Coding Workflow bridge 是唯一接通真实 Agent Loop 的执行路径。
+
+### Team、Roster、Mailbox 与 Board
+
+`TeamDefinition` 固定成员槽位、版本和 `max_active_agents`；`TeamRun` 绑定精确 Graph Run。公开流程先
+创建 Graph，再由 Team 创建命令在一个 SQLite `BEGIN IMMEDIATE` 事务内写入 Team、非空 Roster、Team
+初始 Event，以 CAS 回填 Graph 的 `team_run_id`/revision，并追加 Graph Event；并发第二个 Team 或任一
+后续失败都会整体回滚。`StartGraphRunRequest` 不接受无法预知的反向 Team ID。`RosterEntry` 把成员槽位
+绑定到隔离 AgentInstance 和 Thread。单 Core、单 SQLite 是唯一权威，不存在第二 Writer 或远程 Team。
+
+每次发送只创建一条不可变 `MessageEnvelope`，并在同一事务写入每个接收人的 `MailboxDelivery` 与
+outbox 事实。普通消息时间线必须给出 Roster viewer，SQLite 在 LIMIT 前按可见性过滤；定向消息只对
+发送者和明确接收者可见，`hidden`/`owner_audit` 不进入普通 UI。模型只看到指定给自己的 bounded、
+不可信消息投影；大正文必须先保存为 Artifact 并发送引用。Team 消息、`ApprovalRequested` 或 Ack
+都不能改写 Graph 状态、替代持久 Approval、调用工具或绕过 Action Gateway。
+
+`MessageAck` 精确绑定 Delivery、Message、Team、Recipient、Cursor 和幂等键。首次 Ack 完整持久化，
+同 key 重试返回首个 Ack；key 或 scope 冲突明确失败。Task Board 和 Artifact Board 使用
+`expected_revision` 与幂等键做单调更新，Artifact Board 只发布已有 Artifact metadata，并按 viewer
+过滤接收范围，不复制 Artifact 正文。
 
 ### Memory
 
@@ -1011,6 +1117,20 @@ SQLiteStore 当前创建以下表：
 | `btw_sidecar_runs` | 保存 Sidecar 冻结 Item Cursor、独立 Agent/Revision、状态与显式提升关联 |
 | `btw_sidecar_events` | 按资源 Cursor 保存 Sidecar started/model_completed/failed/promoted 事实 |
 | `phase1d_command_audit_events` | 保存 `/init`、Review 和 Context Command 的只追加 Receipt 关联审计 |
+| `workflow_definitions` | 保存 Draft/Published Graph Definition Revision 与规范 hash |
+| `graph_workflow_runs` | 保存 Graph Run、Definition Snapshot 关联、预算、状态和 legacy Workflow 映射 |
+| `graph_run_leases` | 预留 Graph 单协调者租约、token、generation 与 TTL；本阶段不启用多 Writer |
+| `node_runs` | 保存每个节点的状态、输入/输出引用、等待 token、iteration 和 revision |
+| `node_attempts` | 保存节点每次执行、Receipt/Agent 关联、结果和副作用状态 |
+| `graph_run_events` | 按 Graph Run Cursor 保存带 event_id/schema_version/run_sequence 的只追加运行事件 |
+| `team_definitions` | 保存版本化本地 Team Definition |
+| `team_runs` | 保存绑定 Graph Run 的本地 Team 实例 |
+| `team_roster` | 保存成员槽位到 AgentInstance/Thread 的运行期绑定 |
+| `team_messages` | 保存单条 canonical Team Message 和消息 Cursor |
+| `mailbox_deliveries` | 保存逐接收人投影、Delivery Cursor 与首次 Ack 事实 |
+| `team_tasks` | 保存带 revision 的 Task Board 投影 |
+| `artifact_board_items` | 保存已有 Artifact 的接收范围和 revision 投影 |
+| `team_run_events` | 按 Team Run Cursor 保存带 event_id/schema_version/run_sequence 的消息、Ack 与 Board 事件 |
 
 当前使用 Python 标准库 `sqlite3`，每个 Store 操作创建独立连接，并启用外键约束。写操作使用
 事务；异常时回滚。Migration 使用 `BEGIN IMMEDIATE`，当前版本为：
@@ -1025,6 +1145,8 @@ SQLiteStore 当前创建以下表：
 8. v8：Slash/Context Command、Workspace 注册、Review、BTW Sidecar 与 Command Audit；同时只为
    `THREAD_ITEMS` Compaction 放宽同 Session/Thread 的跨 Agent 后续引用，普通 ContextRevision
    Compaction 仍强制同 Agent。
+9. v9：Graph Definition/Run/Lease、NodeRun/Attempt/Event 与本地 Team/Run/Roster/Message/Mailbox/
+   Task/Artifact Board/Event；冻结 manifest/checksum，并保持 v1—v8 DDL、名称和 checksum 不变。
 
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
@@ -1061,8 +1183,9 @@ preview 收编、逐步升级、每步 manifest 复验和历史写入全部位�
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
 随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
-回滚 v8 要求全部 Phase 1D 注册、基线、Run、Event 与 Audit 表为空，并精确恢复 v7 的两条严格
+v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+回滚 v9 要求全部 Graph/Team 定义、运行、事件、消息、Ack 与 Board 表为空；回滚 v8 要求全部 Phase 1D
+注册、基线、Run、Event 与 Audit 表为空，并精确恢复 v7 的两条严格
 Compaction owner trigger；回滚 v7 要求全部 Phase 1C 投影、审计和 Observation 表为空，回滚 v6 要求全部 Phase 1B 表为空，
 回滚 v5 要求全部 Phase 1A 表为空，回滚 v4 要求两张 execution
 lease 表为空，继续回滚 v3 还要求
@@ -1163,7 +1286,8 @@ workspace 绝对路径。
 | 方法 | 路径 | 功能 |
 |---|---|---|
 | `GET` | `/healthz` | 健康检查 |
-| `GET` | `/v1/protocol` | 协商 `phase1e.v1`、Schema digest、最小 Client 与 capability |
+| `GET` | `/v1/protocol` | 协商冻结 `phase1e.v1`、Schema digest、最小 Client 与 capability |
+| `GET` | `/v1/protocol/phase23` | 独立协商 additive `phase23.v1`、digest 与 Graph/Team capability |
 | `GET` | `/v1/projects` | 查询已登记 Workspace 的只读 Project/Thread/Workflow 聚合投影 |
 | `GET` | `/v1/workspaces/{workspace_id}/files` | 安全列出 Workspace 相对目录的有界 metadata |
 | `GET` | `/v1/slash-commands` | 查询冻结版本的 Slash Command Registry |
@@ -1216,6 +1340,27 @@ workspace 绝对路径。
 | `GET` | `/v1/artifact-audits` | 零写审计 Blob、引用、损坏和非安全对象 |
 | `POST` | `/v1/artifact-repairs/orphan-blob` | 重新核验 finding 后显式修复一个孤儿 Blob |
 | `GET` | `/v1/cache-observations` | 按 Cursor 查询不含正文/原始 cache key 的 Provider 缓存事实 |
+| `POST` | `/v1/graph/workflows/drafts` | 保存 Draft Definition，不视为已发布或已执行 |
+| `POST` | `/v1/graph/workflows/{id}/compile` | 编译指定 Draft Revision 并返回诊断与 definition hash |
+| `POST` | `/v1/graph/workflows/{id}/publish` | 编译通过后创建新的不可变 Published Revision |
+| `GET` | `/v1/graph/workflows/{id}/definitions/{version}` | 查询精确 Definition Revision |
+| `POST` | `/v1/graph/runs` | 固定 Published Revision 并创建/启动未绑定 Team 的 Graph Run |
+| `GET` | `/v1/graph/runs/by-legacy/{workflow_run_id}` | 查询既有 Coding Workflow 绑定的 Graph Run |
+| `GET` | `/v1/graph/runs/{id}` | 查询 Graph Run 与当前节点投影 |
+| `GET` | `/v1/graph/runs/{id}/nodes` | 查询 NodeRun 与全部 Attempt |
+| `GET` | `/v1/graph/runs/{id}/events/stream` | 按 Graph Run Cursor 回放已提交事件 |
+| `POST` | `/v1/graph/runs/{id}/resume` | 从安全持久边界恢复；拒绝强制重放未知副作用 |
+| `POST` | `/v1/graph/runs/{id}/cancel` | 取消 Graph Run 并持久传播节点终态 |
+| `POST` | `/v1/graph/runs/{id}/nodes/{node_id}/input` | 用 wait token 提交 Human Input；不处理 Approval |
+| `POST` | `/v1/teams/definitions` | 保存版本化本地 Team Definition |
+| `POST` | `/v1/teams/runs` | 原子绑定 Graph Run 并创建 Team Run/Roster/初始事件；同一 Graph 仅一个 Team |
+| `GET` | `/v1/teams/runs/{id}` | 查询 Team Run 与 Roster Projection |
+| `POST/GET` | `/v1/teams/runs/{id}/messages` | 发送 canonical Message；GET 必须带 Roster viewer 并按 Cursor 查询可见消息 |
+| `GET` | `/v1/teams/runs/{id}/mailbox/{agent_id}` | 查询指定接收人的 Mailbox Projection |
+| `POST` | `/v1/teams/runs/{id}/mailbox/{agent_id}/{delivery_id}/ack` | 幂等确认精确 Delivery/Cursor |
+| `GET/POST` | `/v1/teams/runs/{id}/tasks[/{task_id}]` | 查询或以 expected revision 更新 Task Board |
+| `GET/POST` | `/v1/teams/runs/{id}/artifacts` | 按 viewer 查询或发布已有 Artifact Projection |
+| `GET` | `/v1/teams/runs/{id}/events/stream` | 按 Team Run Cursor 回放已提交事件 |
 | `POST` | `/v1/workflows/coding/runs` | 运行角色驱动的多 Agent Workflow 并返回 SSE |
 | `POST/GET` | `/v1/tasks` | 运行 Workflow，或查询已持久化任务 |
 | `GET` | `/v1/tasks/{id}` | 查询任务状态、阶段和角色选择 |
@@ -1239,7 +1384,7 @@ workspace 绝对路径。
 SSE 的 `event` 字段使用 RuntimeEvent 或 Workflow 事件类型，`data` 是完整事件 JSON。Workflow
 事件额外包含角色槽位和 Session ID，使客户端可以区分并行 Explorer，并针对当前角色提交审批。
 
-### Phase 1E 生成 Client 边界
+### Phase 1E / Phase 23 生成 Client 边界
 
 `sdk/protocol/schema/operant-phase1e.openapi.json` 是 Phase 1E 正式 Client 面的唯一协议源。固定生成器
 离线产生 TypeScript/Python 公共模型与调用方法，生成文件不得手工修改；旧 GUI demo 的手写类型只服务
@@ -1253,6 +1398,14 @@ Client 首次 live 连接必须核对 `protocol_version` 与生成物内嵌的 S
 有界 frame 和 JSON 错误，Cursor 在 JavaScript 中保持无损 `bigint`，Reducer 以资源 scope、stream kind
 和 Cursor 去重。网络断开后，GUI 先回放同 scope 已提交 Cursor，再查询 Project/Thread/Approval 投影
 校正；本地 Store 只保存选择、UI 布局、有限事件窗口和未提交输入，不裁决运行或恢复终态。
+
+`sdk/protocol/schema/operant-phase23.openapi.json` 是 Phase 2/3 的 additive Graph/Team 协议源，由独立
+固定生成器产生 25 个 TypeScript/Python operation。它复用 Phase 1E 的错误、Receipt、Cursor、SSE 与
+幂等语义，但不修改 `phase1e.v1` 的 Schema、digest 或生成文件。Graph/Team Client 修改方法要求调用方
+稳定复用幂等键；SSE Cursor 仍按资源 scope 去重，不能跨 Graph Run、Team Run 或 legacy Workflow
+互换。Graph/Team Event 都公开稳定 `event_id`、`phase23.v1` schema version 与资源内 run sequence。
+Graph 创建请求不接受 Team ID；Team 创建请求才是 Graph↔Team 的唯一原子绑定入口。未知副作用只返回
+人工核对恢复建议，Client 或 GUI 不能将其改写为可安全重放。
 
 ### REST Command Receipt 与统一错误
 
@@ -1335,8 +1488,9 @@ SSE 只承诺回放已经提交 SQLite 的事件，不承诺从任意模型字�
 
 ## 15. 角色驱动的多 Agent 编排
 
-`SequentialCodingWorkflow` 是应用层的确定性协调器。它使用明确选择的 Role ID 创建独立
-Session；CLI/API 默认流程是 Planner → 一个只读 Explorer → Coder → Reviewer → Main 最终汇总。
+`SequentialCodingWorkflow` 是应用层的确定性兼容协调器。它使用明确选择的 Role ID 创建独立
+Session，并通过 `CodingWorkflowGraphBridge` 把每次 legacy WorkflowRun 映射到固定 Definition Revision
+和 Graph Run；CLI/API 默认流程是 Planner → 一个只读 Explorer → Coder → Reviewer → Main 最终汇总。
 调用方可以替换任意角色，并提供最多 4 个不同的只读 Explorer；只有 Explorer 槽位允许并行，
 Coder 始终独占写阶段。Reviewer 只有在明确给出 `VERDICT: REWORK` 时，才会让 Coder 进入下一轮：
 
@@ -1373,6 +1527,12 @@ sequenceDiagram
 模型消息历史。每个结果记录 `role_id` 和 `session_id`，因此自定义角色和实际执行配置可以回溯。
 Explorer 超时、取消、达到轮次上限或异常时会产生结构化失败结果，后续角色和 Main 可看到该失败；
 必需的 Planner、Coder、Reviewer 或启用的 Main 失败时产生 `workflow.failed` 并停止，不会用空输出继续。
+
+每个角色阶段同时产生 NodeRun/NodeAttempt；Explorer 失败遵循 `skip`，不会阻止 Join，但失败摘要仍
+进入后续结构化输入。Coder 是 `non_idempotent`、`manual_reconcile` 节点：调用 Agent Session 前先把
+Attempt 记为 `started`，只有既有 Workflow 阶段提交成功后才记为 `committed`。Reviewer 的条件结果和
+Loop 节点控制有限返工；每轮返工产生新的 Coder/Reviewer Attempt，而不是覆盖历史。停止、取消、流
+关闭或恢复会同时推进 legacy 与 Graph 投影，二者仍以同一 SQLite 已提交事实为准。
 
 Workflow 通过 CLI 和 API/SSE 暴露，并有确定性 Provider 集成测试。CLI 与 API 默认最多返工
 1 轮，可设为 0 到 3；缺少明确 verdict 时发出事件但不自动修改 workspace，以避免含糊审查
@@ -1538,6 +1698,25 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 - React GUI live adapter/state 覆盖显式 Mock 分离、同源连接、持久 Thread→Session 恢复、Cursor scope、
   SSE 重连/去重、Approval、manual reconcile、有限事件窗口、无静默回退和移动端演示状态；真实浏览器
   另核对宽/窄屏、暗色、键盘首焦点、缩放、实际 Core 投影、审批动作和断线状态。
+- Graph Compiler 覆盖重复/缺失节点与端口、类型和条件、非法 cycle/loop back、递归/子 Agent上限、
+  非幂等重试、插件与 Timer/Scheduler 拒绝；Graph Runtime 覆盖 fixed-point Condition/Fan-out/ALL/ANY
+  Join、并行上限、有限 Loop/limit handler、SKIP、Human Input/Approval 分流、cancel/interruption、
+  required/type/有限 JSON 端口、实际聚合输入、严格 Loop 遥测、字符串布尔字面量、等待边界与并行兄弟
+  继续执行、终态/预算失败拒绝迟到边界输入、成功提交后崩溃恢复、稳定幂等键和未知非幂等副作用人工核对；
+- Coding Workflow bridge 覆盖 legacy Run 一一映射、Planner/Explorer/Coder/Reviewer/Main Attempt、
+  Explorer 超时跳过、Coder committed/unknown、有限返工多 Attempt、恢复来源与流关闭收束；
+- v8→v9 保留数据升级、重复初始化、事务失败、冻结 manifest/checksum、空 v9 受限回滚和非空拒绝；
+- Team 覆盖 Definition、Graph CAS + Run + 非空 Roster + 双侧 Event 的单事务绑定、并发单胜者与故障
+  注入回滚、active-agent 上限、canonical Message + 原子多接收人 Delivery、viewer 级时间线隔离、
+  SQLite 过滤后分页、不可信上下文投影、大消息 Artifact 边界、幂等 Ack 首次事实返回、Cursor/scope
+  冲突，以及 Task/Artifact Board revision 和幂等更新；
+- `phase23.v1` 覆盖 25-operation 形状、digest、双 Client 确定性生成、Python 3.10/TypeScript 类型、
+  Receipt/幂等、Graph/Team Event identity/version/sequence 与 SSE Cursor，并拒绝 Graph 创建时的反向
+  Team 输入；同时逐字核对 `phase1e.v1` Schema/digest/专属 Client 文件未变，并验证两个生成器按任意
+  顺序重建同一个兼容 Python 包入口；
+- React GUI 覆盖 Graph 定义/启动、Node/Attempt 运行监控、legacy Coding Workflow Run 映射、Team/Roster/
+  Message/Mailbox Ack/Task/Artifact Board、scope 切换即时清空与迟到响应隔离，以及窄屏、横屏、暗色、
+  键盘焦点、断线和 reduced motion。
 
 本地验证命令：
 
@@ -1546,12 +1725,31 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy src
 uv run pytest
-uv lock --check
+uv lock --check --offline
 git diff --check
 npm run test --prefix clients/gui
 npm run typecheck --prefix clients/gui
 npm run build --prefix clients/gui
 ```
+
+2026-09-03 的 Phase 2/3 验收使用隔离 v9 SQLite、确定性 Provider、实际 localhost Uvicorn、生成
+TypeScript/Python Client 和真实浏览器；完整 pytest 为 503 通过、1 个条件性 Docker 测试跳过、1 个既有
+Starlette 警告，GUI 为 44 项测试通过。Ruff format/check、mypy、`uv lock --check --offline`、GUI
+typecheck/build、两套生成器双次复现和 `git diff --check` 均通过。真实浏览器验证 Graph Definition/
+Run/SSE、Team 定向 Mailbox 与 Ack、Run/viewer scope 切换即时清空、宽屏与窄屏、深色、高对比键盘
+首焦点、reduced motion 以及 Core 断线显式失败且不回退 Mock。该证据不包含外部真实模型或 Docker E2E；
+条件性 Docker skip 不视为容器验收，Vite 814.79 kB 主 chunk 提示保留为性能债务。
+
+同日按正式门禁先在项目根目录执行 `uv run operant model discover`，再使用发现结果中的精确模型 ID
+`gpt-5.6-luna`，通过正式 ModelProfile 完成一次只读 Session 调用和一次 Coding Workflow 调用。Session
+返回 `REAL_MODEL_OK`，用量为 537 tokens；Workflow 的 Planner、Explorer、Coder、Reviewer、Main 共
+完成 5 次模型调用，Reviewer 给出 `APPROVED`，总用量为 4,772 tokens，模型请求耗时合计 33.732 秒，
+没有 Tool Call 或 workspace 写入。该 Workflow 的持久 Graph 投影为 `completed`：10 个 NodeRun、7 个
+成功 Attempt、27 个连续 `phase23.v1` Graph Event 均可从隔离 SQLite 重新读取。运行时凭据仅注入目标
+进程，没有复制到隔离 worktree、运行日志、文档或 SQLite；但前置 `.env` 规范化时工具错误曾在本地
+操作输出中回显现有 API Key，因此该 Key 必须轮换。该受控 smoke 证明当前 Provider、Session、Coding
+Workflow 与 Graph bridge 的真实模型链路可用；它不等于真实模型执行工具/写入、真实模型加 Docker
+Coder、GUI 外部模型端到端或 Exp 19—24 验收，Team 本身也没有独立模型调用入口。
 
 2026-09-02 的 Phase 1E 验收使用隔离 SQLite/Workspace、确定性 Provider、实际 localhost Uvicorn、
 生成 Python Client 和真实浏览器；完整 pytest 为 402 通过、1 个条件性 Docker 测试跳过、1 个既有
@@ -1649,17 +1847,19 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 ## 18. 已知技术债务
 
 1. SQLite 使用同步 API，运行规模扩大后需要评估异步边界；
-2. Workflow 仍是固定状态机和有限次数返工；恢复只发生在已持久化的阶段边界，不支持从任意模型
-   流位置继续。Coder 写入结果未知时必须人工核对，不能无人值守恢复；
+2. Coding Workflow 已迁移到 Graph Runtime，但兼容协调入口仍按固定角色顺序调用真实 Agent，通用
+   Graph API 尚无后台 Scheduler/任意节点执行器；恢复只发生在已持久化边界，不支持从任意模型流位置
+   继续。Coder 写入结果未知时必须人工核对，不能无人值守恢复；
 3. Approval Request、Decision 和 Audit 已持久化，但待审批工具调用的 `Future` 与任意模型流位置仍只
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-5. 已有 v1/v2/v3/v4/v5/v6/v7/v8 原子 Migration、旧库识别升级、Session run lease 和 Workflow execution lease，
+5. 已有 v1/v2/v3/v4/v5/v6/v7/v8/v9 原子 Migration、旧库识别升级和 Session/Workflow lease；v9 的
+   Graph lease 表只预留单协调者结构，本阶段未启用通用 Graph 多进程 Writer，
    但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
    Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
-6. Session/Workflow/Evaluation 已有 Cursor 和已提交事件回放，Phase 1E GUI 也会按同 scope Cursor
-   回放并查询投影校正，但仍不支持任意模型流位置续传；SSE 断线不保证后台继续。冻结协议没有
+6. Session/Workflow/Evaluation/Graph/Team 已有 Cursor 和已提交事件回放，GUI 会按同 scope Cursor
+   回放并查询投影校正，但仍不支持任意模型流位置续传；SSE 断线不保证后台继续。Phase 1E 冻结协议没有
    Session 列表/详情 Query，因此刷新后 GUI 只能从 Thread 的权威 `session_id` 恢复运行入口，并把角色/
    模型详情明确标为未查询，不能伪造本地详情；
 7. Web 工作台、Phase 1E GUI 和 API 没有身份认证、CSRF 防护、设备配对或 Remote Gateway，只能绑定
@@ -1672,11 +1872,10 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 9. Docker Runner 已跑通真实隔离集成用例，第三周六角色 Workflow 也已在可信临时 Host fixture 上
     完成真实模型验收；两者仍是不同证据，尚未完成“真实模型 + Docker Coder”的同一次端到端验收，
     也尚未构建专用 Operant 镜像；
-10. React GUI 只实现 Phase 1E 的 8-operation live 基线；导入草稿中的 Graph、Team、Skill/MCP、
-    Scheduler、Remote 等页面仍是明确的 Mock/demo，不是后端实现证据。通用 Graph Runtime、
-    Definition/Revision、Team/Mailbox、完整 PWA、TUI、Tauri、Remote Control、Host Connector、自托管
-    Relay、Remote Gateway 和 Remote Execution Target 均未实现，当前 `/web` 与 `/v1/*` 也不得直接
-    暴露到公网。
+10. React GUI 已实现 Phase 1E 与 Phase 23 Graph/本地 Team live 面；Skill/MCP、Scheduler、OAuth、
+    Remote 等页面仍是明确的 Mock/demo，不是后端实现证据。Graph Proposal/智能创建、通用后台节点
+    调度、完整 PWA、TUI、Tauri、Remote Control、Host Connector、自托管 Relay、Remote Gateway 和
+    Remote Execution Target 均未实现，当前 `/web` 与 `/v1/*` 也不得直接暴露到公网。
 11. Artifact 已有对象级 Retention、Pin、宽限期、Trash、只读审计和显式孤儿修复，但
     Session/Workflow/Evaluation 事件、Thread Canonical History、Tool/Command Receipt、Approval Audit、
     Memory 和 Context/Compaction 仍没有清理执行器，会随运行持续增长；Artifact 也没有后台自动清扫，
@@ -1693,9 +1892,9 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
     MCP 与 Scheduler 仍按 COM-20260831-004 拆为后续阶段，当前没有动态命令注册、MCP transport 或
     定时副作用执行。BTW Sidecar 的主动取消通知仍是本进程协作式信号；跨进程重启只会安全标为
     `process_interrupted`，不会从任意模型流位置恢复或自动继续。
-15. GUI 当前生产 bundle 约 777 kB，Vite 会给出大 chunk 警告；Phase 1E 尚未做按路由拆包、真实大目录/
+15. GUI 当前生产 bundle 约 815 kB，Vite 会给出大 chunk 警告；尚未做按路由拆包、真实大 Graph/Team/
     长事件流性能基准、浏览器矩阵或 Tauri WebView 验收。旧 demo SDK 类型继续只服务明确 Mock 表面，
-    不得扩展为第二套正式协议；后续 live operation 必须先进入单一 Schema 再生成两种 Client。
+    不得扩展为第二套正式协议；后续 live operation 必须先进入对应单一 Schema 再生成两种 Client。
 
 ## 19. 文档维护规则
 
@@ -1726,6 +1925,37 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-09-03（Phase 2 Graph Runtime + Phase 3 本地 Team Runtime）
+
+- 从冻结 `origin/main@4cbf828` 建立隔离分支，主 Agent 独占公共 Schema、SQLite v9 Migration 与最终
+  集成；保留 `phase1e.v1` Schema、digest、生成物和 8-operation 行为不变；
+- 新增 Graph IR/Compiler、Draft/Published Revision、GraphRun/NodeRun/Attempt、条件、Fan-out/Join、
+  有界 Loop、Human Input/Approval/Wait/Subworkflow 边界、预算、取消和持久恢复；依赖从已提交事实做
+  fixed-point 推进，强制并行上限，成功 Attempt 后崩溃可恢复，幂等未知结果沿用首次 key；Timer 因
+  Scheduler 明确排除而在编译期拒绝，未知非幂等副作用继续进入人工核对；等待边界不会冻结并行兄弟，
+  终态和预算失败拒绝迟到边界输入，不会复活 Run；返工补齐端口 required/type/有限 JSON、缺失可选
+  输出禁边、实际下游聚合输入、严格 Loop 遥测与成功输出校验，以及只转换 Token 的 Condition 布尔字面量；
+- 将现有 Coding Workflow 经 bridge 投影到 Graph Runtime，保留原 CLI/API、Role/Session、Action
+  Gateway、Receipt、Approval、Cursor 与恢复契约；Attempt 绑定实际 AgentInstance 而不是 RolePreset，
+  Coder 仍独占写入，返工追加 Attempt 而不覆盖历史；
+- 新增本地 Team/Run/Roster、canonical Message、逐接收人 Mailbox、首次事实幂等 Ack、Task Board 与
+  Artifact Board；Team/非空 Roster/初始 Team Event、Graph CAS 回填与 Graph Event 原子创建，并发只允许
+  一个 Team 绑定同一 Graph，错误全回滚；消息按 Roster viewer 在分页前过滤，定向消息只对发送者与
+  接收者可见；消息投影不能裁决 Graph/Approval，也不能绕过 Action Gateway；
+- 新增冻结 manifest/checksum 的 SQLite v9、`phase23.v1` additive Schema、25-operation TS/Python
+  Client 和 React GUI Graph/运行监控/本地 Team live 面；两个生成器重建兼容 Python 包入口，Phase 1E
+  专属 Schema/digest/Client 文件仍冻结；Event 增加稳定 identity/version/run sequence，Graph 创建契约
+  移除无法成立的反向 Team 输入；GUI 切换 Graph Run、Team Run、viewer 或 workspace 时先清空旧投影，
+  丢弃迟到 resolve/reject，并在 SSE EOF 后查询权威终态；Skill/MCP、Scheduler、安全控制面扩建、OAuth、
+  Remote、TUI、Tauri 与多 Writer 保持排除；
+- 独立 `gpt-5.6-sol` medium Reviewer 连续三轮检查边缘情况、并发、回滚、恢复、性能与协议一致性；前两轮
+  的 P1/P2 已全部返工，第三轮复跑最小复现、100 个后端聚焦测试和 44 个 GUI 测试后给出
+  `VERDICT: APPROVED`，未发现 P0/P1/P2；
+- 先执行 `uv run operant model discover`，再以发现的精确模型 `gpt-5.6-luna` 通过正式 ModelProfile
+  完成只读 Session 与五阶段 Coding Workflow 真实调用；Reviewer 为 `APPROVED`，持久 Graph 投影包含
+  10 个 NodeRun、7 个成功 Attempt 和 27 个连续 `phase23.v1` Event。该 smoke 不含工具执行、workspace
+  写入、Docker Coder、GUI 外部模型端到端或 Exp 19—24；
 
 ### 2026-09-02
 
