@@ -452,9 +452,7 @@ def install_phase45_routes(
             + ActionRequest.calculate_hash({"root_refs": list(selected_refs)}),
         )
         try:
-            result = SkillDiscovery(
-                selected_roots, limits=SkillDiscoveryLimits()
-            ).discover()
+            result = SkillDiscovery(selected_roots, limits=SkillDiscoveryLimits()).discover()
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         persisted: list[dict[str, Any]] = []
@@ -462,11 +460,7 @@ def install_phase45_routes(
             root_candidates = tuple(
                 candidate for candidate in result.candidates if candidate.root_index == root_index
             )
-            persisted.extend(
-                phase_repository.replace_skill_candidates(
-                    root_ref, root_candidates
-                )
-            )
+            persisted.extend(phase_repository.replace_skill_candidates(root_ref, root_candidates))
         return {
             "candidates": persisted,
             "issues": [issue.model_dump(mode="json") for issue in result.issues],

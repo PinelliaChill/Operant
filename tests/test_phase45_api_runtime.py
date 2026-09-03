@@ -31,9 +31,7 @@ def test_skill_discovery_persists_only_untrusted_safe_projection(tmp_path: Path)
         encoding="utf-8",
     )
     with TestClient(
-        create_app(
-            tmp_path / "operant.sqlite3", phase45_skill_roots={"test-root": root}
-        )
+        create_app(tmp_path / "operant.sqlite3", phase45_skill_roots={"test-root": root})
     ) as client:
         response = client.post("/v1/skills/discover", json={})
         assert response.status_code == 200, response.text
@@ -92,9 +90,7 @@ def test_stdio_mcp_lifecycle_snapshot_call_and_gateway_audit(tmp_path: Path) -> 
         "transport": "stdio",
         "stdio_argv": [sys.executable, str(server)],
     }
-    app = create_app(
-        tmp_path / "operant.sqlite3", phase45_policy_engine=_approved_phase45_policy()
-    )
+    app = create_app(tmp_path / "operant.sqlite3", phase45_policy_engine=_approved_phase45_policy())
     with TestClient(app) as client:
         assert client.post("/v1/mcp/servers", json=body).status_code == 201
         started = client.post("/v1/mcp/servers/local-test/start")
