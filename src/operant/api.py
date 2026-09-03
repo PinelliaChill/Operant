@@ -5,7 +5,7 @@ import base64
 import binascii
 import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qsl, quote
@@ -1283,6 +1283,8 @@ def create_app(
     artifact_capability_secret: bytes | None = None,
     physical_delete_enabled: bool = False,
     physical_delete_authorization: str | None = None,
+    phase45_skill_roots: Mapping[str, str | Path] | None = None,
+    phase45_policy_engine: Any | None = None,
 ) -> FastAPI:
     load_local_env()
     store = SQLiteStore(db_path or database_path())
@@ -3432,7 +3434,12 @@ def create_app(
         return memory.model_dump(mode="json")
 
     install_phase23_routes(app, store)
-    install_phase45_routes(app, store)
+    install_phase45_routes(
+        app,
+        store,
+        skill_roots=phase45_skill_roots,
+        policy_engine=phase45_policy_engine,
+    )
 
     # Added last so this pure ASGI guard wraps the BaseHTTP command middleware:
     # oversized chunked bodies fail before request.body() can buffer them.

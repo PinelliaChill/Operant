@@ -225,6 +225,23 @@ class SQLiteSchedulerStore:
             ).fetchall()
         return tuple(str(row["schedule_id"]) for row in rows)
 
+    def list_schedules(self, *, limit: int = 200) -> tuple[ScheduleDefinition, ...]:
+        if not 1 <= limit <= 500:
+            raise ValueError("schedule limit is invalid")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT d.definition_json, h.status FROM schedule_heads h "
+                "JOIN schedule_definitions d ON d.schedule_id=h.schedule_id "
+                "AND d.version=h.current_version ORDER BY h.schedule_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(
+            ScheduleDefinition.model_validate_json(row["definition_json"]).model_copy(
+                update={"status": ScheduleStatus(row["status"])}
+            )
+            for row in rows
+        )
+
     def update_schedule_status(
         self, schedule_id: str, status: ScheduleStatus, *, expected_version: int
     ) -> ScheduleDefinition:
@@ -780,6 +797,26 @@ class SQLiteSchedulerStore:
         if row is None:
             raise KeyError(request_id)
         return self._run_request(row)
+
+    def list_requests(
+        self,
+        *,
+        status: RunRequestStatus | None = None,
+        limit: int = 200,
+    ) -> tuple[RunRequest, ...]:
+        if not 1 <= limit <= 500:
+            raise ValueError("run request limit is invalid")
+        query = "SELECT * FROM run_requests"
+        parameters: tuple[object, ...]
+        if status is None:
+            parameters = (limit,)
+        else:
+            query += " WHERE status = ?"
+            parameters = (status.value, limit)
+        query += " ORDER BY created_at DESC, request_id LIMIT ?"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return tuple(self._run_request(row) for row in rows)
 
     def list_attempts(self, request_id: str) -> tuple[JobAttempt, ...]:
         with self._connect() as connection:

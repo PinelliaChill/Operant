@@ -76,8 +76,9 @@ class FakeGateway:
         action_hash: str,
         target_ref: str,
         schema_sha256: str,
+        arguments: Mapping[str, Any],
     ) -> McpGatewayResult:
-        del target_ref, schema_sha256
+        del target_ref, schema_sha256, arguments
         lease = None
         if self.decision == GatewayDecision.ALLOW:
             lease = McpCapabilityLease(

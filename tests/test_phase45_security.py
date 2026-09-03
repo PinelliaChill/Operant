@@ -59,9 +59,9 @@ def _action(
 
 def test_v10_migration_is_frozen_append_only_and_refuses_lossy_rollback(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "security.sqlite3")
-    store.initialize()
+    store.migrate(10)
     assert store.schema_version() == 10
-    migration = store._migrations()[-1]
+    migration = next(item for item in store._migrations() if item.version == 10)
     assert migration.name == "phase4_security_control_plane"
     assert migration.checksum == SQLiteStore._FROZEN_MIGRATION_CHECKSUMS[10]
 

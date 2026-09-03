@@ -37,6 +37,12 @@ PHASE45_CAPABILITIES: tuple[str, ...] = (
     "capability_lease",
     "security_audit",
     "policy_remediation",
+    "controlled_skill_discovery",
+    "mcp_stdio",
+    "mcp_legacy_sse",
+    "durable_scheduler_queue",
+    "job_lease",
+    "dead_letter_replay",
 )
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 

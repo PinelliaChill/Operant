@@ -44,13 +44,32 @@ def test_phase45_schema_and_clients_are_reproducible_and_additive() -> None:
         "issueCapabilityLease",
         "consumeCapabilityLease",
         "listSecurityAudit",
+        "discoverSkills",
+        "listSkills",
+        "createMcpServer",
+        "updateMcpServer",
+        "listMcpServers",
+        "deleteMcpServer",
+        "listMcpTools",
+        "startMcpServer",
+        "stopMcpServer",
+        "callMcpTool",
+        "createSchedule",
+        "updateSchedule",
+        "listSchedules",
+        "getSchedule",
+        "setScheduleStatus",
+        "triggerSchedule",
+        "listSchedulerQueue",
+        "listDeadLetter",
+        "replayDeadLetter",
     }
     serialized = json.dumps(document, sort_keys=True).lower()
     for excluded in ("remote", "relay", "oauth", "tui", "tauri", "browser", "computer"):
         assert excluded not in serialized
 
 
-def test_phase45_generated_clients_expose_security_operations() -> None:
+def test_phase45_generated_clients_expose_phase45_operations() -> None:
     python_source = Path("sdk/python_client/phase45_generated.py").read_text(encoding="utf-8")
     typescript_source = Path("sdk/typescript-client/phase45.generated.ts").read_text(
         encoding="utf-8"
@@ -63,6 +82,25 @@ def test_phase45_generated_clients_expose_security_operations() -> None:
         "issueCapabilityLease",
         "consumeCapabilityLease",
         "listSecurityAudit",
+        "discoverSkills",
+        "listSkills",
+        "createMcpServer",
+        "updateMcpServer",
+        "listMcpServers",
+        "deleteMcpServer",
+        "listMcpTools",
+        "startMcpServer",
+        "stopMcpServer",
+        "callMcpTool",
+        "createSchedule",
+        "updateSchedule",
+        "listSchedules",
+        "getSchedule",
+        "setScheduleStatus",
+        "triggerSchedule",
+        "listSchedulerQueue",
+        "listDeadLetter",
+        "replayDeadLetter",
     ):
         assert operation in python_source
         assert operation in typescript_source

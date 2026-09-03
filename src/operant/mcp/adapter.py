@@ -91,7 +91,9 @@ class McpCapabilityLease(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     lease_id: str = Field(min_length=1, max_length=300)
+    lease_ids: tuple[str, ...] = ()
     action_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    security_action_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     server_id: str = Field(min_length=1, max_length=200)
     tool_name: str = Field(min_length=1, max_length=200)
     expires_at_monotonic: float = Field(gt=0, allow_inf_nan=False)
@@ -139,6 +141,7 @@ class McpActionGateway(Protocol):
         action_hash: str,
         target_ref: str,
         schema_sha256: str,
+        arguments: Mapping[str, Any],
     ) -> McpGatewayResult: ...
 
     async def verify_lease(
@@ -567,6 +570,7 @@ class McpAdapter:
             action_hash=action_hash,
             target_ref=self.target_ref,
             schema_sha256=tool.schema_sha256,
+            arguments=dict(arguments),
         )
         if result.decision != GatewayDecision.ALLOW or result.lease is None:
             await self.action_gateway.record_audit(
