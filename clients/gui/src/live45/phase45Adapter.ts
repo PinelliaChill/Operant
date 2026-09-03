@@ -11,6 +11,10 @@ export interface Phase45ClientLike {
   deleteMcpServer(id: string): Promise<Record<string, unknown>>;
   listMcpTools(id: string): Promise<Record<string, unknown>>;
   explainPolicy(request: Phase45.NormalizeActionBody): Promise<Record<string, unknown>>;
+  listSecurityAudit(
+    actionHash: string,
+    options?: Phase45.ListSecurityAuditOptions,
+  ): Promise<Record<string, unknown>>;
 }
 
 export interface Phase45UiError {
@@ -62,6 +66,7 @@ export interface LiveMcpTool {
 }
 
 export interface LivePolicyEvaluation {
+  actionHash: string;
   decision: 'allow' | 'ask' | 'deny';
   reasonCode: string;
   riskLevel: string;
@@ -70,6 +75,16 @@ export interface LivePolicyEvaluation {
   matchedRuleIds: string[];
   explanation?: unknown;
   remediation?: unknown;
+}
+
+export interface LiveSecurityAuditFact {
+  eventId: string;
+  cursor: number | bigint;
+  principal: string;
+  eventType: string;
+  decision?: 'allow' | 'ask' | 'deny';
+  ruleIds: string[];
+  createdAt: string;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -178,6 +193,7 @@ export function mapPolicyEvaluation(value: unknown): LivePolicyEvaluation {
   const decision = evaluation.decision;
   if (decision !== 'allow' && decision !== 'ask' && decision !== 'deny') throw new Error('Policy decision 无效。');
   return {
+    actionHash: text(evaluation.action_hash, 'Policy evaluation.action_hash'),
     decision,
     reasonCode: text(evaluation.reason_code, 'Policy evaluation.reason_code'),
     riskLevel: text(evaluation.risk_level, 'Policy evaluation.risk_level'),
@@ -187,6 +203,34 @@ export function mapPolicyEvaluation(value: unknown): LivePolicyEvaluation {
     explanation: source.explanation,
     remediation: source.remediation,
   };
+}
+
+export function mapSecurityAudit(value: unknown): LiveSecurityAuditFact[] {
+  return items(value, 'Security audit').map((entry) => {
+    const event = record(entry, 'Security audit event');
+    const rawCursor = event.cursor;
+    const cursor = typeof rawCursor === 'bigint'
+      ? rawCursor
+      : typeof rawCursor === 'number' && Number.isSafeInteger(rawCursor) && rawCursor >= 1
+        ? rawCursor
+        : typeof rawCursor === 'string' && /^[1-9][0-9]*$/.test(rawCursor)
+          ? BigInt(rawCursor)
+          : undefined;
+    if (cursor === undefined) throw new Error('Security audit event.cursor 无效。');
+    const decision = event.decision;
+    if (decision !== null && decision !== undefined && decision !== 'allow' && decision !== 'ask' && decision !== 'deny') {
+      throw new Error('Security audit event.decision 无效。');
+    }
+    return {
+      eventId: text(event.event_id, 'Security audit event.event_id'),
+      cursor,
+      principal: text(event.principal, 'Security audit event.principal'),
+      eventType: text(event.event_type, 'Security audit event.event_type'),
+      decision: decision ?? undefined,
+      ruleIds: Array.isArray(event.rule_ids) ? event.rule_ids.filter((item): item is string => typeof item === 'string') : [],
+      createdAt: text(event.created_at, 'Security audit event.created_at'),
+    };
+  });
 }
 
 export function normalizePhase45Error(error: unknown): Phase45UiError {
@@ -220,4 +264,7 @@ export class Phase45LiveAdapter {
   async deleteMcpServer(id: string) { await this.client.deleteMcpServer(id); }
   async listMcpTools(id: string) { return mapMcpTools(await this.client.listMcpTools(id)); }
   async explainPolicy(request: Phase45.NormalizeActionBody) { return mapPolicyEvaluation(await this.client.explainPolicy(request)); }
+  async listSecurityAudit(actionHash: string, afterCursor = 0, limit = 100) {
+    return mapSecurityAudit(await this.client.listSecurityAudit(actionHash, { afterCursor, limit }));
+  }
 }

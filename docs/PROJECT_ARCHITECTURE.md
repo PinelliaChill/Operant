@@ -131,7 +131,8 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   错误或断线不会回退 Mock。切换 Graph Run、Team Run 或 viewer 时先立即清空旧 scope 投影，再以查询
   epoch 丢弃迟到 resolve/reject，避免旧运行状态或定向消息短暂泄漏到新 scope；SSE 正常 EOF 后先做
   权威 Query 校正，只有已持久终态回到 idle，非终态 EOF 明确显示断线并保留 Cursor 重连语义；
-- React GUI 通过生成的 `Phase45Client` 与同源 `/v1` 接通 Policy dry-run/解释、受信根 Skill 候选发现与
+- React GUI 通过生成的 `Phase45Client` 与同源 `/v1` 接通 Policy dry-run/解释、每个 Action Hash 最多
+  100 条的安全审计事实投影、受信根 Skill 候选发现与
   列表、MCP Server 配置/启停/删除及工具快照；Skill 始终标为未信任候选，MCP 副作用继续由服务端
   Action Gateway 裁决，客户端不直接执行命令、不解析 Secret、不把 ASK/DENY 当作允许。审批决定仍
   使用现有 Session scope Approval Command，并等待 Core Projection 校正；Live 加载、空、错误和断线
@@ -1935,7 +1936,8 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 
 - GUI 复用生成的 `Phase45Client`、同源 Base URL 和显式 Client mode，增加独立 Phase 4/5A 适配与状态层；
 - Live 安全设置只提供 Policy dry-run/解释，不伪造可修改策略；Approval 继续按 Session scope 走正式
-  Command，ASK 与 DENY 不在客户端放行；
+  Command，ASK 与 DENY 不在客户端放行；安全审计列表只消费 cursor、时间、主体、事件、决定和规则
+  ID，不把服务端 detail、原始动作参数或 Secret 放入客户端状态；
 - Skill 页只展示 Core 受信根扫描出的未信任候选及安全 metadata；MCP 页接通配置、生命周期和工具
   Projection，启停/删除带确认，参数数组不经 Shell，端点与 Secret 仅接收引用名；
 - Demo 页面保持原有分支；新增 Node 适配/状态测试，并验证 typecheck 与生产 build。

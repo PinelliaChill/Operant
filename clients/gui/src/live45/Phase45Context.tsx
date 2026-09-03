@@ -7,12 +7,15 @@ import {
   type LiveMcpServer,
   type LiveMcpTool,
   type LivePolicyEvaluation,
+  type LiveSecurityAuditFact,
   type LiveSkillCandidate,
   type LiveSkillIssue,
   type Phase45UiError,
 } from './phase45Adapter';
+import { boundedAuditFacts } from './phase45State';
 
 type Phase45LoadPhase = 'idle' | 'loading' | 'ready' | 'error';
+export const SECURITY_AUDIT_LIMIT = 100;
 
 interface Phase45ContextValue {
   phase: Phase45LoadPhase;
@@ -20,6 +23,9 @@ interface Phase45ContextValue {
   skillIssues: LiveSkillIssue[];
   servers: LiveMcpServer[];
   toolsByServer: Record<string, LiveMcpTool[]>;
+  auditsByAction: Record<string, LiveSecurityAuditFact[]>;
+  auditLoadingActionHash?: string;
+  auditError?: Phase45UiError;
   error?: Phase45UiError;
   actionLabel?: string;
   refresh: () => Promise<void>;
@@ -30,6 +36,7 @@ interface Phase45ContextValue {
   deleteMcpServer: (id: string) => Promise<boolean>;
   loadMcpTools: (id: string) => Promise<void>;
   explainPolicy: (request: Phase45.NormalizeActionBody) => Promise<LivePolicyEvaluation | undefined>;
+  loadSecurityAudit: (actionHash: string) => Promise<void>;
 }
 
 const Phase45Context = createContext<Phase45ContextValue | null>(null);
@@ -42,6 +49,9 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
   const [skillIssues, setSkillIssues] = useState<LiveSkillIssue[]>([]);
   const [servers, setServers] = useState<LiveMcpServer[]>([]);
   const [toolsByServer, setToolsByServer] = useState<Record<string, LiveMcpTool[]>>({});
+  const [auditsByAction, setAuditsByAction] = useState<Record<string, LiveSecurityAuditFact[]>>({});
+  const [auditLoadingActionHash, setAuditLoadingActionHash] = useState<string>();
+  const [auditError, setAuditError] = useState<Phase45UiError>();
   const [error, setError] = useState<Phase45UiError>();
   const [actionLabel, setActionLabel] = useState<string>();
 
@@ -75,6 +85,9 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
       setSkillIssues([]);
       setServers([]);
       setToolsByServer({});
+      setAuditsByAction({});
+      setAuditLoadingActionHash(undefined);
+      setAuditError(undefined);
       setError(undefined);
       setActionLabel(undefined);
     }
@@ -145,10 +158,28 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
     return result;
   }, [adapter, runAction]);
 
+  const loadSecurityAudit = useCallback(async (actionHash: string) => {
+    if (clientMode !== 'live' || !/^[0-9a-f]{64}$/.test(actionHash)) return;
+    setAuditLoadingActionHash(actionHash);
+    setAuditError(undefined);
+    try {
+      const facts = await adapter.listSecurityAudit(actionHash, 0, SECURITY_AUDIT_LIMIT);
+      setAuditsByAction((current) => ({
+        ...current,
+        [actionHash]: boundedAuditFacts(facts, SECURITY_AUDIT_LIMIT),
+      }));
+    } catch (value: unknown) {
+      setAuditError(normalizePhase45Error(value));
+    } finally {
+      setAuditLoadingActionHash(undefined);
+    }
+  }, [adapter, clientMode]);
+
   return <Phase45Context.Provider value={{
-    phase, skills, skillIssues, servers, toolsByServer, error, actionLabel, refresh,
+    phase, skills, skillIssues, servers, toolsByServer, auditsByAction,
+    auditLoadingActionHash, auditError, error, actionLabel, refresh,
     discoverSkills, createMcpServer, startMcpServer, stopMcpServer, deleteMcpServer,
-    loadMcpTools, explainPolicy,
+    loadMcpTools, explainPolicy, loadSecurityAudit,
   }}>{children}</Phase45Context.Provider>;
 };
 
