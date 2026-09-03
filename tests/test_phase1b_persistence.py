@@ -352,7 +352,7 @@ def test_v1_through_v5_upgrade_to_v6_preserves_rows(
     store.initialize()
     store.initialize()
 
-    assert store.schema_version() == 10
+    assert store.schema_version() == 11
     assert store.get_model_profile(profile.id) == profile
     applied_v6 = next(
         migration for migration in store.list_applied_migrations() if migration["version"] == 6
@@ -454,7 +454,7 @@ def test_v6_failure_is_atomic_and_empty_rollback_is_explicit(tmp_path: Path) -> 
     empty = SQLiteStore(tmp_path / "empty.sqlite3")
     empty.initialize()
     assert empty.rollback(5, isolated=True) == 5
-    assert empty.migrate() == 10
+    assert empty.migrate() == 11
 
 
 def test_concurrent_v6_initialization_and_context_request_identity(tmp_path: Path) -> None:
@@ -462,7 +462,7 @@ def test_concurrent_v6_initialization_and_context_request_identity(tmp_path: Pat
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         versions = list(executor.map(lambda _value: SQLiteStore(database).migrate(), range(3)))
-    assert versions == [10, 10, 10]
+    assert versions == [11, 11, 11]
 
     store = SQLiteStore(database)
     _profile, _role, session, agent = _scope(store)
