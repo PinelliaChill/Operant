@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,25 @@ def _phase45_names(source: str) -> str:
     return renamed
 
 
+def _trim_unused_typescript_scaffolding(source: str) -> str:
+    """Remove base-client helpers that Phase 4/5A operations do not use."""
+    for imported_name in ("parseSse", "readText"):
+        if source.count(imported_name) == 1:
+            source = source.replace(f"  {imported_name},\n", "", 1)
+    for function_name in ("newIdempotencyKey", "requireIdempotencyKey", "cursorQuery"):
+        if source.count(f"{function_name}(") == 1:
+            source, replacements = re.subn(
+                rf"\nfunction {function_name}\([^\n]*\):[^\n]*\n.*?^\}}\n",
+                "\n",
+                source,
+                count=1,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+            if replacements != 1:
+                raise ValueError(f"unable to remove unused TypeScript helper: {function_name}")
+    return source
+
+
 def generate() -> str:
     document = _document()
     _validate(document)
@@ -158,7 +178,9 @@ def generate() -> str:
         ts_source = (
             base._ts_models(document, digest) + "\n" + base._render_ts_client(document, digest)
         )
-        base._write_if_changed(TS_PATH, _phase45_names(ts_source))
+        base._write_if_changed(
+            TS_PATH, _trim_unused_typescript_scaffolding(_phase45_names(ts_source))
+        )
         python_source = _phase45_names(base._render_py_models(document, digest))
         base._write_if_changed(
             PY_PATH, _python_aliases(python_source, base._operation_specs(document))

@@ -104,3 +104,12 @@ def test_phase45_generated_clients_expose_phase45_operations() -> None:
     ):
         assert operation in python_source
         assert operation in typescript_source
+
+    for unused_scaffolding in (
+        "  parseSse,",
+        "  readText,",
+        "function newIdempotencyKey(",
+        "function requireIdempotencyKey(",
+        "function cursorQuery(",
+    ):
+        assert unused_scaffolding not in typescript_source
