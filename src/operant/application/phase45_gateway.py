@@ -153,7 +153,7 @@ class Phase45ActionGateway:
         capabilities = (
             (Capability.NETWORK_EGRESS,)
             if target_ref.startswith("legacy_sse:")
-            else (Capability.PROCESS_EXEC_NO_NETWORK,)
+            else (Capability.PROCESS_EXEC,)
         )
         security_action, result = self.guard(
             tool="mcp",

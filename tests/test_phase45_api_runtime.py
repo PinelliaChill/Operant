@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -9,6 +10,8 @@ from fastapi.testclient import TestClient
 from operant.api import create_app
 from operant.application.security import PolicyEngine
 from operant.domain.security import PolicyBundle, PolicyDecision
+from operant.mcp import GatewayDecision
+from operant.protocol import canonical_action_hash
 
 
 def _approved_phase45_policy() -> PolicyEngine:
@@ -68,6 +71,37 @@ def test_stdio_mcp_default_ask_does_not_spawn(tmp_path: Path) -> None:
         assert blocked.status_code == 409
         assert not marker.exists()
         assert client.get("/v1/mcp/servers").json()["items"][0]["lifecycle_status"] == "stopped"
+
+
+def test_stdio_mcp_tool_call_requires_host_process_approval(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "operant.sqlite3")
+    target_ref = "stdio:unapproved-local"
+    schema_sha256 = "0" * 64
+    arguments = {"value": "safe"}
+    action_hash = canonical_action_hash(
+        {
+            "kind": "mcp_tool_call",
+            "server_id": "unapproved-local",
+            "target_ref": target_ref,
+            "tool_name": "echo",
+            "schema_sha256": schema_sha256,
+            "arguments": arguments,
+        }
+    )
+
+    result = asyncio.run(
+        app.state.phase45_action_gateway.authorize(
+            server_id="unapproved-local",
+            tool_name="echo",
+            action_hash=action_hash,
+            target_ref=target_ref,
+            schema_sha256=schema_sha256,
+            arguments=arguments,
+        )
+    )
+
+    assert result.decision is GatewayDecision.ASK
+    assert result.lease is None
 
 
 def test_stdio_mcp_lifecycle_snapshot_call_and_gateway_audit(tmp_path: Path) -> None:
