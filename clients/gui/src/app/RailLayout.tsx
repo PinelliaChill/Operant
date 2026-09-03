@@ -286,6 +286,7 @@ export const RailLayout: React.FC = () => {
     section === 'chat' ||
     section === 'projects' ||
     section === 'approvals' ||
+    section === 'schedules' ||
     section === 'collab' ||
     section === 'skills' ||
     section === 'extensions' ||
