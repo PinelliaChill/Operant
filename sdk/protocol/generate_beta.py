@@ -49,6 +49,9 @@ def _document() -> dict[str, Any]:
         if operations:
             selected[path] = operations
     selected["/v1/protocol/beta"]["get"]["operationId"] = "negotiateProtocol"
+    selected["/v1/protocol/beta"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] = {"$ref": "#/components/schemas/ProtocolNegotiation"}
     for path_item in selected.values():
         for method, operation in path_item.items():
             if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -73,6 +76,9 @@ def _document() -> dict[str, Any]:
     )
     for name, schema in frozen["components"]["schemas"].items():
         schemas.setdefault(name, copy.deepcopy(schema))
+    protocol_properties = schemas["ProtocolNegotiation"]["properties"]
+    protocol_properties["protocol_version"] = {"const": PROTOCOL_VERSION}
+    protocol_properties["min_client_version"] = {"const": PROTOCOL_VERSION}
     required: set[str] = set()
 
     def collect(value: Any) -> None:

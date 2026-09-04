@@ -7,42 +7,38 @@ import argparse
 import asyncio
 import json
 import statistics
-import tempfile
 import time
-from pathlib import Path
 
 from operant.auth import OAuthConfig, OAuthControl, _Session
 
 
 async def benchmark(iterations: int, p95_budget_ms: float) -> dict[str, float | int | bool]:
-    with tempfile.TemporaryDirectory(prefix="operant-auth-benchmark-") as directory:
-        config = OAuthConfig(
-            issuer="https://issuer.example",
-            client_id="operant-local",
-            subject="local-user",
-            redirect_uri="https://operant.example/internal/auth/callback",
-            authorization_endpoint="https://issuer.example/authorize",
-            token_endpoint="https://issuer.example/token",
-            jwks_uri="https://issuer.example/jwks",
-            token_store_path=Path(directory) / "oauth-secrets.json",
-        )
-        control = OAuthControl(config)
-        control._sessions["benchmark"] = _Session("subject", (), time.time() + 3600)
-        samples: list[float] = []
-        for _ in range(iterations):
-            started = time.perf_counter_ns()
-            if not await control.authenticated("benchmark"):
-                raise RuntimeError("benchmark session unexpectedly expired")
-            samples.append((time.perf_counter_ns() - started) / 1_000_000)
-        samples.sort()
-        p95 = samples[max(0, int(len(samples) * 0.95) - 1)]
-        return {
-            "iterations": iterations,
-            "median_ms": round(statistics.median(samples), 6),
-            "p95_ms": round(p95, 6),
-            "budget_p95_ms": p95_budget_ms,
-            "passed": p95 <= p95_budget_ms,
-        }
+    config = OAuthConfig(
+        issuer="https://issuer.example",
+        client_id="operant-local",
+        subject="local-user",
+        redirect_uri="https://operant.example/internal/auth/callback",
+        authorization_endpoint="https://issuer.example/authorize",
+        token_endpoint="https://issuer.example/token",
+        jwks_uri="https://issuer.example/jwks",
+    )
+    control = OAuthControl(config)
+    control._sessions["benchmark"] = _Session("subject", {}, time.time() + 3600)
+    samples: list[float] = []
+    for _ in range(iterations):
+        started = time.perf_counter_ns()
+        if not await control.authenticated("benchmark"):
+            raise RuntimeError("benchmark session unexpectedly expired")
+        samples.append((time.perf_counter_ns() - started) / 1_000_000)
+    samples.sort()
+    p95 = samples[max(0, int(len(samples) * 0.95) - 1)]
+    return {
+        "iterations": iterations,
+        "median_ms": round(statistics.median(samples), 6),
+        "p95_ms": round(p95, 6),
+        "budget_p95_ms": p95_budget_ms,
+        "passed": p95 <= p95_budget_ms,
+    }
 
 
 def main() -> None:

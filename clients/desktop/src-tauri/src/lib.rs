@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -32,7 +32,25 @@ struct CoreStatus {
 }
 
 fn core_reachable() -> bool {
-    TcpStream::connect_timeout(&CORE_ADDR, Duration::from_millis(250)).is_ok()
+    let Ok(mut stream) = TcpStream::connect_timeout(&CORE_ADDR, Duration::from_millis(250)) else {
+        return false;
+    };
+    let timeout = Some(Duration::from_millis(500));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return false;
+    }
+    if stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.take(4096).read_to_string(&mut response).is_err() {
+        return false;
+    }
+    (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
+        && response.contains("\r\n\r\n{\"status\":\"ok\"}")
 }
 
 #[tauri::command]
@@ -65,8 +83,15 @@ fn start_local_core(state: State<'_, CoreProcess>) -> Result<CoreStatus, String>
         // No user-controlled executable, host, port, workspace, or shell text
         // crosses this boundary. Agent actions remain REST Commands handled by
         // Core and Action Gateway.
-        let child = Command::new("uvicorn")
-            .args(["operant.api:app", "--host", "127.0.0.1", "--port", "8000"])
+        let child = Command::new("operant")
+            .args([
+                "serve",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000",
+                "--desktop",
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -133,6 +158,16 @@ fn persist_secret_reference(app: AppHandle, secret_ref: String) -> Result<(), St
 pub fn run() {
     tauri::Builder::default()
         .manage(CoreProcess::default())
+        .setup(|app| {
+            start_local_core(app.state::<CoreProcess>())?;
+            for _ in 0..50 {
+                if core_reachable() {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err("Operant Core did not become ready within five seconds".into())
+        })
         .invoke_handler(tauri::generate_handler![
             core_status,
             start_local_core,

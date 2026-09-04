@@ -18,8 +18,10 @@ Operant 已打通一条能运行、能测试、能追溯，并具备基础自我
 - 提供 Graph IR、Compiler、Definition Revision、Graph Run、NodeRun/Attempt、有限 Loop、边界与持久恢复；
 - 既有 Coding Workflow 已投影到 Graph Runtime，保留兼容 CLI/API 和单 Writer Coder 边界；
 - 提供本地 Team、Roster、定向 Mailbox、消息投影、Task/Artifact Board 和幂等 Ack；
-- 冻结 `phase1e.v1`，新增 `phase23.v1` 生成 TypeScript/Python Client，并让 React GUI live 接入 Graph、
-  运行监控和本地 Team；
+- 冻结 `phase1e.v1`、`phase23.v1`、`phase45.v1`、`phase56.v1`，新增 additive `operant-beta.v1`，
+  从公共 Schema 确定生成 TypeScript/Python Client；
+- React PWA、Textual TUI 与 Tauri 薄桌面壳统一使用生成 Client；断线、SSE EOF 和 Cursor 过期会明确
+  显示并通过服务端 Query/Projection 校正，不回退 Mock；
 - 支持最多 4 个只读 Explorer 的有限并行、自定义角色替换和结构化失败汇总；
 - Reviewer 明确要求时可触发有限返工，必需角色失败时会安全停止；
 - 通过 SQLite 保存 Workflow 状态和事件，并从已提交的阶段检查点恢复中断任务；
@@ -35,6 +37,11 @@ Operant 已打通一条能运行、能测试、能追溯，并具备基础自我
 - 支持总超时、运行中取消和高风险工具审批后继续执行；
 - 将失败测试压缩为结构化反馈，连续相同失败会安全停止；
 - 新初始化的默认 Coder 在过滤后的 Docker workspace 快照中运行命令，限制网络、CPU、内存和进程数。
+- 提供 TLS/WSS 直连 Remote Gateway、HTTPS Host/Target Connector 和受限 Container Writer 生命周期；
+  连接、租约、未知结果与人工核对事实继续由本地 SQLite v14 裁决；
+- 提供单用户 OAuth 2.0 Authorization Code + PKCE 私网保护层；Token 只在当前 Core 进程内存中保存，
+  logout、过期或重启后失效；
+- 提供候选构建、安装 smoke、依赖闭包 SBOM 与发布检查；未签名候选明确标记为不可正式发布。
 
 模型凭据只通过环境变量名引用。API Key 不会写入 Model Profile、Role Snapshot、Event
 或 SQLite。
@@ -52,6 +59,8 @@ uv run mypy src
 npm run test --prefix clients/gui
 npm run typecheck --prefix clients/gui
 npm run build --prefix clients/gui
+uv run --project clients/tui python -m unittest discover -s clients/tui/test
+cargo test --locked --manifest-path clients/desktop/src-tauri/Cargo.toml
 ```
 
 真实模型集成测试需要一个 OpenAI-compatible API 中转服务。将 `.env.example` 复制为
@@ -88,8 +97,8 @@ uv run operant workflow run \
   --max-parallel-explorers 2 \
   --main-role-id <main-summary-role-id>
 
-# 启动 API 和 SSE 接口
-uv run uvicorn operant.api:app --reload
+# 安全启动本机 API/SSE；生产入口会拒绝公网和通配地址
+uv run operant serve --host 127.0.0.1 --port 8000
 
 # 查看任务、事件与聚合 Trace
 uv run operant workflow list
@@ -146,9 +155,38 @@ Planner、Explorer 和 Reviewer 槽位必须使用只读角色；并行只用于
 `--docker-image`、`--cpu-limit`、`--memory-limit-mb` 和 `--pids-limit`；可写角色默认选择
 Docker，只有明确填写 `--command-runner host` 才会直接运行宿主机命令。
 
-启动 Uvicorn 后访问 `/web` 可打开本地工作台。工作台和 API 当前没有身份认证，只应绑定受信任的
-本机地址；不要直接暴露到公网。SQLite 任务事件可能包含模型输出、工具结果和本地任务内容，也应按
+启动后访问 `/web` 可打开本地工作台。loopback 模式可不启用 OAuth；私网监听必须同时配置 TLS 与
+OAuth，WSS Gateway 也必须使用 TLS。`operant serve` 会拒绝公网、通配、多播和含糊 hostname，但这不
+代表接口已经通过公网部署验收。SQLite 任务事件可能包含模型输出、工具结果和本地任务内容，也应按
 敏感运行数据保护。详细边界见 [`SECURITY.md`](SECURITY.md)。
+
+## Beta/RC 客户端与发布检查
+
+```bash
+# PWA production build（包含单 chunk 500 kB 预算）
+npm ci --prefix clients/gui
+npm run build --prefix clients/gui
+
+# Textual TUI
+uv sync --project clients/tui
+uv run --project clients/tui operant-tui --core-url http://127.0.0.1:8000
+
+# Tauri 候选包；当前要求本机 PATH 中已有 operant Core
+npm ci --prefix clients/desktop
+npm run tauri --prefix clients/desktop -- build
+
+# Python 候选分发、锁文件依赖闭包 SBOM 与安装检查
+uv build
+uv run python scripts/release_checks.py generate --dist dist
+uv run python scripts/release_checks.py verify --dist dist
+```
+
+私网 OAuth 使用 `OPERANT_OAUTH_ISSUER`、`OPERANT_OAUTH_CLIENT_ID`、
+`OPERANT_OAUTH_SUBJECT`、`OPERANT_OAUTH_REDIRECT_URI`、授权/token/JWKS endpoint 等环境变量；可选
+client secret 只配置变量名引用。WSS Gateway 使用 `OPERANT_REMOTE_GATEWAY_TOKEN_REF` 引用运行环境中的
+Bearer，并用 `OPERANT_REMOTE_GATEWAY_ALLOWED_ORIGINS_JSON` 配置精确 Origin。不要把 secret 真值写入
+配置、日志或文档。当前候选包没有代码签名、公证或 provenance 签名，检查会标记为
+`unsigned_candidate_not_for_release`，不得当作正式发布物。
 
 ## 文档入口
 
@@ -160,10 +198,10 @@ Docker，只有明确填写 `--command-runner host` 才会直接运行宿主机�
   响应式 PWA、远程操控、无障碍和实施顺序，不代表当前已经实现；
 - [安全边界](SECURITY.md)：当前安全前提、执行隔离、恢复、Memory 和本地部署限制。
 
-当前 `/web` 仍是无前端框架、无 CDN 的基础本地工作台。React GUI 已在 live 模式接入 Graph 定义与
-启动、运行监控和本地 Team；通用后台 Scheduler、Skill/MCP、Textual TUI、Tauri、Host Connector、自托管
-Relay 和 Remote PWA 仍只属于目标设计或 Mock，不能描述为已完成。当前 `/web` 和 `/v1/*` 没有设备
-配对或 Remote Gateway，不得直接暴露到公网。
+当前保留无前端框架、无 CDN 的基础 `/web` 工作台，同时交付 React PWA、Textual TUI 与 Tauri 薄壳。
+Remote Control、Relay、WSS Gateway、Host/Target Connector 与 Container Writer 已进入 Beta/RC 范围，
+但多 Host 自动发现、移动推送、签名/公证/自动更新、真实浏览器/桌面驱动矩阵与公网部署验收仍未完成。
+不得直接把 `/web`、普通 `/v1/*` 或 Gateway 暴露到公网。
 
 Operant 2.0 的目标是单用户、单个本地 Core 和本地 SQLite 权威。用户可以通过直连或自托管 Relay 从
 手机/浏览器远程启动、引导、审批和审查本地任务，也可以连接受控远程执行 Target；这不等于建设 SaaS、

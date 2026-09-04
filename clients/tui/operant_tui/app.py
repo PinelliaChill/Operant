@@ -52,7 +52,6 @@ class OperantTui(App[None]):
     def __init__(self, controller: ClientController) -> None:
         super().__init__()
         self.controller = controller
-        self.cursors: dict[str, int] = {}
         self.command_keys = CommandKeys()
         self.pending_cancel_run_id: str | None = None
         self.stream_run_id: str | None = None
@@ -119,6 +118,11 @@ class OperantTui(App[None]):
         except Exception as exc:
             self._show_error(exc)
             return
+        await self._render_projection(run, nodes)
+        self.query_one("#connection", Static).update("[已连接] 投影已由 Core 校正")
+        self._set_mutations_enabled(True)
+
+    async def _render_projection(self, run: Any, nodes: list[Any]) -> None:
         self.query_one("#run-status", Static).update(
             f"[{projection_field(run, 'status', 'unknown')}] "
             f"revision {projection_field(run, 'revision', '—')} · 当前节点 "
@@ -137,8 +141,6 @@ class OperantTui(App[None]):
                 for node in nodes
             ]
         )
-        self.query_one("#connection", Static).update("[已连接] 投影已由 Core 校正")
-        self._set_mutations_enabled(True)
 
     @on(Button.Pressed, "#refresh")
     async def refresh_projection(self) -> None:
@@ -221,25 +223,46 @@ class OperantTui(App[None]):
             return
         self.stream_run_id = run_id
 
-        def read_stream() -> None:
+        def read_stream() -> Exception | None:
             try:
                 for frame in self.controller.graph_events(
-                    run_id, after_cursor=self.cursors.get(run_id)
+                    run_id, after_cursor=self.controller.graph_cursor(run_id)
                 ):
-                    cursor = projection_field(frame, "id")
+                    cursor = self.controller.accept_graph_event(run_id, frame)
+                    if cursor is None:
+                        continue
                     event_name = projection_field(frame, "event", "message")
-                    if cursor is not None:
-                        self.cursors[run_id] = cursor
-                        self.call_from_thread(
-                            self.query_one("#cursor", Static).update,
-                            f"Cursor: {cursor} · {event_name}",
-                        )
+                    self.call_from_thread(
+                        self.query_one("#cursor", Static).update,
+                        f"Cursor: {cursor} · {event_name}",
+                    )
             except Exception as exc:
-                self.call_from_thread(self._show_error, exc)
-            finally:
-                self.stream_run_id = None
+                return exc
+            return None
 
-        asyncio.create_task(asyncio.to_thread(read_stream))
+        failure = await asyncio.to_thread(read_stream)
+        self.stream_run_id = None
+        if failure is not None:
+            view = error_view(failure)
+            if view.code in {"cursor_expired", "cursor_out_of_range"}:
+                self.controller.reset_graph_cursor(run_id)
+                await self._refresh()
+            self._show_error(failure)
+            return
+        try:
+            run, nodes = await asyncio.to_thread(self.controller.graph_projection, run_id)
+        except Exception as exc:
+            self._show_error(exc)
+            return
+        await self._render_projection(run, nodes)
+        terminal = projection_field(run, "status") in {"completed", "failed", "cancelled"}
+        if terminal:
+            self.query_one("#connection", Static).update("[已连接] 事件流已在持久终态结束")
+            self._set_mutations_enabled(True)
+        else:
+            self._show_error(
+                RuntimeError("SSE 在运行到达持久终态前结束；已校正投影并保留 Cursor。")
+            )
 
     def action_focus_pane(self, pane_id: str) -> None:
         pane = self.query_one(f"#{pane_id}")

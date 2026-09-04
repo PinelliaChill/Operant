@@ -6,12 +6,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import shutil
 import subprocess
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
+
+import tomllib
+
+REPOSITORY_ROOT = Path(__file__).parents[1]
+LOCK_PATH = REPOSITORY_ROOT / "uv.lock"
 
 
 def _digest(path: Path) -> str:
@@ -43,6 +49,104 @@ def _wheel_metadata(wheel: Path) -> tuple[str, str, list[str]]:
     return name, version, requirements
 
 
+def _package_id(name: str) -> str:
+    safe_name = "".join(character if character.isalnum() else "-" for character in name)
+    return f"SPDXRef-Package-{safe_name}"
+
+
+def _locked_runtime_graph(root_name: str) -> tuple[list[dict[str, object]], list[dict[str, str]]]:
+    lock = tomllib.loads(LOCK_PATH.read_text(encoding="utf-8"))
+    locked = {package["name"]: package for package in lock.get("package", [])}
+    if root_name not in locked:
+        raise SystemExit(f"uv.lock does not contain release package {root_name}")
+    selected: set[str] = set()
+    pending = [root_name]
+    relationships: list[dict[str, str]] = []
+    while pending:
+        name = pending.pop()
+        if name in selected:
+            continue
+        package = locked.get(name)
+        if not isinstance(package, dict):
+            raise SystemExit(f"uv.lock dependency is unavailable: {name}")
+        selected.add(name)
+        for dependency in package.get("dependencies", []):
+            dependency_name = dependency.get("name") if isinstance(dependency, dict) else None
+            if not isinstance(dependency_name, str) or dependency_name not in locked:
+                raise SystemExit(f"uv.lock contains an invalid dependency for {name}")
+            relationships.append(
+                {
+                    "spdxElementId": _package_id(name),
+                    "relationshipType": "DEPENDS_ON",
+                    "relatedSpdxElement": _package_id(dependency_name),
+                }
+            )
+            pending.append(dependency_name)
+    packages: list[dict[str, object]] = []
+    for name in sorted(selected):
+        package = locked[name]
+        version = package.get("version")
+        if not isinstance(version, str):
+            raise SystemExit(f"uv.lock package is missing a version: {name}")
+        source = package.get("source")
+        registry = source.get("registry") if isinstance(source, dict) else None
+        entry: dict[str, object] = {
+            "name": name,
+            "SPDXID": _package_id(name),
+            "versionInfo": version,
+            "downloadLocation": registry if isinstance(registry, str) else "NOASSERTION",
+            "filesAnalyzed": False,
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": "NOASSERTION",
+            "externalRefs": [
+                {
+                    "referenceCategory": "PACKAGE-MANAGER",
+                    "referenceType": "purl",
+                    "referenceLocator": f"pkg:pypi/{name}@{version}",
+                }
+            ],
+        }
+        source_artifact = package.get("sdist")
+        if isinstance(source_artifact, dict):
+            source_hash = source_artifact.get("hash")
+            if isinstance(source_hash, str) and source_hash.startswith("sha256:"):
+                entry["checksums"] = [
+                    {"algorithm": "SHA256", "checksumValue": source_hash.removeprefix("sha256:")}
+                ]
+        packages.append(entry)
+    relationships.append(
+        {
+            "spdxElementId": "SPDXRef-DOCUMENT",
+            "relationshipType": "DESCRIBES",
+            "relatedSpdxElement": _package_id(root_name),
+        }
+    )
+    relationships.sort(
+        key=lambda item: (
+            item["spdxElementId"],
+            item["relationshipType"],
+            item["relatedSpdxElement"],
+        )
+    )
+    return packages, relationships
+
+
+def _source_revision() -> str:
+    revision = os.environ.get("GITHUB_SHA")
+    if not revision:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        revision = completed.stdout.strip()
+    if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
+        raise SystemExit("source revision must be a full Git commit SHA")
+    return revision
+
+
 def generate(dist: Path) -> None:
     artifacts = _artifacts(dist)
     checksums = {path.name: _digest(path) for path in artifacts}
@@ -54,6 +158,17 @@ def generate(dist: Path) -> None:
     if wheel is None:
         raise SystemExit("a wheel is required to generate package metadata")
     name, version, requirements = _wheel_metadata(wheel)
+    packages, relationships = _locked_runtime_graph(name)
+    root_package = next(package for package in packages if package["name"] == name)
+    root_package.update(
+        {
+            "downloadLocation": "NOASSERTION",
+            "licenseConcluded": "Apache-2.0",
+            "licenseDeclared": "Apache-2.0",
+            "checksums": [{"algorithm": "SHA256", "checksumValue": checksums[wheel.name]}],
+            "comment": "Requires-Dist: " + "; ".join(requirements),
+        }
+    )
     sbom = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
@@ -64,29 +179,11 @@ def generate(dist: Path) -> None:
             "created": "1970-01-01T00:00:00Z",
             "creators": ["Tool: scripts/release_checks.py"],
             "comment": (
-                "Deterministic package SBOM; resolved versions remain authoritative in uv.lock."
+                "Deterministic runtime dependency SBOM generated from the frozen uv.lock graph."
             ),
         },
-        "packages": [
-            {
-                "name": name,
-                "SPDXID": "SPDXRef-Package",
-                "versionInfo": version,
-                "downloadLocation": "NOASSERTION",
-                "filesAnalyzed": False,
-                "licenseConcluded": "Apache-2.0",
-                "licenseDeclared": "Apache-2.0",
-                "externalRefs": [
-                    {
-                        "referenceCategory": "PACKAGE-MANAGER",
-                        "referenceType": "purl",
-                        "referenceLocator": f"pkg:pypi/{name}@{version}",
-                    }
-                ],
-                "checksums": [{"algorithm": "SHA256", "checksumValue": checksums[wheel.name]}],
-                "comment": "Requires-Dist: " + "; ".join(requirements),
-            }
-        ],
+        "packages": packages,
+        "relationships": relationships,
     }
     (dist / "operant-agent.spdx.json").write_text(
         json.dumps(sbom, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -96,6 +193,9 @@ def generate(dist: Path) -> None:
         "sbom": "operant-agent.spdx.json",
         "signing": "not_performed",
         "notarization": "not_applicable_to_python_wheel_and_sdist",
+        "distribution_trust": "unsigned_candidate_not_for_release",
+        "source_revision": _source_revision(),
+        "uv_lock_sha256": _digest(LOCK_PATH),
         "scope": "Python wheel and source distribution only",
     }
     (dist / "release-manifest.json").write_text(
@@ -128,14 +228,32 @@ def verify(dist: Path) -> None:
         raise SystemExit("release manifest contains an invalid SBOM name")
     sbom = json.loads((dist / sbom_name).read_text(encoding="utf-8"))
     packages = sbom.get("packages")
-    if sbom.get("spdxVersion") != "SPDX-2.3" or not isinstance(packages, list):
+    relationships = sbom.get("relationships")
+    if (
+        sbom.get("spdxVersion") != "SPDX-2.3"
+        or not isinstance(packages, list)
+        or not isinstance(relationships, list)
+    ):
         raise SystemExit("SPDX SBOM validation failed")
     wheels = sorted(path for path in _artifacts(dist) if path.suffix == ".whl")
-    if len(wheels) != 1 or len(packages) != 1 or not isinstance(packages[0], dict):
-        raise SystemExit("release evidence requires exactly one wheel and one SPDX package")
+    if len(wheels) != 1 or not all(isinstance(package, dict) for package in packages):
+        raise SystemExit("release evidence requires exactly one wheel and valid SPDX packages")
     wheel = wheels[0]
     wheel_name, wheel_version, requirements = _wheel_metadata(wheel)
-    package = packages[0]
+    expected_packages, expected_relationships = _locked_runtime_graph(wheel_name)
+    expected_root = next(package for package in expected_packages if package["name"] == wheel_name)
+    expected_root.update(
+        {
+            "downloadLocation": "NOASSERTION",
+            "licenseConcluded": "Apache-2.0",
+            "licenseDeclared": "Apache-2.0",
+            "checksums": [{"algorithm": "SHA256", "checksumValue": artifacts[wheel.name]}],
+            "comment": "Requires-Dist: " + "; ".join(requirements),
+        }
+    )
+    package = next((item for item in packages if item.get("name") == wheel_name), None)
+    if package is None:
+        raise SystemExit("SPDX root package is missing")
     package_checksums = package.get("checksums")
     if (
         package.get("name") != wheel_name
@@ -144,6 +262,16 @@ def verify(dist: Path) -> None:
         or package_checksums != [{"algorithm": "SHA256", "checksumValue": artifacts[wheel.name]}]
     ):
         raise SystemExit("SPDX package does not match the built wheel")
+    if packages != expected_packages or relationships != expected_relationships:
+        raise SystemExit("SPDX runtime dependency graph does not match uv.lock")
+    if (
+        manifest.get("distribution_trust") != "unsigned_candidate_not_for_release"
+        or manifest.get("uv_lock_sha256") != _digest(LOCK_PATH)
+        or not isinstance(manifest.get("source_revision"), str)
+        or len(manifest["source_revision"]) != 40
+        or any(character not in "0123456789abcdef" for character in manifest["source_revision"])
+    ):
+        raise SystemExit("release manifest provenance is incomplete")
     expected_lines = [f"{digest}  {name}" for name, digest in artifacts.items()]
     actual_lines = (dist / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
     if actual_lines != expected_lines:

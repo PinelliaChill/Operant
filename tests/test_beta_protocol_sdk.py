@@ -63,6 +63,12 @@ def test_beta_schema_and_clients_are_reproducible_and_additive() -> None:
     document = json.loads(
         Path("sdk/protocol/schema/operant-beta.openapi.json").read_text(encoding="utf-8")
     )
+    negotiation = document["components"]["schemas"]["ProtocolNegotiation"]["properties"]
+    assert negotiation["protocol_version"] == {"const": BETA_PROTOCOL_VERSION}
+    assert negotiation["min_client_version"] == {"const": BETA_PROTOCOL_VERSION}
+    assert document["paths"]["/v1/protocol/beta"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/ProtocolNegotiation"}
     operations = {
         operation["operationId"]
         for path_item in document["paths"].values()

@@ -30,7 +30,6 @@ def _config(tmp_path: Path) -> OAuthConfig:
         authorization_endpoint="https://issuer.example/authorize",
         token_endpoint="https://issuer.example/token",
         jwks_uri="https://issuer.example/jwks",
-        token_store_path=(tmp_path / "oauth-secrets.json").absolute(),
         revocation_endpoint="https://issuer.example/revoke",
     )
 
@@ -56,6 +55,15 @@ def _jwt(
     return f"{header}.{claims}.{_b64(signature)}"
 
 
+class _ChunkStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+
+    async def __aiter__(self):  # type: ignore[no-untyped-def]
+        for chunk in self.chunks:
+            yield chunk
+
+
 def _oauth_transport(private_key: rsa.RSAPrivateKey, state: dict[str, Any]) -> httpx.MockTransport:
     public_numbers = private_key.public_key().public_numbers()
 
@@ -65,6 +73,12 @@ def _oauth_transport(private_key: rsa.RSAPrivateKey, state: dict[str, Any]) -> h
             assert body["grant_type"] == ["authorization_code"]
             assert body["redirect_uri"] == ["https://operant.example/internal/auth/callback"]
             assert len(body["code_verifier"][0]) >= 43
+            if state.get("oversized_token"):
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    stream=_ChunkStream([b"{" + b"x" * (256 * 1024), b"}"]),
+                )
             return httpx.Response(
                 200,
                 headers={"content-type": "application/json"},
@@ -81,6 +95,12 @@ def _oauth_transport(private_key: rsa.RSAPrivateKey, state: dict[str, Any]) -> h
                 },
             )
         if request.url.path == "/jwks":
+            if state.get("oversized_jwks"):
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    stream=_ChunkStream([b"{" + b"x" * (1024 * 1024), b"}"]),
+                )
             return httpx.Response(
                 200,
                 json={
@@ -166,10 +186,7 @@ def test_oauth_pkce_session_origin_and_logout(tmp_path: Path) -> None:
         )
         assert replay.status_code == 401
 
-    stored = (tmp_path / "oauth-secrets.json").read_text(encoding="utf-8")
-    assert "access-secret" not in stored
-    assert "refresh-secret" not in stored
-    assert json.loads(stored)["keys"] == {}
+    assert not (tmp_path / "oauth-secrets.json").exists()
     database = (tmp_path / "operant.sqlite3").read_bytes()
     assert b"access-secret" not in database
     assert b"refresh-secret" not in database
@@ -188,7 +205,6 @@ def test_oauth_config_is_all_or_nothing_and_https_only(tmp_path: Path) -> None:
             authorization_endpoint="https://issuer.example/authorize",
             token_endpoint="https://issuer.example/token",
             jwks_uri="https://issuer.example/jwks",
-            token_store_path=(tmp_path / "tokens").absolute(),
         )
 
 
@@ -279,19 +295,6 @@ def test_callback_requires_initiating_browser_and_malformed_jwk_fails_closed(
         assert client.get("/v1/projects").status_code == 401
 
 
-def test_token_store_file_is_owner_only(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    state = {"nonce": "unused"}
-    app = create_app(
-        tmp_path / "operant.sqlite3",
-        oauth_config=config,
-        oauth_http_client=httpx.AsyncClient(transport=_oauth_transport(key, state)),
-    )
-    with TestClient(app, base_url="https://operant.example"):
-        assert config.token_store_path.stat().st_mode & 0o777 == 0o600
-
-
 def test_oauth_endpoints_and_redirect_are_strict(tmp_path: Path) -> None:
     values = {
         "issuer": "https://issuer.example",
@@ -301,7 +304,6 @@ def test_oauth_endpoints_and_redirect_are_strict(tmp_path: Path) -> None:
         "authorization_endpoint": "https://issuer.example/authorize",
         "token_endpoint": "https://issuer.example/token",
         "jwks_uri": "https://issuer.example/jwks",
-        "token_store_path": (tmp_path / "tokens").absolute(),
     }
     with pytest.raises(AuthConfigurationError, match="redirect_uri path"):
         OAuthConfig(**{**values, "redirect_uri": "https://operant.example/callback"})
@@ -346,6 +348,7 @@ def test_callback_rejects_duplicate_parameters_without_consuming_state(tmp_path:
         {"nbf": int(time.time()) + 600},
         {"iat": int(time.time()) + 600},
         {"exp": float("inf")},
+        {"azp": "foreign-client"},
     ],
 )
 def test_id_token_rejects_invalid_time_claims(tmp_path: Path, extra_claims: dict[str, Any]) -> None:
@@ -384,3 +387,39 @@ def test_id_token_rejects_weak_rsa_key(tmp_path: Path) -> None:
             params={"state": query["state"][0], "code": "code"},
         )
         assert callback.status_code == 401
+
+
+@pytest.mark.parametrize("oversized", ["oversized_token", "oversized_jwks"])
+def test_oauth_provider_responses_are_stream_bounded(tmp_path: Path, oversized: str) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    state: dict[str, Any] = {oversized: True}
+    app = create_app(
+        tmp_path / "operant.sqlite3",
+        oauth_config=_config(tmp_path),
+        oauth_http_client=httpx.AsyncClient(transport=_oauth_transport(private_key, state)),
+    )
+    with TestClient(app, base_url="https://operant.example") as client:
+        login = client.get("/internal/auth/login", follow_redirects=False)
+        query = parse_qs(urlsplit(login.headers["location"]).query)
+        state["nonce"] = query["nonce"][0]
+        callback = client.get(
+            "/internal/auth/callback",
+            params={"state": query["state"][0], "code": "code"},
+        )
+        assert callback.status_code == 401
+
+
+def test_login_is_bounded_and_returns_retry_after(tmp_path: Path) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    state: dict[str, Any] = {}
+    app = create_app(
+        tmp_path / "operant.sqlite3",
+        oauth_config=_config(tmp_path),
+        oauth_http_client=httpx.AsyncClient(transport=_oauth_transport(private_key, state)),
+    )
+    with TestClient(app, base_url="https://operant.example") as client:
+        for _ in range(10):
+            assert client.get("/internal/auth/login", follow_redirects=False).status_code == 302
+        limited = client.get("/internal/auth/login", follow_redirects=False)
+        assert limited.status_code == 429
+        assert int(limited.headers["retry-after"]) >= 1

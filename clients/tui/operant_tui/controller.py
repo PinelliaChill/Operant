@@ -8,6 +8,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from sdk.python_client import Phase1EClient, Phase23Client, Phase45Client, Phase56Client
+from sdk.python_client.phase23_generated import ScopedCursorTracker
 from sdk.python_client.transport import Phase1EError
 
 LayoutMode = Literal["wide", "medium", "narrow"]
@@ -104,6 +105,7 @@ class ClientController:
         self.phase23 = phase23 or Phase23Client(base_url)
         self.phase45 = phase45 or Phase45Client(base_url)
         self.phase56 = phase56 or Phase56Client(base_url)
+        self._graph_cursors: dict[str, ScopedCursorTracker] = {}
 
     def negotiate(self) -> None:
         for client in (self.phase1e, self.phase23, self.phase45, self.phase56):
@@ -143,3 +145,21 @@ class ClientController:
             raise ValueError("Graph Run ID is required")
         stream = self.phase23.stream_graph_run_events(run_id, last_event_id=after_cursor)
         return iter(stream.events)
+
+    def accept_graph_event(self, run_id: str, frame: Any) -> int | None:
+        tracker = self._graph_cursors.setdefault(run_id, ScopedCursorTracker())
+        scope = f"graph_run:{run_id}"
+        previous = tracker.last(scope, "graph.run")
+        if not tracker.accept(frame):
+            return None
+        current = tracker.last(scope, "graph.run")
+        if previous is not None and current == previous:
+            return None
+        return current
+
+    def graph_cursor(self, run_id: str) -> int | None:
+        tracker = self._graph_cursors.get(run_id)
+        return None if tracker is None else tracker.last(f"graph_run:{run_id}", "graph.run")
+
+    def reset_graph_cursor(self, run_id: str) -> None:
+        self._graph_cursors.pop(run_id, None)

@@ -109,6 +109,29 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             controller.cancel_graph("  ", idempotency_key="key")
 
+    def test_graph_cursor_is_scoped_monotonic_and_deduplicated(self) -> None:
+        controller = ClientController(
+            "http://127.0.0.1:8000",
+            phase1e=object(),
+            phase23=FakePhase23(),
+            phase45=object(),
+            phase56=object(),
+        )
+        frame = {
+            "id": 7,
+            "event": "graph.updated",
+            "data": {},
+            "resource_scope": "graph_run:run-1",
+            "stream_kind": "graph.run",
+        }
+        self.assertEqual(controller.accept_graph_event("run-1", frame), 7)
+        self.assertIsNone(controller.accept_graph_event("run-1", frame))
+        older = {**frame, "id": 6}
+        self.assertIsNone(controller.accept_graph_event("run-1", older))
+        self.assertEqual(controller.graph_cursor("run-1"), 7)
+        controller.reset_graph_cursor("run-1")
+        self.assertIsNone(controller.graph_cursor("run-1"))
+
 
 if __name__ == "__main__":
     unittest.main()

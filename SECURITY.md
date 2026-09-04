@@ -228,15 +228,21 @@ Coordinator 精确持有的租约；崩溃接管仍以 SQLite 已提交事实和
 
 ## Web 与 API 部署边界
 
-`/web` 和 `/v1/*` 当前没有身份认证、CSRF 防护或多租户隔离。Web 页面虽然不使用 CDN，并通过
-`textContent` 等 DOM API 展示模型输出，但这不构成网络访问控制。默认只能绑定受信任的本机地址；
-不得直接暴露到公网、共享局域网或不受信任的反向代理后面。若必须远程访问，应由外层受信任网关
-提供 TLS、强身份认证、来源限制和审计。
+生产入口使用 `operant serve`。它拒绝公网、通配、多播和含糊 hostname，只允许显式 loopback 或私网
+IP；私网监听必须同时配置 TLS 和单用户 OAuth，WSS Gateway 也必须配置 TLS。`proxy_headers` 默认关闭，
+因此未受信反向代理不能伪造来源。默认 loopback 开发模式仍可不启用 OAuth，不代表具备公网认证。
 
 Phase 45 的 Policy、Capability、Skill、MCP 和 Scheduler API 同样不构成身份认证。SQLite 中的 Action、
 Audit、MCP 配置引用、Schedule/Queue/Attempt 和 Graph 绑定均是敏感本地运行事实，不应上传或公开。
 Phase 5B 的设备配对和端到端加密只保护 Remote Control 协议，不会自动给其余 `/v1/*` 增加身份认证。
-OAuth、CSRF 防护、TUI、Tauri、完整 Remote PWA/WSS 和允许公网暴露的接入网关仍未实现。
+OAuth 使用 Authorization Code + PKCE，精确绑定 issuer、audience、subject、redirect、state 和 nonce；
+登录按实际客户端地址限流，token/JWKS/revocation 响应有界。会话 Cookie 为 Secure、HttpOnly、SameSite，
+Access/refresh Token 只保存在当前 Core 进程内存，logout、过期、关闭或重启即删除，不写 SQLite 或本地
+token 文件。该实现是单用户私网保护层，不是 SaaS、多租户身份系统，也未经过公网部署验收。
+
+Tauri `--desktop` bridge 只允许 loopback，并只为固定 Tauri Origin 开启最小 CORS；普通浏览器 Origin
+不在白名单。Web 页面虽然不使用 CDN，并对模型输出做安全展示，这仍不能代替网络边界。当前不得把
+`/web`、普通 `/v1/*` 或 WSS Gateway 直接暴露到公网，也不得放在未验收的反向代理后面。
 
 ## Phase 5B Remote Control 与 Relay 边界
 
@@ -255,8 +261,10 @@ key store 采用原子替换和文件锁串行并发写。Pairing Challenge 持�
 自托管 Relay MVP 只接受单独配置的 Bearer 运维鉴权，只保存严格 TTL/大小上限的 opaque ciphertext、
 nonce 和投递状态。它不解密业务消息，不持有设备/Host 私钥，不运行 Agent/Tool，不裁决 Policy 或
 Approval。Relay delivery/ack 只表示信封流转，不是 Host Ack；Host Connector 解密后仍重验设备签名、
-Session/Scope/TTL 和本地 Action Gateway。当前 transport 是 HTTPS polling API，不是 WSS/直连 Gateway
-或经过公网部署审计的完整套件，因此 `/web` 与普通 `/v1/*` 仍不得直接暴露到公网。
+Session/Scope/TTL 和本地 Action Gateway。Beta/RC 另提供 TLS-only WSS 直连 Gateway：握手要求精确
+HTTPS Origin、Bearer 和子协议，frame/pending queue 有界，并在建立和处理消息时重验
+Host/Device/Session/Cursor 绑定；连接 owner、lease、关闭和错误事实持久化到 SQLite v14。它仍不是
+经过公网部署审计的完整套件，因此 `/web`、普通 `/v1/*` 与 Gateway 均不得直接暴露到公网。
 
 实现强制满足：
 
@@ -296,8 +304,10 @@ Lease token 只在首次 `no-store` 响应返回，SQLite 只保存 SHA-256；�
 绑定未过期 observation hash、精确 target ref 与递归 precondition，成功结果再核对 postcondition；
 观察或目标漂移会失败关闭。新 owner 获取 Target Lease 前会先收口过期 lease 的残留 Job；已运行的
 非幂等 Job 在断线、租约失效或结果未知时进入
-`manual_reconcile_required`，不得自动重放。当前 connector 是可注入边界和确定性内存实现，生产网络
-connector、凭据下发隔离和真实浏览器/桌面驱动仍需部署方实现与单独审计。
+`manual_reconcile_required`，不得自动重放。Beta/RC 的生产 Target Connector 只接受 HTTPS，签名绑定
+route/recipient/TTL/nonce/fencing，使用调用方绝对 deadline，并对响应 body/stream frame 设置上限；
+Host Connector 在解密后执行同等重验。真实浏览器/桌面驱动矩阵、凭据下发运维与公网部署仍需单独
+验收。
 
 ## Phase 6 Multi-Writer 边界
 
@@ -316,9 +326,11 @@ Merge 时均重新核对 commit ancestry 或 patch、SHA-256、changed paths 和
 干扰或 owner 崩溃时保留隔离 worktree 现场并进入 `outcome_unknown`，只允许本机鉴权且经过 Action
 Gateway 的人工 reconcile，不执行可能删除外部数据的 reset/clean，不自动重放。最终 merge 要通过
 `workspace.write + git.commit` 的 Action Gateway，默认需要精确 Approval。普通确定失败的回滚仅允许
-作用于管理员映射的专用、可重建隔离 target，不能指向用户共享 checkout。当前未实现 Container Writer
-的创建/挂载/销毁 adapter，也未把
-多 Writer 描述为分布式 Core 或高可用。
+作用于管理员映射的专用、可重建隔离 target，不能指向用户共享 checkout。Beta/RC 的 Container Writer
+adapter 只接受 digest-pinned image、非 root UID/GID、只读 rootfs、无网络、最小 capability、资源上限
+和管理员映射的隔离 mount。create/start/stop/remove 调用前先持久过渡态与 Action Hash；结果未知时
+进入 `outcome_unknown`，只能用真实 Docker inspect 人工核对，不能自动重放。多 Writer 仍不是分布式
+Core 或高可用。
 
 ## 验收方式
 

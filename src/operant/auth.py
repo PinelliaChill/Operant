@@ -9,11 +9,10 @@ import json
 import math
 import os
 import secrets
-import stat
 import time
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlencode, urlsplit
 
@@ -25,8 +24,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from operant.remote_control.crypto import RemoteKeyStore
-
 _AUTH_PREFIX = "/internal/auth"
 _SESSION_COOKIE = "__Host-operant_session"
 _TRANSACTION_COOKIE = "__Host-operant_oauth_transaction"
@@ -35,6 +32,8 @@ _MAX_TRANSACTIONS = 32
 _MAX_SESSIONS = 8
 _MAX_TOKEN_RESPONSE_BYTES = 256 * 1024
 _MAX_JWKS_RESPONSE_BYTES = 1024 * 1024
+_MAX_LOGIN_ATTEMPTS_PER_MINUTE = 10
+_CLOCK_SKEW_SECONDS = 60
 
 
 class AuthConfigurationError(ValueError):
@@ -43,6 +42,12 @@ class AuthConfigurationError(ValueError):
 
 class AuthFlowError(RuntimeError):
     pass
+
+
+class AuthRateLimitError(AuthFlowError):
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("too many authorization attempts")
+        self.retry_after = retry_after
 
 
 def _b64url(value: bytes) -> str:
@@ -76,7 +81,6 @@ class OAuthConfig:
     authorization_endpoint: str
     token_endpoint: str
     jwks_uri: str
-    token_store_path: Path
     client_secret_ref: str | None = None
     revocation_endpoint: str | None = None
     scopes: tuple[str, ...] = ("openid", "profile")
@@ -97,8 +101,6 @@ class OAuthConfig:
             raise AuthConfigurationError("subject is required for single-user authentication")
         if urlsplit(redirect).path != f"{_AUTH_PREFIX}/callback":
             raise AuthConfigurationError(f"redirect_uri path must be {_AUTH_PREFIX}/callback")
-        if not self.token_store_path.is_absolute():
-            raise AuthConfigurationError("token_store_path must be absolute")
         if "openid" not in self.scopes:
             raise AuthConfigurationError("openid scope is required for nonce verification")
         if not 30 <= self.transaction_ttl_seconds <= 600:
@@ -130,7 +132,6 @@ def oauth_config_from_env(environment: Mapping[str, str] | None = None) -> OAuth
         "authorization_endpoint": values.get("OPERANT_OAUTH_AUTHORIZATION_ENDPOINT"),
         "token_endpoint": values.get("OPERANT_OAUTH_TOKEN_ENDPOINT"),
         "jwks_uri": values.get("OPERANT_OAUTH_JWKS_URI"),
-        "token_store_path": values.get("OPERANT_OAUTH_TOKEN_STORE_PATH"),
     }
     configured = {key for key, value in required.items() if value}
     if not configured:
@@ -147,7 +148,6 @@ def oauth_config_from_env(environment: Mapping[str, str] | None = None) -> OAuth
         authorization_endpoint=cast(str, required["authorization_endpoint"]),
         token_endpoint=cast(str, required["token_endpoint"]),
         jwks_uri=cast(str, required["jwks_uri"]),
-        token_store_path=Path(cast(str, required["token_store_path"])),
         client_secret_ref=values.get("OPERANT_OAUTH_CLIENT_SECRET_REF") or None,
         revocation_endpoint=values.get("OPERANT_OAUTH_REVOCATION_ENDPOINT") or None,
         scopes=scopes,
@@ -165,7 +165,7 @@ class _Transaction:
 @dataclass(slots=True)
 class _Session:
     subject_hash: str
-    token_refs: tuple[str, ...]
+    tokens: dict[str, str]
     expires_at: float
 
 
@@ -180,38 +180,45 @@ class OAuthControl:
         clock: Any = time.time,
     ) -> None:
         self.config = config
-        if config.token_store_path.is_symlink():
-            raise AuthConfigurationError("token store must not be a symbolic link")
-        self.store = RemoteKeyStore(config.token_store_path)
-        store_stat = config.token_store_path.lstat()
-        if (
-            not stat.S_ISREG(store_stat.st_mode)
-            or store_stat.st_uid != os.getuid()
-            or stat.S_IMODE(store_stat.st_mode) != 0o600
-        ):
-            raise AuthConfigurationError("token store must be an owner-only regular file")
         self._http_client = http_client
         self._owns_http_client = http_client is None
         self._clock = clock
         self._transactions: dict[str, _Transaction] = {}
         self._sessions: dict[str, _Session] = {}
+        self._login_attempts: dict[str, deque[float]] = {}
         self._lock = asyncio.Lock()
 
-    async def begin(self) -> tuple[str, str]:
+    async def begin(
+        self, *, browser_binding: str | None = None, client_key: str = "unknown"
+    ) -> tuple[str, str]:
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(64)
-        browser_binding = secrets.token_urlsafe(32)
+        if not browser_binding or len(browser_binding) > 500:
+            browser_binding = secrets.token_urlsafe(32)
         challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
         now = float(self._clock())
         async with self._lock:
             self._prune(now)
+            attempts = self._login_attempts.setdefault(client_key, deque())
+            while attempts and attempts[0] <= now - 60:
+                attempts.popleft()
+            if len(attempts) >= _MAX_LOGIN_ATTEMPTS_PER_MINUTE:
+                retry_after = max(1, int(60 - (now - attempts[0])))
+                raise AuthRateLimitError(retry_after)
+            attempts.append(now)
+            binding_hash = hashlib.sha256(browser_binding.encode("utf-8")).hexdigest()
+            self._transactions = {
+                existing_state: existing
+                for existing_state, existing in self._transactions.items()
+                if existing.browser_binding_hash != binding_hash
+            }
             if len(self._transactions) >= _MAX_TRANSACTIONS:
-                raise AuthFlowError("too many pending authorization transactions")
+                raise AuthRateLimitError(self.config.transaction_ttl_seconds)
             self._transactions[state] = _Transaction(
                 nonce=nonce,
                 verifier=verifier,
-                browser_binding_hash=hashlib.sha256(browser_binding.encode("ascii")).hexdigest(),
+                browser_binding_hash=binding_hash,
                 expires_at=now + self.config.transaction_ttl_seconds,
             )
         query = urlencode(
@@ -269,33 +276,26 @@ class OAuthControl:
             float(claims["exp"]),
         )
         session_id = secrets.token_urlsafe(48)
-        refs: list[str] = []
-        try:
-            for token_name in ("access_token", "refresh_token", "id_token"):
-                token = token_response.get(token_name)
-                if token is None:
-                    continue
-                if not isinstance(token, str) or not token or len(token) > 64 * 1024:
-                    raise AuthFlowError("invalid token response")
-                reference = f"oauth:{session_id}:{token_name}"
-                self.store.put(reference, token.encode("utf-8"))
-                refs.append(reference)
-            if not any(ref.endswith(":access_token") for ref in refs):
-                raise AuthFlowError("token response did not contain an access token")
-        except BaseException:
-            for reference in refs:
-                self.store.delete(reference)
-            raise
+        tokens: dict[str, str] = {}
+        for token_name in ("access_token", "refresh_token", "id_token"):
+            token = token_response.get(token_name)
+            if token is None:
+                continue
+            if not isinstance(token, str) or not token or len(token) > 64 * 1024:
+                raise AuthFlowError("invalid token response")
+            tokens[token_name] = token
+        if "access_token" not in tokens:
+            raise AuthFlowError("token response did not contain an access token")
         subject = cast(str, claims["sub"])
         session = _Session(
             subject_hash=hashlib.sha256(subject.encode("utf-8")).hexdigest(),
-            token_refs=tuple(refs),
+            tokens=tokens,
             expires_at=expires_at,
         )
         async with self._lock:
             self._prune(now)
             if len(self._sessions) >= _MAX_SESSIONS:
-                self._delete_tokens(session)
+                self._clear_tokens(session)
                 raise AuthFlowError("too many active authorization sessions")
             self._sessions[session_id] = session
         return session_id, expires_at
@@ -311,7 +311,7 @@ class OAuthControl:
                 expired = self._sessions.pop(session_id)
                 session = None
         if expired is not None:
-            self._delete_tokens(expired)
+            self._clear_tokens(expired)
         return session is not None
 
     async def logout(self, session_id: str | None) -> None:
@@ -323,16 +323,16 @@ class OAuthControl:
             return
         revocation_tokens: list[bytes] = []
         if self.config.revocation_endpoint:
-            for suffix in (":refresh_token", ":access_token"):
-                for reference in session.token_refs:
-                    if reference.endswith(suffix):
-                        revocation_tokens.append(self.store.get(reference))
+            for name in ("refresh_token", "access_token"):
+                token = session.tokens.get(name)
+                if token is not None:
+                    revocation_tokens.append(token.encode("utf-8"))
         try:
             for token in revocation_tokens:
                 await self._revoke(token.decode("utf-8"))
         finally:
             revocation_tokens.clear()
-            self._delete_tokens(session)
+            self._clear_tokens(session)
 
     async def close(self) -> None:
         async with self._lock:
@@ -340,7 +340,7 @@ class OAuthControl:
             self._sessions.clear()
             self._transactions.clear()
         for session in sessions:
-            self._delete_tokens(session)
+            self._clear_tokens(session)
         if self._http_client is not None and self._owns_http_client:
             await self._http_client.aclose()
 
@@ -359,11 +359,16 @@ class OAuthControl:
             if session.expires_at > now
         }
         for session in expired_sessions:
-            self._delete_tokens(session)
+            self._clear_tokens(session)
+        for client_key, attempts in tuple(self._login_attempts.items()):
+            while attempts and attempts[0] <= now - 60:
+                attempts.popleft()
+            if not attempts:
+                self._login_attempts.pop(client_key, None)
 
-    def _delete_tokens(self, session: _Session) -> None:
-        for reference in session.token_refs:
-            self.store.delete(reference)
+    @staticmethod
+    def _clear_tokens(session: _Session) -> None:
+        session.tokens.clear()
 
     def _client(self) -> httpx.AsyncClient:
         if self._http_client is None:
@@ -392,18 +397,15 @@ class OAuthControl:
         client_secret = self._client_secret()
         if client_secret is not None:
             payload["client_secret"] = client_secret
-        response = await self._client().post(
+        async with self._client().stream(
+            "POST",
             self.config.token_endpoint,
             data=payload,
             headers={"Accept": "application/json"},
-        )
-        if response.status_code != 200:
-            raise AuthFlowError("authorization server rejected the code exchange")
-        if len(response.content) > _MAX_TOKEN_RESPONSE_BYTES:
-            raise AuthFlowError("token endpoint response is too large")
-        if response.headers.get("content-type", "").split(";", 1)[0] != "application/json":
-            raise AuthFlowError("token endpoint returned an invalid content type")
-        result = response.json()
+        ) as response:
+            if response.status_code != 200:
+                raise AuthFlowError("authorization server rejected the code exchange")
+            result = await self._bounded_json(response, _MAX_TOKEN_RESPONSE_BYTES, "token endpoint")
         if not isinstance(result, dict) or result.get("token_type", "").lower() != "bearer":
             raise AuthFlowError("token endpoint returned an invalid response")
         return cast(dict[str, Any], result)
@@ -423,19 +425,14 @@ class OAuthControl:
             raise AuthFlowError("invalid ID token")
         if header.get("alg") != "RS256" or not isinstance(header.get("kid"), str):
             raise AuthFlowError("unsupported ID token signature")
-        response = await self._client().get(
-            self.config.jwks_uri,
-            headers={"Accept": "application/json"},
-        )
-        if response.status_code != 200:
-            raise AuthFlowError("unable to validate ID token")
-        if len(response.content) > _MAX_JWKS_RESPONSE_BYTES:
-            raise AuthFlowError("JWKS response is too large")
-        if response.headers.get("content-type", "").split(";", 1)[0] != "application/json":
-            raise AuthFlowError("JWKS endpoint returned an invalid content type")
-        jwks = response.json()
+        async with self._client().stream(
+            "GET", self.config.jwks_uri, headers={"Accept": "application/json"}
+        ) as response:
+            if response.status_code != 200:
+                raise AuthFlowError("unable to validate ID token")
+            jwks = await self._bounded_json(response, _MAX_JWKS_RESPONSE_BYTES, "JWKS endpoint")
         keys = jwks.get("keys") if isinstance(jwks, dict) else None
-        if not isinstance(keys, list):
+        if not isinstance(keys, list) or len(keys) > 128:
             raise AuthFlowError("invalid JWKS response")
         matching = [
             key for key in keys if isinstance(key, dict) and key.get("kid") == header["kid"]
@@ -472,9 +469,12 @@ class OAuthControl:
             and all(isinstance(value, str) for value in audience)
             and self.config.client_id in audience
         )
-        authorized_party_valid = not isinstance(audience, list) or len(audience) == 1
+        authorized_party = claims.get("azp")
+        authorized_party_valid = (
+            authorized_party is None or authorized_party == self.config.client_id
+        )
         if isinstance(audience, list) and len(audience) > 1:
-            authorized_party_valid = claims.get("azp") == self.config.client_id
+            authorized_party_valid = authorized_party == self.config.client_id
         expiration = claims.get("exp")
         not_before = claims.get("nbf")
         issued_at = claims.get("iat")
@@ -488,7 +488,7 @@ class OAuthControl:
             not isinstance(not_before, bool)
             and isinstance(not_before, (int, float))
             and math.isfinite(float(not_before))
-            and float(not_before) <= now
+            and float(not_before) <= now + _CLOCK_SKEW_SECONDS
         )
         issued_at_valid = issued_at is None or (
             not isinstance(issued_at, bool)
@@ -511,15 +511,40 @@ class OAuthControl:
             raise AuthFlowError("ID token claims validation failed")
         return cast(dict[str, Any], claims)
 
+    @staticmethod
+    async def _bounded_json(response: httpx.Response, limit: int, label: str) -> Any:
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            raise AuthFlowError(f"{label} returned an invalid content type")
+        content_length = response.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared = int(content_length)
+            except ValueError as exc:
+                raise AuthFlowError(f"{label} returned an invalid content length") from exc
+            if declared < 0 or declared > limit:
+                raise AuthFlowError(f"{label} response is too large")
+        payload = bytearray()
+        async for chunk in response.aiter_bytes():
+            if len(payload) + len(chunk) > limit:
+                raise AuthFlowError(f"{label} response is too large")
+            payload.extend(chunk)
+        try:
+            return json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AuthFlowError(f"{label} returned invalid JSON") from exc
+
     async def _revoke(self, token: str) -> None:
         assert self.config.revocation_endpoint is not None
         payload = {"token": token, "client_id": self.config.client_id}
         client_secret = self._client_secret()
         if client_secret is not None:
             payload["client_secret"] = client_secret
-        response = await self._client().post(self.config.revocation_endpoint, data=payload)
-        if response.status_code not in {200, 204}:
-            raise AuthFlowError("authorization server rejected token revocation")
+        async with self._client().stream(
+            "POST", self.config.revocation_endpoint, data=payload
+        ) as response:
+            if response.status_code not in {200, 204}:
+                raise AuthFlowError("authorization server rejected token revocation")
 
 
 class AuthMiddleware:
@@ -588,8 +613,19 @@ def install_oauth_control(app: FastAPI, control: OAuthControl) -> None:
     app.state.oauth_control = control
 
     @app.get(f"{_AUTH_PREFIX}/login", include_in_schema=False)
-    async def login() -> Response:
-        authorization_url, browser_binding = await control.begin()
+    async def login(request: Request) -> Response:
+        client_key = "unknown" if request.client is None else request.client.host
+        try:
+            authorization_url, browser_binding = await control.begin(
+                browser_binding=request.cookies.get(_TRANSACTION_COOKIE),
+                client_key=client_key,
+            )
+        except AuthRateLimitError as exc:
+            return JSONResponse(
+                {"error": "authorization_rate_limited"},
+                status_code=429,
+                headers={"Cache-Control": "no-store", "Retry-After": str(exc.retry_after)},
+            )
         response = RedirectResponse(
             authorization_url,
             status_code=302,

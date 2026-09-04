@@ -24,9 +24,12 @@ def test_release_evidence_generation_and_verification(tmp_path: Path) -> None:
     manifest = json.loads((tmp_path / "release-manifest.json").read_text())
     assert manifest["signing"] == "not_performed"
     assert manifest["artifacts"][wheel.name] == hashlib.sha256(wheel.read_bytes()).hexdigest()
-    assert json.loads((tmp_path / "operant-agent.spdx.json").read_text())["spdxVersion"] == (
-        "SPDX-2.3"
-    )
+    sbom = json.loads((tmp_path / "operant-agent.spdx.json").read_text())
+    assert sbom["spdxVersion"] == "SPDX-2.3"
+    assert len(sbom["packages"]) > 1
+    assert any(item["relationshipType"] == "DEPENDS_ON" for item in sbom["relationships"])
+    assert manifest["distribution_trust"] == "unsigned_candidate_not_for_release"
+    assert len(manifest["source_revision"]) == 40
 
 
 def test_release_verification_rejects_tampering(tmp_path: Path) -> None:
