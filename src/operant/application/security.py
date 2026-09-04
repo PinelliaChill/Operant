@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 import re
@@ -445,11 +446,15 @@ class ApprovalReviewerAdapter:
             "secret_ref_count": len(action.secret_refs),
         }
         try:
-            candidate = self.reviewer(redact_public_data(minimal, max_chars=4000))
-            if inspect.isawaitable(candidate):
-                import asyncio
+            payload = redact_public_data(minimal, max_chars=4000)
 
-                candidate = await asyncio.wait_for(candidate, timeout=self.timeout_seconds)
+            async def invoke_reviewer() -> ReviewerDecision | Mapping[str, Any]:
+                candidate = await asyncio.to_thread(self.reviewer, payload)
+                if inspect.isawaitable(candidate):
+                    candidate = await candidate
+                return candidate
+
+            candidate = await asyncio.wait_for(invoke_reviewer(), timeout=self.timeout_seconds)
             return ReviewerDecision.model_validate(candidate)
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):

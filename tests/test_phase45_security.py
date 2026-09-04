@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
@@ -134,6 +137,43 @@ async def test_reviewer_only_handles_ask_and_fails_closed_with_redacted_input(
         await ApprovalReviewerAdapter(broken).review(
             _action(tmp_path), PolicyEngine(balanced_policy_bundle()).evaluate(_action(tmp_path))
         )
+
+
+@pytest.mark.asyncio
+async def test_sync_reviewer_timeout_fails_closed_and_ignores_late_allow(tmp_path: Path) -> None:
+    action = _action(
+        tmp_path,
+        capabilities=(Capability.NETWORK_EGRESS,),
+        key="sync-review-timeout",
+    )
+    evaluation = PolicyEngine(balanced_policy_bundle()).evaluate(action)
+    release = threading.Event()
+    finished = threading.Event()
+
+    def slow_allow(_payload: dict[str, object]) -> dict[str, str]:
+        try:
+            release.wait(timeout=1)
+            return {
+                "decision": "allow",
+                "reason_code": "late-allow",
+                "summary": "this result arrived after the reviewer deadline",
+            }
+        finally:
+            finished.set()
+
+    started_at = time.monotonic()
+    decision = await ApprovalReviewerAdapter(slow_allow, timeout_seconds=0.02).review(
+        action, evaluation
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert decision.decision is PolicyDecision.DENY
+    assert decision.reason_code == "reviewer_fail_closed"
+    assert elapsed < 0.5
+
+    release.set()
+    assert await asyncio.to_thread(finished.wait, 1)
+    assert decision.decision is PolicyDecision.DENY
 
 
 def test_secret_broker_is_exact_short_lived_and_redacts_material(tmp_path: Path) -> None:
