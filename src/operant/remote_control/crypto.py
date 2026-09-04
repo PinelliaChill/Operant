@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -40,42 +43,57 @@ class RemoteKeyStore:
         if not self.path.is_absolute():
             raise ValueError("remote key store path must be absolute")
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if not self.path.exists():
-            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump({"version": 1, "keys": {}}, stream)
-        os.chmod(self.path, 0o600)
+        self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        with self._locked(exclusive=True):
+            if not self.path.exists():
+                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    json.dump({"version": 1, "keys": {}}, stream)
+            os.chmod(self.path, 0o600)
 
     def put(self, reference: str, material: bytes) -> None:
         if not reference or len(reference) > 300:
             raise ValueError("invalid key reference")
-        payload = self._read()
-        keys = payload["keys"]
-        assert isinstance(keys, dict)
-        encoded = _b64(material)
-        existing = keys.get(reference)
-        if existing is not None and existing != encoded:
-            raise ValueError("key reference is already bound")
-        keys[reference] = encoded
-        self._write(payload)
+        with self._locked(exclusive=True):
+            payload = self._read()
+            keys = payload["keys"]
+            assert isinstance(keys, dict)
+            encoded = _b64(material)
+            existing = keys.get(reference)
+            if existing is not None and existing != encoded:
+                raise ValueError("key reference is already bound")
+            keys[reference] = encoded
+            self._write(payload)
 
     def get(self, reference: str) -> bytes:
-        keys = self._read()["keys"]
-        assert isinstance(keys, dict)
-        try:
-            value = keys[reference]
-        except KeyError as exc:
-            raise KeyError("key reference is unavailable") from exc
-        if not isinstance(value, str):
-            raise ValueError("invalid key material")
-        return _unb64(value)
+        with self._locked(exclusive=False):
+            keys = self._read()["keys"]
+            assert isinstance(keys, dict)
+            try:
+                value = keys[reference]
+            except KeyError as exc:
+                raise KeyError("key reference is unavailable") from exc
+            if not isinstance(value, str):
+                raise ValueError("invalid key material")
+            return _unb64(value)
 
     def delete(self, reference: str) -> None:
-        payload = self._read()
-        keys = payload["keys"]
-        assert isinstance(keys, dict)
-        if keys.pop(reference, None) is not None:
-            self._write(payload)
+        with self._locked(exclusive=True):
+            payload = self._read()
+            keys = payload["keys"]
+            assert isinstance(keys, dict)
+            if keys.pop(reference, None) is not None:
+                self._write(payload)
+
+    @contextmanager
+    def _locked(self, *, exclusive: bool) -> Iterator[None]:
+        descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     def _read(self) -> dict[str, Any]:
         payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -217,6 +235,5 @@ class RemoteCrypto:
                 "protocol_version": command.protocol_version,
                 "issued_at": command.issued_at.isoformat(),
                 "expires_at": command.expires_at.isoformat(),
-                "expected_version": command.expected_version,
             }
         )

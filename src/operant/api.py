@@ -4,7 +4,9 @@ import asyncio
 import base64
 import binascii
 import hashlib
+import hmac
 import json
+import os
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -28,6 +30,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from operant.api_phase23 import install_phase23_routes
 from operant.api_phase45 import install_phase45_routes
+from operant.api_phase56_control import Authorizer, install_phase56_control_routes
+from operant.api_phase56_target import install_phase56_target_routes
+from operant.api_phase56_writer import install_phase56_writer_routes
 from operant.application.client_projection import (
     ProjectProjectionCursorError,
     ProjectProjectionError,
@@ -80,6 +85,7 @@ from operant.domain.threads import (
     ThreadStatus,
     Turn,
 )
+from operant.multiwriter import TrustedGitMultiWriterAdapter
 from operant.persistence.sqlite import (
     ActionOutcomeUnknownError,
     ConflictError,
@@ -103,6 +109,7 @@ from operant.settings import configured_path_roots, database_path, load_local_en
 MAX_ARTIFACT_UPLOAD_BYTES = 16 * 1024 * 1024
 MAX_ARTIFACT_BASE64_CHARS = ((MAX_ARTIFACT_UPLOAD_BYTES + 2) // 3) * 4
 MAX_ARTIFACT_REQUEST_BODY_BYTES = MAX_ARTIFACT_BASE64_CHARS + 64 * 1024
+SENSITIVE_RESPONSE_HEADER = "x-operant-sensitive-response"
 
 
 class _ArtifactRequestTooLarge(Exception):
@@ -1288,12 +1295,29 @@ def create_app(
     phase45_mcp_workspace_roots: Mapping[str, str | Path] | None = None,
     phase45_policy_engine: Any | None = None,
     phase45_approval_reviewer: Any | None = None,
+    phase56_local_authorizer: Authorizer | None = None,
+    phase56_relay_authorizer: Authorizer | None = None,
+    phase56_remote_executor: Any | None = None,
+    phase56_remote_operation_capabilities: Any | None = None,
+    phase56_multiwriter_roots: Mapping[str, str | Path] | None = None,
+    phase56_writer_artifact_adapter: Any | None = None,
+    phase56_merge_adapter: Any | None = None,
 ) -> FastAPI:
     load_local_env()
     if phase45_skill_roots is None:
         phase45_skill_roots = configured_path_roots("OPERANT_SKILL_ROOTS_JSON")
     if phase45_mcp_workspace_roots is None:
         phase45_mcp_workspace_roots = configured_path_roots("OPERANT_MCP_WORKSPACE_ROOTS_JSON")
+    if phase56_multiwriter_roots is None:
+        phase56_multiwriter_roots = configured_path_roots(
+            "OPERANT_MULTIWRITER_ROOTS_JSON", max_roots=65
+        )
+    if phase56_multiwriter_roots:
+        trusted_git_adapter = TrustedGitMultiWriterAdapter(phase56_multiwriter_roots)
+        if phase56_writer_artifact_adapter is None:
+            phase56_writer_artifact_adapter = trusted_git_adapter
+        if phase56_merge_adapter is None:
+            phase56_merge_adapter = trusted_git_adapter
     store = SQLiteStore(db_path or database_path())
     configured_artifact_root = (
         store.path.parent.absolute() / "artifacts" if artifact_root is None else Path(artifact_root)
@@ -1666,6 +1690,37 @@ def create_app(
             )
             raise
         response_body = b"".join(chunks)
+        if (
+            response.status_code < 400
+            and response.headers.get(SENSITIVE_RESPONSE_HEADER) == "one-time"
+        ):
+            # One-time pairing and lease secrets must reach the authenticated caller,
+            # but must never enter the durable command receipt. A lost response is
+            # intentionally reconciled instead of being replayed from storage.
+            store.mark_command_manual_reconcile(
+                execution.id,
+                error_code="sensitive_response_not_replayable",
+            )
+            passthrough_headers = {
+                key: value
+                for key, value in response.headers.items()
+                if key.lower()
+                not in {
+                    "cache-control",
+                    "content-length",
+                    "content-type",
+                    SENSITIVE_RESPONSE_HEADER,
+                }
+            }
+            passthrough_headers["Idempotency-Key"] = idempotency_key
+            passthrough_headers["Cache-Control"] = "no-store"
+            return Response(
+                content=response_body,
+                status_code=response.status_code,
+                media_type=content_type.split(";", 1)[0] or "application/json",
+                headers=passthrough_headers,
+                background=response.background,
+            )
         try:
             stored_payload = json.loads(response_body) if response_body else None
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -3459,6 +3514,37 @@ def create_app(
         mcp_workspace_roots=phase45_mcp_workspace_roots,
         policy_engine=phase45_policy_engine,
         approval_reviewer=phase45_approval_reviewer,
+    )
+    local_authorizer = phase56_local_authorizer or (
+        lambda request: (
+            request.client is not None and request.client.host in {"127.0.0.1", "::1", "testclient"}
+        )
+    )
+
+    def configured_relay_authorizer(request: Request) -> bool:
+        configured_token = os.getenv("OPERANT_RELAY_AUTH_TOKEN")
+        supplied = request.headers.get("authorization", "")
+        if not configured_token or not supplied.startswith("Bearer "):
+            return False
+        return hmac.compare_digest(supplied.removeprefix("Bearer "), configured_token)
+
+    install_phase56_control_routes(
+        app,
+        store,
+        local_authorizer=local_authorizer,
+        relay_authorizer=phase56_relay_authorizer or configured_relay_authorizer,
+        action_gateway=app.state.phase45_action_gateway,
+        executor=phase56_remote_executor,
+        operation_capabilities=phase56_remote_operation_capabilities,
+    )
+    install_phase56_target_routes(app, store, action_gateway=app.state.phase45_action_gateway)
+    install_phase56_writer_routes(
+        app,
+        store,
+        action_gateway=app.state.phase45_action_gateway,
+        local_authorizer=local_authorizer,
+        artifact_adapter=phase56_writer_artifact_adapter,
+        merge_adapter=phase56_merge_adapter,
     )
 
     # Added last so this pure ASGI guard wraps the BaseHTTP command middleware:

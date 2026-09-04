@@ -583,7 +583,7 @@ export const LiveChatView: React.FC = () => {
               <section className="live-panel live-scope-panel">
                 <div className="live-panel-heading"><h2>本阶段边界</h2><ChevronRight size={15} aria-hidden="true" /></div>
                 <p>Live 已接入 Core 连接、Workspace/Project、Thread、Session/Run、SSE Cursor 回放、Approval 与类型化错误。</p>
-                <p className="live-not-connected">Graph、Team、Skill/MCP、Scheduler、OAuth、Remote、TUI、Tauri：本阶段未接入。</p>
+                <p className="live-not-connected">OAuth、完整 Remote PWA/WSS、TUI 与 Tauri 本阶段未接入；其他能力请到对应 live 页面查看。</p>
               </section>
             </aside>
           </div>

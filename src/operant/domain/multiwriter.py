@@ -52,6 +52,7 @@ class MergeRunStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     ROLLED_BACK = "rolled_back"
+    OUTCOME_UNKNOWN = "outcome_unknown"
 
 
 class WriterNodePolicy(BaseModel):

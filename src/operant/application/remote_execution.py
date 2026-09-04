@@ -26,6 +26,18 @@ from operant.protocol import canonical_action_hash
 from operant.remote.connector import RemoteOutcomeUnknown, RemoteTargetConnector
 
 
+def _matches_evidence(actual: Any, expected: Any) -> bool:
+    """Require every declared pre/postcondition field in authoritative evidence."""
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and _matches_evidence(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return isinstance(actual, list) and actual == expected
+    return bool(actual == expected)
+
+
 class RemoteAuthorization(Protocol):
     def authorize(
         self,
@@ -119,6 +131,9 @@ class RemoteExecutionController:
             capabilities=(Capability.REMOTE_TARGET_EXEC,),
             idempotency_key=idempotency_key,
         )
+        # A new fenced owner must not inherit stale concurrency usage. Running
+        # non-idempotent work is closed conservatively and is never replayed.
+        self.repository.reconcile_expired(now=now)
         lease = RemoteTargetLease(
             target_id=target_id,
             owner=owner,
@@ -274,6 +289,8 @@ class RemoteExecutionController:
         lease_fencing: int,
         now: datetime,
     ) -> tuple[RemoteExecutionJob, CapabilityActionReceipt]:
+        if kind not in {"browser", "computer"}:
+            raise ValueError("action kind must be browser or computer")
         expected = (
             {RemoteCapability.BROWSER_NAVIGATE, RemoteCapability.BROWSER_SUBMIT}
             if kind == "browser"
@@ -290,6 +307,8 @@ class RemoteExecutionController:
             raise ConflictError("observation target binding does not match")
         if observation.expires_at <= now.astimezone(timezone.utc):
             raise ConflictError("observation is expired; observe again before acting")
+        if not _matches_evidence(observation.body, request.precondition):
+            raise ConflictError("action precondition does not match the bound observation")
         arguments = {
             "target_ref": request.target_ref,
             "observation_hash": request.observation_hash,
@@ -357,8 +376,22 @@ class RemoteExecutionController:
             candidate_target_ref = result.postcondition.get("target_ref")
             if not isinstance(candidate_body, dict) or not isinstance(candidate_target_ref, str):
                 raise ConflictError("successful observation result lacks observation evidence")
+            if candidate_target_ref != job.arguments.get("target_ref"):
+                raise ConflictError("observation result changed the requested target binding")
             observation_body = candidate_body
             observation_target_ref = candidate_target_ref
+        elif result.status is RemoteJobStatus.SUCCEEDED and job.capability not in {
+            RemoteCapability.TARGET_READ,
+            RemoteCapability.TARGET_EXEC,
+        }:
+            expected_postcondition = job.arguments.get("postcondition", {})
+            if not _matches_evidence(result.postcondition, expected_postcondition):
+                result = result.model_copy(
+                    update={
+                        "status": RemoteJobStatus.FAILED,
+                        "error_code": "remote.postcondition_failed",
+                    }
+                )
         completed = self.repository.complete_job(
             result,
             target_id=target_id,

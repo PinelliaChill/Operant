@@ -13,6 +13,7 @@ import { Modal } from '../../components/Modal';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { formatDate, formatTransportMode } from '../../lib/format';
+import { LiveRemoteView } from './LiveRemoteView';
 
 /** 设备权限范围 → 中文标签 */
 const SCOPE_LABELS: Record<string, string> = {
@@ -21,7 +22,7 @@ const SCOPE_LABELS: Record<string, string> = {
   full_control: '完全控制',
 };
 
-export const RemoteView: React.FC = () => {
+const DemoRemoteView: React.FC = () => {
   const { client, addNotification } = useOperant();
 
   const [hosts, setHosts] = useState<RemoteHost[]>([]);
@@ -279,4 +280,9 @@ export const RemoteView: React.FC = () => {
       </Modal>
     </div>
   );
+};
+
+export const RemoteView: React.FC = () => {
+  const { clientMode } = useOperant();
+  return clientMode === 'live' ? <LiveRemoteView /> : <DemoRemoteView />;
 };

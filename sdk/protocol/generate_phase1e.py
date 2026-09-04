@@ -1415,10 +1415,45 @@ def _validate_document(document: dict[str, Any]) -> None:
             raise ValueError(f"{operation.operation_id} request body has no content")
 
 
-def _python_package_init() -> str:
-    """Keep frozen clients while exposing additive protocol lines from one package."""
+def _python_package_init_before_phase56() -> str:
+    """Render the package entry point shared by the frozen protocol lines."""
 
     return '''"""Generated Operant Python SDK entry points."""\n\nfrom .phase1e_generated import (\n    PHASE1E_MAX_CURSOR,\n    PHASE1E_PROTOCOL_VERSION,\n    PHASE1E_SCHEMA_DIGEST,\n    Phase1EClient,\n    ProtocolNegotiationError,\n)\nfrom .phase23_generated import (\n    PHASE23_MAX_CURSOR,\n    PHASE23_PROTOCOL_VERSION,\n    PHASE23_SCHEMA_DIGEST,\n    Phase23Client,\n)\nfrom .phase23_generated import (\n    ProtocolNegotiationError as Phase23ProtocolNegotiationError,\n)\nfrom .phase45_generated import (\n    PHASE45_MAX_CURSOR,\n    PHASE45_PROTOCOL_VERSION,\n    PHASE45_SCHEMA_DIGEST,\n    Phase45Client,\n)\nfrom .phase45_generated import (\n    ProtocolNegotiationError as Phase45ProtocolNegotiationError,\n)\nfrom .transport import Phase23Error\n\n__all__ = [\n    "PHASE1E_MAX_CURSOR",\n    "PHASE1E_PROTOCOL_VERSION",\n    "PHASE1E_SCHEMA_DIGEST",\n    "PHASE23_MAX_CURSOR",\n    "PHASE23_PROTOCOL_VERSION",\n    "PHASE23_SCHEMA_DIGEST",\n    "PHASE45_MAX_CURSOR",\n    "PHASE45_PROTOCOL_VERSION",\n    "PHASE45_SCHEMA_DIGEST",\n    "Phase1EClient",\n    "Phase23Client",\n    "Phase23Error",\n    "Phase23ProtocolNegotiationError",\n    "Phase45Client",\n    "Phase45ProtocolNegotiationError",\n    "ProtocolNegotiationError",\n]\n'''
+
+
+def _python_package_init() -> str:
+    """Keep frozen clients while exposing every additive protocol line."""
+
+    source = _python_package_init_before_phase56()
+    source = source.replace(
+        "from .transport import Phase23Error\n",
+        "from .phase56_generated import (\n"
+        "    PHASE56_MAX_CURSOR,\n"
+        "    PHASE56_PROTOCOL_VERSION,\n"
+        "    PHASE56_SCHEMA_DIGEST,\n"
+        "    Phase56Client,\n"
+        ")\n"
+        "from .phase56_generated import (\n"
+        "    ProtocolNegotiationError as Phase56ProtocolNegotiationError,\n"
+        ")\n"
+        "from .transport import Phase23Error\n",
+        1,
+    )
+    source = source.replace(
+        '    "PHASE45_SCHEMA_DIGEST",\n',
+        '    "PHASE45_SCHEMA_DIGEST",\n'
+        '    "PHASE56_MAX_CURSOR",\n'
+        '    "PHASE56_PROTOCOL_VERSION",\n'
+        '    "PHASE56_SCHEMA_DIGEST",\n',
+        1,
+    )
+    return source.replace(
+        '    "Phase45ProtocolNegotiationError",\n',
+        '    "Phase45ProtocolNegotiationError",\n'
+        '    "Phase56Client",\n'
+        '    "Phase56ProtocolNegotiationError",\n',
+        1,
+    )
 
 
 def generate() -> str:

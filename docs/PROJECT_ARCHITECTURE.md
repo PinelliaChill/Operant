@@ -4,7 +4,7 @@
 >
 > 最后更新：2026-09-04
 >
-> 对应版本：Operant 2.0 Phase 4/5A 后端与 GUI live 接入（`phase45.v1`；既有协议冻结）
+> 对应版本：Operant 2.0 Phase 5B Remote + Phase 6 Multi-Writer（`phase56.v1`；既有协议冻结）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -40,6 +40,12 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
     受控 Skill Discovery 与 MCP 工具调用纳入同一 Action Gateway。
 13. 用 Cron/一次性 Timer 生成持久 RunRequest，由单 Scheduler Leader 和单 Runtime Writer
     通过带 fencing 的 Job Lease 幂等地启动已发布 Graph Workflow。
+14. 把 Remote Control 与 Remote Execution Target 分成两个领域：前者让已配对设备控制本地 Core，
+    后者让本地 Core 把受控 Job 派给授权 Target；二者都不能绕过 Action Gateway。
+15. 以短时配对、设备身份、应用层端到端加密、Host Ack 和短 TTL opaque Envelope 提供单 Host
+    Remote Control 与自托管 Relay MVP，本地 SQLite 继续是恢复权威。
+16. 以独立 Writer Workspace、哈希化 Lease、所有权、Patch/Commit Artifact、冲突与显式 Merge Node
+    支持多个 Writer；真实 Git 修改只在管理员映射的隔离 worktree 内验证和合并。
 
 ## 2. 当前完成度
 
@@ -173,6 +179,33 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   调度 dispatch 经 Policy/Capability/Audit 后使用持久 `scheduler_graph_dispatches` 绑定唯一 Graph Run；
 - React GUI live 已接通 Schedule 列表/创建/修改/暂停/恢复/取消、手工触发、Queue、DLQ 和显式
   replay，并保持加载/空/错误、重试幂等键与高风险操作确认；
+- Phase 5B Remote Control 已实现单 Host、默认关闭、短时一次性配对、Ed25519 签名、X25519 会话密钥、
+  ChaCha20-Poly1305 加密、独立设备 Scope/撤销、RemoteSession/Cursor、Command 幂等与 Host Ack；配对
+  Challenge 持久绑定本机预授 Scope，设备请求只能取其子集；远程动作还必须匹配 Host 注册的
+  `(tool, operation) → capabilities` 精确映射，不能靠设备自报 Capability 提权。本地
+  Policy/Capability/Audit 是最终裁决，确定未配置 executor 的动作明确拒绝；Command 执行使用可续租
+  owner lease，只有租约过期的 `received`/`accepted` 才会保守收口，后者进入 `outcome_unknown`；人工
+  核对还要再次通过 Action Gateway，并以 CAS 落到已知终态，旧 owner 不能覆盖，不自动重放；
+- 自托管 Relay MVP 只保存有 120 秒上限和大小上限的 opaque 加密 Envelope，采用独立 Bearer 运维鉴权；
+  Host Connector 主动拉取、解密、重验设备签名并提交本地 Core，Relay delivery/ack 不冒充 Host Ack。
+  当前 transport 是有界 HTTPS polling API，不宣称已经完成 WSS、多 Host 发现或公网部署套件；
+- Remote Execution Target 已与 Remote Control 分域：Target 注册、Identity/Heartbeat、Capability
+  Manifest、Workspace Lease、fencing、Job/Result 幂等、取消、Artifact checksum，以及 Browser/Computer
+  observe-before-act 的 target/precondition/postcondition 证据均由本地 Controller 持久裁决。Target
+  凭据只保存环境变量引用，Lease token 只在首次响应返回且 SQLite 仅保存 SHA-256；非幂等运行中断线
+  或租约失效进入 `manual_reconcile_required`，不自动重放；
+- Phase 6 Graph Compiler 允许带显式 `WriterNodePolicy` 的多个写节点，并强制独立 isolation ref、互斥
+  ownership 和覆盖全部 Writer 的 Merge Node。运行层保存独立 Writer Workspace、token-hash + fencing
+  Lease、Patch/Commit Artifact、冲突与 Merge Run；可信 Git adapter 在管理员映射的绝对 worktree 中
+  重新核对 commit/patch SHA-256、base ancestry、changed paths 和 ownership；patch 只应用同一次验证
+  得到的不可变内存快照，同一 target 由 SQLite `RUNNING` 唯一约束、可续租 owner lease 和 Git worktree
+  文件锁串行，再经 Action Gateway 的 `workspace.write + git.commit` 审批执行 merge。Git adapter 在
+  私有 checkout 先算出预期 tree，目标 index 必须逐字匹配，并用固定 tree 的 `commit-tree` + old-HEAD
+  `update-ref` CAS 提交；检测到外部干扰会保留现场并转 `outcome_unknown`，不会 reset/clean 外部数据；
+- additive `phase56.v1` 从同一 OpenAPI Schema 确定生成 TypeScript/Python Client，并逐字冻结 Phase
+  1E/23/45 生成物。GUI live 已用该 Client 查询 Remote Host/Device、Remote Target/Job 和多 Writer
+  投影，可从本机显式启用 Host、创建一次性票据和撤销设备；错误或断线保留最近投影并明确显示，
+  不回退 Demo；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
 - v1/v2/v3/v4/v5/v6/v7/v8/v9/v10/v11/v12 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
@@ -222,14 +255,16 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 审批 Future 的跨进程恢复；
 - 使用真实 Provider 完成 Exp 19—24、形成统计性实验结论和用户学习验收；
 - 自动模型价格发现、显著性分析，以及中断 Evaluation Run 的逐 Result 自动续跑；
-- Web 身份认证、设备配对和远程访问控制；
+- Web/OAuth 身份认证、CSRF 防护和允许公网暴露的接入网关；
 - Graph Proposal/智能创建、Graph IR 中的 Timer 节点执行与任意第三方节点执行器；Phase 5A
   Scheduler 只能触发已发布 Graph Workflow，不会把任意 Graph 节点变成后台作业；
 - 完整 React GUI/PWA、Textual TUI 和 Tauri 桌面壳；当前生成 Client 与 React live 面覆盖冻结
-  Phase 1E、Graph/本地 Team 以及 Phase 4/5A 的 Policy、安全审计、Skill、MCP 和 Scheduler；Skill 信任/安装、
-  Policy 修改、OAuth、Browser/Computer 工具、TUI 与 Tauri 尚未实现；
+  Phase 1E、Graph/本地 Team、Phase 4/5A 和 Phase 5B/6 查询及本机设备治理；Skill 信任/安装、
+  Policy 修改、OAuth、完整 Browser/Computer connector、TUI 与 Tauri 尚未实现；
 - 复杂 `@` 引用、Provider Cache 的执行/复制，以及面向非可信 HTTP 客户端的 Artifact capability 签发；
-- Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
+- WSS/直连 Remote Gateway、完整远程 PWA、多 Host 发现/通知/安装器、生产 Remote Target connector，
+  以及 Container Writer 的创建与生命周期 adapter；当前仅交付单 Host HTTPS polling Relay MVP、
+  injectable Target connector 和可信 Git worktree merge adapter。
 
 ## 3. 总体架构
 
@@ -1279,7 +1314,7 @@ SQLiteStore 当前创建以下表：
 | `phase1d_command_audit_events` | 保存 `/init`、Review 和 Context Command 的只追加 Receipt 关联审计 |
 | `workflow_definitions` | 保存 Draft/Published Graph Definition Revision 与规范 hash |
 | `graph_workflow_runs` | 保存 Graph Run、Definition Snapshot 关联、预算、状态和 legacy Workflow 映射 |
-| `graph_run_leases` | 预留 Graph 单协调者租约、token、generation 与 TTL；本阶段不启用多 Writer |
+| `graph_run_leases` | 预留 Graph 单协调者租约、token、generation 与 TTL；Phase 6 Writer 使用独立 Workspace Lease，不把它扩成多协调者 |
 | `node_runs` | 保存每个节点的状态、输入/输出引用、等待 token、iteration 和 revision |
 | `node_attempts` | 保存节点每次执行、Receipt/Agent 关联、结果和副作用状态 |
 | `graph_run_events` | 按 Graph Run Cursor 保存带 event_id/schema_version/run_sequence 的只追加运行事件 |
@@ -1310,6 +1345,19 @@ SQLiteStore 当前创建以下表：
 | `job_leases` | 保存每个 claimed RunRequest 的带 fencing 执行租约 |
 | `job_attempts` | 保存每次调度尝试、副作用开始标志、结果和安全错误码 |
 | `scheduler_graph_dispatches` | 保存 RunRequest/Idempotency/Action Hash 到唯一 Graph Run 的持久绑定 |
+| `remote_control_hosts` | 保存本地 Remote Host 公钥、能力、开关与在线投影，不保存私钥 |
+| `remote_pairing_challenges` | 保存一次性配对码 hash、本机预授 Scope、TTL 与消费事实，不保存配对码明文 |
+| `remote_devices` / `remote_sessions` | 保存设备公钥/Scope/撤销与会话 Cursor/key ref；会话密钥在独立 0600 key store |
+| `remote_command_receipts` | 保存签名 Command 的 action/payload hash、状态、Host Ack 与安全结果引用 |
+| `relay_envelopes` | 保存短 TTL opaque ciphertext、nonce 和 delivery/ack 投影，不保存业务明文 |
+| `remote_execution_targets` | 保存 Target Identity、Secret Ref、Capability Manifest、状态与 fencing |
+| `remote_target_leases` | 保存 Target Workspace Lease 的 token hash、fencing、TTL 与释放事实 |
+| `remote_execution_jobs` / `remote_execution_results` | 保存受控 Job、幂等、unknown/cancel 状态、结果 checksum 和后置证据 |
+| `capability_observations` / `capability_action_receipts` | 保存 Browser/Computer observe-before-act 绑定和结果状态 |
+| `writer_workspaces` | 保存 Graph/Node 对应的隔离类型/ref、冻结 base 与路径所有权 |
+| `writer_leases` | 保存每个 Writer 的 token hash、单调 fencing、TTL 与释放事实 |
+| `writer_artifacts` / `writer_conflicts` | 保存 Patch/Commit hash、changed paths、测试证据与确定性冲突 |
+| `merge_runs` | 保存 Merge Node、策略、独立 target ref、revision、结果或失败/回滚状态；partial unique 约束阻止同一 target 同时 RUNNING |
 
 当前使用 Python 标准库 `sqlite3`，每个 Store 操作创建独立连接，并启用外键约束。写操作使用
 事务；异常时回滚。Migration 使用 `BEGIN IMMEDIATE`，当前版本为：
@@ -1333,6 +1381,9 @@ SQLiteStore 当前创建以下表：
     v1—v10 manifest/checksum 不变。
 12. v12：MCP Action Receipt、Server Start Fence、stdio Sandbox 绑定与 Phase 45 持久 Approval；保持
     v1—v11 manifest/checksum 不变。
+13. v13：Remote Control/Relay、Remote Execution Target/Browser/Computer evidence 与 Multi-Writer/
+    Merge 表；Command/Merge 执行 owner 与租约支持跨进程保守恢复，一次性 Pairing/Lease Secret 不进入
+    Command Receipt，Lease 只保存 hash，并保持 v1—v12 manifest/checksum 不变。
 
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
@@ -1371,6 +1422,13 @@ v12 在任何 MCP 工具副作用前持久 receipt，并把调用从 `reserved` 
 成功持久化后才进入 `completed`，因此 Core 重启后可重放已知结果而不会再次调用 Server，未知结果则
 保持人工核对。MCP start fence 和生命周期 CAS 阻止并发双启动；stdio 的受控 root/image 绑定与 Phase 45
 Approval 都只保存引用、摘要和决定事实，不保存宿主路径或 Secret 真值。
+
+v13 继续以本地 SQLite 为 Remote 与 Multi-Writer 状态权威。Remote Command 与 Merge Run 的运行态
+使用 owner/expiry lease 和 CAS；活跃 owner 会续租，只有过期 owner 才进入保守恢复，旧进程晚到结果
+不能覆盖人工核对。Remote Control 私钥和会话密钥只放在
+独立 `0600` 原子 key store，并用文件锁串行多进程写；Pairing code、Remote Target/Writer Lease token
+只在首次 `Cache-Control: no-store` 响应返回，Command Receipt 对该响应标为需要人工核对而不保存响应
+正文。Target 与 Writer 表只保存 token SHA-256，fencing/expiry 在 `BEGIN IMMEDIATE` 事务中核对。
 
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
@@ -1493,6 +1551,7 @@ workspace 绝对路径。
 | `GET` | `/v1/protocol` | 协商冻结 `phase1e.v1`、Schema digest、最小 Client 与 capability |
 | `GET` | `/v1/protocol/phase23` | 独立协商 additive `phase23.v1`、digest 与 Graph/Team capability |
 | `GET` | `/v1/protocol/phase45` | 独立协商 additive `phase45.v1`、digest 与 Security/Skill/MCP/Scheduler capability |
+| `GET` | `/v1/protocol/phase56` | 独立协商 additive `phase56.v1`、digest 与 Remote/Multi-Writer capability |
 | `GET` | `/v1/projects` | 查询已登记 Workspace 的只读 Project/Thread/Workflow 聚合投影 |
 | `GET` | `/v1/workspaces/{workspace_id}/files` | 安全列出 Workspace 相对目录的有界 metadata |
 | `GET` | `/v1/slash-commands` | 查询冻结版本的 Slash Command Registry |
@@ -1584,6 +1643,22 @@ workspace 绝对路径。
 | `POST` | `/v1/schedules/{id}/trigger` | 用调用方幂等键创建手工 RunRequest |
 | `GET` | `/v1/scheduler/{queue,dead-letter}` | 查询持久 Queue 或 DLQ 投影 |
 | `POST` | `/v1/scheduler/dead-letter/{id}/replay` | 显式、幂等地创建绑定原 DLQ 事实的新请求 |
+| `GET/POST` | `/v1/remote-control/hosts[/enable]` | 本机鉴权下查询或显式启用/禁用 Remote Host |
+| `POST` | `/v1/remote-control/pairing-challenges` | 创建不落 Command Receipt 的一次性短时配对票据 |
+| `POST/GET` | `/v1/remote-control/{devices,sessions}` 及其 `/pair`、`/{id}/{revoke,close}` 子路由 | 配对/撤销设备、创建/关闭会话并查询安全投影 |
+| `POST/GET` | `/v1/remote-control/commands[/{id}]` | 提交签名加密 Command，或按 ID 查询 Host Ack/终态；`/{id}/reconcile` 仅供本机人工核对 unknown |
+| `GET` | `/v1/remote-control/events` | 按 Host 与可选 Session 绑定 Cursor 查询已提交事件 |
+| `POST/GET` | `/v1/relay/envelopes` | Relay 鉴权后发布/拉取有界 opaque Envelope |
+| `POST` | `/v1/relay/envelopes/{id}/acknowledge` | 只确认 Relay 投递；不表示 Core 已接受动作 |
+| `POST/GET` | `/v1/remote-targets` | 经 Action Gateway 注册 Target 或查询安全投影 |
+| `POST` | `/v1/remote-targets/{id}/heartbeat`、`/{id}/leases[/renew|/release]` | 身份心跳与一次性 Target Lease；renew/release 继续 fencing |
+| `POST/GET` | `/v1/remote-targets/{id}/jobs` 及 jobs 子路由 | 创建、poll、complete、cancel 受控远程 Job 与结果 |
+| `POST` | `/v1/{browser,computer}/{target_id}/observe`、`/v1/{browser,computer}/act` | Browser/Computer observe-before-act Capability |
+| `POST/GET` | `/v1/graph/runs/{id}/writer-workspaces` | 建立/查询冻结策略对应的独立 Writer Workspace |
+| `POST` | `/v1/writer-workspaces/{id}/lease[/renew,/release]` | 获取、续期或释放 token-hash + fencing Writer Lease |
+| `POST/GET` | `/v1/writer-workspaces/{id}/artifacts`, `/v1/graph/runs/{id}/writer-artifacts` | 发布或查询已验证 Patch/Commit Artifact |
+| `POST/GET` | `/v1/graph/runs/{id}/writer-conflicts[/detect]` | 确定性检测或查询多 Writer 冲突 |
+| `POST/GET` | `/v1/merge-runs[/{id}]` 及 `/{id}/{finalize,reconcile}` | 创建/查询显式 Merge Node Run；finalize 经 Git commit 审批，unknown 只允许本机 Gateway 人工核对 |
 | `POST` | `/v1/workflows/coding/runs` | 运行角色驱动的多 Agent Workflow 并返回 SSE |
 | `POST/GET` | `/v1/tasks` | 运行 Workflow，或查询已持久化任务 |
 | `GET` | `/v1/tasks/{id}` | 查询任务状态、阶段和角色选择 |
@@ -1607,7 +1682,7 @@ workspace 绝对路径。
 SSE 的 `event` 字段使用 RuntimeEvent 或 Workflow 事件类型，`data` 是完整事件 JSON。Workflow
 事件额外包含角色槽位和 Session ID，使客户端可以区分并行 Explorer，并针对当前角色提交审批。
 
-### Phase 1E / Phase 23 / Phase 45 生成 Client 边界
+### Phase 1E / Phase 23 / Phase 45 / Phase 56 生成 Client 边界
 
 `sdk/protocol/schema/operant-phase1e.openapi.json` 是 Phase 1E 正式 Client 面的唯一协议源。固定生成器
 离线产生 TypeScript/Python 公共模型与调用方法，生成文件不得手工修改；旧 GUI demo 的手写类型只服务
@@ -1635,6 +1710,12 @@ TypeScript/Python operation，覆盖 Security、Skill、MCP 和 Scheduler。它�
 digest 或专属生成文件；三个生成器共同维护兼容 Python 包入口。Phase 45 修改操作要求
 稳定幂等键；GUI 只显示服务端投影，不在本地伪造 Policy ALLOW、Skill 信任、MCP 工具结果、
 Schedule 终态或 DLQ replay 成功。
+
+`sdk/protocol/schema/operant-phase56.openapi.json` 是 additive `phase56.v1` 协议源，覆盖 Remote
+Control/Relay、Remote Execution Target/Browser/Computer 与 Multi-Writer/Merge。生成器只从公共
+FastAPI Schema 产生 TypeScript/Python Client 和 SHA-256；Phase 45 生成器显式冻结旧 Capability 枚举，
+因此新增 Phase 56 capability 不会反向改写 Phase 45 产物。一次性 Pairing/Lease 响应不进入 durable
+Command body；丢失时只能重新建立新的逻辑动作，不允许从 Receipt 回放 Secret。
 
 ### REST Command Receipt 与统一错误
 
@@ -1963,6 +2044,18 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 - React GUI Phase 45 live 覆盖 Policy/有界 Audit、Skill 候选、MCP root-ref 配置/启停/删除/工具快照、
   ASK allow/deny 后同 key 重试、tool call、receipt 与 unknown 人工核对，以及 Schedule/Queue/DLQ/replay
   的加载、空、错误、断线、幂等重试和确认边界。
+- Phase 5B 覆盖本机预授 Scope 的一次性配对/撤销、签名和密文篡改、Capability 伪报拒绝、过期、
+  Host/session 绑定、Command replay/Host Ack/ASK、owner lease/CAS 崩溃收口与 Gateway 人工核对、key store 并发写、Relay
+  TTL/大小/opaque delivery、Target identity/lease fencing、并发
+  上限、Job/Result 幂等、Artifact checksum、Browser/Computer observation target + pre/postcondition、
+  payload 上限、取消、断线 unknown 和重启 reconcile；
+- Phase 6 覆盖 Compiler 的 Writer/Merge/ownership 约束、Lease token hash/fencing/expiry、Artifact base/
+  ownership/test evidence、稳定冲突检测、review/rollback/terminal CAS、管理员路径映射、Git commit
+  ancestry/SHA/changed paths、patch 不可变快照、target owner lease/独占 RUNNING/文件锁、预期 tree 与
+  old-HEAD CAS、外部干扰保留现场、崩溃后人工 reconcile，以及 finalize 前 Action Gateway ASK；
+- `phase56.v1` 覆盖 operation 形状、digest 和双 Client 确定生成，并确认 Phase 1E/23/45 Schema、digest
+  与专属生成文件保持冻结；GUI adapter/test 覆盖生成 Client、live 无 Mock fallback 和 Remote/Writer
+  投影解析。
 
 本地验证命令：
 
@@ -1977,6 +2070,32 @@ npm run test --prefix clients/gui
 npm run typecheck --prefix clients/gui
 npm run build --prefix clients/gui
 ```
+
+本次最终门禁为 656 项 pytest 通过、1 个条件性 Docker 测试跳过、1 个既有 Starlette 警告，GUI
+75 项测试全部通过；Ruff format/check、mypy、`uv lock --check --offline`、`git diff --check`、GUI
+typecheck/build 均通过。条件性 skip 不算容器验收；Vite 生产主 chunk 为 963.95 kB，继续作为性能债务。
+
+2026-09-04 的 Phase 5B/6 验收使用隔离 v13 SQLite、实际 localhost Uvicorn 和生成 Python
+`Phase56Client`，完整跑通 Host 显式启用、一次性配对、设备侧 X25519 会话密钥推导、签名加密
+Remote Command、Host Ack/Cursor、Relay publish/pull/ack、独立 Remote Target 注册/心跳/Workspace Lease，
+以及 Browser/Computer observe-before-act Job/Result；全部受控动作都留下 Action Gateway hash，协议
+digest 为 `538eb163b88e0bfbb42f99c84d31314b01965b23e95b662604b97963c7de6513`。实际链路发现并修复
+`/v1/remote-targets/jobs` 被动态 target 路由抢先匹配的问题，并加入 200 响应回归；全量生成顺序还发现
+旧协议生成器会覆盖 Python 包入口，现由公共生成器统一保留 additive Phase 56 export 并加入确定性回归。
+
+同一真实 Core 的 GUI live 验收在 1440×900 和 375×812 下显示 Host、已配对设备、Remote Target 与
+Browser/Computer Job 投影；键盘首焦点为 skip link，随后可到 Refresh 和 Create Pairing Ticket，实测
+标题与按钮对比度分别为 17.49、16.74 和 7.29。Core 断开后写动作禁用、保留最后投影并显示
+“不会回退演示数据”的显式错误；以同一 SQLite 重启 Core 后投影恢复。该过程还发现并修复 live
+Settings 未暴露 Remote 页面的问题，保留旧 `tab=remote` 跳转兼容，不新增视觉方案。
+
+独立 `sol-medium` Reviewer 聚焦 Scope/Capability 提权、密文与 replay、owner lease/CAS、断线恢复、
+unknown 人工核对、Git patch TOCTOU、同 target 并发与外部干扰，返工后给出 `VERDICT: PASS`，未留下
+P0/P1/P2。正式 `operant model discover` 发现并选用精确模型 ID `gpt-5.6-luna`，通过本分支正式
+ModelProfile 与只读 Session 返回 `PHASE56_REAL_MODEL_OK`；用量 574 tokens、模型请求耗时 7.889 秒、
+0 个 Tool Call，隔离 workspace 无写入，SQLite 仅保存 `secret_ref=OPERANT_API_KEY`。该 smoke 证明
+正式 Provider/ModelProfile/Session 链路仍可用，不等于真实模型控制浏览器/桌面、生产 Relay/Target
+connector、Container Writer 生命周期、多进程高压或真实模型 + 多 Writer 的同一次端到端验收。
 
 2026-09-04 的 Phase 4/5A 验收使用隔离 v12 SQLite、实际 localhost Uvicorn、生成 TypeScript/Python
 Client 和真实浏览器；最终返工后完整 pytest 为 618 通过、1 个条件性 Docker 测试跳过、1 个既有 Starlette 警告，
@@ -2125,17 +2244,17 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-5. 已有 v1—v12 原子 Migration、旧库识别升级和 Session/Workflow/Scheduler lease；v9 Graph lease 仍只是
-   预留结构，v11 的 Scheduler Leader 与 Runtime Writer 只栅栏调度物化/派发，不是通用 Graph 多进程 Writer，
-   但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
-   Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
+5. 已有 v1—v13 原子 Migration、旧库识别升级和 Session/Workflow/Scheduler/Remote/Writer lease；v9
+   Graph lease 仍只是单协调者预留，v11 Scheduler Writer 与 v13 多 Writer 解决的分别是调度派发和隔离
+   工作区写入，不是分布式 Core 或高可用协调。downgrade 只用于显式 isolated 且新增表全空的数据库；
+   没有通用生产 downgrade，REST Command 也没有跨常驻 Core 进程的 owner/liveness lease；
 6. Session/Workflow/Evaluation/Graph/Team 已有 Cursor 和已提交事件回放，GUI 会按同 scope Cursor
    回放并查询投影校正，但仍不支持任意模型流位置续传；SSE 断线不保证后台继续。Phase 1E 冻结协议没有
    Session 列表/详情 Query，因此刷新后 GUI 只能从 Thread 的权威 `session_id` 恢复运行入口，并把角色/
    模型详情明确标为未查询，不能伪造本地详情；
-7. Web 工作台、Phase 1E GUI 和 API 没有身份认证、CSRF 防护、设备配对或 Remote Gateway，只能绑定
-   受信任本机地址。GUI 生产部署还要求受信任的同源反向代理把 `/v1` 转给 Core；开发环境由 Vite
-   proxy 提供该路径，不开放 Core CORS，也不得直接暴露到公网；
+7. Web 工作台与 API 仍没有通用身份认证和 CSRF 防护，只能绑定受信任本机地址。Phase 5B 配对和
+   E2E Command 只保护 Remote Control 协议，不能给全部 `/v1/*` 充当公网认证；Relay API 还需单独
+   Bearer 运维鉴权。GUI 生产部署要求受信任同源反向代理，当前仍不得直接暴露到公网；
 8. Evaluation Runner v1 已有可复现 Suite、隔离 artifact、外部验证、指标和五类 Trace RCA，但模型
    价格仍须由配置/Suite 固定提供，尚无自动价格发现、Evaluation Run 级总预算与调度、统计显著性、
    真实模型 Exp 19—24 结果或逐 Result 断点续跑；中断组合会保留为不可重放的 Interrupted Result，
@@ -2143,11 +2262,11 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 9. Docker Runner 已跑通真实隔离集成用例，第三周六角色 Workflow 也已在可信临时 Host fixture 上
     完成真实模型验收；两者仍是不同证据，尚未完成“真实模型 + Docker Coder”的同一次端到端验收，
     也尚未构建专用 Operant 镜像；
-10. React GUI 已实现 Phase 1E、Phase 23 与 Phase 45 的 Security Audit/Skill/MCP/Scheduler live 面，
-    包含受控 MCP Tool 调用、Approval continuation 与 receipt 查询；Skill 信任/安装、Policy 修改、OAuth、
-    Browser/Computer 工具仍未实现。Graph Proposal/
-    智能创建、Graph Timer/任意节点执行、完整 PWA、TUI、Tauri、Remote Control、Host Connector、自托管 Relay、Remote Gateway 和
-    Remote Execution Target 均未实现，当前 `/web` 与 `/v1/*` 也不得直接暴露到公网。
+10. React GUI 已实现 Phase 1E/23/45 和 Phase 56 Remote/Multi-Writer 查询及本机设备治理 live 面；
+    Skill 信任/安装、Policy 修改、OAuth、Graph Proposal/智能创建、Graph Timer/任意节点执行、完整
+    Remote PWA、TUI、Tauri、WSS/直连 Gateway、多 Host 发现/通知与生产 Remote Target connector 仍未
+    实现。Browser/Computer 当前是 Target Capability 契约、观察/动作证据与 injectable connector，
+    不是内置浏览器/桌面驱动；Relay 是 HTTPS polling MVP，不是已审计的公网托管产品。
 11. Artifact 已有对象级 Retention、Pin、宽限期、Trash、只读审计和显式孤儿修复，但
     Session/Workflow/Evaluation 事件、Thread Canonical History、Tool/Command Receipt、Approval Audit、
     Memory 和 Context/Compaction 仍没有清理执行器，会随运行持续增长；Artifact 也没有后台自动清扫，
@@ -2166,9 +2285,15 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
     实现 MCP Streamable HTTP。Phase 45 Approval 可跨请求/重启保存决定，但不会恢复任意模型流位置。
     BTW Sidecar 的主动取消通知仍是本进程协作式信号；跨进程重启只会安全标为
     `process_interrupted`，不会从任意模型流位置恢复或自动继续。
-15. GUI 当前生产主 chunk 约 903 kB，Vite 会给出大 chunk 警告；尚未做按路由拆包、真实大 Graph/Team/
+15. GUI 当前生产主 chunk 约 964 kB，Vite 会给出大 chunk 警告；尚未做按路由拆包、真实大 Graph/Team/
     长事件流性能基准、浏览器矩阵或 Tauri WebView 验收。旧 demo SDK 类型继续只服务明确 Mock 表面，
     不得扩展为第二套正式协议；后续 live operation 必须先进入对应单一 Schema 再生成两种 Client。
+16. Phase 6 已实现可信 Git worktree 验证/合并 adapter，但 Container Writer 目前只有冻结领域契约与
+    adapter 边界，尚无负责创建、挂载、回收容器工作区的生产实现。Merge 进程若在 Git 已提交而 SQLite
+    尚未写入成功之间崩溃，owner lease 过期后会进入 `outcome_unknown`，保留独立 target worktree 供
+    本机 Gateway 人工核对，不自动猜测或重放；同一 target 的并发由 SQLite 持久独占状态与跨进程文件锁
+    拒绝；尚未完成多进程高压、超大 patch
+    性能和进程崩溃故障注入演练。
 
 ## 19. 文档维护规则
 
@@ -2199,6 +2324,23 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-09-04（Phase 5B Remote + Phase 6 Multi-Writer）
+
+- 从 `origin/main@56d87b8` 建立隔离集成分支；Remote Control、Remote Execution Target 与 Multi-Writer
+  三条实现轨并行交付，公共领域 Schema、SQLite v13 Migration、生成 Client 和最终集成由 Codex 统一持有；
+- Remote Control 实现单 Host、本机显式开关、短时配对、设备 Scope/撤销、E2E 加密、签名 Command、
+  Host Ack/Cursor 与 opaque Relay polling；Remote Execution 独立实现 Target Identity/Manifest、Lease
+  fencing、Job/Result/Artifact、Browser/Computer observe-before-act 和 unknown-write 人工核对；
+- Graph/SQLite/API 增加隔离 Writer、Lease、Patch/Commit Artifact、冲突与 Merge Node；可信 Git
+  adapter 在管理员映射的 worktree 内重验 SHA/base/path ownership，Merge 由 Action Gateway 审批并在
+  普通确定失败时回滚；若检测到外部干扰则保留现场并进入 unknown，不执行破坏性回滚；Lease token
+  和一次性响应不以明文写入 SQLite/Command Receipt；
+- Reviewer 复核后补强 Remote Command/Merge Run 的 owner lease 与 CAS 恢复、Gateway 人工核对、
+  Git 私有 expected-tree/固定 tree commit/old-HEAD CAS；外部干扰保留现场并进入 unknown，不破坏性回滚；
+- 新增 additive `phase56.v1` 确定生成 Client并冻结旧协议；GUI live 接入 Remote 与 Multi-Writer 投影，
+  不新增视觉方案、不静默回退 Mock。OAuth、TUI、Tauri、完整 Remote PWA/WSS、多 Host 运维套件、
+  生产 Target connector 与 Container Writer 生命周期仍明确排除或后续处理。
 
 ### 2026-09-04（Phase 4/5A 独立安全审查收口）
 

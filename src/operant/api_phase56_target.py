@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import Any, TypeVar
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from operant.application.phase45_gateway import Phase45ActionGateway
@@ -62,6 +62,10 @@ class LeaseBindingBody(_Body):
 
 class ReleaseRemoteTargetLeaseBody(LeaseBindingBody):
     idempotency_key: str = Field(min_length=1, max_length=300)
+
+
+class RenewRemoteTargetLeaseBody(LeaseBindingBody):
+    ttl_seconds: int = Field(default=60, ge=1, le=300)
 
 
 class PollRemoteTargetJobsBody(LeaseBindingBody):
@@ -147,9 +151,11 @@ def install_phase56_target_routes(
     action_gateway: Phase45ActionGateway,
 ) -> None:
     repository = SQLiteRemoteExecutionRepository(store)
+    reconciled = repository.reconcile_expired(now=datetime.now(timezone.utc))
     controller = RemoteExecutionController(repository, _Phase45RemoteAuthorization(action_gateway))
     app.state.remote_execution_repository = repository
     app.state.remote_execution_controller = controller
+    app.state.remote_execution_reconciled_jobs = tuple(item.job_id for item in reconciled)
 
     def now() -> datetime:
         return datetime.now(timezone.utc)
@@ -179,6 +185,20 @@ def install_phase56_target_routes(
             "items": [item.model_dump(mode="json") for item in repository.list_targets(limit=limit)]
         }
 
+    # Keep this static route ahead of /v1/remote-targets/{target_id}; Starlette
+    # resolves matching routes in registration order.
+    @app.get("/v1/remote-targets/jobs", operation_id="listRemoteTargetJobs")
+    async def list_remote_target_jobs(
+        target_id: str | None = None,
+        limit: int = Query(default=200, ge=1, le=500),
+    ) -> dict[str, Any]:
+        return {
+            "items": [
+                item.model_dump(mode="json")
+                for item in repository.list_jobs(target_id=target_id, limit=limit)
+            ]
+        }
+
     @app.get("/v1/remote-targets/{target_id}", operation_id="getRemoteTarget")
     async def get_remote_target(target_id: str) -> dict[str, Any]:
         return call(lambda: repository.get_target(target_id)).model_dump(mode="json")
@@ -199,8 +219,10 @@ def install_phase56_target_routes(
         status_code=201,
     )
     async def acquire_remote_target_lease(
-        target_id: str, body: AcquireRemoteTargetLeaseBody
+        target_id: str, body: AcquireRemoteTargetLeaseBody, response: Response
     ) -> dict[str, Any]:
+        response.headers["x-operant-sensitive-response"] = "one-time"
+        response.headers["Cache-Control"] = "no-store"
         return call(
             lambda: controller.acquire_lease(
                 target_id,
@@ -213,13 +235,32 @@ def install_phase56_target_routes(
         ).model_dump(mode="json")
 
     @app.post(
+        "/v1/remote-targets/{target_id}/leases/renew",
+        operation_id="renewRemoteTargetLease",
+    )
+    async def renew_remote_target_lease(
+        target_id: str, body: RenewRemoteTargetLeaseBody
+    ) -> dict[str, Any]:
+        renewed = call(
+            lambda: controller.renew_lease(
+                target_id=target_id,
+                lease_id=body.lease_id,
+                token=body.token,
+                fencing=body.fencing,
+                ttl_seconds=body.ttl_seconds,
+                now=now(),
+            )
+        )
+        return renewed.model_dump(mode="json", exclude={"token"})
+
+    @app.post(
         "/v1/remote-targets/{target_id}/leases/release",
         operation_id="releaseRemoteTargetLease",
     )
     async def release_remote_target_lease(
         target_id: str, body: ReleaseRemoteTargetLeaseBody
     ) -> dict[str, Any]:
-        return call(
+        released = call(
             lambda: controller.release_lease(
                 target_id=target_id,
                 lease_id=body.lease_id,
@@ -228,7 +269,8 @@ def install_phase56_target_routes(
                 now=now(),
                 idempotency_key=body.idempotency_key,
             )
-        ).model_dump(mode="json")
+        )
+        return released.model_dump(mode="json", exclude={"token"})
 
     @app.post(
         "/v1/remote-targets/{target_id}/jobs",
@@ -335,18 +377,6 @@ def install_phase56_target_routes(
         return call(
             lambda: controller.cancel_job(job_id, now=now(), idempotency_key=body.idempotency_key)
         ).model_dump(mode="json")
-
-    @app.get("/v1/remote-targets/jobs", operation_id="listRemoteTargetJobs")
-    async def list_remote_target_jobs(
-        target_id: str | None = None,
-        limit: int = Query(default=200, ge=1, le=500),
-    ) -> dict[str, Any]:
-        return {
-            "items": [
-                item.model_dump(mode="json")
-                for item in repository.list_jobs(target_id=target_id, limit=limit)
-            ]
-        }
 
     async def observe(kind: str, target_id: str, body: ObserveCapabilityBody) -> dict[str, Any]:
         return call(

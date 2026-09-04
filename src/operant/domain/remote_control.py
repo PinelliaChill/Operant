@@ -96,6 +96,7 @@ class PairingChallenge(BaseModel):
     challenge_id: str = Field(default_factory=lambda: new_remote_id("pairing"))
     host_id: str = Field(min_length=1, max_length=200)
     code_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    allowed_scopes: tuple[RemoteScope, ...] = (RemoteScope.OBSERVE,)
     expires_at: datetime
     max_uses: int = Field(default=1, ge=1, le=5)
     uses: int = Field(default=0, ge=0, le=5)
@@ -115,6 +116,10 @@ class PairingChallenge(BaseModel):
             raise ValueError("pairing challenge uses exceed max_uses")
         if self.expires_at <= self.created_at:
             raise ValueError("pairing challenge expiry must follow creation")
+        if not self.allowed_scopes or RemoteScope.OBSERVE not in self.allowed_scopes:
+            raise ValueError("pairing challenge must allow the observe scope")
+        if len(set(self.allowed_scopes)) != len(self.allowed_scopes):
+            raise ValueError("pairing challenge scopes must be unique")
         return self
 
 
@@ -125,6 +130,7 @@ class PairingTicket(BaseModel):
     host_id: str
     one_time_code: str = Field(min_length=16, max_length=200)
     expires_at: datetime
+    allowed_scopes: tuple[RemoteScope, ...]
     relay_url: str | None = Field(default=None, max_length=2_000)
     host_signing_public_key: str = Field(min_length=32, max_length=500)
     host_exchange_public_key: str = Field(min_length=32, max_length=500)
@@ -195,7 +201,6 @@ class EncryptedRemoteCommand(BaseModel):
     expires_at: datetime
     nonce: str = Field(min_length=16, max_length=200)
     ciphertext: str = Field(min_length=1, max_length=1_400_000)
-    expected_version: int | None = Field(default=None, ge=0)
     signature: str = Field(min_length=32, max_length=500)
 
     @field_validator("issued_at", "expires_at")

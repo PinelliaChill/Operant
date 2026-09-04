@@ -35,7 +35,7 @@ function message(error: unknown): string {
 }
 
 export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab }) => {
-  const { phase23Client, connectionStatus, activeWorkspace, addNotification } = useOperant();
+  const { phase23Client, phase56Client, connectionStatus, activeWorkspace, addNotification } = useOperant();
   const keys = useRef(new IdempotencyKeyRegistry());
   const streamEpoch = useRef(0);
   const graphScopeEpoch = useRef(0);
@@ -95,7 +95,7 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
     const [nextRun, nextNodes, multiWriter] = await Promise.all([
       phase23Client.getGraphRun(normalizedRunId),
       phase23Client.listNodeRuns(normalizedRunId),
-      loadMultiWriterProjection(normalizedRunId),
+      loadMultiWriterProjection(phase56Client, normalizedRunId),
     ]);
     if (
       epoch !== graphQueryEpoch.current

@@ -392,7 +392,7 @@ export const LiveSchedulesView: React.FC = () => {
               </div>
             </section>
           </div>
-          <p className="section-footnote">本页面只连接本地单 Core、单 Scheduler Leader 与单 Runtime Writer；不表示 Remote、Relay、OAuth 或多 Writer 已实现。</p>
+          <p className="section-footnote">本页面只显示本地单 Core、单 Scheduler Leader 与单 Runtime Writer；Remote 与多 Writer 状态请到对应 live 页面查看，OAuth 仍未接入。</p>
         </div>
       </div>
 

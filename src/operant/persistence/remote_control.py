@@ -110,6 +110,16 @@ class SQLiteRemoteControlRepository:
             raise KeyError(host_id)
         return self._host(row)
 
+    def list_hosts(self, *, limit: int = 200) -> list[HostInstance]:
+        if not 1 <= limit <= 500:
+            raise ValueError("invalid remote host page")
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM remote_control_hosts ORDER BY created_at, host_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._host(row) for row in rows]
+
     def create_challenge(self, challenge: PairingChallenge) -> PairingChallenge:
         with self.store._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -117,14 +127,15 @@ class SQLiteRemoteControlRepository:
                 connection.execute(
                     """
                     INSERT INTO remote_pairing_challenges(
-                        challenge_id, host_id, code_hash, expires_at, max_uses, uses,
-                        consumed_at, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        challenge_id, host_id, code_hash, allowed_scopes_json, expires_at,
+                        max_uses, uses, consumed_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         challenge.challenge_id,
                         challenge.host_id,
                         challenge.code_hash,
+                        _json([scope.value for scope in challenge.allowed_scopes]),
                         _utc(challenge.expires_at),
                         challenge.max_uses,
                         challenge.uses,
@@ -135,6 +146,15 @@ class SQLiteRemoteControlRepository:
             except sqlite3.IntegrityError as exc:
                 raise ConflictError("unable to create pairing challenge") from exc
         return challenge
+
+    def get_challenge(self, challenge_id: str) -> PairingChallenge:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM remote_pairing_challenges WHERE challenge_id=?", (challenge_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(challenge_id)
+        return self._challenge(row)
 
     def consume_challenge(
         self, challenge_id: str, *, code_hash: str, now: datetime
@@ -311,6 +331,8 @@ class SQLiteRemoteControlRepository:
         payload_hash: str,
         nonce: str,
         signature: str,
+        execution_owner_id: str,
+        execution_lease_expires_at: datetime,
         now: datetime,
     ) -> tuple[RemoteCommandReceipt, bool]:
         with self.store._connect() as connection:
@@ -334,8 +356,9 @@ class SQLiteRemoteControlRepository:
                     INSERT INTO remote_command_receipts(
                         command_id, idempotency_key, action_hash, host_id, device_id,
                         remote_session_id, payload_hash, nonce, signature, status,
+                        execution_owner_id, execution_lease_expires_at,
                         host_acknowledged_at, result_ref, error_code, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', NULL, NULL, NULL, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, NULL, NULL, NULL, ?, ?)
                     """,
                     (
                         command_id,
@@ -347,6 +370,8 @@ class SQLiteRemoteControlRepository:
                         payload_hash,
                         nonce,
                         signature,
+                        execution_owner_id,
+                        _utc(execution_lease_expires_at),
                         _utc(now),
                         _utc(now),
                     ),
@@ -355,11 +380,74 @@ class SQLiteRemoteControlRepository:
                 raise ConflictError("remote command replay or binding conflict") from exc
         return self.get_command(command_id), True
 
+    def claim_command_execution(
+        self,
+        command_id: str,
+        *,
+        execution_owner_id: str,
+        execution_lease_expires_at: datetime,
+        now: datetime,
+    ) -> RemoteCommandReceipt:
+        """CAS a never-executed receipt into accepted under this live owner."""
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                """
+                UPDATE remote_command_receipts
+                SET status='accepted', execution_owner_id=?, execution_lease_expires_at=?,
+                    result_ref=NULL, error_code=NULL,
+                    host_acknowledged_at=COALESCE(host_acknowledged_at, ?), updated_at=?
+                WHERE command_id=? AND (
+                    (status='received' AND execution_owner_id=?)
+                    OR (status='rejected' AND error_code='remote.approval_required')
+                )
+                """,
+                (
+                    execution_owner_id,
+                    _utc(execution_lease_expires_at),
+                    _utc(now),
+                    _utc(now),
+                    command_id,
+                    execution_owner_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ConflictError("remote command execution claim conflicts")
+        return self.get_command(command_id)
+
+    def renew_command_execution_lease(
+        self,
+        command_id: str,
+        *,
+        execution_owner_id: str,
+        execution_lease_expires_at: datetime,
+        now: datetime,
+    ) -> None:
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                """
+                UPDATE remote_command_receipts
+                SET execution_lease_expires_at=?, updated_at=?
+                WHERE command_id=? AND status='accepted' AND execution_owner_id=?
+                """,
+                (
+                    _utc(execution_lease_expires_at),
+                    _utc(now),
+                    command_id,
+                    execution_owner_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ConflictError("remote command execution lease was lost")
+
     def set_command_status(
         self,
         command_id: str,
         status: RemoteCommandStatus,
         *,
+        expected_status: RemoteCommandStatus,
+        execution_owner_id: str,
         now: datetime,
         result_ref: str | None = None,
         error_code: str | None = None,
@@ -370,11 +458,12 @@ class SQLiteRemoteControlRepository:
             updated = connection.execute(
                 """
                 UPDATE remote_command_receipts SET status=?, result_ref=?, error_code=?,
+                    execution_owner_id=NULL, execution_lease_expires_at=NULL,
                     host_acknowledged_at=CASE
                         WHEN ? THEN COALESCE(host_acknowledged_at, ?)
                         ELSE host_acknowledged_at
                     END,
-                    updated_at=? WHERE command_id=?
+                    updated_at=? WHERE command_id=? AND status=? AND execution_owner_id=?
                 """,
                 (
                     status.value,
@@ -384,10 +473,12 @@ class SQLiteRemoteControlRepository:
                     _utc(now),
                     _utc(now),
                     command_id,
+                    expected_status.value,
+                    execution_owner_id,
                 ),
             )
             if updated.rowcount != 1:
-                raise KeyError(command_id)
+                raise ConflictError("remote command status transition conflicts")
         return self.get_command(command_id)
 
     def get_command(self, command_id: str) -> RemoteCommandReceipt:
@@ -399,6 +490,59 @@ class SQLiteRemoteControlRepository:
         if row is None:
             raise KeyError(command_id)
         return self._receipt(row)
+
+    def reconcile_incomplete_commands(self, *, now: datetime) -> tuple[int, int]:
+        """Close receipts left across a process boundary without replaying any action."""
+        now_text = _utc(now)
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            accepted = connection.execute(
+                """
+                UPDATE remote_command_receipts
+                SET status='outcome_unknown', error_code='remote.manual_reconcile_required',
+                    execution_owner_id=NULL, execution_lease_expires_at=NULL, updated_at=?
+                WHERE status='accepted' AND (
+                    execution_lease_expires_at IS NULL OR execution_lease_expires_at<=?
+                )
+                """,
+                (now_text, now_text),
+            ).rowcount
+            received = connection.execute(
+                """
+                UPDATE remote_command_receipts
+                SET status='rejected', error_code='remote.interrupted_before_execution',
+                    execution_owner_id=NULL, execution_lease_expires_at=NULL, updated_at=?
+                WHERE status='received' AND (
+                    execution_lease_expires_at IS NULL OR execution_lease_expires_at<=?
+                )
+                """,
+                (now_text, now_text),
+            ).rowcount
+        return int(accepted), int(received)
+
+    def reconcile_command(
+        self,
+        command_id: str,
+        *,
+        status: RemoteCommandStatus,
+        result_ref: str | None,
+        error_code: str | None,
+        now: datetime,
+    ) -> RemoteCommandReceipt:
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                """
+                UPDATE remote_command_receipts
+                SET status=?, result_ref=?, error_code=?, execution_owner_id=NULL,
+                    execution_lease_expires_at=NULL, updated_at=?
+                WHERE command_id=? AND status='outcome_unknown'
+                """,
+                (status.value, result_ref, error_code, _utc(now), command_id),
+            )
+            if updated.rowcount != 1:
+                raise ConflictError("remote command cannot be reconciled from its current state")
+        return self.get_command(command_id)
 
     def list_command_events(
         self, host_id: str, *, after_cursor: int = 0, limit: int = 100
@@ -541,7 +685,19 @@ class SQLiteRemoteControlRepository:
 
     @staticmethod
     def _challenge(row: sqlite3.Row) -> PairingChallenge:
-        return PairingChallenge(**dict(row))
+        return PairingChallenge(
+            challenge_id=row["challenge_id"],
+            host_id=row["host_id"],
+            code_hash=row["code_hash"],
+            allowed_scopes=tuple(
+                RemoteScope(value) for value in json.loads(row["allowed_scopes_json"])
+            ),
+            expires_at=row["expires_at"],
+            max_uses=int(row["max_uses"]),
+            uses=int(row["uses"]),
+            consumed_at=row["consumed_at"],
+            created_at=row["created_at"],
+        )
 
     @staticmethod
     def _device(row: sqlite3.Row) -> RemoteDevice:

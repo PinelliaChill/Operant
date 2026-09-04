@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -28,6 +29,10 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamp must be timezone-aware")
     return value.astimezone(timezone.utc)
+
+
+def _token_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 class SQLiteRemoteExecutionRepository:
@@ -62,7 +67,7 @@ class SQLiteRemoteExecutionRepository:
             lease_id=row["lease_id"],
             target_id=row["target_id"],
             owner=row["owner"],
-            token=row["token"],
+            token="redacted-at-rest",
             fencing=int(row["fencing"]),
             workspace_ref=row["workspace_ref"],
             expires_at=row["expires_at"],
@@ -229,7 +234,7 @@ class SQLiteRemoteExecutionRepository:
                     persisted.lease_id,
                     persisted.target_id,
                     persisted.owner,
-                    persisted.token,
+                    _token_hash(persisted.token),
                     persisted.fencing,
                     persisted.workspace_ref,
                     persisted.expires_at.isoformat(),
@@ -263,7 +268,7 @@ class SQLiteRemoteExecutionRepository:
         ).fetchone()
         if (
             row is None
-            or row["token"] != token
+            or row["token_hash"] != _token_hash(token)
             or int(row["fencing"]) != fencing
             or row["released_at"] is not None
             or datetime.fromisoformat(row["expires_at"]) <= _utc(now)
@@ -380,6 +385,8 @@ class SQLiteRemoteExecutionRepository:
                 raise ConflictError("remote target does not advertise the requested capability")
             if job.operation not in manifest.supported_operations:
                 raise ConflictError("remote target does not advertise the requested operation")
+            if len(_json(job.arguments).encode("utf-8")) > manifest.max_payload_bytes:
+                raise ConflictError("remote job payload exceeds the target manifest limit")
             active_count = connection.execute(
                 "SELECT COUNT(*) AS count FROM remote_execution_jobs WHERE target_id=? "
                 "AND status IN ('queued','leased','running')",

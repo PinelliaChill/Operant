@@ -52,26 +52,21 @@ function strings(value: unknown): string[] {
     : [];
 }
 
-async function get(path: string): Promise<unknown[]> {
-  const response = await fetch(path, { headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(`Core multi-writer query failed (${response.status})`);
-  const value: unknown = await response.json();
-  if (!Array.isArray(value)) throw new Error('Core multi-writer list is invalid');
-  return value;
-}
-
-export async function loadMultiWriterProjection(runId: string): Promise<{
+export async function loadMultiWriterProjection(
+  client: Pick<Phase56Client,
+    'listWriterWorkspaces' | 'listWriterArtifacts' | 'listWriterConflicts' | 'listMergeRuns'>,
+  runId: string,
+): Promise<{
   workspaces: WriterWorkspaceView[];
   artifacts: WriterArtifactView[];
   conflicts: WriterConflictView[];
   merges: MergeRunView[];
 }> {
-  const encoded = encodeURIComponent(runId);
   const [rawWorkspaces, rawArtifacts, rawConflicts, rawMerges] = await Promise.all([
-    get(`/v1/graph/runs/${encoded}/writer-workspaces`),
-    get(`/v1/graph/runs/${encoded}/writer-artifacts`),
-    get(`/v1/graph/runs/${encoded}/writer-conflicts`),
-    get(`/v1/graph/runs/${encoded}/merge-runs`),
+    client.listWriterWorkspaces(runId),
+    client.listWriterArtifacts(runId),
+    client.listWriterConflicts(runId),
+    client.listMergeRuns(runId),
   ]);
   return {
     workspaces: rawWorkspaces.map((item) => {
@@ -124,3 +119,4 @@ export async function loadMultiWriterProjection(runId: string): Promise<{
     }),
   };
 }
+import type { Phase56Client } from '@operant/sdk';

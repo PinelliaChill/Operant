@@ -27,6 +27,7 @@ EXPECTED_OPERATION_IDS = {
     "negotiateProtocol",
     "enableRemoteHost",
     "getRemoteHost",
+    "listRemoteHosts",
     "createPairingChallenge",
     "pairRemoteDevice",
     "listRemoteDevices",
@@ -36,6 +37,7 @@ EXPECTED_OPERATION_IDS = {
     "listRemoteSessions",
     "submitRemoteCommand",
     "getRemoteCommand",
+    "reconcileRemoteCommand",
     "listRemoteControlEvents",
     "publishRelayEnvelope",
     "pullRelayEnvelopes",
@@ -46,6 +48,7 @@ EXPECTED_OPERATION_IDS = {
     "getRemoteTarget",
     "heartbeatRemoteTarget",
     "acquireRemoteTargetLease",
+    "renewRemoteTargetLease",
     "releaseRemoteTargetLease",
     "createRemoteTargetJob",
     "pollRemoteTargetJobs",
@@ -67,8 +70,10 @@ EXPECTED_OPERATION_IDS = {
     "listWriterConflicts",
     "createMergeRun",
     "getMergeRun",
+    "listMergeRuns",
     "resolveMergeConflict",
     "finalizeMergeRun",
+    "reconcileMergeRun",
 }
 
 
@@ -199,6 +204,7 @@ def generate() -> str:
         base._write_if_changed(
             PY_PATH, _python_aliases(python_source, base._operation_specs(document))
         )
+        base._write_if_changed(base.PY_INIT_PATH, base._python_package_init())
         return digest
     finally:
         (

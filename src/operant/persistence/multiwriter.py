@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -7,6 +8,7 @@ from datetime import datetime, timezone
 from operant.application.graph import GraphConflictError
 from operant.domain.multiwriter import (
     MergeRun,
+    MergeRunStatus,
     PatchCommitArtifact,
     WriterConflict,
     WriterLease,
@@ -21,6 +23,10 @@ def _json(value: object) -> str:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _token_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 class SQLiteMultiWriterRepository:
@@ -86,7 +92,7 @@ class SQLiteMultiWriterRepository:
         return WriterLease(
             writer_workspace_id=row["writer_workspace_id"],
             owner=row["owner"],
-            token=row["token"],
+            token="redacted-at-rest",
             fencing=row["fencing"],
             expires_at=datetime.fromisoformat(row["expires_at"]),
             released_at=(
@@ -123,21 +129,21 @@ class SQLiteMultiWriterRepository:
                 fencing = int(current["fencing"]) + 1
                 connection.execute(
                     """
-                    UPDATE writer_leases SET owner = ?, token = ?, fencing = ?,
+                    UPDATE writer_leases SET owner = ?, token_hash = ?, fencing = ?,
                         expires_at = ?, released_at = NULL
                     WHERE writer_workspace_id = ?
                     """,
-                    (owner, token, fencing, expires_at.isoformat(), workspace_id),
+                    (owner, _token_hash(token), fencing, expires_at.isoformat(), workspace_id),
                 )
             else:
                 fencing = 1
                 connection.execute(
                     """
                     INSERT INTO writer_leases(
-                        writer_workspace_id, owner, token, fencing, expires_at, released_at
+                        writer_workspace_id, owner, token_hash, fencing, expires_at, released_at
                     ) VALUES (?, ?, ?, ?, ?, NULL)
                     """,
-                    (workspace_id, owner, token, fencing, expires_at.isoformat()),
+                    (workspace_id, owner, _token_hash(token), fencing, expires_at.isoformat()),
                 )
         return WriterLease(
             writer_workspace_id=workspace_id,
@@ -155,14 +161,14 @@ class SQLiteMultiWriterRepository:
             result = connection.execute(
                 """
                 UPDATE writer_leases SET expires_at = ?
-                WHERE writer_workspace_id = ? AND owner = ? AND token = ? AND fencing = ?
+                WHERE writer_workspace_id = ? AND owner = ? AND token_hash = ? AND fencing = ?
                   AND released_at IS NULL AND expires_at > ?
                 """,
                 (
                     expires_at.isoformat(),
                     lease.writer_workspace_id,
                     lease.owner,
-                    lease.token,
+                    _token_hash(lease.token),
                     lease.fencing,
                     observed_at.isoformat(),
                 ),
@@ -177,7 +183,7 @@ class SQLiteMultiWriterRepository:
             result = connection.execute(
                 """
                 UPDATE writer_leases SET released_at = ?, expires_at = ?
-                WHERE writer_workspace_id = ? AND owner = ? AND token = ? AND fencing = ?
+                WHERE writer_workspace_id = ? AND owner = ? AND token_hash = ? AND fencing = ?
                   AND released_at IS NULL
                 """,
                 (
@@ -185,7 +191,7 @@ class SQLiteMultiWriterRepository:
                     released_at.isoformat(),
                     lease.writer_workspace_id,
                     lease.owner,
-                    lease.token,
+                    _token_hash(lease.token),
                     lease.fencing,
                 ),
             )
@@ -203,13 +209,13 @@ class SQLiteMultiWriterRepository:
         row = connection.execute(
             """
             SELECT * FROM writer_leases
-            WHERE writer_workspace_id = ? AND owner = ? AND token = ? AND fencing = ?
+            WHERE writer_workspace_id = ? AND owner = ? AND token_hash = ? AND fencing = ?
               AND released_at IS NULL AND expires_at > ?
             """,
             (
                 lease.writer_workspace_id,
                 lease.owner,
-                lease.token,
+                _token_hash(lease.token),
                 lease.fencing,
                 _now().isoformat(),
             ),
@@ -400,12 +406,127 @@ class SQLiteMultiWriterRepository:
     def update_merge_run(self, merge: MergeRun, *, expected_revision: int) -> MergeRun:
         if merge.expected_revision != expected_revision + 1:
             raise GraphConflictError("merge run revision conflict")
+        if merge.status is MergeRunStatus.RUNNING:
+            raise GraphConflictError("running merge runs require an execution owner lease")
         with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                result = connection.execute(
+                    """
+                    UPDATE merge_runs
+                    SET status = ?, expected_revision = ?, result_artifact_ref = ?,
+                        error_code = ?, execution_owner_id = NULL,
+                        execution_lease_expires_at = NULL, updated_at = ?
+                    WHERE merge_run_id = ? AND expected_revision = ?
+                    """,
+                    (
+                        merge.status.value,
+                        merge.expected_revision,
+                        merge.result_artifact_ref,
+                        merge.error_code,
+                        merge.updated_at.isoformat(),
+                        merge.merge_run_id,
+                        expected_revision,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise GraphConflictError(
+                    "merge target already has an exclusive running merge"
+                ) from exc
+            if result.rowcount != 1:
+                raise GraphConflictError("merge run revision conflict")
+        return merge
+
+    def claim_merge_run(
+        self,
+        merge: MergeRun,
+        *,
+        execution_owner_id: str,
+        execution_lease_expires_at: datetime,
+    ) -> MergeRun:
+        claimed = merge.model_copy(
+            update={
+                "status": MergeRunStatus.RUNNING,
+                "expected_revision": merge.expected_revision + 1,
+                "result_artifact_ref": None,
+                "error_code": None,
+                "updated_at": _now(),
+            }
+        )
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                result = connection.execute(
+                    """
+                    UPDATE merge_runs
+                    SET status='running', expected_revision=?, result_artifact_ref=NULL,
+                        error_code=NULL, execution_owner_id=?, execution_lease_expires_at=?,
+                        updated_at=?
+                    WHERE merge_run_id=? AND expected_revision=?
+                      AND status NOT IN ('running', 'succeeded', 'failed', 'rolled_back',
+                                         'outcome_unknown')
+                    """,
+                    (
+                        claimed.expected_revision,
+                        execution_owner_id,
+                        execution_lease_expires_at.isoformat(),
+                        claimed.updated_at.isoformat(),
+                        merge.merge_run_id,
+                        merge.expected_revision,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise GraphConflictError(
+                    "merge target already has an exclusive running merge"
+                ) from exc
+            if result.rowcount != 1:
+                raise GraphConflictError("merge run execution claim conflicts")
+        return claimed
+
+    def renew_merge_run_lease(
+        self,
+        merge_run_id: str,
+        *,
+        execution_owner_id: str,
+        execution_lease_expires_at: datetime,
+    ) -> None:
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             result = connection.execute(
                 """
-                UPDATE merge_runs SET status = ?, expected_revision = ?, result_artifact_ref = ?,
-                    error_code = ?, updated_at = ?
-                WHERE merge_run_id = ? AND expected_revision = ?
+                UPDATE merge_runs SET execution_lease_expires_at=?, updated_at=?
+                WHERE merge_run_id=? AND status='running' AND execution_owner_id=?
+                """,
+                (
+                    execution_lease_expires_at.isoformat(),
+                    _now().isoformat(),
+                    merge_run_id,
+                    execution_owner_id,
+                ),
+            )
+            if result.rowcount != 1:
+                raise GraphConflictError("merge run execution lease was lost")
+
+    def complete_owned_merge_run(
+        self,
+        merge: MergeRun,
+        *,
+        expected_revision: int,
+        execution_owner_id: str,
+    ) -> MergeRun:
+        if merge.expected_revision != expected_revision + 1:
+            raise GraphConflictError("merge run revision conflict")
+        if merge.status is MergeRunStatus.RUNNING:
+            raise GraphConflictError("owned merge completion requires a known terminal status")
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            result = connection.execute(
+                """
+                UPDATE merge_runs
+                SET status=?, expected_revision=?, result_artifact_ref=?, error_code=?,
+                    execution_owner_id=NULL, execution_lease_expires_at=NULL, updated_at=?
+                WHERE merge_run_id=? AND expected_revision=? AND status='running'
+                  AND execution_owner_id=?
                 """,
                 (
                     merge.status.value,
@@ -415,11 +536,68 @@ class SQLiteMultiWriterRepository:
                     merge.updated_at.isoformat(),
                     merge.merge_run_id,
                     expected_revision,
+                    execution_owner_id,
                 ),
             )
             if result.rowcount != 1:
-                raise GraphConflictError("merge run revision conflict")
+                raise GraphConflictError("merge run owned completion conflicts")
         return merge
+
+    def reconcile_incomplete_merge_runs(self, *, now: datetime) -> int:
+        """Conservatively close only expired running owners; never replay Git writes."""
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            result = connection.execute(
+                """
+                UPDATE merge_runs
+                SET status='outcome_unknown', expected_revision=expected_revision+1,
+                    result_artifact_ref=NULL, error_code='merge.manual_reconcile_required',
+                    execution_owner_id=NULL, execution_lease_expires_at=NULL, updated_at=?
+                WHERE status='running' AND (
+                    execution_lease_expires_at IS NULL OR execution_lease_expires_at<=?
+                )
+                """,
+                (now.isoformat(), now.isoformat()),
+            )
+        return int(result.rowcount)
+
+    def reconcile_merge_run(
+        self,
+        merge_run_id: str,
+        *,
+        expected_revision: int,
+        status: MergeRunStatus,
+        result_artifact_ref: str | None,
+        error_code: str | None,
+        now: datetime,
+    ) -> MergeRun:
+        if status not in {
+            MergeRunStatus.SUCCEEDED,
+            MergeRunStatus.FAILED,
+            MergeRunStatus.ROLLED_BACK,
+        }:
+            raise GraphConflictError("merge reconciliation requires a known terminal status")
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            result = connection.execute(
+                """
+                UPDATE merge_runs
+                SET status=?, expected_revision=expected_revision+1,
+                    result_artifact_ref=?, error_code=?, updated_at=?
+                WHERE merge_run_id=? AND expected_revision=? AND status='outcome_unknown'
+                """,
+                (
+                    status.value,
+                    result_artifact_ref,
+                    error_code,
+                    now.isoformat(),
+                    merge_run_id,
+                    expected_revision,
+                ),
+            )
+            if result.rowcount != 1:
+                raise GraphConflictError("merge reconciliation state conflicts")
+        return self.get_merge_run(merge_run_id)
 
     @staticmethod
     def _workspace(row: sqlite3.Row) -> WriterWorkspace:

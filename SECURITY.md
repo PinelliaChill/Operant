@@ -235,20 +235,30 @@ Coordinator 精确持有的租约；崩溃接管仍以 SQLite 已提交事实和
 
 Phase 45 的 Policy、Capability、Skill、MCP 和 Scheduler API 同样不构成身份认证。SQLite 中的 Action、
 Audit、MCP 配置引用、Schedule/Queue/Attempt 和 Graph 绑定均是敏感本地运行事实，不应上传或公开。
-本阶段不包含 OAuth、Remote/Relay、TUI、Tauri、Browser/Computer 工具或通用多 Writer；相关页面、
-模型或目标文档不是已实现安全能力。
+Phase 5B 的设备配对和端到端加密只保护 Remote Control 协议，不会自动给其余 `/v1/*` 增加身份认证。
+OAuth、CSRF 防护、TUI、Tauri、完整 Remote PWA/WSS 和允许公网暴露的接入网关仍未实现。
 
-## 目标 Remote Control 边界（尚未实现）
+## Phase 5B Remote Control 与 Relay 边界
 
-Operant 2.0 的目标远程能力会把“用户从手机/浏览器操控本地 Core”和“Core 在远程主机执行”拆成
-两个独立能力。计划中的自托管 Relay 只负责连接、路由、最小设备治理和可选通知，本地 Core 与
-SQLite 仍是 Thread、Workflow、Approval、Audit 和恢复权威。
+当前实现把“用户从远程设备操控本地 Core”和“Core 在远程主机执行”拆成两个独立领域。Remote
+Control 使用 `HostInstance`、`RemoteDevice`、`RemoteSession` 和 `EncryptedRemoteCommand`；Remote
+Execution 使用 Target/Lease/Job/Result，不共享含糊的 Worker 状态机。本地 Core 与 SQLite 始终是
+Thread、Workflow、Approval、Audit 和恢复权威。
 
-在 Host Connector、Remote Gateway、RemoteDevice 配对、端到端加密、Command 幂等/签名、Action
-Hash、设备撤销和安全审计真正实现并通过测试前，**不得**把当前 `/web` 或 `/v1/*` 直接接到公网 Relay，
-也不得把“外层反向代理有密码”描述为目标 Remote Control 已经完成。
+已实现的单 Host MVP 包括本机显式启用、一次性短时配对、每设备 Ed25519/X25519 身份、
+ChaCha20-Poly1305 会话加密、独立 Scope/撤销、Command TTL/nonce/签名/幂等/Host Ack、Cursor 查询和
+Host Connector。私钥及 Session Key 只写入 `0600` 本地 key store，SQLite 只保存公开密钥和 key ref；
+key store 采用原子替换和文件锁串行并发写。Pairing Challenge 持久绑定本机预授 Scope，设备不能用
+一次性码扩大权限；配对票据只返回一次并带 `no-store`，durable Command Receipt 不保存其正文；丢失
+响应时必须创建新票据，不能回放 Secret。
 
-目标实现必须满足：
+自托管 Relay MVP 只接受单独配置的 Bearer 运维鉴权，只保存严格 TTL/大小上限的 opaque ciphertext、
+nonce 和投递状态。它不解密业务消息，不持有设备/Host 私钥，不运行 Agent/Tool，不裁决 Policy 或
+Approval。Relay delivery/ack 只表示信封流转，不是 Host Ack；Host Connector 解密后仍重验设备签名、
+Session/Scope/TTL 和本地 Action Gateway。当前 transport 是 HTTPS polling API，不是 WSS/直连 Gateway
+或经过公网部署审计的完整套件，因此 `/web` 与普通 `/v1/*` 仍不得直接暴露到公网。
+
+实现强制满足：
 
 - Remote Control 默认关闭，由本地用户通过短时码/二维码显式配对每个设备；
 - 每个设备使用独立身份与最小 Scope，可撤销，并在本地提供全部断开和紧急关闭入口；
@@ -256,9 +266,15 @@ Hash、设备撤销和安全审计真正实现并通过测试前，**不得**把
   正文、模型消息或 Secret；
 - Remote Command 带请求 ID、幂等键、Host/Device Identity、过期、nonce、签名和 Host Ack；Relay
   收到消息不等于 Core 已接受动作；
-- RemoteDevice Scope、远程用户操作和 Relay 消息都不能覆盖本地 Policy `DENY`；Approval 继续绑定
+- RemoteDevice Scope、远程用户操作和 Relay 消息都不能覆盖本地 Policy `DENY`；解密后的动作必须
+  命中 Host 预注册的 `(tool, operation) → capabilities` 精确映射，observe 不能和副作用 Capability
+  混用；Approval 继续绑定
   精确 Action Hash、Target、Policy Version 和有效期；
 - Client、Host 或 Relay 断线不改变本地 Run；重连后从本地 Event Cursor 和 Query Projection 校正；
+- Remote Command 的 `received`/`accepted` 都绑定 execution owner 与可续租 TTL；其他 Core 不会收口
+  尚存活的 owner，只有租约过期项才分别保守拒绝或进入 `outcome_unknown`。人工核对除本机鉴权外，
+  还绑定原 Action/Target 通过 Action Gateway 并消费一次性 Capability Lease，再以 CAS 落到已知终态；
+  旧 owner 的晚到结果不能覆盖，不自动重放；
 - Host 离线时不在 Relay 无限期排队未来副作用；短期加密 Envelope 必须有严格 TTL 和大小上限；
 - Relay 不保存模型凭据、SSH 私钥或项目数据，也不运行 Agent、工具、Browser、Computer 或 Workflow；
 - Relay 与 Remote Execution Target 即使部署在同一云主机，也必须使用独立用户/容器、目录、凭据和
@@ -266,6 +282,43 @@ Hash、设备撤销和安全审计真正实现并通过测试前，**不得**把
 
 Operant 2.0 不以此为由建设 SaaS、多个人类用户协作、多租户、分布式 Core、外部恢复数据库或高可用
 控制面。远程操控只是同一用户跨设备连接自己的本地 Core。
+
+## Phase 5B Remote Execution Target 与 Browser/Computer
+
+Remote Execution Target 是本地 Controller 发起、远端受租约约束执行的独立能力。注册只保存
+`endpoint_ref`/`credential_ref`，不保存 endpoint credential 真值；Target Identity、Heartbeat、
+Capability Manifest、Workspace/Artifact Namespace、Job/Result 和状态仍由本地 SQLite 裁决。Target
+Lease token 只在首次 `no-store` 响应返回，SQLite 只保存 SHA-256；所有 poll/complete/renew/release
+都在事务中核对 target、lease ID、token hash、fencing、TTL 和在线状态。
+
+每个外部动作先经 Action Gateway，Capability/operation 还必须同时存在于 Target Manifest。Job 参数、
+并发数、Artifact bytes 和 checksum 都有上限。Browser/Computer 动作采用 observe-before-act：Action
+绑定未过期 observation hash、精确 target ref 与递归 precondition，成功结果再核对 postcondition；
+观察或目标漂移会失败关闭。新 owner 获取 Target Lease 前会先收口过期 lease 的残留 Job；已运行的
+非幂等 Job 在断线、租约失效或结果未知时进入
+`manual_reconcile_required`，不得自动重放。当前 connector 是可注入边界和确定性内存实现，生产网络
+connector、凭据下发隔离和真实浏览器/桌面驱动仍需部署方实现与单独审计。
+
+## Phase 6 Multi-Writer 边界
+
+多个 Writer 只能写不同 `WriterWorkspace`；Graph Compiler 要求每个写节点声明唯一 writer key、
+独立 isolation ref 和不重叠 ownership paths，并由覆盖全部 Writer 的显式 Merge Node 收口。
+Writer Lease 使用 token hash、单调 fencing 和 TTL，过期、释放或旧 fencing 无法发布 Artifact 或参与
+Merge。Patch/Commit Artifact 必须绑定冻结 base、changed paths、SHA-256 和测试证据；冲突按路径、
+ownership 与 stale base 确定性持久化，不静默覆盖。
+
+可信 Git adapter 只解析管理员通过 `OPERANT_MULTIWRITER_ROOTS_JSON` 映射的绝对 Git worktree；发布和
+Merge 时均重新核对 commit ancestry 或 patch、SHA-256、changed paths 和 ownership，patch 在同一次
+验证中读成有大小上限的不可变内存快照，后续不再按可变路径打开。target 必须是另一个干净 worktree
+且 HEAD 等于冻结 base；SQLite partial unique 约束只允许同一 target 有一个 `RUNNING` Merge，并用
+可续租 execution owner + CAS 防止旧进程覆盖恢复权威。Git adapter 先在私有 checkout 计算预期 tree，
+目标 index 必须精确匹配，再用该固定 tree 创建 commit 并以 old HEAD 做 `update-ref` CAS。检测到外部
+干扰或 owner 崩溃时保留隔离 worktree 现场并进入 `outcome_unknown`，只允许本机鉴权且经过 Action
+Gateway 的人工 reconcile，不执行可能删除外部数据的 reset/clean，不自动重放。最终 merge 要通过
+`workspace.write + git.commit` 的 Action Gateway，默认需要精确 Approval。普通确定失败的回滚仅允许
+作用于管理员映射的专用、可重建隔离 target，不能指向用户共享 checkout。当前未实现 Container Writer
+的创建/挂载/销毁 adapter，也未把
+多 Writer 描述为分布式 Core 或高可用。
 
 ## 验收方式
 

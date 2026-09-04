@@ -2637,7 +2637,29 @@ const LiveSecuritySettingsView: React.FC = () => (
   </div>
 );
 
+const LiveSettingsView: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  if (tabParam === 'remote') return <Navigate to="/settings?cat=system" replace />;
+
+  if (searchParams.get('cat') === 'system') {
+    return (
+      <div className="section-view" data-client-mode="live">
+        <header className="section-header">
+          <h1 className="section-title">系统与设备</h1>
+          <p className="section-sub">连接本地 Core 的 Remote Control、Remote Execution Target 与设备状态。</p>
+        </header>
+        <div className="section-scroll">
+          <div className="section-inner"><RemoteView /></div>
+        </div>
+      </div>
+    );
+  }
+
+  return <LiveSecuritySettingsView />;
+};
+
 export const SettingsView: React.FC = () => {
   const { clientMode } = useOperant();
-  return clientMode === 'live' ? <LiveSecuritySettingsView /> : <DemoSettingsView />;
+  return clientMode === 'live' ? <LiveSettingsView /> : <DemoSettingsView />;
 };

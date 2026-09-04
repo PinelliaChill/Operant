@@ -156,8 +156,14 @@ def _online_lease(
 
 
 def test_remote_target_lease_fencing_pull_result_and_checksum(tmp_path: Path) -> None:
-    controller, _store = _controller(tmp_path)
+    controller, store = _controller(tmp_path)
     target, lease = _online_lease(controller)
+    with store._connect() as connection:
+        persisted_token = connection.execute(
+            "SELECT token_hash FROM remote_target_leases WHERE lease_id=?", (lease.lease_id,)
+        ).fetchone()[0]
+    assert persisted_token != lease.token
+    assert len(persisted_token) == 64
     job = controller.create_job(
         target_id=target.target_id,
         lease_id=lease.lease_id,
@@ -298,6 +304,20 @@ def test_browser_observation_binding_and_unknown_submit_are_fail_closed(
         idempotency_key="submit-1",
         idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
     )
+    with pytest.raises(ConflictError, match="precondition"):
+        controller.act(
+            action.model_copy(
+                update={
+                    "idempotency_key": "submit-precondition-mismatch",
+                    "precondition": {"form_ready": False},
+                }
+            ),
+            kind="browser",
+            lease_id=lease.lease_id,
+            lease_token=lease.token,
+            lease_fencing=lease.fencing,
+            now=_now(),
+        )
     submit_job, receipt = controller.act(
         action,
         kind="browser",
@@ -319,6 +339,114 @@ def test_browser_observation_binding_and_unknown_submit_are_fail_closed(
         now=_now(),
     )
     assert stored_receipt.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+
+
+def test_browser_postcondition_and_manifest_payload_limit_fail_closed(tmp_path: Path) -> None:
+    controller, _store = _controller(tmp_path)
+    target, lease = _online_lease(controller)
+    observation_job = controller.observe(
+        kind="browser",
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        target_ref="browser:tab-2",
+        idempotency_key="observe-postcondition",
+        now=_now(),
+    )
+    connector = InMemoryRemoteTargetConnector(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        outcomes={
+            "observe_browser": ConnectorOutcome(
+                RemoteExecutionResult(
+                    job_id=observation_job.job_id,
+                    result_idempotency_key="observe-postcondition-result",
+                    status=RemoteJobStatus.SUCCEEDED,
+                    postcondition={
+                        "target_ref": "browser:tab-2",
+                        "observation": {"url": "https://example.test/form"},
+                    },
+                    completed_at=_now(),
+                )
+            )
+        },
+    )
+    controller.dispatch_available(connector, now=_now())
+    observation_hash = canonical_action_hash(
+        {
+            "target_id": target.target_id,
+            "target_ref": "browser:tab-2",
+            "body": {"url": "https://example.test/form"},
+        }
+    )
+    action_job, _receipt = controller.act(
+        CapabilityActionRequest(
+            target_id=target.target_id,
+            capability=RemoteCapability.BROWSER_NAVIGATE,
+            operation="navigate",
+            target_ref="browser:tab-2",
+            observation_hash=observation_hash,
+            precondition={"url": "https://example.test/form"},
+            arguments={"url": "https://example.test/done"},
+            postcondition={"url": "https://example.test/done"},
+            idempotency_key="navigate-postcondition",
+            idempotency=RemoteActionIdempotency.IDEMPOTENT,
+        ),
+        kind="browser",
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        now=_now(),
+    )
+    connector.outcomes["navigate"] = ConnectorOutcome(
+        RemoteExecutionResult(
+            job_id=action_job.job_id,
+            result_idempotency_key="navigate-postcondition-result",
+            status=RemoteJobStatus.SUCCEEDED,
+            postcondition={"url": "https://example.test/wrong"},
+            completed_at=_now(),
+        )
+    )
+    [failed] = controller.dispatch_available(connector, now=_now())
+    assert failed.status is RemoteJobStatus.FAILED
+    assert failed.error_code == "remote.postcondition_failed"
+
+    limited = target.model_copy(
+        update={
+            "target_id": "target-limited",
+            "capability_manifest": target.capability_manifest.model_copy(
+                update={"max_payload_bytes": 8}
+            ),
+        }
+    )
+    controller.register_target(limited)
+    controller.heartbeat_target(
+        limited.target_id, identity_public_key=limited.identity_public_key, now=_now()
+    )
+    limited_lease = controller.acquire_lease(
+        limited.target_id,
+        owner="connector:limited",
+        workspace_ref="workspace:limited",
+        ttl_seconds=60,
+        now=_now(),
+        idempotency_key="limited-lease",
+    )
+    with pytest.raises(ConflictError, match="payload"):
+        controller.create_job(
+            target_id=limited.target_id,
+            lease_id=limited_lease.lease_id,
+            lease_token=limited_lease.token,
+            lease_fencing=limited_lease.fencing,
+            capability=RemoteCapability.TARGET_EXEC,
+            operation="run",
+            arguments={"argv": ["too-large"]},
+            idempotency_key="limited-job",
+            idempotency=RemoteActionIdempotency.IDEMPOTENT,
+            now=_now(),
+        )
 
 
 def test_expired_non_idempotent_running_job_requires_manual_reconcile(tmp_path: Path) -> None:
@@ -370,6 +498,7 @@ def test_remote_target_api_installer_exposes_bounded_operations(tmp_path: Path) 
         "getRemoteTarget",
         "heartbeatRemoteTarget",
         "acquireRemoteTargetLease",
+        "renewRemoteTargetLease",
         "releaseRemoteTargetLease",
         "createRemoteTargetJob",
         "pollRemoteTargetJobs",
@@ -404,3 +533,6 @@ def test_remote_target_api_installer_exposes_bounded_operations(tmp_path: Path) 
         listed = client.get("/v1/remote-targets")
         assert listed.status_code == 200
         assert listed.json()["items"][0]["credential_ref"] == "REMOTE_TARGET_TOKEN"
+        jobs = client.get("/v1/remote-targets/jobs", params={"target_id": "api-target"})
+        assert jobs.status_code == 200
+        assert jobs.json() == {"items": []}

@@ -57,3 +57,16 @@ export type {
   Phase45Response,
   Phase45Transport,
 } from './phase45-transport';
+
+// Phase 5B remote control/execution and Phase 6 multi-writer are additive.
+export {
+  Phase56Client,
+  ProtocolNegotiationError as Phase56ProtocolNegotiationError,
+} from './phase56.generated';
+export * as Phase56 from './phase56.generated';
+export type {
+  Phase56Body,
+  Phase56Request,
+  Phase56Response,
+  Phase56Transport,
+} from './phase56-transport';

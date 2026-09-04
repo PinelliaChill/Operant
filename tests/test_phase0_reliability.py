@@ -1085,6 +1085,13 @@ async def test_cross_instance_cancel_fences_session_during_long_provider_wait(
 ) -> None:
     provider = AlwaysBlockingProvider()
     service, role_id = _service_with_blocking_role(tmp_path, provider)
+    other = ApplicationService(
+        SQLiteStore(service.store.path),
+        provider,
+        session_lease_ttl_seconds=1,
+        session_lease_heartbeat_seconds=0.01,
+    )
+    other.initialize()
     session = service.create_session(role_id)
     streamed = service.run_session(
         session.id,
@@ -1095,13 +1102,6 @@ async def test_cross_instance_cancel_fences_session_during_long_provider_wait(
     pending = asyncio.create_task(anext(streamed))
     await asyncio.wait_for(provider.started.wait(), timeout=2)
 
-    other = ApplicationService(
-        SQLiteStore(service.store.path),
-        provider,
-        session_lease_ttl_seconds=1,
-        session_lease_heartbeat_seconds=0.01,
-    )
-    other.initialize()
     assert other.cancel_session(session.id) is True
     assert (await asyncio.wait_for(pending, timeout=2)).event_type == "agent.cancelled"
     await streamed.aclose()

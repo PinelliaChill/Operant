@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,7 +43,7 @@ from operant.mcp import GatewayDecision
 from operant.persistence.phase45 import SQLitePhase45Repository
 from operant.persistence.remote_control import SQLiteRemoteControlRepository
 from operant.persistence.security import SQLiteSecurityRepository
-from operant.persistence.sqlite import SQLiteStore
+from operant.persistence.sqlite import ConflictError, SQLiteStore
 from operant.remote_control.crypto import RemoteCrypto, RemoteKeyStore
 
 MAX_PAIRING_TTL_SECONDS = 300
@@ -49,6 +52,7 @@ MAX_COMMAND_TTL_SECONDS = 300
 MAX_CLOCK_SKEW_SECONDS = 60
 MAX_RELAY_TTL_SECONDS = 120
 MAX_RELAY_CIPHERTEXT_CHARS = 350_000
+DEFAULT_COMMAND_EXECUTION_LEASE_SECONDS = 30
 
 
 def _now() -> datetime:
@@ -75,6 +79,52 @@ class RemoteActionPayload(BaseModel):
 
 
 RemoteExecutor = Callable[[RemoteActionPayload, ActionRequest], str | None]
+RemoteCapabilityMap = Mapping[tuple[str, str], tuple[Capability, ...]]
+
+
+DEFAULT_REMOTE_OPERATION_CAPABILITIES: dict[tuple[str, str], tuple[Capability, ...]] = {
+    ("remote_projection", "read"): (
+        Capability.REMOTE_CONTROL_OBSERVE,
+        Capability.WORKSPACE_READ,
+    ),
+    ("workspace", "write"): (
+        Capability.REMOTE_CONTROL_COMMAND,
+        Capability.WORKSPACE_WRITE,
+    ),
+    ("approval", "decide"): (Capability.REMOTE_CONTROL_APPROVE,),
+    ("browser", "observe"): (
+        Capability.REMOTE_CONTROL_OBSERVE,
+        Capability.BROWSER_OBSERVE,
+    ),
+    ("browser", "navigate"): (
+        Capability.REMOTE_CONTROL_COMMAND,
+        Capability.BROWSER_NAVIGATE,
+    ),
+    ("browser", "submit"): (
+        Capability.REMOTE_CONTROL_COMMAND,
+        Capability.BROWSER_SUBMIT,
+    ),
+    ("computer", "observe"): (
+        Capability.REMOTE_CONTROL_OBSERVE,
+        Capability.COMPUTER_OBSERVE,
+    ),
+    ("computer", "clipboard_read"): (
+        Capability.REMOTE_CONTROL_OBSERVE,
+        Capability.COMPUTER_CLIPBOARD_READ,
+    ),
+    ("computer", "input"): (
+        Capability.REMOTE_CONTROL_COMMAND,
+        Capability.COMPUTER_INPUT,
+    ),
+    ("computer", "clipboard_write"): (
+        Capability.REMOTE_CONTROL_COMMAND,
+        Capability.COMPUTER_CLIPBOARD_WRITE,
+    ),
+    ("settings", "update"): (
+        Capability.REMOTE_CONTROL_COMMAND,
+        Capability.POLICY_MODIFY,
+    ),
+}
 
 
 def remote_control_policy_engine() -> PolicyEngine:
@@ -123,12 +173,28 @@ class RemoteControlService:
         policy_engine: PolicyEngine,
         *,
         executor: RemoteExecutor | None = None,
+        operation_capabilities: RemoteCapabilityMap | None = None,
+        execution_owner_id: str | None = None,
+        execution_lease_seconds: int = DEFAULT_COMMAND_EXECUTION_LEASE_SECONDS,
     ) -> None:
+        if not 3 <= execution_lease_seconds <= MAX_COMMAND_TTL_SECONDS:
+            raise ValueError("remote command execution lease must be between 3 and 300 seconds")
         self.store = store
         self.repository = SQLiteRemoteControlRepository(store)
         self.key_store = key_store
         self.policy_engine = policy_engine
         self.executor = executor or self._unsupported_executor
+        source = (
+            DEFAULT_REMOTE_OPERATION_CAPABILITIES
+            if operation_capabilities is None
+            else operation_capabilities
+        )
+        self.operation_capabilities = {
+            key: tuple(dict.fromkeys(value)) for key, value in source.items()
+        }
+        self.execution_owner_id = execution_owner_id or f"remote-core:{uuid4().hex}"
+        self.execution_lease_seconds = execution_lease_seconds
+        self.repository.reconcile_incomplete_commands(now=_now())
 
     def enable_host(
         self,
@@ -163,7 +229,13 @@ class RemoteControlService:
                     "updated_at": at,
                 }
             )
-            return self.repository.put_host(host)
+            persisted = self.repository.put_host(host)
+            if not enabled:
+                for session in self.repository.list_sessions(host_id):
+                    if session.connection_state is not RemoteSessionState.CLOSED:
+                        closed = self.repository.close_session(session.remote_session_id, now=at)
+                        self.key_store.delete(closed.session_key_ref)
+            return persisted
         signing_public, signing_private = RemoteCrypto.create_signing_keypair()
         exchange_public, exchange_private = RemoteCrypto.create_exchange_keypair()
         host = HostInstance(
@@ -191,16 +263,21 @@ class RemoteControlService:
         *,
         relay_url: str | None = None,
         ttl_seconds: int = 120,
+        allowed_scopes: Sequence[RemoteScope] = (RemoteScope.OBSERVE,),
         now: datetime | None = None,
     ) -> PairingTicket:
         if not 1 <= ttl_seconds <= MAX_PAIRING_TTL_SECONDS:
             raise RemoteControlError("remote.invalid_pairing_ttl", "pairing TTL is out of range")
         at = now or _now()
         host = self._active_host(host_id)
+        approved_scopes = tuple(dict.fromkeys(allowed_scopes))
+        if not approved_scopes or RemoteScope.OBSERVE not in approved_scopes:
+            raise RemoteControlError("remote.invalid_scope", "pairing must allow the observe scope")
         code = secrets.token_urlsafe(24)
         challenge = PairingChallenge(
             host_id=host_id,
             code_hash=hashlib.sha256(code.encode()).hexdigest(),
+            allowed_scopes=approved_scopes,
             expires_at=at + timedelta(seconds=ttl_seconds),
             created_at=at,
         )
@@ -210,6 +287,7 @@ class RemoteControlService:
             host_id=host_id,
             one_time_code=code,
             expires_at=challenge.expires_at,
+            allowed_scopes=challenge.allowed_scopes,
             relay_url=relay_url,
             host_signing_public_key=host.signing_public_key,
             host_exchange_public_key=host.exchange_public_key,
@@ -231,6 +309,13 @@ class RemoteControlService:
         if not requested or RemoteScope.OBSERVE not in requested:
             raise RemoteControlError(
                 "remote.invalid_scope", "new devices require the observe scope"
+            )
+        challenge = self.repository.get_challenge(challenge_id)
+        if not set(requested).issubset(challenge.allowed_scopes):
+            raise RemoteControlError(
+                "remote.scope_not_approved",
+                "requested device scopes exceed the locally approved pairing scopes",
+                status_code=403,
             )
         challenge = self.repository.consume_challenge(
             challenge_id,
@@ -311,6 +396,7 @@ class RemoteControlService:
         self, command: EncryptedRemoteCommand, *, now: datetime | None = None
     ) -> RemoteCommandReceipt:
         at = now or _now()
+        self.repository.reconcile_incomplete_commands(now=at)
         self._validate_command_time(command, at)
         host = self._active_host(command.host_id)
         device = self._active_device(command.device_id, host_id=command.host_id)
@@ -335,7 +421,7 @@ class RemoteControlService:
                 status_code=403,
             ) from exc
         payload = RemoteActionPayload.model_validate(payload_data)
-        self._require_scope(device, payload)
+        self._require_scope(device, payload, self.operation_capabilities)
         gateway = Phase45ActionGateway(
             SQLiteSecurityRepository(self.store),
             SQLitePhase45Repository(self.store),
@@ -366,6 +452,8 @@ class RemoteControlService:
             payload_hash=payload_hash,
             nonce=command.nonce,
             signature=command.signature,
+            execution_owner_id=self.execution_owner_id,
+            execution_lease_expires_at=at + timedelta(seconds=self.execution_lease_seconds),
             now=at,
         )
         if not created and receipt.status is not RemoteCommandStatus.REJECTED:
@@ -373,6 +461,8 @@ class RemoteControlService:
         if not created and receipt.error_code != "remote.approval_required":
             return receipt
         if guarded.decision is not GatewayDecision.ALLOW or guarded.lease is None:
+            if not created:
+                return receipt
             code = (
                 "remote.approval_required"
                 if guarded.decision is GatewayDecision.ASK
@@ -381,39 +471,132 @@ class RemoteControlService:
             return self.repository.set_command_status(
                 command.command_id,
                 RemoteCommandStatus.REJECTED,
+                expected_status=RemoteCommandStatus.RECEIVED,
+                execution_owner_id=self.execution_owner_id,
                 now=at,
                 result_ref=guarded.approval_id,
                 error_code=code,
                 host_ack=True,
             )
         gateway.consume(guarded.lease, action)
-        self.repository.set_command_status(
-            command.command_id, RemoteCommandStatus.ACCEPTED, now=at, host_ack=True
+        self.repository.claim_command_execution(
+            command.command_id,
+            execution_owner_id=self.execution_owner_id,
+            execution_lease_expires_at=at + timedelta(seconds=self.execution_lease_seconds),
+            now=at,
         )
-        try:
-            result_ref = self.executor(payload, action)
-        except Exception:
-            status = (
-                RemoteCommandStatus.REJECTED
-                if action.idempotency_level.value == "read_only"
-                else RemoteCommandStatus.OUTCOME_UNKNOWN
-            )
-            return self.repository.set_command_status(
-                command.command_id,
-                status,
-                now=_now(),
-                error_code=(
-                    "remote.execution_failed"
-                    if status is RemoteCommandStatus.REJECTED
-                    else "remote.outcome_unknown"
-                ),
-            )
-        return self.repository.set_command_status(
+        with self._command_execution_heartbeat(command.command_id):
+            try:
+                result_ref = self.executor(payload, action)
+            except RemoteControlError as exc:
+                return self._finish_owned_command(
+                    command.command_id,
+                    RemoteCommandStatus.REJECTED,
+                    error_code=exc.code,
+                )
+            except Exception:
+                status = (
+                    RemoteCommandStatus.REJECTED
+                    if action.idempotency_level.value == "read_only"
+                    else RemoteCommandStatus.OUTCOME_UNKNOWN
+                )
+                return self._finish_owned_command(
+                    command.command_id,
+                    status,
+                    error_code=(
+                        "remote.execution_failed"
+                        if status is RemoteCommandStatus.REJECTED
+                        else "remote.outcome_unknown"
+                    ),
+                )
+        return self._finish_owned_command(
             command.command_id,
             RemoteCommandStatus.COMPLETED,
-            now=_now(),
             result_ref=result_ref,
         )
+
+    def _finish_owned_command(
+        self,
+        command_id: str,
+        status: RemoteCommandStatus,
+        *,
+        result_ref: str | None = None,
+        error_code: str | None = None,
+    ) -> RemoteCommandReceipt:
+        try:
+            return self.repository.set_command_status(
+                command_id,
+                status,
+                expected_status=RemoteCommandStatus.ACCEPTED,
+                execution_owner_id=self.execution_owner_id,
+                now=_now(),
+                result_ref=result_ref,
+                error_code=error_code,
+            )
+        except ConflictError:
+            # An expired owner may have been conservatively closed and reconciled.
+            # The old executor must never overwrite that newer authoritative state.
+            return self.repository.get_command(command_id)
+
+    @contextmanager
+    def _command_execution_heartbeat(self, command_id: str) -> Iterator[None]:
+        stop = threading.Event()
+
+        def renew() -> None:
+            interval = max(1.0, self.execution_lease_seconds / 3)
+            while not stop.wait(interval):
+                at = _now()
+                try:
+                    self.repository.renew_command_execution_lease(
+                        command_id,
+                        execution_owner_id=self.execution_owner_id,
+                        execution_lease_expires_at=at
+                        + timedelta(seconds=self.execution_lease_seconds),
+                        now=at,
+                    )
+                except ConflictError:
+                    return
+
+        thread = threading.Thread(
+            target=renew,
+            name=f"operant-remote-command-{command_id[:32]}",
+            daemon=True,
+        )
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join(timeout=1.0)
+
+    def reconcile_command(
+        self,
+        command_id: str,
+        *,
+        status: RemoteCommandStatus,
+        result_ref: str | None = None,
+        error_code: str | None = None,
+        now: datetime | None = None,
+    ) -> RemoteCommandReceipt:
+        if status not in {RemoteCommandStatus.COMPLETED, RemoteCommandStatus.REJECTED}:
+            raise RemoteControlError(
+                "remote.invalid_reconciliation",
+                "manual reconciliation requires a known terminal outcome",
+            )
+        try:
+            return self.repository.reconcile_command(
+                command_id,
+                status=status,
+                result_ref=result_ref,
+                error_code=error_code,
+                now=now or _now(),
+            )
+        except ConflictError as exc:
+            raise RemoteControlError(
+                "remote.reconciliation_conflict",
+                "only outcome-unknown commands can be reconciled",
+                status_code=409,
+            ) from exc
 
     def list_events(
         self,
@@ -427,10 +610,18 @@ class RemoteControlService:
         events = self.repository.list_command_events(
             host_id, after_cursor=after_cursor, limit=limit
         )
-        if session_id is not None and events:
-            self.repository.advance_cursor(
-                session_id, max(int(event["cursor"]) for event in events)
-            )
+        if session_id is not None:
+            session = self.repository.get_session(session_id)
+            if session.host_id != host_id:
+                raise RemoteControlError(
+                    "remote.session_binding_invalid",
+                    "remote event cursor session belongs to another host",
+                    status_code=409,
+                )
+            if events:
+                self.repository.advance_cursor(
+                    session_id, max(int(event["cursor"]) for event in events)
+                )
         return events
 
     def _active_host(self, host_id: str) -> HostInstance:
@@ -486,20 +677,66 @@ class RemoteControlService:
             )
 
     @staticmethod
-    def _require_scope(device: RemoteDevice, payload: RemoteActionPayload) -> None:
+    def _require_scope(
+        device: RemoteDevice,
+        payload: RemoteActionPayload,
+        operation_capabilities: RemoteCapabilityMap,
+    ) -> None:
         scopes = set(device.scopes)
         capabilities = set(payload.capabilities)
-        if not capabilities.intersection(
+        expected = operation_capabilities.get((payload.tool, payload.operation))
+        if expected is None:
+            raise RemoteControlError(
+                "remote.operation_not_registered",
+                "remote operation has no trusted capability registration",
+                status_code=403,
+            )
+        if capabilities != set(expected):
+            raise RemoteControlError(
+                "remote.capability_mismatch",
+                "remote capabilities do not match the trusted operation registration",
+                status_code=403,
+            )
+        remote_markers = capabilities.intersection(
             {
                 Capability.REMOTE_CONTROL_OBSERVE,
                 Capability.REMOTE_CONTROL_COMMAND,
                 Capability.REMOTE_CONTROL_APPROVE,
             }
+        )
+        if len(remote_markers) != 1:
+            raise RemoteControlError(
+                "remote.capability_mismatch",
+                "remote operation must have exactly one trusted remote capability",
+                status_code=403,
+            )
+        if Capability.REMOTE_CONTROL_OBSERVE in capabilities and capabilities.intersection(
+            {
+                Capability.WORKSPACE_WRITE,
+                Capability.WORKSPACE_DELETE,
+                Capability.PROCESS_EXEC,
+                Capability.PROCESS_EXEC_NO_NETWORK,
+                Capability.NETWORK_EGRESS,
+                Capability.SECRET_USE,
+                Capability.GIT_COMMIT,
+                Capability.GIT_PUSH,
+                Capability.BROWSER_NAVIGATE,
+                Capability.BROWSER_SUBMIT,
+                Capability.COMPUTER_INPUT,
+                Capability.COMPUTER_CLIPBOARD_WRITE,
+                Capability.EXTERNAL_MESSAGE_SEND,
+                Capability.PRODUCTION_MUTATE,
+                Capability.POLICY_MODIFY,
+            }
         ):
             raise RemoteControlError(
-                "remote.capability_missing",
-                "remote command must declare a remote.control capability",
+                "remote.observe_side_effect_mixed",
+                "observe scope cannot be mixed with side-effect capabilities",
                 status_code=403,
+            )
+        if Capability.REMOTE_CONTROL_OBSERVE in capabilities and RemoteScope.OBSERVE not in scopes:
+            raise RemoteControlError(
+                "remote.scope_denied", "device lacks observe scope", status_code=403
             )
         if Capability.REMOTE_CONTROL_COMMAND in capabilities and RemoteScope.COMMAND not in scopes:
             raise RemoteControlError(

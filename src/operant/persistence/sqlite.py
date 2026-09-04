@@ -239,7 +239,7 @@ class SQLiteStore:
         10: "cc99b8ac7b8f7b7898d807adb3252ea993a9c435ce8ac31b1109183776c32680",
         11: "9e1fb35ddb1c6fafb19e44e145b5e94258c896530c9e8b6bcc0fa5c4258d2a2d",
         12: "0211f297de06325f636986b174cd068e30c89592260d13ca132f9899d62a3876",
-        13: "c6ceea59f8e7b01db061772e6b1af45d4b3c3d4e20d6f94c9ac474aeaba8e242",
+        13: "24ffd705597380ea6e7c6ae7e120c33520b7cffd6547809b25130f6e5d8647ac",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -254,7 +254,7 @@ class SQLiteStore:
         10: "5153ded0e3637722fc9972c17cca5c9ca55e737e0993e5d46bf5486e041a5765",
         11: "6cc52b1f8c469b66bf907dd8d8dd30ee08951396feb03cb16d8d5f2d45a00003",
         12: "d62b2a3c77cbcbc2131f75067f31d68c6de3d4ed28e3bbedc626d50014bd1bb4",
-        13: "1e02896ba1232c12ff0b859eed2aab6666e1ba13cbd62470a354098b193536d4",
+        13: "bab03e8bf1473ac17648823637c1ce717824fa544301fbe2a6d4e2bccc219299",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -1798,6 +1798,7 @@ class SQLiteStore:
                 "challenge_id",
                 "host_id",
                 "code_hash",
+                "allowed_scopes_json",
                 "expires_at",
                 "max_uses",
                 "uses",
@@ -1841,6 +1842,8 @@ class SQLiteStore:
                 "nonce",
                 "signature",
                 "status",
+                "execution_owner_id",
+                "execution_lease_expires_at",
                 "host_acknowledged_at",
                 "result_ref",
                 "error_code",
@@ -1880,7 +1883,7 @@ class SQLiteStore:
                 "lease_id",
                 "target_id",
                 "owner",
-                "token",
+                "token_hash",
                 "fencing",
                 "workspace_ref",
                 "expires_at",
@@ -1952,7 +1955,7 @@ class SQLiteStore:
             "writer_leases": {
                 "writer_workspace_id",
                 "owner",
-                "token",
+                "token_hash",
                 "fencing",
                 "expires_at",
                 "released_at",
@@ -1991,6 +1994,8 @@ class SQLiteStore:
                 "base_revision",
                 "status",
                 "expected_revision",
+                "execution_owner_id",
+                "execution_lease_expires_at",
                 "result_artifact_ref",
                 "error_code",
                 "created_at",
@@ -2159,6 +2164,8 @@ class SQLiteStore:
                 ("remote_sessions", "connected_at"),
                 ("remote_sessions", "disconnected_at"),
                 ("remote_command_receipts", "host_acknowledged_at"),
+                ("remote_command_receipts", "execution_owner_id"),
+                ("remote_command_receipts", "execution_lease_expires_at"),
                 ("remote_command_receipts", "result_ref"),
                 ("remote_command_receipts", "error_code"),
                 ("relay_envelopes", "delivered_at"),
@@ -2180,6 +2187,8 @@ class SQLiteStore:
                 ("writer_conflicts", "resolved_at"),
                 ("merge_runs", "result_artifact_ref"),
                 ("merge_runs", "error_code"),
+                ("merge_runs", "execution_owner_id"),
+                ("merge_runs", "execution_lease_expires_at"),
             }
         )
 
@@ -2892,7 +2901,7 @@ class SQLiteStore:
                         ("device_id", "nonce"),
                     ),
                     "relay_envelopes": (("sender_ref", "nonce"),),
-                    "remote_target_leases": (("token",),),
+                    "remote_target_leases": (("token_hash",),),
                     "remote_execution_jobs": (
                         ("action_hash",),
                         ("target_id", "idempotency_key"),
@@ -2907,9 +2916,10 @@ class SQLiteStore:
                         ("graph_run_id", "writer_key"),
                         ("isolation_ref",),
                     ),
-                    "writer_leases": (("token",),),
+                    "writer_leases": (("token_hash",),),
                     "writer_artifacts": (("artifact_ref",),),
                     "writer_conflicts": (("graph_run_id", "conflict_hash"),),
+                    "merge_runs": (("target_isolation_ref",),),
                 }
             )
         return contract
@@ -3489,6 +3499,10 @@ class SQLiteStore:
                     "idx_remote_devices_host_revoked": ("host_id", "revoked_at"),
                     "idx_remote_sessions_device_state": ("device_id", "connection_state"),
                     "idx_remote_commands_device_status": ("device_id", "status", "updated_at"),
+                    "idx_remote_commands_execution_lease": (
+                        "status",
+                        "execution_lease_expires_at",
+                    ),
                     "idx_relay_route_status_expiry": ("route_ref", "status", "expires_at"),
                     "idx_remote_targets_status_seen": ("status", "last_seen_at"),
                     "idx_remote_target_leases_target_expiry": ("target_id", "expires_at"),
@@ -3506,6 +3520,10 @@ class SQLiteStore:
                     ),
                     "idx_writer_conflicts_run_status": ("graph_run_id", "status"),
                     "idx_merge_runs_graph_status": ("graph_run_id", "status", "updated_at"),
+                    "idx_merge_runs_execution_lease": (
+                        "status",
+                        "execution_lease_expires_at",
+                    ),
                 }
             )
         return indexes
@@ -7942,6 +7960,11 @@ class SQLiteStore:
                 code_hash TEXT NOT NULL UNIQUE CHECK (
                     length(code_hash) = 64 AND code_hash NOT GLOB '*[^0-9a-f]*'
                 ),
+                allowed_scopes_json TEXT NOT NULL CHECK (
+                    json_valid(allowed_scopes_json)
+                    AND json_type(allowed_scopes_json) = 'array'
+                    AND json_array_length(allowed_scopes_json) BETWEEN 1 AND 6
+                ),
                 expires_at TEXT NOT NULL,
                 max_uses INTEGER NOT NULL CHECK (max_uses BETWEEN 1 AND 5),
                 uses INTEGER NOT NULL DEFAULT 0 CHECK (uses BETWEEN 0 AND 5),
@@ -8031,6 +8054,10 @@ class SQLiteStore:
                 status TEXT NOT NULL CHECK (
                     status IN ('received', 'accepted', 'rejected', 'completed', 'outcome_unknown')
                 ),
+                execution_owner_id TEXT CHECK (
+                    execution_owner_id IS NULL OR length(execution_owner_id) BETWEEN 1 AND 300
+                ),
+                execution_lease_expires_at TEXT,
                 host_acknowledged_at TEXT,
                 result_ref TEXT,
                 error_code TEXT CHECK (
@@ -8038,6 +8065,10 @@ class SQLiteStore:
                 ),
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                CHECK (
+                    (status IN ('received', 'accepted'))
+                    = (execution_owner_id IS NOT NULL AND execution_lease_expires_at IS NOT NULL)
+                ),
                 UNIQUE (device_id, nonce),
                 FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash),
                 FOREIGN KEY (host_id) REFERENCES remote_control_hosts(host_id),
@@ -8046,6 +8077,8 @@ class SQLiteStore:
             );
             CREATE INDEX idx_remote_commands_device_status
                 ON remote_command_receipts(device_id, status, updated_at);
+            CREATE INDEX idx_remote_commands_execution_lease
+                ON remote_command_receipts(status, execution_lease_expires_at);
             CREATE TRIGGER remote_commands_binding_guard
             BEFORE UPDATE ON remote_command_receipts
             WHEN NEW.command_id != OLD.command_id
@@ -8117,7 +8150,10 @@ class SQLiteStore:
                 lease_id TEXT PRIMARY KEY,
                 target_id TEXT NOT NULL,
                 owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 300),
-                token TEXT NOT NULL UNIQUE CHECK (length(token) BETWEEN 16 AND 300),
+                token_hash TEXT NOT NULL UNIQUE CHECK (
+                    length(token_hash) = 64
+                    AND token_hash NOT GLOB '*[^0-9a-f]*'
+                ),
                 fencing INTEGER NOT NULL CHECK (fencing >= 1),
                 workspace_ref TEXT NOT NULL CHECK (
                     length(workspace_ref) BETWEEN 1 AND 500
@@ -8291,7 +8327,10 @@ class SQLiteStore:
             CREATE TABLE writer_leases (
                 writer_workspace_id TEXT PRIMARY KEY,
                 owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 300),
-                token TEXT NOT NULL UNIQUE CHECK (length(token) BETWEEN 16 AND 300),
+                token_hash TEXT NOT NULL UNIQUE CHECK (
+                    length(token_hash) = 64
+                    AND token_hash NOT GLOB '*[^0-9a-f]*'
+                ),
                 fencing INTEGER NOT NULL CHECK (fencing >= 1),
                 expires_at TEXT NOT NULL,
                 released_at TEXT,
@@ -8370,20 +8409,32 @@ class SQLiteStore:
                 status TEXT NOT NULL CHECK (
                     status IN (
                         'created', 'running', 'conflicted', 'review_required', 'succeeded',
-                        'failed', 'rolled_back'
+                        'failed', 'rolled_back', 'outcome_unknown'
                     )
                 ),
                 expected_revision INTEGER NOT NULL DEFAULT 0 CHECK (expected_revision >= 0),
+                execution_owner_id TEXT CHECK (
+                    execution_owner_id IS NULL OR length(execution_owner_id) BETWEEN 1 AND 300
+                ),
+                execution_lease_expires_at TEXT,
                 result_artifact_ref TEXT,
                 error_code TEXT CHECK (
                     error_code IS NULL OR length(error_code) BETWEEN 1 AND 200
                 ),
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                CHECK (
+                    (status = 'running')
+                    = (execution_owner_id IS NOT NULL AND execution_lease_expires_at IS NOT NULL)
+                ),
                 FOREIGN KEY (graph_run_id) REFERENCES graph_workflow_runs(id)
             );
             CREATE INDEX idx_merge_runs_graph_status
                 ON merge_runs(graph_run_id, status, updated_at);
+            CREATE UNIQUE INDEX uq_merge_runs_running_target
+                ON merge_runs(target_isolation_ref) WHERE status = 'running';
+            CREATE INDEX idx_merge_runs_execution_lease
+                ON merge_runs(status, execution_lease_expires_at);
             """,
         )
 
@@ -8414,6 +8465,8 @@ class SQLiteStore:
         self._execute_sql_batch(
             connection,
             """
+            DROP INDEX uq_merge_runs_running_target;
+            DROP INDEX idx_merge_runs_execution_lease;
             DROP INDEX idx_merge_runs_graph_status;
             DROP TABLE merge_runs;
             DROP INDEX idx_writer_conflicts_run_status;
@@ -8438,6 +8491,7 @@ class SQLiteStore:
             DROP INDEX idx_relay_route_status_expiry;
             DROP TABLE relay_envelopes;
             DROP TRIGGER remote_commands_binding_guard;
+            DROP INDEX idx_remote_commands_execution_lease;
             DROP INDEX idx_remote_commands_device_status;
             DROP TABLE remote_command_receipts;
             DROP TRIGGER remote_sessions_host_device_guard;
