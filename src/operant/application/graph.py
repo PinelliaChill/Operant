@@ -95,6 +95,40 @@ _PORT_TYPE_ALIASES = {
 }
 
 
+def _valid_ownership_path(path: str) -> bool:
+    if not path or path in {".", ".."} or "\\" in path or path.startswith("/"):
+        return False
+    parts = path.split("/")
+    return all(part not in {"", ".", ".."} for part in parts)
+
+
+def _ownership_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> set[str]:
+    overlaps: set[str] = set()
+    for left_path in left:
+        for right_path in right:
+            if (
+                left_path == right_path
+                or left_path.startswith(f"{right_path}/")
+                or right_path.startswith(f"{left_path}/")
+            ):
+                overlaps.add(min(left_path, right_path, key=len))
+    return overlaps
+
+
+def _node_reaches(source_id: str, target_id: str, outgoing: dict[str, list[EdgeSpec]]) -> bool:
+    pending = [source_id]
+    seen: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current == target_id:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(edge.target_node for edge in outgoing[current] if not edge.loop_back)
+    return False
+
+
 class GraphRepository(Protocol):
     """Persistence boundary. Implementations must commit before returning."""
 
@@ -521,14 +555,23 @@ class GraphCompiler:
                     )
                 )
 
-        writers = [node.node_id for node in nodes.values() if node.writes_workspace]
-        if len(writers) > 1:
-            issues.append(
-                CompilationIssue(
-                    code="multiple_writers",
-                    message=f"only one workspace Writer is allowed, found {writers}",
+        writer_nodes = [
+            node
+            for node in nodes.values()
+            if node.writes_workspace and node.node_kind is not NodeKind.MERGE
+        ]
+        if len(writer_nodes) > 1:
+            if any(node.writer_policy is None for node in writer_nodes):
+                issues.append(
+                    CompilationIssue(
+                        code="multiple_writers",
+                        message=(
+                            "multiple workspace Writers require typed isolation and an explicit "
+                            "Merge node"
+                        ),
+                    )
                 )
-            )
+            issues.extend(self._validate_multi_writer(writer_nodes, nodes, outgoing))
 
         indegree = {node_id: 0 for node_id in nodes}
         for edge in edges.values():
@@ -584,6 +627,97 @@ class GraphCompiler:
                 node_id: tuple(edge.edge_id for edge in outgoing[node_id]) for node_id in nodes
             },
         )
+
+    @staticmethod
+    def _validate_multi_writer(
+        writers: list[NodeSpec],
+        nodes: dict[str, NodeSpec],
+        outgoing: dict[str, list[EdgeSpec]],
+    ) -> list[CompilationIssue]:
+        """Fail closed unless every parallel writer has an isolated merge contract."""
+
+        issues: list[CompilationIssue] = []
+        policies = [node.writer_policy for node in writers]
+        for node, policy in zip(writers, policies, strict=True):
+            if policy is None:
+                issues.append(
+                    CompilationIssue(
+                        code="writer_policy_required",
+                        message=f"multi-writer node {node.node_id} requires writer_policy",
+                        node_id=node.node_id,
+                    )
+                )
+                continue
+            for path in policy.ownership_paths:
+                if not _valid_ownership_path(path):
+                    issues.append(
+                        CompilationIssue(
+                            code="invalid_writer_ownership_path",
+                            message=f"writer {node.node_id} has invalid ownership path {path!r}",
+                            node_id=node.node_id,
+                        )
+                    )
+
+        typed = [(node, policy) for node, policy in zip(writers, policies, strict=True) if policy]
+        writer_keys = [policy.writer_key for _, policy in typed]
+        isolation_refs = [policy.isolation_ref for _, policy in typed]
+        if len(set(writer_keys)) != len(writer_keys):
+            issues.append(
+                CompilationIssue(
+                    code="duplicate_writer_key",
+                    message="multi-writer writer_key values must be unique",
+                )
+            )
+        if len(set(isolation_refs)) != len(isolation_refs):
+            issues.append(
+                CompilationIssue(
+                    code="shared_writer_isolation",
+                    message="multi-writer isolation_ref values must be unique",
+                )
+            )
+        for index, (left_node, left) in enumerate(typed):
+            for right_node, right in typed[index + 1 :]:
+                overlap = _ownership_overlap(left.ownership_paths, right.ownership_paths)
+                if overlap:
+                    issues.append(
+                        CompilationIssue(
+                            code="writer_ownership_overlap",
+                            message=(
+                                f"writers {left_node.node_id} and {right_node.node_id} "
+                                f"have overlapping ownership: {sorted(overlap)}"
+                            ),
+                        )
+                    )
+
+        merge_nodes = [node for node in nodes.values() if node.node_kind is NodeKind.MERGE]
+        expected_keys = set(writer_keys)
+        candidates = [
+            node
+            for node in merge_nodes
+            if node.merge_policy is not None
+            and set(node.merge_policy.source_writer_keys) == expected_keys
+        ]
+        if len(candidates) != 1 or len(expected_keys) != len(writers):
+            issues.append(
+                CompilationIssue(
+                    code="explicit_merge_required",
+                    message="multi-writer graph requires one Merge node covering every writer_key",
+                )
+            )
+            return issues
+        merge = candidates[0]
+        for writer in writers:
+            if not _node_reaches(writer.node_id, merge.node_id, outgoing):
+                issues.append(
+                    CompilationIssue(
+                        code="writer_not_connected_to_merge",
+                        message=(
+                            f"writer {writer.node_id} must flow into merge node {merge.node_id}"
+                        ),
+                        node_id=writer.node_id,
+                    )
+                )
+        return issues
 
 
 _SAFE_EXPRESSION_NODES = (
