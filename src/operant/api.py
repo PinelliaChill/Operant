@@ -104,6 +104,7 @@ from operant.providers.openai_compatible import (
     OpenAICompatibleProvider,
     ProviderError,
 )
+from operant.remote_control.gateway import RemoteGatewayConfig, install_remote_gateway
 from operant.settings import configured_path_roots, database_path, load_local_env
 
 MAX_ARTIFACT_UPLOAD_BYTES = 16 * 1024 * 1024
@@ -1299,6 +1300,7 @@ def create_app(
     phase56_relay_authorizer: Authorizer | None = None,
     phase56_remote_executor: Any | None = None,
     phase56_remote_operation_capabilities: Any | None = None,
+    phase56_gateway_config: RemoteGatewayConfig | None = None,
     phase56_multiwriter_roots: Mapping[str, str | Path] | None = None,
     phase56_writer_artifact_adapter: Any | None = None,
     phase56_merge_adapter: Any | None = None,
@@ -3528,7 +3530,7 @@ def create_app(
             return False
         return hmac.compare_digest(supplied.removeprefix("Bearer "), configured_token)
 
-    install_phase56_control_routes(
+    remote_control_service = install_phase56_control_routes(
         app,
         store,
         local_authorizer=local_authorizer,
@@ -3537,6 +3539,8 @@ def create_app(
         executor=phase56_remote_executor,
         operation_capabilities=phase56_remote_operation_capabilities,
     )
+    if phase56_gateway_config is not None:
+        install_remote_gateway(app, remote_control_service, config=phase56_gateway_config)
     install_phase56_target_routes(app, store, action_gateway=app.state.phase45_action_gateway)
     install_phase56_writer_routes(
         app,
