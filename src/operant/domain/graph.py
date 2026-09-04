@@ -8,6 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from operant.domain.models import Budget
+from operant.domain.multiwriter import MergeNodePolicy, WriterNodePolicy
 
 
 def utc_now() -> datetime:
@@ -38,6 +39,7 @@ class NodeKind(str, Enum):
     TIMER = "timer"
     SUBWORKFLOW = "subworkflow"
     ARTIFACT = "artifact"
+    MERGE = "merge"
 
 
 class IdempotencyClass(str, Enum):
@@ -171,6 +173,8 @@ class NodeSpec(BaseModel):
     workspace_or_target: str | None = None
     failure_policy: FailurePolicy = FailurePolicy.FAIL_WORKFLOW
     writes_workspace: bool = False
+    writer_policy: WriterNodePolicy | None = None
+    merge_policy: MergeNodePolicy | None = None
     loop_policy: LoopPolicy | None = None
     subworkflow_id: str | None = None
     subworkflow_version: int | None = Field(default=None, ge=1)
@@ -191,6 +195,13 @@ class NodeSpec(BaseModel):
                 raise ValueError("subworkflow nodes must pin an id and version")
         elif self.subworkflow_id is not None or self.subworkflow_version is not None:
             raise ValueError("subworkflow fields are only valid for subworkflow nodes")
+        if self.writer_policy is not None and not self.writes_workspace:
+            raise ValueError("writer_policy requires writes_workspace")
+        if self.node_kind is NodeKind.MERGE:
+            if self.merge_policy is None or not self.writes_workspace:
+                raise ValueError("merge nodes require merge_policy and writes_workspace")
+        elif self.merge_policy is not None:
+            raise ValueError("merge_policy is only valid for merge nodes")
         return self
 
 
