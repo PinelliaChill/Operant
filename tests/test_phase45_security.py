@@ -176,6 +176,29 @@ async def test_sync_reviewer_timeout_fails_closed_and_ignores_late_allow(tmp_pat
     assert decision.decision is PolicyDecision.DENY
 
 
+@pytest.mark.asyncio
+async def test_reviewer_preserves_caller_cancellation(tmp_path: Path) -> None:
+    action = _action(
+        tmp_path,
+        capabilities=(Capability.NETWORK_EGRESS,),
+        key="review-cancelled",
+    )
+    evaluation = PolicyEngine(balanced_policy_bundle()).evaluate(action)
+    started = asyncio.Event()
+
+    async def pending(_payload: dict[str, object]) -> dict[str, str]:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    task = asyncio.create_task(ApprovalReviewerAdapter(pending).review(action, evaluation))
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
 def test_secret_broker_is_exact_short_lived_and_redacts_material(tmp_path: Path) -> None:
     secret_action = ActionNormalizer().normalize(
         principal="agent:test",

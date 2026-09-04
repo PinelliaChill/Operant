@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
@@ -240,6 +241,8 @@ class SQLitePhase45Repository:
     def claim_mcp_start(
         self, server_id: str, owner: str, *, expected_updated_at: str, ttl_seconds: int = 60
     ) -> tuple[str, int]:
+        if ttl_seconds < 1:
+            raise ValueError("MCP start lease TTL must be positive")
         now = datetime.now(timezone.utc)
         expires_at = datetime.fromtimestamp(now.timestamp() + ttl_seconds, timezone.utc)
         token = secrets.token_urlsafe(24)
@@ -251,13 +254,24 @@ class SQLitePhase45Repository:
             ).fetchone()
             if row is None:
                 raise KeyError(server_id)
-            if row["lifecycle_status"] not in {"stopped", "failed"}:
-                raise ConflictError("MCP server is already starting or running")
             if row["updated_at"] != expected_updated_at:
                 raise ConflictError("MCP server configuration changed before start")
             lease = connection.execute(
-                "SELECT fencing FROM mcp_server_start_leases WHERE server_id = ?", (server_id,)
+                "SELECT token, fencing, expires_at FROM mcp_server_start_leases "
+                "WHERE server_id = ?",
+                (server_id,),
             ).fetchone()
+            reclaimed = row["lifecycle_status"] == "starting"
+            if reclaimed:
+                if (
+                    lease is None
+                    or lease["token"] is None
+                    or lease["expires_at"] is None
+                    or str(lease["expires_at"]) > now.isoformat()
+                ):
+                    raise ConflictError("MCP server is already starting or running")
+            elif row["lifecycle_status"] not in {"stopped", "failed"}:
+                raise ConflictError("MCP server is already starting or running")
             fencing = 1 if lease is None else int(lease["fencing"]) + 1
             connection.execute(
                 """
@@ -270,11 +284,32 @@ class SQLitePhase45Repository:
             )
             changed = connection.execute(
                 "UPDATE mcp_servers SET lifecycle_status='starting', updated_at=? "
-                "WHERE server_id=? AND lifecycle_status IN ('stopped','failed')",
-                (now.isoformat(), server_id),
+                "WHERE server_id=? AND lifecycle_status=? AND updated_at=?",
+                (
+                    now.isoformat(),
+                    server_id,
+                    "starting" if reclaimed else row["lifecycle_status"],
+                    expected_updated_at,
+                ),
             ).rowcount
             if changed != 1:
                 raise ConflictError("MCP server start lost its lifecycle fence")
+            if reclaimed:
+                event_id = hashlib.sha256(
+                    f"{server_id}\0mcp.start_lease_reclaimed\0{now.isoformat()}".encode()
+                ).hexdigest()
+                connection.execute(
+                    "INSERT INTO mcp_lifecycle_events("
+                    "id,server_id,event_type,lifecycle_status,detail_json,"
+                    "security_audit_event_id,created_at) "
+                    "VALUES (?,?,'mcp.start_lease_reclaimed','starting',?,NULL,?)",
+                    (
+                        event_id,
+                        server_id,
+                        _json({"fencing": fencing}),
+                        now.isoformat(),
+                    ),
+                )
         return token, fencing
 
     def finish_mcp_start(
@@ -297,12 +332,10 @@ class SQLitePhase45Repository:
                 "SELECT token, fencing, expires_at FROM mcp_server_start_leases WHERE server_id=?",
                 (server_id,),
             ).fetchone()
-            if (
-                lease is None
-                or lease["token"] != token
-                or int(lease["fencing"]) != fencing
-                or lease["expires_at"] is None
-                or str(lease["expires_at"]) <= now
+            if lease is None or lease["token"] != token or int(lease["fencing"]) != fencing:
+                raise ConflictError("stale MCP lifecycle fence")
+            if status == "running" and (
+                lease["expires_at"] is None or str(lease["expires_at"]) <= now
             ):
                 raise ConflictError("stale MCP lifecycle fence")
             changed = connection.execute(
@@ -322,6 +355,78 @@ class SQLitePhase45Repository:
                 "detail_json,security_audit_event_id,created_at) VALUES (?,?,?,?,?,NULL,?)",
                 (event_id, server_id, event_type, status, _json(detail or {}), now),
             )
+
+    def complete_mcp_start(
+        self,
+        server_id: str,
+        token: str,
+        fencing: int,
+        tools: tuple[McpTool, ...],
+    ) -> int:
+        """Commit a tool snapshot and running lifecycle under one live start fence."""
+
+        now = _now()
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            lease = connection.execute(
+                "SELECT token, fencing, expires_at FROM mcp_server_start_leases WHERE server_id=?",
+                (server_id,),
+            ).fetchone()
+            if (
+                lease is None
+                or lease["token"] != token
+                or int(lease["fencing"]) != fencing
+                or lease["expires_at"] is None
+                or str(lease["expires_at"]) <= now
+            ):
+                raise ConflictError("stale MCP lifecycle fence")
+            lifecycle = connection.execute(
+                "SELECT lifecycle_status FROM mcp_servers WHERE server_id=?", (server_id,)
+            ).fetchone()
+            if lifecycle is None:
+                raise KeyError(server_id)
+            if lifecycle["lifecycle_status"] != "starting":
+                raise ConflictError("MCP lifecycle is no longer starting")
+            snapshot_version = self._latest_mcp_snapshot_version(connection, server_id) + 1
+            for tool in tools:
+                connection.execute(
+                    """
+                    INSERT INTO mcp_tool_snapshots(
+                        server_id, snapshot_version, tool_name, schema_sha256,
+                        tool_json, discovered_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        server_id,
+                        snapshot_version,
+                        tool.name,
+                        tool.schema_sha256,
+                        tool.model_dump_json(),
+                        now,
+                    ),
+                )
+            connection.execute(
+                "UPDATE mcp_servers SET lifecycle_status='running', updated_at=? WHERE server_id=?",
+                (now, server_id),
+            )
+            connection.execute(
+                "UPDATE mcp_server_start_leases SET owner=NULL, token=NULL, expires_at=NULL "
+                "WHERE server_id=? AND token=? AND fencing=?",
+                (server_id, token, fencing),
+            )
+            event_id = hashlib.sha256(f"{server_id}\0mcp.started\0{now}".encode()).hexdigest()
+            connection.execute(
+                "INSERT INTO mcp_lifecycle_events(id,server_id,event_type,lifecycle_status,"
+                "detail_json,security_audit_event_id,created_at) "
+                "VALUES (?,?,'mcp.started','running',?,NULL,?)",
+                (
+                    event_id,
+                    server_id,
+                    _json({"snapshot_version": snapshot_version, "tool_count": len(tools)}),
+                    now,
+                ),
+            )
+        return snapshot_version
 
     def reserve_mcp_action(
         self,
@@ -603,44 +708,10 @@ class SQLitePhase45Repository:
                 ),
             )
 
-    def replace_mcp_tools(self, server_id: str, tools: tuple[McpTool, ...]) -> int:
-        now = _now()
-        with self.store._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT COALESCE(MAX(snapshot_version), 0) AS version "
-                "FROM mcp_tool_snapshots WHERE server_id = ?",
-                (server_id,),
-            ).fetchone()
-            version = int(row["version"]) + 1
-            for tool in tools:
-                connection.execute(
-                    """
-                    INSERT INTO mcp_tool_snapshots(
-                        server_id, snapshot_version, tool_name, schema_sha256,
-                        tool_json, discovered_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        server_id,
-                        version,
-                        tool.name,
-                        tool.schema_sha256,
-                        tool.model_dump_json(),
-                        now,
-                    ),
-                )
-        return version
-
     def list_mcp_tools(self, server_id: str) -> tuple[dict[str, Any], ...]:
         with self.store._connect() as connection:
-            version_row = connection.execute(
-                "SELECT MAX(snapshot_version) AS version FROM mcp_tool_snapshots "
-                "WHERE server_id = ?",
-                (server_id,),
-            ).fetchone()
-            version = None if version_row is None else version_row["version"]
-            if version is None:
+            version = self._latest_mcp_snapshot_version(connection, server_id)
+            if version == 0:
                 return ()
             rows = connection.execute(
                 "SELECT tool_json FROM mcp_tool_snapshots "
@@ -648,3 +719,22 @@ class SQLitePhase45Repository:
                 (server_id, version),
             ).fetchall()
         return tuple(json.loads(row["tool_json"]) for row in rows)
+
+    @staticmethod
+    def _latest_mcp_snapshot_version(connection: sqlite3.Connection, server_id: str) -> int:
+        row = connection.execute(
+            """
+            SELECT COALESCE(MAX(version), 0) AS version
+            FROM (
+                SELECT snapshot_version AS version
+                FROM mcp_tool_snapshots
+                WHERE server_id = ?
+                UNION ALL
+                SELECT CAST(json_extract(detail_json, '$.snapshot_version') AS INTEGER) AS version
+                FROM mcp_lifecycle_events
+                WHERE server_id = ? AND event_type = 'mcp.started'
+            )
+            """,
+            (server_id, server_id),
+        ).fetchone()
+        return int(row["version"])

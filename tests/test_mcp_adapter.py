@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 import httpx
 import pytest
 
+import operant.mcp.adapter as mcp_adapter_module
 from operant.mcp import (
     GatewayDecision,
     LegacySseTransport,
@@ -23,6 +25,7 @@ from operant.mcp import (
     McpStdioConfig,
     StdioTransport,
 )
+from operant.mcp.adapter import _copy_workspace_snapshot_safely
 
 
 class FakeTransport:
@@ -237,6 +240,102 @@ async def test_schema_snapshot_rejects_unknown_and_invalid_arguments() -> None:
     assert missing.value.code == "mcp.arguments_invalid"
     assert extra.value.code == "mcp.arguments_invalid"
     assert [method for method, _ in transport.calls].count("tools/call") == 0
+
+
+@pytest.mark.asyncio
+async def test_schema_validation_is_recursive_and_fail_closed() -> None:
+    transport = FakeTransport(
+        tools=[
+            {
+                "name": "controlled",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["read"]},
+                        "options": {
+                            "type": "object",
+                            "properties": {
+                                "safe": {"const": True},
+                                "level": {"type": "integer", "minimum": 1, "maximum": 3},
+                            },
+                            "required": ["safe"],
+                            "additionalProperties": False,
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["a", "b"]},
+                            "minItems": 1,
+                            "uniqueItems": True,
+                        },
+                        "quota": {
+                            "type": "number",
+                            "minimum": 0,
+                            "exclusiveMaximum": 10,
+                            "multipleOf": 0.5,
+                        },
+                    },
+                    "required": ["mode", "options"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+    )
+    gateway = FakeGateway()
+    adapter = McpAdapter(
+        server_id="server-1",
+        target_ref="target-ref",
+        transport=transport,
+        action_gateway=gateway,
+    )
+    await adapter.start()
+
+    invalid_arguments = (
+        {"mode": "delete", "options": {"safe": True}},
+        {"mode": "read", "options": {"safe": False}},
+        {"mode": "read", "options": {}},
+        {"mode": "read", "options": {"safe": True, "extra": True}},
+        {"mode": "read", "options": {"safe": True}, "tags": ["a", "a"]},
+        {"mode": "read", "options": {"safe": True}, "quota": 1.25},
+    )
+    for arguments in invalid_arguments:
+        with pytest.raises(McpError) as error:
+            await adapter.call_tool("controlled", arguments)
+        assert error.value.code == "mcp.arguments_invalid"
+
+    assert [method for method, _ in transport.calls].count("tools/call") == 0
+    assert gateway.receipts == {}
+    await adapter.call_tool(
+        "controlled",
+        {"mode": "read", "options": {"safe": True, "level": 2}, "tags": ["a"], "quota": 1.5},
+    )
+    assert [method for method, _ in transport.calls].count("tools/call") == 1
+
+
+@pytest.mark.asyncio
+async def test_schema_snapshot_rejects_unsupported_keywords() -> None:
+    transport = FakeTransport(
+        tools=[
+            {
+                "name": "unsafe-schema",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/$defs/value"}},
+                },
+            }
+        ]
+    )
+    adapter = McpAdapter(
+        server_id="server-1",
+        target_ref="target-ref",
+        transport=transport,
+        action_gateway=FakeGateway(),
+    )
+
+    with pytest.raises(McpError) as error:
+        await adapter.start()
+
+    assert error.value.code == "mcp.schema_unsupported"
+    assert transport.closed is True
 
 
 @pytest.mark.asyncio
@@ -531,3 +630,62 @@ async def test_stdio_rejects_oversized_snapshot_before_docker(
 
     assert error.value.code == "mcp.stdio_snapshot_limit"
     assert spawned is False
+
+
+def test_stdio_snapshot_rejects_symbolic_links(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must-not-copy", encoding="utf-8")
+    (workspace / "outside-link").symlink_to(outside)
+
+    with pytest.raises(McpError) as error:
+        _copy_workspace_snapshot_safely(
+            workspace,
+            tmp_path / "snapshot",
+            McpLimits(),
+        )
+
+    assert error.value.code == "mcp.stdio_snapshot_unsafe"
+    assert not (tmp_path / "snapshot" / "outside-link").exists()
+
+
+def test_stdio_snapshot_replacement_race_fails_without_copying_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    visible = workspace / "visible.txt"
+    visible.write_text("safe", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must-not-copy", encoding="utf-8")
+    real_open = os.open
+    swapped = False
+
+    def racing_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == "visible.txt" and dir_fd is not None and not swapped:
+            swapped = True
+            visible.unlink()
+            visible.symlink_to(outside)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(mcp_adapter_module.os, "open", racing_open)
+
+    with pytest.raises(McpError) as error:
+        _copy_workspace_snapshot_safely(
+            workspace,
+            tmp_path / "snapshot",
+            McpLimits(),
+        )
+
+    assert swapped is True
+    assert error.value.code == "mcp.stdio_snapshot_unreadable"
+    copied = tmp_path / "snapshot" / "visible.txt"
+    assert not copied.exists()

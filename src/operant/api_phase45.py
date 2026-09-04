@@ -915,18 +915,27 @@ def install_phase45_routes(
         )
         try:
             tools = await adapter.start()
-            snapshot_version = phase_repository.replace_mcp_tools(server_id, tools)
-            phase_repository.finish_mcp_start(
-                server_id,
-                start_token,
-                start_fencing,
-                status="running",
-                event_type="mcp.started",
-                detail={"snapshot_version": snapshot_version, "tool_count": len(tools)},
-            )
+            phase_repository.complete_mcp_start(server_id, start_token, start_fencing, tools)
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                await adapter.close()
+            if secret_resolver is not None:
+                secret_resolver.clear()
+            with suppress(ConflictError):
+                phase_repository.finish_mcp_start(
+                    server_id,
+                    start_token,
+                    start_fencing,
+                    status="failed",
+                    event_type="mcp.start_cancelled",
+                    detail={"error_code": "mcp.start_cancelled"},
+                )
+            raise
         except Exception as exc:
             with suppress(Exception):
                 await adapter.close()
+            if secret_resolver is not None:
+                secret_resolver.clear()
             with suppress(ConflictError):
                 phase_repository.finish_mcp_start(
                     server_id,

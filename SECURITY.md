@@ -1,6 +1,6 @@
 # Operant 安全边界
 
-> 最后更新：2026-09-03
+> 最后更新：2026-09-04
 
 Operant 会把模型输出视为不可信输入。模型只能请求由当前 `RoleSnapshot` 的 Tool Policy
 允许的工具；Runtime 和工具层会再次校验，不把“模型遵守提示词”当作安全边界。
@@ -29,17 +29,19 @@ Policy 规则按 System、Workspace、Role、Workflow、Session、Approval 和 D
 - System hard DENY 不能被低层规则、客户端、人工审批或 LLM Reviewer 覆盖。
 
 `ApprovalReviewerAdapter` 只能审查 `reviewer_eligible` 的 ASK，只获得脱敏的最小 Action 摘要，且只能
-返回 ALLOW 或 DENY。超时、异常、非法 JSON 或仍返回 ASK 都固定收口为 DENY。当前 Phase 45
-MCP/Scheduler API 没有独立的持久 Approval continuation；既有 Session Tool Approval 不能被当作 Phase 45
-ASK 的续传。因此这些后台或外部副作用在 ASK/DENY 时都会 fail-closed，不会静默自批。
+返回 ALLOW 或 DENY。超时、异常、非法 JSON 或仍返回 ASK 都固定收口为 DENY。Phase 45 系统动作使用
+独立持久 Approval：决定绑定精确 Action Hash、Target、Policy Version 和有效期；客户端不能伪造
+`decided_by`，只能由 User 入口或 Core 配置的 Reviewer Adapter 决定。批准后仍重新评估 Policy 且只能
+消费一次；DENY、过期、已消费和 hard DENY 均不会继续。它不替代既有 Session Tool Approval。
 
 Capability Lease 只能从精确 ALLOW 的 Action 发放，并绑定 Action Hash、principal、Capability、target、
 workspace、Policy Version、TTL、约束和最大使用次数。消费使用 SQLite CAS 重新核对这些字段、
 过期、撤销和用量；旧、越目标、超量或被撤销 Lease 均失败关闭。
 
 Secret Broker 只在精确 ALLOW 且包含 `secret.use` 的 Action 执行时解析已声明 `secret_ref`，并生成
-短 TTL、单目标 Secret Lease。真实 Secret 值只进入目标执行环境，不写入 SQLite、API、Policy 解释、
-Audit 或错误；返回输出还会按实际注入值再次脱敏。
+短 TTL、单目标 Secret Lease。真实 Secret 值只进入目标 transport 的进程内 resolver，不写入 SQLite、
+API、Policy 解释、Audit 或错误；返回输出还会按实际值再次脱敏。legacy SSE 当前把 endpoint 与 bearer
+限制在最短 60 秒 Lease 内，到期关闭连接并清空 resolver。
 
 Security Action 和 Audit 是不可变/只追加事实。Audit 仅保存决策、规则 ID、有界详情、结果 hash
 和安全错误码，不保存原始参数/结果或 Secret。重复拒绝仅通过不含参数值的 signature 计数，
@@ -150,7 +152,9 @@ Docker Runner。
 ## 受控 Skill Discovery
 
 Skill Discovery 只接受 Core 启动时配置的有界受信根 reference，API 调用者不能提交任意宿主
-路径扩大扫描范围。每个根必须是绝对、已存在、非软链接真实目录，并用 device/inode 去重。
+路径扩大扫描范围。默认应用从 `OPERANT_SKILL_ROOTS_JSON` 读取 reference→绝对路径映射；MCP stdio
+从 `OPERANT_MCP_WORKSPACE_ROOTS_JSON` 读取独立映射。API 只投影 reference，不返回宿主路径。每个根
+必须是绝对、已存在、非软链接真实目录，并用 device/inode 去重；MCP 额外拒绝文件系统根和用户 Home。
 
 发现器只检查根和一层子目录中的 `SKILL.md`，对根、候选、`scripts/`、`references/` 中的
 每个组件拒绝软链接、路径逃逸和非普通文件。文件用 no-follow 打开，读取后复核 device/inode/
@@ -167,21 +171,32 @@ Policy 或权限边界；“连接成功”也不等于任何工具获得执行�
 
 当前支持：
 
-- `stdio`：显式 argv 直接启动，不经 Shell；子进程不继承 Core 的整个环境，只获得显式映射的
-  environment reference。但它仍是宿主机进程，未受 Docker 或 OS 网络沙箱隔离；
+- `stdio`：显式 argv 只在 operator allowlist 中的 workspace 与 digest-pinned Docker 镜像上启动，
+  不经 Shell、不接收 environment Secret、不继承 Core 环境，也不挂载原 workspace。过滤快照只读挂载，
+  容器固定 `--pull never --network none --cap-drop ALL --read-only`、no-new-privileges、UID/GID、CPU/内存/
+  PID 与快照项数/字节上限；快照复制用目录 FD 锚定和 no-follow 打开，拒绝软链接、非普通文件及
+  文件/目录替换竞态；Docker 或镜像不可用时明确失败，不回退 Host；
 - `legacy_sse`：兼容旧 MCP SSE 接收流 + POST 消息端点。它明确是 legacy transport，不是新推荐的
   远程安全协议。默认拒绝 redirect、userinfo、query/fragment、非 HTTP(S)、不安全 HTTP 和未明确允许的
   loopback HTTP；从 SSE 推导的 POST 端点还必须与已校验端点保持安全绑定。
 
 两种 transport 都限制启停/请求超时、frame/Schema/stderr 大小、工具数、JSON 深度/总项/字符长度、
-request ID 和 content type。`initialize`/`tools/list` 的结果经验证后持久为版本化工具快照。每次
-`tools/call` 仍必须命中快照、通过本地有界 Schema 验证、重算 Action Hash，并在外部请求前经
-Action Gateway 发放和一次消费精确 Capability Lease。结果先有界校验和脱敏，Audit 只记录结果 hash/
-耗时/错误码，不保存原始参数和原始结果。
+request ID 和 content type。`initialize`/`tools/list` 的结果仅在通过明确白名单的递归有界 Schema
+子集后持久为版本化工具快照；未知断言关键字会拒绝整个快照，不会静默放行。每次 `tools/call` 仍必须
+命中快照、通过本地 Schema 验证、重算包含 Server 配置摘要的 Action Hash，并在
+外部请求前经 Action Gateway 发放和一次消费精确 Capability Lease。发送前持久 durable receipt 并从
+`reserved` 原子转到 `sent`；只有结果完成有界校验、按实际 Secret 再脱敏并持久后才进入 `completed`。
+重复 completed 调用只回放持久结果；`sent` 或 `outcome_unknown` 不会自动重放，必须人工核对。Audit
+只记录结果 hash/耗时/错误码，不保存原始参数和原始结果。
 
-默认 balanced Policy 把 stdio 启动/调用视为 `process.exec`，把 legacy SSE 视为 `network.egress`，显式
-Secret Ref 另需 `secret.use`；这些默认都是 ASK。因当前 Phase 45 无独立审批 continuation，ASK 和 DENY
-都会在启动或工具调用前失败关闭。
+默认 balanced Policy 把隔离 stdio 启动/调用约束为 `process.exec.no_network` + `workspace.read`，可在
+规则匹配时 ALLOW；legacy SSE 需要 `network.egress`，启动时的 endpoint/bearer 另需 `secret.use`，默认
+为 ASK。ASK 只有在精确持久 Approval 决定后才能继续；DENY 永远不会被 Reviewer 或客户端覆盖。
+
+MCP Server 启动还使用单独的 owner/token/fencing/TTL CAS。并发请求只有一个能从 stopped/failed 进入
+starting 并启动 transport；请求取消会关闭 transport 并 fenced 地收口为 failed，过期 start lease 可由
+新 owner 原子接管，旧 owner 不能提交 running 或工具快照。Core 重启会把没有进程权威的活跃生命周期
+保守收口，不能把 SQLite 的 running 投影冒充仍在运行的进程。
 
 ## Scheduler 边界
 
@@ -205,7 +220,8 @@ dispatch 如果 lease 过期或返回结果未知，只能进 `manual_reconcile_
 
 Scheduler 派发本身还要经 Phase 4 Policy/Capability/Audit；后台调度不会等待或自行批准 ASK。
 `scheduler_graph_dispatches` 在创建 Graph Run 前保留 RunRequest/幂等键/Action Hash 绑定：已完成绑定
-重放返回同一 Graph Run，pending 绑定的结果未知不会创建第二个 Run。FastAPI 停机只释放当前
+重放返回同一 Graph Run；pending 绑定按稳定 Graph Run ID 恢复已提交 Run，确定未提交时用原绑定安全
+创建，只有冲突或无法确定的 create/start/完成异常才转人工核对。FastAPI 停机只释放当前
 Coordinator 精确持有的租约；崩溃接管仍以 SQLite 已提交事实和 fencing 为准。
 
 ## Web 与 API 部署边界
@@ -260,8 +276,10 @@ SQLite 契约、超时、软链接、指标、根因分类及 CLI/API 脱敏。�
 Exp 19—24 实验结论或“真实模型 + Docker Coder”的联合验收。
 
 Phase 4/5A 自动化测试覆盖 Policy/Capability/Secret/Audit、Skill 路径与读取竞态、stdio/legacy SSE MCP、
-Cron/Timer/DST/misfire、Queue/Lease/fencing/retry/DLQ/manual reconcile、Scheduler→Graph 幂等绑定、SQLite v10/v11
-升级/回滚与 27-operation 生成 Client。这些确定性测试不等于真实第三方 MCP Server 安全审计、
+Docker argv/快照边界与替换竞态、递归 Schema/未知关键字拒绝、User/Reviewer Approval timeout、
+start 取消/过期接管、receipt 并发与 unknown、Cron/Timer/DST/misfire、
+Queue/Lease/fencing/retry/DLQ/manual reconcile、Scheduler→Graph 幂等绑定、SQLite v10/v11/v12
+升级/回滚与 32-operation 生成 Client。这些确定性测试不等于真实第三方 MCP Server 安全审计、
 长时稳定 Scheduler 运维、多进程压力/故障演练或真实模型联合验收。
 
 2026-08-22 的六角色真实模型 Workflow 在可信的临时 fixture 中使用 Host Coder 完成，并由模型外

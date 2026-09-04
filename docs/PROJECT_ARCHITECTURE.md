@@ -2,7 +2,7 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-03
+> 最后更新：2026-09-04
 >
 > 对应版本：Operant 2.0 Phase 4/5A 后端与 GUI live 接入（`phase45.v1`；既有协议冻结）
 
@@ -137,11 +137,12 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   epoch 丢弃迟到 resolve/reject，避免旧运行状态或定向消息短暂泄漏到新 scope；SSE 正常 EOF 后先做
   权威 Query 校正，只有已持久终态回到 idle，非终态 EOF 明确显示断线并保留 Cursor 重连语义；
 - React GUI 通过生成的 `Phase45Client` 与同源 `/v1` 接通 Policy dry-run/解释、每个 Action Hash 最多
-  100 条的安全审计事实投影、受信根 Skill 候选发现与
-  列表、MCP Server 配置/启停/删除及工具快照；Skill 始终标为未信任候选，MCP 副作用继续由服务端
-  Action Gateway 裁决，客户端不直接执行命令、不解析 Secret、不把 ASK/DENY 当作允许。审批决定仍
-  使用现有 Session scope Approval Command，并等待 Core Projection 校正；Live 加载、空、错误和断线
-  状态不会回退 Demo，危险生命周期操作要求明确确认；
+  100 条的安全审计事实投影、受信根 Skill 候选发现与列表，以及 MCP Server 配置/启停/删除、工具快照、
+  工具调用和 durable receipt 查询；stdio 表单只能选择 Core 返回的 root ref，并校验相对 cwd、JSON argv
+  与 digest-pinned Docker image。Skill 始终标为未信任候选，MCP 副作用继续由服务端 Action Gateway
+  裁决，客户端不直接执行命令、不解析 Secret、不把 ASK/DENY 当作允许。Phase 45 ASK 显示绑定事实，
+  允许后复用原稳定 Idempotency-Key 重试，拒绝后不执行；`outcome_unknown` 只允许人工核对。Live 加载、
+  空、错误和断线状态不会回退 Demo，危险生命周期操作要求明确确认；
 - Phase 4 安全控制面把 principal、tool/operation、规范化 target/arguments、capability、Secret Ref、
   sandbox/network profile、幂等等级、Policy Version 和幂等键绑定为稳定 Action Hash；
   分层 Policy 按 `DENY > ASK > ALLOW` 合成，System hard DENY 不可覆盖，无规则命中默认 DENY。
@@ -153,11 +154,16 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - Skill Discovery 只扫描 Core 启动时配置的有界绝对受信根，拒绝根/候选/资源软链接、路径逃逸、
   读取竞态、非普通文件、非法或过大 frontmatter/body/resource；仅存候选快照与 hash，默认
   `untrusted_candidate`，不自动信任、安装或执行脚本；
-- MCP 支持无 Shell 的 stdio JSON-RPC 与明确标注为 legacy 的 SSE+POST transport；服务器和工具声明都
-  是不可信输入，有帧、Schema、JSON 深度/数量、超时、redirect 和端点限制。工具必须存在于
-  已发现快照，参数先验证，再经 Action Gateway 与一次 Capability Lease 才调用；默认 Policy 下
-  stdio `process.exec` 和 legacy SSE `network.egress` 均为 ASK，当前 Phase 4/5A API 没有独立的审批
-  continuation，因此 ASK 与 DENY 都 fail-closed；
+- MCP 支持无 Shell 的 Docker stdio JSON-RPC 与明确标注为 legacy 的 SSE+POST transport；stdio 只接受
+  Core 配置的 workspace root ref 与 digest-pinned 本地镜像，使用过滤后只读快照、`--network none`、
+  无环境 Secret、固定 CPU/内存/PID/capability 限制和有界快照，不回退 Host。legacy SSE 的 endpoint/
+  bearer 只按 SecretBroker 60 秒 Lease 解析，Lease 到期会关闭连接并清空材料。工具必须存在于快照，
+  参数先验证，再经 Action Gateway 与一次 Capability Lease 才调用；默认 stdio 的无网络只读能力可
+  ALLOW，legacy SSE 的网络与 Secret 使用为 ASK；持久 Approval 可由 User 或受控 Reviewer 决定且只能
+  消费一次，DENY/hard DENY 不可覆盖；
+- MCP 工具调用在发出前持久保留精确配置/工具 Schema/参数绑定的 action receipt，并原子进入 `sent`；
+  完成结果脱敏后持久化并可幂等回放，发送后丢失结果则进入 `outcome_unknown`，禁止自动重放。Server
+  start 另用 token/fencing/TTL CAS，避免并发启动两个进程；
 - Phase 5A 实现版本化 Cron/一次性 Timer、IANA 时区与 DST gap/fold 处理、`skip`/`fire_once`/
   有界 `catch_up` misfire、持久幂等 RunRequest Queue、手工触发、取消与 DLQ 显式 replay。
   Scheduler Leader 只负责具象化 due occurrence，Runtime Writer 只负责 dispatch；两者与 Job Lease 均使用
@@ -167,7 +173,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - React GUI live 已接通 Schedule 列表/创建/修改/暂停/恢复/取消、手工触发、Queue、DLQ 和显式
   replay，并保持加载/空/错误、重试幂等键与高风险操作确认；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1/v2/v3/v4/v5/v6/v7/v8/v9/v10/v11 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1/v2/v3/v4/v5/v6/v7/v8/v9/v10/v11/v12 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -220,7 +226,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   Scheduler 只能触发已发布 Graph Workflow，不会把任意 Graph 节点变成后台作业；
 - 完整 React GUI/PWA、Textual TUI 和 Tauri 桌面壳；当前生成 Client 与 React live 面覆盖冻结
   Phase 1E、Graph/本地 Team 以及 Phase 4/5A 的 Policy、安全审计、Skill、MCP 和 Scheduler；Skill 信任/安装、
-  Policy 修改、MCP Tool 调用 UI、OAuth、Browser/Computer 工具、TUI 与 Tauri 尚未实现；
+  Policy 修改、OAuth、Browser/Computer 工具、TUI 与 Tauri 尚未实现；
 - 复杂 `@` 引用、Provider Cache 的执行/复制，以及面向非可信 HTTP 客户端的 Artifact capability 签发；
 - Host Connector、自托管 Relay、Remote Gateway、RemoteDevice/RemoteSession 和受控 Remote Target。
 
@@ -842,8 +848,10 @@ profile、Secret Ref、dry-run、幂等等级、Policy Version 和幂等键绑�
 同一 Action 内任一 capability 命中 DENY 即整体 DENY，否则 ASK 优先于 ALLOW；无匹配默认 DENY。
 System hard DENY 只能由 System DENY 规则定义，审批或 LLM Reviewer 不能覆盖。
 `ApprovalReviewerAdapter` 仅接收经脱敏的最小 ASK 事实，并且只允许输出 ALLOW/DENY；超时、异常或非法输出固定
-fail-closed 为 DENY。当前 Phase 4 公开 API 提供 normalize/check/explain/test 和 Capability 发放/消费，
-但没有为 Phase 45 副作用建立独立持久审批 continuation；既有 Session Tool Approval 不能被当作该续传。
+fail-closed 为 DENY。Phase 4 公开 API 除 normalize/check/explain/test 和 Capability 发放/消费外，还为
+Phase 45 系统动作保存绑定 Action Hash、Target、Policy Version 与过期时间的独立 Approval。只有 User 或
+Core 配置的 Reviewer Adapter 可决定，客户端不能提交 `decided_by`；批准后仍重算 Policy，匹配的 ASK
+只消费一次，DENY、过期、已消费或 hard DENY 均不能继续。它与 Session Tool Approval 是两个不同作用域。
 
 `CapabilityLease` 只能从已 ALLOW 且绑定精确 Action/Policy 的评估发放，保存 capability、target、
 workspace、约束、TTL、次数和撤销状态；SQLite 消费在同一 CAS 中重新核对 action/principal/
@@ -855,21 +863,31 @@ capability/target/过期/撤销/用量。`SecretBroker` 只在已 ALLOW 的精�
 ### Skill Discovery 与 MCP
 
 `SkillDiscovery` 的输入不是任意用户路径，而是 Core 启动时注入的有界、绝对、真实目录 allowlist。
+默认 `uvicorn operant.api:app` 可从 `OPERANT_SKILL_ROOTS_JSON` 读取 root-ref 到绝对路径的 JSON 映射；
+MCP stdio 对应使用 `OPERANT_MCP_WORKSPACE_ROOTS_JSON`。API 与 GUI 只看引用名，不返回映射后的宿主路径。
 扫描只检查根本身和一层子目录的 `SKILL.md`，逐组件拒绝软链接/越界/非普通文件，读前后核对
 device/inode/size/mtime，对候选数、manifest/body/frontmatter、资源数量/层级/大小和 JSON 列表均有上限。
 发现结果只是带 manifest/resource hash 的 `untrusted_candidate`，持久候选不等于信任、安装或执行。
 
-MCP Adapter 支持两种 transport：默认选择的 stdio 用显式 argv 启动子进程，不经 Shell，也不继承 Core
-的整个环境；只注入配置的 environment reference。`legacy_sse` 是兼容性 transport，使用长连 SSE
+MCP Adapter 支持两种 transport：默认选择的 stdio 用显式 argv 在 digest-pinned Docker 镜像中启动，
+不经 Shell、不继承 Core 环境、不允许环境 Secret，也不直接挂载宿主 workspace；它只读取受控 root 的
+过滤快照；复制过程用目录 FD 锚定、no-follow 打开和前后身份/版本核对拒绝软链接、非普通文件与替换
+竞态，再使用只读 mount、无网络、cap-drop、no-new-privileges、CPU/内存/PID 与快照大小/项数上限。
+镜像不存在或 Docker 不可用时明确失败，不拉取、不回退 Host。`legacy_sse` 是兼容性 transport，使用长连 SSE
 接收和消息 POST，不是新的推荐 MCP 安全边界；默认拒绝 redirect、userinfo/query/fragment、不安全
 HTTP 和非明确允许的 loopback HTTP。两种 transport 都校验有界 JSON-RPC frame、request ID、Schema
 大小/深度/数量、超时、工具数量和结果脱敏。MCP Server 是不可信外部进程/端点，不是安全边界。
 
-`initialize` + `tools/list` 得到的工具 Schema 作为版本快照持久。每次 `tools/call` 必须仍命中快照、
-通过本地 Schema 验证、重算 Action Hash，再由 `Phase45ActionGateway` 评估精确 transport capability、
-发放并一次消费 Lease 才发送到 Server。默认 balanced Policy 把 stdio 子进程与工具调用的
-`process.exec`、legacy SSE 的 `network.egress` 以及 Secret 使用评为 ASK；由于 Phase 45 尚无独立审批
-continuation，这些操作在 ASK/DENY 时立即失败关闭，不会越过 Gateway 运行。
+`initialize` + `tools/list` 得到的工具 Schema 先经过有界白名单子集验证，再作为版本快照持久；当前支持
+type/enum/const、递归 object/array、长度/数量/数值约束和 allOf/anyOf/oneOf/not，任何未知断言关键字
+会拒绝整个快照，不会静默忽略。每次 `tools/call` 必须仍命中快照、递归通过该本地 Schema、重算 Action
+Hash，再由 `Phase45ActionGateway` 评估精确 transport capability、
+发放并一次消费 Lease 才发送到 Server。Action Hash 还绑定 Server 的 transport、引用、argv、cwd、
+workspace root 与镜像摘要；发送前持久 receipt 并原子标为 `sent`，完成结果脱敏后才标为 `completed`。
+重复 completed 调用只回放持久结果；`sent`/`outcome_unknown` 必须人工核对，不允许第二次外部调用。
+默认 balanced Policy 允许隔离 stdio 的 `process.exec.no_network` + `workspace.read`，legacy SSE 的
+`network.egress` + `secret.use` 为 ASK。它的 endpoint/bearer 仅在审批消费后按 SecretBroker 解析并保留到
+最短 60 秒 Lease，到期关闭 transport、清空值并更新生命周期。
 
 ### Phase 5A Scheduler
 
@@ -888,7 +906,9 @@ Scheduler Leader 持有者才能生成 due RunRequest，Runtime Writer 持有者
 
 Worker 在调用 Gateway 前持久 `side_effect_started`，再用原 RunRequest 幂等键经 Policy/Capability/Audit 创建
 并启动精确 Published Graph Revision。`scheduler_graph_dispatches` 先保留幂等绑定：已 completed 的键重放
-返回同一 Graph Run，pending 绑定的结果未知则进人工核对。可确定失败使用有界指数退避，达
+返回同一 Graph Run；pending 绑定通过稳定 Graph Run ID 查找已提交 Run，找到则恢复并完成绑定，找不到
+则证明 create 事务未提交，可用原幂等绑定安全创建。只有发现绑定与既有 Run 冲突，或 create/start/完成
+绑定返回无法确定的异常，才进入人工核对。可确定失败使用有界指数退避，达
 `max_attempts` 后进 DLQ；仅显式 replay 用新请求绑定旧 DLQ 事实。非幂等作业在副作用开始后
 lease 过期或结果未知时直接 `manual_reconcile_required`，不自动 retry/replay。FastAPI lifespan
 运行有界 Coordinator，停机时只释放它持有的精确租约；多 Core 可候选接管，但同时只允许一个
@@ -1276,6 +1296,10 @@ SQLiteStore 当前创建以下表：
 | `mcp_servers` | 保存 stdio/legacy SSE 引用型配置和生命周期投影 |
 | `mcp_tool_snapshots` | 保存 Server 每次发现的工具 Schema 版本快照 |
 | `mcp_lifecycle_events` | 保存只追加 MCP 配置/启停/失败/删除事实 |
+| `mcp_action_receipts` | 保存精确配置/Schema/参数绑定与 reserved/sent/completed/outcome_unknown 结果事实 |
+| `mcp_server_start_leases` | 保存 MCP start 的 owner/token/fencing/TTL，避免并发双启动 |
+| `mcp_stdio_sandboxes` | 保存 stdio workspace root ref 与 digest-pinned Docker image，不保存主机路径 |
+| `phase45_approval_requests` | 保存系统动作 ASK 的一次性 User/Reviewer 决定、过期与消费事实 |
 | `schedule_definitions` | 保存不可改写的 Cron/Timer Schedule Revision |
 | `schedule_heads` | 保存 Schedule 当前版本、状态和物化 Cursor |
 | `run_requests` | 保存幂等持久 Queue、retry/DLQ/manual-reconcile 与 Workflow Run 绑定 |
@@ -1304,6 +1328,8 @@ SQLiteStore 当前创建以下表：
 11. v11：Skill Candidate、MCP Server/Tool Snapshot/Lifecycle Event、Schedule Revision/Head、
     RunRequest Queue、Scheduler Authority/Job Lease/Attempt 与 Scheduler→Graph 幂等绑定；保持
     v1—v10 manifest/checksum 不变。
+12. v12：MCP Action Receipt、Server Start Fence、stdio Sandbox 绑定与 Phase 45 持久 Approval；保持
+    v1—v11 manifest/checksum 不变。
 
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
@@ -1338,6 +1364,11 @@ v11 把 Skill 候选、MCP 生命周期/工具快照和 Scheduler 全部收入�
 幂等键去重。权威租约与 Job Lease 按 token/fencing/expiry 核对；回收过期 Job 时，未开始或已知幂等的
 调用可进 retry/DLQ，已开始的非幂等调用只进 `manual_reconcile_required`。
 
+v12 在任何 MCP 工具副作用前持久 receipt，并把调用从 `reserved` 原子推进到 `sent`；只有脱敏结果
+成功持久化后才进入 `completed`，因此 Core 重启后可重放已知结果而不会再次调用 Server，未知结果则
+保持人工核对。MCP start fence 和生命周期 CAS 阻止并发双启动；stdio 的受控 root/image 绑定与 Phase 45
+Approval 都只保存引用、摘要和决定事实，不保存宿主路径或 Secret 真值。
+
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
 全部受管 table/index/view/trigger/FTS shadow object、规范化 DDL、列名/类型/NOT NULL、主键顺序、
@@ -1350,7 +1381,8 @@ preview 收编、逐步升级、每步 manifest 复验和历史写入全部位�
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
 随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v11/v10/v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+v12/v11/v10/v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+回滚 v12 要求 MCP receipt/start/sandbox 与 Phase 45 Approval 表全空；
 回滚 v11 要求 Skill/MCP/Scheduler/Queue/Lease/Attempt/Graph Dispatch 表全空，回滚 v10 要求
 Security Action/Capability/Audit/Denial 表全空；
 回滚 v9 要求全部 Graph/Team 定义、运行、事件、消息、Ack 与 Board 表为空；回滚 v8 要求全部 Phase 1D
@@ -1533,13 +1565,17 @@ workspace 绝对路径。
 | `GET` | `/v1/teams/runs/{id}/events/stream` | 按 Team Run Cursor 回放已提交事件 |
 | `POST` | `/v1/security/actions/normalize` | 规范化并持久一个完整绑定的 Security Action |
 | `POST` | `/v1/security/policy/{check,explain,test}` | 执行 Policy dry-run/解释/批量测试，不修改 Policy |
+| `GET/POST` | `/v1/security/approvals/{id}` | 查询或由 User 决定绑定精确 Action 的 Phase 45 ASK |
+| `POST` | `/v1/security/approvals/{id}/review` | 仅由 Core 配置的 Reviewer Adapter 评审 eligible ASK，失败关闭 |
 | `POST` | `/v1/security/capability-leases[/{id}/consume]` | 仅为已 ALLOW Action 发放并以 CAS 消费短时 Lease |
 | `GET` | `/v1/security/actions/{action_hash}/audit` | 按 Cursor 查询有界安全审计事实 |
 | `POST/GET` | `/v1/skills/discover`, `/v1/skills` | 扫描已配置受信根并查询未信任候选快照 |
 | `POST/GET/PUT/DELETE` | `/v1/mcp/servers[/{id}]` | 配置、查询或删除 stdio/legacy SSE Server |
+| `GET` | `/v1/mcp/workspace-roots` | 只列 Core 配置的 root ref，不返回宿主路径 |
 | `POST` | `/v1/mcp/servers/{id}/{start,stop}` | 经 Policy/Capability 栅栏启停 Server 并持久生命周期 |
 | `GET` | `/v1/mcp/servers/{id}/tools` | 查询已发现的最新工具 Schema 快照 |
-| `POST` | `/v1/mcp/servers/{id}/tools/{name}/call` | 重验 Schema/Action Hash/Policy/Lease 后调用；ASK/DENY 失败关闭 |
+| `GET` | `/v1/mcp/action-receipts/{action_hash}` | 查询 result_available/status 等安全回执事实，不返回结果正文 |
+| `POST` | `/v1/mcp/servers/{id}/tools/{name}/call` | 重验 Schema/Action/Policy/Lease；completed 回放，unknown 禁止重放 |
 | `POST/GET/PUT` | `/v1/schedules[/{id}]` | 创建、查询或追加版本化 Cron/单次 Timer Schedule |
 | `POST` | `/v1/schedules/{id}/status` | 切换 enabled/paused/cancelled 投影 |
 | `POST` | `/v1/schedules/{id}/trigger` | 用调用方幂等键创建手工 RunRequest |
@@ -1591,7 +1627,7 @@ Client 首次 live 连接必须核对 `protocol_version` 与生成物内嵌的 S
 Graph 创建请求不接受 Team ID；Team 创建请求才是 Graph↔Team 的唯一原子绑定入口。未知副作用只返回
 人工核对恢复建议，Client 或 GUI 不能将其改写为可安全重放。
 
-`sdk/protocol/schema/operant-phase45.openapi.json` 是 additive `phase45.v1` 协议源，固定生成 27 个
+`sdk/protocol/schema/operant-phase45.openapi.json` 是 additive `phase45.v1` 协议源，固定生成 32 个
 TypeScript/Python operation，覆盖 Security、Skill、MCP 和 Scheduler。它不修改 Phase 1E/23 的 Schema、
 digest 或专属生成文件；三个生成器共同维护兼容 Python 包入口。Phase 45 修改操作要求
 稳定幂等键；GUI 只显示服务端投影，不在本地伪造 Policy ALLOW、Skill 信任、MCP 工具结果、
@@ -1912,15 +1948,18 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
   和只追加 Security Audit；
 - Skill Discovery 覆盖受信根、根/候选/资源软链接、越界、非普通文件、读取竞态、严格
   frontmatter 和文件/数量/层级上限；MCP 覆盖 stdio 与 legacy SSE 生命周期、端点/redirect/
-  frame/Schema/JSON 上限、工具快照、Action Hash、Gateway/Lease、ASK/DENY 阻断和结果脱敏审计；
+  frame/Schema/JSON/快照上限、Docker 无网络/只读/digest pin、工具快照、精确配置 Action Hash、
+  Gateway/Lease、ASK 的 User/Reviewer 一次性审批、并发 start fence、durable receipt replay/unknown 和
+  Secret Lease 到期清理/结果脱敏审计；
 - Phase 5A 覆盖 Cron/IANA/DST gap/fold、单次 Timer、三种 misfire、物化去重、手工触发、
   Leader/Writer/Job Lease fencing、取消竞态、有界 retry/backoff/DLQ/replay、非幂等结果未知人工核对、
   Policy/Capability/Audit 栅栏、Scheduler→Graph 持久幂等绑定、Core 接管与 lifespan 停机释放；
-- v1—v10 保留数据升级到 v11、v10/v11 manifest/checksum 冻结、并发初始化、中途失败原子回滚和
-  只允许空数据 isolated downgrade；`phase45.v1` 覆盖 27-operation 形状、digest、TS/Python 确定生成和
+- v1—v11 保留数据升级到 v12、v10/v11/v12 manifest/checksum 冻结、并发初始化、中途失败原子回滚和
+  只允许空数据 isolated downgrade；`phase45.v1` 覆盖 32-operation 形状、digest、TS/Python 确定生成和
   与冻结 Phase 1E/23 生成物兼容；
-- React GUI Phase 45 live 覆盖 Policy/有界 Audit、Skill 候选、MCP 配置/启停/删除/工具快照，
-  以及 Schedule/Queue/DLQ/replay 的加载、空、错误、幂等重试和确认边界。
+- React GUI Phase 45 live 覆盖 Policy/有界 Audit、Skill 候选、MCP root-ref 配置/启停/删除/工具快照、
+  ASK allow/deny 后同 key 重试、tool call、receipt 与 unknown 人工核对，以及 Schedule/Queue/DLQ/replay
+  的加载、空、错误、断线、幂等重试和确认边界。
 
 本地验证命令：
 
@@ -1935,6 +1974,26 @@ npm run test --prefix clients/gui
 npm run typecheck --prefix clients/gui
 npm run build --prefix clients/gui
 ```
+
+2026-09-04 的 Phase 4/5A 验收使用隔离 v12 SQLite、实际 localhost Uvicorn、生成 TypeScript/Python
+Client 和真实浏览器；完整 pytest 为 599 通过、1 个条件性 Docker 测试跳过、1 个既有 Starlette 警告，
+GUI 为 73 项测试通过。Ruff format/check、mypy、`uv lock --check --offline`、GUI typecheck/build、
+Phase 45 生成器双次复现、Phase 1E/23 冻结文件核对和 `git diff --check` 均通过；Phase 45 digest 为
+`94a3b48ba9482184712c587937a9606373637663dd650d92fd252766e6e25af3`。真实浏览器验证 Policy/Audit、
+Skill 受控扫描、MCP root-ref 表单与非法 cwd 拒绝、Schedule/Queue/DLQ Projection、375px 无横向溢出、
+键盘焦点，以及 Core 断线后保留只读 Projection 但禁用配置、审批、调用和 Receipt，且不回退 Mock。
+另以本地已有 `python:3.13-slim` 显式设置 `OPERANT_DOCKER_TEST_IMAGE`，真实 Docker Runner 集成测试
+6 项通过；同一 digest-pinned 本地镜像上的受控 MCP stdio responder 还验证 JSON-RPC 初始化/列表/调用、
+过滤快照可见、workspace 写入被拒绝和网络被拒绝。这仍不等于真实第三方 MCP 专用镜像兼容性验收。
+Vite 约 903.58 kB 主 chunk 警告保留为性能债务。
+
+同日按 D-034 在已配置 `.env` 的原项目根目录先执行正式 `operant model discover`，再使用发现结果中的
+精确模型 ID `gpt-5.6-luna`，通过本分支正式 ModelProfile 和只读 Session 入口完成受控真实调用。
+Session 返回 `PHASE45_REAL_MODEL_OK`，用量 563 tokens、模型请求耗时 2.657 秒，0 个 Tool Call，隔离
+workspace 无写入。SQLite 回读确认 Profile 只保存 `secret_ref=OPERANT_API_KEY`，Session 快照仅允许
+`read_file`、`search_files` 与 `git_diff`；凭据未复制到隔离 worktree、日志或文档。该 smoke 证明本次
+生成 Client/GUI 所依赖的正式 Provider/ModelProfile/Session 链路仍可用，不等于真实第三方 MCP Server、
+真实模型工具写入、真实模型 + Docker Coder 或 GUI 外部模型端到端验收。
 
 2026-09-03 的 Phase 2/3 验收使用隔离 v9 SQLite、确定性 Provider、实际 localhost Uvicorn、生成
 TypeScript/Python Client 和真实浏览器；完整 pytest 为 503 通过、1 个条件性 Docker 测试跳过、1 个既有
@@ -2057,7 +2116,7 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-5. 已有 v1—v11 原子 Migration、旧库识别升级和 Session/Workflow/Scheduler lease；v9 Graph lease 仍只是
+5. 已有 v1—v12 原子 Migration、旧库识别升级和 Session/Workflow/Scheduler lease；v9 Graph lease 仍只是
    预留结构，v11 的 Scheduler Leader 与 Runtime Writer 只栅栏调度物化/派发，不是通用 Graph 多进程 Writer，
    但 downgrade 只用于显式 isolated 且对应审计/租约表全空的数据库；没有通用生产 downgrade，REST
    Command 也没有跨常驻 Core 进程的 owner/liveness lease，不能宣称已有通用多 Writer 或高可用协调；
@@ -2075,8 +2134,9 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 9. Docker Runner 已跑通真实隔离集成用例，第三周六角色 Workflow 也已在可信临时 Host fixture 上
     完成真实模型验收；两者仍是不同证据，尚未完成“真实模型 + Docker Coder”的同一次端到端验收，
     也尚未构建专用 Operant 镜像；
-10. React GUI 已实现 Phase 1E、Phase 23 与 Phase 45 的 Security Audit/Skill/MCP/Scheduler live 面；
-    Skill 信任/安装、Policy 修改、MCP Tool 调用、OAuth、Browser/Computer 工具仍未实现。Graph Proposal/
+10. React GUI 已实现 Phase 1E、Phase 23 与 Phase 45 的 Security Audit/Skill/MCP/Scheduler live 面，
+    包含受控 MCP Tool 调用、Approval continuation 与 receipt 查询；Skill 信任/安装、Policy 修改、OAuth、
+    Browser/Computer 工具仍未实现。Graph Proposal/
     智能创建、Graph Timer/任意节点执行、完整 PWA、TUI、Tauri、Remote Control、Host Connector、自托管 Relay、Remote Gateway 和
     Remote Execution Target 均未实现，当前 `/web` 与 `/v1/*` 也不得直接暴露到公网。
 11. Artifact 已有对象级 Retention、Pin、宽限期、Trash、只读审计和显式孤儿修复，但
@@ -2092,11 +2152,12 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
     或吞吐基准。Composer
     与 SQLite/Artifact Store 使用同步本地 I/O，超大引用和高并发规模需要后续性能评估。
 14. Slash Registry 当前冻结为 `phase1d.v1`，只覆盖四个正式 Context/Review/Workspace 命令；Phase 45
-    Skill/MCP/Scheduler 使用独立 REST 协议，尚未注册为动态 Slash Command。MCP stdio 子进程是主机进程，
-    并无 OS 层网络隔离；legacy SSE 是兼容输运而非新安全边界；Phase 45 ASK 没有独立跨进程
-    approval continuation。BTW Sidecar 的主动取消通知仍是本进程协作式信号；跨进程重启只会安全标为
+    Skill/MCP/Scheduler 使用独立 REST 协议，尚未注册为动态 Slash Command。MCP stdio 已限定为 Docker
+    无网络只读快照，但尚未完成真实第三方 Server 与专用镜像的长时验收；legacy SSE 是兼容输运，尚未
+    实现 MCP Streamable HTTP。Phase 45 Approval 可跨请求/重启保存决定，但不会恢复任意模型流位置。
+    BTW Sidecar 的主动取消通知仍是本进程协作式信号；跨进程重启只会安全标为
     `process_interrupted`，不会从任意模型流位置恢复或自动继续。
-15. GUI 当前生产 bundle 约 815 kB，Vite 会给出大 chunk 警告；尚未做按路由拆包、真实大 Graph/Team/
+15. GUI 当前生产主 chunk 约 903 kB，Vite 会给出大 chunk 警告；尚未做按路由拆包、真实大 Graph/Team/
     长事件流性能基准、浏览器矩阵或 Tauri WebView 验收。旧 demo SDK 类型继续只服务明确 Mock 表面，
     不得扩展为第二套正式协议；后续 live operation 必须先进入对应单一 Schema 再生成两种 Client。
 
@@ -2129,6 +2190,23 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-09-04（Phase 4/5A 独立安全审查收口）
+
+- 新增 SQLite v12 的 MCP durable action receipt、start fencing、stdio sandbox 绑定与 Phase 45 持久
+  Approval；completed 可安全回放，sent/unknown 禁止重复副作用，User/Reviewer 决定均绑定精确 Action
+  且只消费一次；
+- stdio 改为 digest-pinned Docker、过滤只读 workspace 快照、无网络/无环境 Secret、固定资源与快照
+  上限，不拉取且不回退 Host；快照复制新增目录 FD 锚定、no-follow 与版本复核，替换竞态 fail-closed；
+  legacy SSE 的 endpoint/bearer 改由 SecretBroker 短租约按需解析，到期自动断开并清空；
+- MCP 工具 Schema 改为明确支持的递归有界子集，未知断言在快照阶段拒绝；start 请求取消会关闭
+  transport 并 fenced 地收口，过期 start lease 可由新 owner 原子接管，旧 owner 不能提交工具快照；
+- Scheduler 在持有 Graph Run 到终态期间持续占用 concurrency slot，先做确定性校验再写 pending，使用
+  稳定 Graph Run ID 恢复；Cron 搜索改为有界 calendar candidate；TS/Python Client 和 GUI 修改动作复用
+  稳定 `Idempotency-Key`；
+- additive `phase45.v1` 扩到 32 个 operation，增加 Phase 45 Approval、MCP workspace root ref 与 action
+  receipt 查询，仍保持 Phase 1E/23 生成物冻结；范围继续排除 Remote/Relay、OAuth、TUI、Tauri、
+  Browser/Computer 与通用多 Writer。
 
 ### 2026-09-03（Phase 4 Security + Phase 5A Skill/MCP/Scheduler）
 

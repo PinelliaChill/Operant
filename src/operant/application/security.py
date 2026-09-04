@@ -456,6 +456,8 @@ class ApprovalReviewerAdapter:
 
             candidate = await asyncio.wait_for(invoke_reviewer(), timeout=self.timeout_seconds)
             return ReviewerDecision.model_validate(candidate)
+        except asyncio.CancelledError:
+            raise
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise

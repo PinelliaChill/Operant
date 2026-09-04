@@ -160,6 +160,56 @@ def test_stdio_mcp_tool_call_uses_no_network_docker_capabilities(tmp_path: Path)
     assert len(result.lease.lease_ids) == 2
 
 
+@pytest.mark.asyncio
+async def test_cancelled_mcp_start_releases_starting_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed = 0
+
+    async def cancelled_start(_transport: StdioTransport) -> None:
+        raise asyncio.CancelledError
+
+    async def fake_close(_transport: StdioTransport) -> None:
+        nonlocal closed
+        closed += 1
+
+    monkeypatch.setattr(StdioTransport, "start", cancelled_start)
+    monkeypatch.setattr(StdioTransport, "close", fake_close)
+    app = create_app(
+        tmp_path / "cancelled-start.sqlite3",
+        phase45_policy_engine=_approved_phase45_policy(),
+        phase45_mcp_workspace_roots={"workspace": tmp_path},
+    )
+    app.state.phase45_repository.put_mcp_server(
+        {
+            "server_id": "cancelled-start",
+            "transport": "stdio",
+            "endpoint_ref": None,
+            "secret_ref": None,
+            "stdio_argv": ["python", "server.py"],
+            "cwd_ref": None,
+            "environment_refs": {},
+            "workspace_root_ref": "workspace",
+            "docker_image": "sha256:" + "d" * 64,
+            "allow_loopback_http": False,
+        },
+        create_only=True,
+    )
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", None) == "/v1/mcp/servers/{server_id}/start"
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await endpoint("cancelled-start")
+
+    assert closed >= 1
+    server = app.state.phase45_repository.get_mcp_server("cancelled-start")
+    assert server["lifecycle_status"] == "failed"
+    assert "cancelled-start" not in app.state.mcp_runtimes
+
+
 def test_stdio_mcp_lifecycle_snapshot_call_and_gateway_audit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

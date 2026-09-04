@@ -7,10 +7,12 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, suppress
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
@@ -257,11 +259,11 @@ class StdioTransport:
         self._temporary_root = temporary_root
         self._cidfile = cidfile
         try:
-            await asyncio.to_thread(_validate_snapshot_limits, workspace, self.limits)
             await asyncio.to_thread(
-                DockerCommandRunner._copy_workspace_snapshot,
+                _copy_workspace_snapshot_safely,
                 workspace,
                 snapshot,
+                self.limits,
             )
             policy = CommandExecutionPolicy(
                 runner=CommandRunnerType.DOCKER,
@@ -400,34 +402,213 @@ class StdioTransport:
         self._stderr = captured.decode("utf-8", errors="replace")
 
 
-def _validate_snapshot_limits(workspace: Path, limits: McpLimits) -> None:
-    entries = 0
-    total_bytes = 0
-    for directory, directory_names, file_names in os.walk(workspace, followlinks=False):
-        directory_names[:] = [
-            name
-            for name in directory_names
-            if name.lower() not in SNAPSHOT_EXCLUDED_NAMES and not is_protected_workspace_name(name)
-        ]
-        visible_files = [
-            name
-            for name in file_names
-            if name.lower() not in SNAPSHOT_EXCLUDED_NAMES and not is_protected_workspace_name(name)
-        ]
-        entries += len(directory_names) + len(visible_files)
-        if entries > limits.max_snapshot_entries:
+def _copy_workspace_snapshot_safely(
+    workspace: Path,
+    destination: Path,
+    limits: McpLimits,
+) -> None:
+    """Copy a bounded stdio snapshot without following source links.
+
+    The source is untrusted and may change while it is copied. Directory file
+    descriptors keep traversal anchored to the opened tree; O_NOFOLLOW plus
+    before/after identity checks turn replacement races into a closed failure.
+    """
+
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise McpError(
+            "mcp.stdio_snapshot_unsupported",
+            "MCP stdio safe snapshotting is unavailable on this platform",
+        )
+    try:
+        expected_root = os.stat(workspace, follow_symlinks=False)
+        root_fd = os.open(
+            workspace,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+    except OSError as exc:
+        raise McpError(
+            "mcp.stdio_snapshot_unreadable",
+            "MCP workspace snapshot changed before it could be opened",
+        ) from exc
+    try:
+        opened_root = os.fstat(root_fd)
+        if not _same_snapshot_identity(expected_root, opened_root) or not stat.S_ISDIR(
+            opened_root.st_mode
+        ):
+            raise McpError(
+                "mcp.stdio_snapshot_changed",
+                "MCP workspace snapshot changed before it could be copied",
+            )
+        destination.mkdir(mode=0o700)
+        budget = {"entries": 0, "bytes": 0}
+        _copy_snapshot_directory(root_fd, destination, limits, budget)
+        final_root = os.fstat(root_fd)
+        if not _same_snapshot_version(opened_root, final_root):
+            raise McpError(
+                "mcp.stdio_snapshot_changed",
+                "MCP workspace snapshot changed while it was copied",
+            )
+    finally:
+        os.close(root_fd)
+
+
+def _copy_snapshot_directory(
+    source_fd: int,
+    destination: Path,
+    limits: McpLimits,
+    budget: dict[str, int],
+) -> None:
+    try:
+        with os.scandir(source_fd) as iterator:
+            names = sorted(entry.name for entry in iterator)
+    except OSError as exc:
+        raise McpError(
+            "mcp.stdio_snapshot_unreadable",
+            "MCP workspace snapshot could not be enumerated",
+        ) from exc
+    for name in names:
+        if name.lower() in SNAPSHOT_EXCLUDED_NAMES or is_protected_workspace_name(name):
+            continue
+        budget["entries"] += 1
+        if budget["entries"] > limits.max_snapshot_entries:
             raise McpError("mcp.stdio_snapshot_limit", "MCP workspace snapshot is too large")
-        current = Path(directory)
-        for name in visible_files:
-            try:
-                total_bytes += (current / name).lstat().st_size
-            except OSError as exc:
-                raise McpError(
-                    "mcp.stdio_snapshot_unreadable",
-                    "MCP workspace snapshot changed while it was inspected",
-                ) from exc
-            if total_bytes > limits.max_snapshot_bytes:
+        try:
+            before = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise McpError(
+                "mcp.stdio_snapshot_unreadable",
+                "MCP workspace snapshot changed while it was inspected",
+            ) from exc
+        target = destination / name
+        if stat.S_ISLNK(before.st_mode):
+            raise McpError(
+                "mcp.stdio_snapshot_unsafe",
+                "MCP workspace snapshot contains a symbolic link",
+            )
+        if stat.S_ISDIR(before.st_mode):
+            _copy_snapshot_subdirectory(source_fd, name, before, target, limits, budget)
+            continue
+        if stat.S_ISREG(before.st_mode):
+            _copy_snapshot_file(source_fd, name, before, target, limits, budget)
+            continue
+        raise McpError(
+            "mcp.stdio_snapshot_unsafe",
+            "MCP workspace snapshot contains a non-regular file",
+        )
+
+
+def _copy_snapshot_subdirectory(
+    parent_fd: int,
+    name: str,
+    expected: os.stat_result,
+    destination: Path,
+    limits: McpLimits,
+    budget: dict[str, int],
+) -> None:
+    try:
+        child_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+    except OSError as exc:
+        raise McpError(
+            "mcp.stdio_snapshot_unreadable",
+            "MCP workspace directory changed while it was opened",
+        ) from exc
+    try:
+        opened = os.fstat(child_fd)
+        if not _same_snapshot_identity(expected, opened) or not stat.S_ISDIR(opened.st_mode):
+            raise McpError(
+                "mcp.stdio_snapshot_changed",
+                "MCP workspace directory changed while it was opened",
+            )
+        destination.mkdir(mode=(stat.S_IMODE(opened.st_mode) & 0o777) or 0o700)
+        _copy_snapshot_directory(child_fd, destination, limits, budget)
+        if not _same_snapshot_version(opened, os.fstat(child_fd)):
+            raise McpError(
+                "mcp.stdio_snapshot_changed",
+                "MCP workspace directory changed while it was copied",
+            )
+    finally:
+        os.close(child_fd)
+
+
+def _copy_snapshot_file(
+    parent_fd: int,
+    name: str,
+    expected: os.stat_result,
+    destination: Path,
+    limits: McpLimits,
+    budget: dict[str, int],
+) -> None:
+    try:
+        source_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except OSError as exc:
+        raise McpError(
+            "mcp.stdio_snapshot_unreadable",
+            "MCP workspace file changed while it was opened",
+        ) from exc
+    destination_fd: int | None = None
+    try:
+        opened = os.fstat(source_fd)
+        if not _same_snapshot_identity(expected, opened) or not stat.S_ISREG(opened.st_mode):
+            raise McpError(
+                "mcp.stdio_snapshot_changed",
+                "MCP workspace file changed while it was opened",
+            )
+        if budget["bytes"] + opened.st_size > limits.max_snapshot_bytes:
+            raise McpError("mcp.stdio_snapshot_limit", "MCP workspace snapshot is too large")
+        destination_fd = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            (stat.S_IMODE(opened.st_mode) & 0o777) or 0o600,
+        )
+        copied = 0
+        while True:
+            chunk = os.read(source_fd, 64 * 1024)
+            if not chunk:
+                break
+            copied += len(chunk)
+            if budget["bytes"] + copied > limits.max_snapshot_bytes:
                 raise McpError("mcp.stdio_snapshot_limit", "MCP workspace snapshot is too large")
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_fd, view)
+                if written <= 0:
+                    raise McpError(
+                        "mcp.stdio_snapshot_unreadable",
+                        "MCP workspace snapshot could not be written",
+                    )
+                view = view[written:]
+        final = os.fstat(source_fd)
+        if copied != opened.st_size or not _same_snapshot_version(opened, final):
+            raise McpError(
+                "mcp.stdio_snapshot_changed",
+                "MCP workspace file changed while it was copied",
+            )
+        budget["bytes"] += copied
+        os.fchmod(destination_fd, stat.S_IMODE(opened.st_mode) & 0o777)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        os.close(source_fd)
+
+
+def _same_snapshot_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _same_snapshot_version(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        _same_snapshot_identity(left, right)
+        and left.st_mode == right.st_mode
+        and left.st_size == right.st_size
+        and left.st_mtime_ns == right.st_mtime_ns
+    )
 
 
 class LegacySseTransport:
@@ -886,6 +1067,7 @@ class McpAdapter:
             ).encode("utf-8")
             if len(schema_bytes) > self.limits.max_schema_bytes:
                 raise McpError("mcp.schema_too_large", "MCP tool schema is too large")
+            _validate_input_schema(schema, root=True)
             tools[name] = McpTool(
                 name=name,
                 description=description,
@@ -969,39 +1151,333 @@ def _validate_bounded_json(value: Any, limits: McpLimits) -> None:
     visit(value, 0)
 
 
-def _validate_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any]) -> None:
-    if schema.get("type") not in (None, "object"):
-        raise McpError("mcp.schema_unsupported", "MCP input schema root must be an object")
-    required = schema.get("required", [])
-    properties = schema.get("properties", {})
-    if not isinstance(required, list) or any(not isinstance(item, str) for item in required):
-        raise McpError("mcp.schema_invalid", "MCP input schema required list is invalid")
-    if not isinstance(properties, dict):
-        raise McpError("mcp.schema_invalid", "MCP input schema properties are invalid")
-    missing = set(required).difference(arguments)
-    if missing:
-        raise McpError("mcp.arguments_invalid", "MCP tool arguments omit required fields")
-    if schema.get("additionalProperties") is False and set(arguments).difference(properties):
-        raise McpError("mcp.arguments_invalid", "MCP tool arguments contain unknown fields")
-    python_types: dict[str, tuple[type[Any], ...]] = {
-        "string": (str,),
-        "integer": (int,),
-        "number": (int, float),
-        "boolean": (bool,),
-        "object": (dict,),
-        "array": (list,),
-        "null": (type(None),),
+_SCHEMA_TYPES = frozenset({"array", "boolean", "integer", "null", "number", "object", "string"})
+_SCHEMA_ANNOTATIONS = frozenset(
+    {
+        "$id",
+        "$schema",
+        "default",
+        "deprecated",
+        "description",
+        "examples",
+        "readOnly",
+        "title",
+        "writeOnly",
     }
-    for key, value in arguments.items():
-        property_schema = properties.get(key)
-        if not isinstance(property_schema, dict):
+)
+_SCHEMA_ASSERTIONS = frozenset(
+    {
+        "additionalProperties",
+        "allOf",
+        "anyOf",
+        "const",
+        "enum",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "items",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "minimum",
+        "multipleOf",
+        "not",
+        "oneOf",
+        "properties",
+        "required",
+        "type",
+        "uniqueItems",
+    }
+)
+
+
+def _validate_input_schema(schema: Any, *, root: bool = False) -> None:
+    """Accept a bounded JSON Schema subset and reject every unknown assertion."""
+
+    if isinstance(schema, bool):
+        if root:
+            raise McpError("mcp.schema_unsupported", "MCP input schema root must be an object")
+        return
+    if not isinstance(schema, dict):
+        raise McpError("mcp.schema_invalid", "MCP input schema entry is invalid")
+    unsupported = set(schema).difference(_SCHEMA_ANNOTATIONS | _SCHEMA_ASSERTIONS)
+    if unsupported:
+        raise McpError(
+            "mcp.schema_unsupported",
+            "MCP input schema contains an unsupported keyword",
+        )
+
+    expected = schema.get("type")
+    declared_types: tuple[str, ...] = ()
+    if "type" in schema:
+        if isinstance(expected, str):
+            declared_types = (expected,)
+        elif (
+            isinstance(expected, list)
+            and expected
+            and all(isinstance(item, str) for item in expected)
+            and len(set(expected)) == len(expected)
+        ):
+            declared_types = tuple(expected)
+        else:
+            raise McpError("mcp.schema_invalid", "MCP input schema type is invalid")
+        if any(item not in _SCHEMA_TYPES for item in declared_types):
+            raise McpError("mcp.schema_unsupported", "MCP input schema type is unsupported")
+    if root and declared_types and "object" not in declared_types:
+        raise McpError("mcp.schema_unsupported", "MCP input schema root must accept an object")
+
+    properties = schema.get("properties")
+    if "properties" in schema:
+        if not isinstance(properties, dict):
+            raise McpError("mcp.schema_invalid", "MCP input schema properties are invalid")
+        for key, child in properties.items():
+            if not isinstance(key, str):
+                raise McpError("mcp.schema_invalid", "MCP input schema property name is invalid")
+            _validate_input_schema(child)
+
+    required = schema.get("required")
+    if "required" in schema and (
+        not isinstance(required, list)
+        or any(not isinstance(item, str) for item in required)
+        or len(set(required)) != len(required)
+    ):
+        raise McpError("mcp.schema_invalid", "MCP input schema required list is invalid")
+
+    additional = schema.get("additionalProperties")
+    if "additionalProperties" in schema:
+        if not isinstance(additional, bool) and not isinstance(additional, dict):
+            raise McpError("mcp.schema_invalid", "MCP input schema additionalProperties is invalid")
+        _validate_input_schema(additional)
+
+    items = schema.get("items")
+    if "items" in schema:
+        _validate_input_schema(items)
+
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        if keyword not in schema:
             continue
-        expected = property_schema.get("type")
-        if isinstance(expected, str) and expected in python_types:
-            if expected in ("integer", "number") and isinstance(value, bool):
-                raise McpError("mcp.arguments_invalid", "MCP tool argument type is invalid")
-            if not isinstance(value, python_types[expected]):
-                raise McpError("mcp.arguments_invalid", "MCP tool argument type is invalid")
+        branches = schema[keyword]
+        if not isinstance(branches, list) or not branches:
+            raise McpError("mcp.schema_invalid", "MCP input schema branches are invalid")
+        for branch in branches:
+            _validate_input_schema(branch)
+    if "not" in schema:
+        _validate_input_schema(schema["not"])
+
+    enum = schema.get("enum")
+    if "enum" in schema and (
+        not isinstance(enum, list)
+        or not enum
+        or len({_json_equivalence_key(item) for item in enum}) != len(enum)
+    ):
+        raise McpError("mcp.schema_invalid", "MCP input schema enum is invalid")
+
+    for minimum, maximum in (
+        ("minLength", "maxLength"),
+        ("minItems", "maxItems"),
+        ("minProperties", "maxProperties"),
+    ):
+        lower = schema.get(minimum)
+        upper = schema.get(maximum)
+        if minimum in schema and (
+            isinstance(lower, bool) or not isinstance(lower, int) or lower < 0
+        ):
+            raise McpError("mcp.schema_invalid", "MCP input schema size bound is invalid")
+        if maximum in schema and (
+            isinstance(upper, bool) or not isinstance(upper, int) or upper < 0
+        ):
+            raise McpError("mcp.schema_invalid", "MCP input schema size bound is invalid")
+        if minimum in schema and maximum in schema:
+            assert isinstance(lower, int) and not isinstance(lower, bool)
+            assert isinstance(upper, int) and not isinstance(upper, bool)
+            if lower > upper:
+                raise McpError("mcp.schema_invalid", "MCP input schema size bounds conflict")
+
+    for keyword in (
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+    ):
+        if keyword not in schema:
+            continue
+        bound = schema[keyword]
+        if (
+            isinstance(bound, bool)
+            or not isinstance(bound, (int, float))
+            or not _is_finite_number(bound)
+            or (keyword == "multipleOf" and bound <= 0)
+        ):
+            raise McpError("mcp.schema_invalid", "MCP input schema numeric bound is invalid")
+
+    for keyword in ("uniqueItems", "deprecated", "readOnly", "writeOnly"):
+        if keyword in schema and not isinstance(schema[keyword], bool):
+            raise McpError("mcp.schema_invalid", "MCP input schema boolean option is invalid")
+    for keyword in ("$id", "$schema", "description", "title"):
+        if keyword in schema and not isinstance(schema[keyword], str):
+            raise McpError("mcp.schema_invalid", "MCP input schema annotation is invalid")
+    if "examples" in schema and not isinstance(schema["examples"], list):
+        raise McpError("mcp.schema_invalid", "MCP input schema examples are invalid")
+
+
+def _validate_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any]) -> None:
+    _validate_value_against_schema(schema, dict(arguments))
+
+
+def _validate_value_against_schema(schema: Any, value: Any) -> None:
+    if schema is True:
+        return
+    if schema is False:
+        _invalid_arguments()
+    assert isinstance(schema, dict)
+
+    expected = schema.get("type")
+    if expected is not None:
+        expected_types = (expected,) if isinstance(expected, str) else tuple(expected)
+        if not any(_matches_json_type(value, item) for item in expected_types):
+            _invalid_arguments()
+    if "const" in schema and not _json_values_equal(value, schema["const"]):
+        _invalid_arguments()
+    if "enum" in schema and not any(_json_values_equal(value, item) for item in schema["enum"]):
+        _invalid_arguments()
+
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        if set(required).difference(value):
+            _invalid_arguments()
+        if len(value) < schema.get("minProperties", 0):
+            _invalid_arguments()
+        maximum = schema.get("maxProperties")
+        if maximum is not None and len(value) > maximum:
+            _invalid_arguments()
+        additional = schema.get("additionalProperties", True)
+        for key, child in value.items():
+            property_schema = properties.get(key)
+            if property_schema is not None:
+                _validate_value_against_schema(property_schema, child)
+            elif additional is False:
+                _invalid_arguments()
+            elif isinstance(additional, (dict, bool)):
+                _validate_value_against_schema(additional, child)
+
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            _invalid_arguments()
+        maximum = schema.get("maxItems")
+        if maximum is not None and len(value) > maximum:
+            _invalid_arguments()
+        if schema.get("uniqueItems") and len(
+            {_json_equivalence_key(item) for item in value}
+        ) != len(value):
+            _invalid_arguments()
+        item_schema = schema.get("items")
+        if item_schema is not None:
+            for item in value:
+                _validate_value_against_schema(item_schema, item)
+
+    if isinstance(value, str):
+        if len(value) < schema.get("minLength", 0):
+            _invalid_arguments()
+        maximum = schema.get("maxLength")
+        if maximum is not None and len(value) > maximum:
+            _invalid_arguments()
+
+    if _is_json_number(value):
+        if "minimum" in schema and value < schema["minimum"]:
+            _invalid_arguments()
+        if "maximum" in schema and value > schema["maximum"]:
+            _invalid_arguments()
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
+            _invalid_arguments()
+        if "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]:
+            _invalid_arguments()
+        if "multipleOf" in schema:
+            try:
+                if Decimal(str(value)) % Decimal(str(schema["multipleOf"])) != 0:
+                    _invalid_arguments()
+            except InvalidOperation:
+                _invalid_arguments()
+
+    for branch in schema.get("allOf", []):
+        _validate_value_against_schema(branch, value)
+    if "anyOf" in schema and not any(_schema_matches(branch, value) for branch in schema["anyOf"]):
+        _invalid_arguments()
+    if "oneOf" in schema and sum(_schema_matches(branch, value) for branch in schema["oneOf"]) != 1:
+        _invalid_arguments()
+    if "not" in schema and _schema_matches(schema["not"], value):
+        _invalid_arguments()
+
+
+def _schema_matches(schema: Any, value: Any) -> bool:
+    try:
+        _validate_value_against_schema(schema, value)
+    except McpError as exc:
+        if exc.code == "mcp.arguments_invalid":
+            return False
+        raise
+    return True
+
+
+def _matches_json_type(value: Any, expected: str) -> bool:
+    if expected == "null":
+        return value is None
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return _is_json_number(value)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "object":
+        return isinstance(value, dict)
+    return False
+
+
+def _is_json_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_finite_number(value: int | float) -> bool:
+    return (
+        not isinstance(value, float)
+        or value not in (float("inf"), float("-inf"))
+        and value == value
+    )
+
+
+def _json_values_equal(left: Any, right: Any) -> bool:
+    return bool(_json_equivalence_key(left) == _json_equivalence_key(right))
+
+
+def _json_equivalence_key(value: Any) -> Any:
+    if value is None:
+        return ("null",)
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if _is_json_number(value):
+        return ("number", Decimal(str(value)).normalize())
+    if isinstance(value, str):
+        return ("string", value)
+    if isinstance(value, list):
+        return ("array", tuple(_json_equivalence_key(item) for item in value))
+    if isinstance(value, dict):
+        return (
+            "object",
+            tuple(sorted((key, _json_equivalence_key(item)) for key, item in value.items())),
+        )
+    raise McpError("mcp.schema_invalid", "MCP input schema contains a non-JSON value")
+
+
+def _invalid_arguments() -> None:
+    raise McpError("mcp.arguments_invalid", "MCP tool arguments do not match the input schema")
 
 
 def _redact_exact_values(value: Any, secrets: tuple[str, ...]) -> Any:

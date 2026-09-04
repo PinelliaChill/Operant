@@ -11,7 +11,7 @@ import pytest
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.security import ActionNormalizer, PolicyEngine, SecretBroker
 from operant.domain.security import Capability, PolicyBundle, PolicyDecision
-from operant.mcp import McpAdapter, McpError
+from operant.mcp import McpAdapter, McpError, McpTool
 from operant.persistence.phase45 import SQLitePhase45Repository
 from operant.persistence.security import SQLiteSecurityRepository
 from operant.persistence.sqlite import ConflictError, SQLiteStore
@@ -201,6 +201,102 @@ def test_concurrent_start_claim_is_fenced_and_stale_owner_cannot_finish(tmp_path
         status="running",
         event_type="mcp.started",
     )
+
+
+def test_expired_start_lease_is_reclaimed_and_old_owner_cannot_commit(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "start-reclaim.sqlite3")
+    store.initialize()
+    repository = SQLitePhase45Repository(store)
+    config = repository.put_mcp_server(_stdio_server_config(), create_only=True)
+    old_token, old_fencing = repository.claim_mcp_start(
+        "fenced-server", "owner-old", expected_updated_at=config["updated_at"]
+    )
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE mcp_server_start_leases SET expires_at=? WHERE server_id=?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), "fenced-server"),
+        )
+
+    starting = repository.get_mcp_server("fenced-server")
+    new_token, new_fencing = repository.claim_mcp_start(
+        "fenced-server", "owner-new", expected_updated_at=starting["updated_at"]
+    )
+    assert new_fencing == old_fencing + 1
+    tool = McpTool(
+        name="echo",
+        input_schema={"type": "object"},
+        schema_sha256="a" * 64,
+    )
+    with pytest.raises(ConflictError, match="stale MCP lifecycle fence"):
+        repository.complete_mcp_start("fenced-server", old_token, old_fencing, (tool,))
+    assert repository.list_mcp_tools("fenced-server") == ()
+
+    snapshot_version = repository.complete_mcp_start(
+        "fenced-server", new_token, new_fencing, (tool,)
+    )
+    assert snapshot_version == 1
+    assert repository.get_mcp_server("fenced-server")["lifecycle_status"] == "running"
+    assert [item["name"] for item in repository.list_mcp_tools("fenced-server")] == ["echo"]
+
+
+def test_expired_current_start_owner_can_fail_closed_without_restart(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "start-expired-failure.sqlite3")
+    store.initialize()
+    repository = SQLitePhase45Repository(store)
+    config = repository.put_mcp_server(_stdio_server_config(), create_only=True)
+    token, fencing = repository.claim_mcp_start(
+        "fenced-server", "owner", expected_updated_at=config["updated_at"]
+    )
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE mcp_server_start_leases SET expires_at=? WHERE server_id=?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), "fenced-server"),
+        )
+
+    repository.finish_mcp_start(
+        "fenced-server",
+        token,
+        fencing,
+        status="failed",
+        event_type="mcp.start_failed",
+    )
+    assert repository.get_mcp_server("fenced-server")["lifecycle_status"] == "failed"
+
+
+def test_empty_mcp_tool_snapshot_supersedes_old_tools_and_keeps_versions_monotonic(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "empty-tool-snapshot.sqlite3")
+    store.initialize()
+    repository = SQLitePhase45Repository(store)
+    config = repository.put_mcp_server(_stdio_server_config(), create_only=True)
+    tool = McpTool(
+        name="echo",
+        input_schema={"type": "object"},
+        schema_sha256="a" * 64,
+    )
+
+    token, fencing = repository.claim_mcp_start(
+        "fenced-server", "owner-1", expected_updated_at=config["updated_at"]
+    )
+    assert repository.complete_mcp_start("fenced-server", token, fencing, (tool,)) == 1
+    assert [item["name"] for item in repository.list_mcp_tools("fenced-server")] == ["echo"]
+
+    repository.set_mcp_lifecycle("fenced-server", "stopped", "mcp.stopped")
+    stopped = repository.get_mcp_server("fenced-server")
+    token, fencing = repository.claim_mcp_start(
+        "fenced-server", "owner-2", expected_updated_at=stopped["updated_at"]
+    )
+    assert repository.complete_mcp_start("fenced-server", token, fencing, ()) == 2
+    assert repository.list_mcp_tools("fenced-server") == ()
+
+    repository.set_mcp_lifecycle("fenced-server", "stopped", "mcp.stopped")
+    stopped = repository.get_mcp_server("fenced-server")
+    token, fencing = repository.claim_mcp_start(
+        "fenced-server", "owner-3", expected_updated_at=stopped["updated_at"]
+    )
+    assert repository.complete_mcp_start("fenced-server", token, fencing, (tool,)) == 3
+    assert [item["name"] for item in repository.list_mcp_tools("fenced-server")] == ["echo"]
 
 
 def test_receipt_and_approval_are_bound_to_exact_action_inputs(tmp_path: Path) -> None:
