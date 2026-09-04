@@ -156,10 +156,12 @@ Skill Discovery 只接受 Core 启动时配置的有界受信根 reference，API
 从 `OPERANT_MCP_WORKSPACE_ROOTS_JSON` 读取独立映射。API 只投影 reference，不返回宿主路径。每个根
 必须是绝对、已存在、非软链接真实目录，并用 device/inode 去重；MCP 额外拒绝文件系统根和用户 Home。
 
-发现器只检查根和一层子目录中的 `SKILL.md`，对根、候选、`scripts/`、`references/` 中的
-每个组件拒绝软链接、路径逃逸和非普通文件。文件用 no-follow 打开，读取后复核 device/inode/
-size/mtime，避免把替换竞态当作稳定快照。候选数、层级、文件数、单件/总字节、frontmatter/body
-和 JSON 集合全部有上限；仅允许简单、白名单 frontmatter，拒绝 YAML tag/anchor/alias/调用或变量替换形状。
+发现器只检查根和一层子目录中的 `SKILL.md`。它从重新验证 identity 的 allowlist root FD 开始，
+对候选、`scripts/`、`references/` 与嵌套目录逐层使用 dir-fd + no-follow 打开，并在读取后复核
+device/inode/size/mtime/ctime 和父目录 path binding；根或任一父目录被替换时丢弃该根暂存的全部候选。
+缺少这些安全原语的平台直接拒绝发现。root entry 与每个候选跨 resource tree 的 entry 在枚举时消耗
+独立预算，达到 cap+1 就在排序/stat 前停止；候选数、层级、文件数、单件/总字节、frontmatter/body
+和 JSON 集合也都有上限。仅允许简单、白名单 frontmatter，拒绝 YAML tag/anchor/alias/调用或变量替换形状。
 
 发现和持久只产生 `untrusted_candidate` 及 manifest/resource hash，不会因为候选位于“受信根”就自动
 信任内容、安装 Skill、加载代码或执行脚本。受信根只限定可见范围，不是对候选内容的安全背书。

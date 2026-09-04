@@ -151,8 +151,9 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - Capability Lease 绑定精确 Action Hash、principal、capability、target、Policy Version、TTL 和使用次数，
   消费用 SQLite CAS 防止过期、撤销、越目标或重复使用；Secret Broker 仅在已 ALLOW 的精确 Action
   执行时把环境变量名解析成短时 Secret Lease，真实值不持久化，输出再次脱敏；
-- Skill Discovery 只扫描 Core 启动时配置的有界绝对受信根，拒绝根/候选/资源软链接、路径逃逸、
-  读取竞态、非普通文件、非法或过大 frontmatter/body/resource；仅存候选快照与 hash，默认
+- Skill Discovery 只扫描 Core 启动时配置的有界绝对受信根；从重新核对身份的 root FD 开始逐层
+  no-follow 打开候选、resource 与嵌套目录，拒绝软链接、路径逃逸、父目录/文件替换竞态、非普通文件
+  以及非法或过大 frontmatter/body/resource；仅存候选快照与 hash，默认
   `untrusted_candidate`，不自动信任、安装或执行脚本；
 - MCP 支持无 Shell 的 Docker stdio JSON-RPC 与明确标注为 legacy 的 SSE+POST transport；stdio 只接受
   Core 配置的 workspace root ref 与 digest-pinned 本地镜像，使用过滤后只读快照、`--network none`、
@@ -867,6 +868,8 @@ capability/target/过期/撤销/用量。`SecretBroker` 只在已 ALLOW 的精�
 MCP stdio 对应使用 `OPERANT_MCP_WORKSPACE_ROOTS_JSON`。API 与 GUI 只看引用名，不返回映射后的宿主路径。
 扫描只检查根本身和一层子目录的 `SKILL.md`，逐组件拒绝软链接/越界/非普通文件，读前后核对
 device/inode/size/mtime，对候选数、manifest/body/frontmatter、资源数量/层级/大小和 JSON 列表均有上限。
+root entry 与每个候选跨 `scripts`/`references`/嵌套目录的 resource entry 还使用独立全局预算，扫描到
+上限后一项即在缓存、排序和逐项 stat 前停止，避免大量非候选或目录项绕过工作量边界。
 发现结果只是带 manifest/resource hash 的 `untrusted_candidate`，持久候选不等于信任、安装或执行。
 
 MCP Adapter 支持两种 transport：默认选择的 stdio 用显式 argv 在 digest-pinned Docker 镜像中启动，
@@ -1976,7 +1979,7 @@ npm run build --prefix clients/gui
 ```
 
 2026-09-04 的 Phase 4/5A 验收使用隔离 v12 SQLite、实际 localhost Uvicorn、生成 TypeScript/Python
-Client 和真实浏览器；完整 pytest 为 599 通过、1 个条件性 Docker 测试跳过、1 个既有 Starlette 警告，
+Client 和真实浏览器；最终返工后完整 pytest 为 618 通过、1 个条件性 Docker 测试跳过、1 个既有 Starlette 警告，
 GUI 为 73 项测试通过。Ruff format/check、mypy、`uv lock --check --offline`、GUI typecheck/build、
 Phase 45 生成器双次复现、Phase 1E/23 冻结文件核对和 `git diff --check` 均通过；Phase 45 digest 为
 `94a3b48ba9482184712c587937a9606373637663dd650d92fd252766e6e25af3`。真实浏览器验证 Policy/Audit、
@@ -1987,9 +1990,15 @@ Skill 受控扫描、MCP root-ref 表单与非法 cwd 拒绝、Schedule/Queue/DL
 过滤快照可见、workspace 写入被拒绝和网络被拒绝。这仍不等于真实第三方 MCP 专用镜像兼容性验收。
 Vite 约 903.58 kB 主 chunk 警告保留为性能债务。
 
+独立 `sol-medium` 安全 Reviewer 先后发现并验证同步 Reviewer 超时绕过、MCP Schema 静默忽略、MCP
+start lease 卡死、stdio/Skill 父目录替换竞态与目录枚举预算过晚；返工加入对应回归后，最终复测确认
+上述攻击均 fail-closed、FD 无泄漏、扫描工作量受独立 entry cap 约束，并给出 `VERDICT: APPROVE`，
+未留下 P0/P1/P2。
+
 同日按 D-034 在已配置 `.env` 的原项目根目录先执行正式 `operant model discover`，再使用发现结果中的
-精确模型 ID `gpt-5.6-luna`，通过本分支正式 ModelProfile 和只读 Session 入口完成受控真实调用。
-Session 返回 `PHASE45_REAL_MODEL_OK`，用量 563 tokens、模型请求耗时 2.657 秒，0 个 Tool Call，隔离
+精确模型 ID `gpt-5.6-luna`，通过本分支正式 ModelProfile 和只读 Session 入口完成受控真实调用；安全
+返工后的最终重跑返回 `PHASE45_FINAL_REAL_MODEL_OK`，用量 549 tokens、模型请求耗时 12.873 秒，
+0 个 Tool Call，隔离
 workspace 无写入。SQLite 回读确认 Profile 只保存 `secret_ref=OPERANT_API_KEY`，Session 快照仅允许
 `read_file`、`search_files` 与 `git_diff`；凭据未复制到隔离 worktree、日志或文档。该 smoke 证明本次
 生成 Client/GUI 所依赖的正式 Provider/ModelProfile/Session 链路仍可用，不等于真实第三方 MCP Server、
@@ -2196,6 +2205,8 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 - 新增 SQLite v12 的 MCP durable action receipt、start fencing、stdio sandbox 绑定与 Phase 45 持久
   Approval；completed 可安全回放，sent/unknown 禁止重复副作用，User/Reviewer 决定均绑定精确 Action
   且只消费一次；
+- Skill Discovery 改为 root/候选/resource/嵌套目录全链路 FD 锚定，复核 identity/version/path binding；
+  缺少 dir-fd、scandir-fd、`O_NOFOLLOW` 或 `O_DIRECTORY` 的平台明确 fail-closed；
 - stdio 改为 digest-pinned Docker、过滤只读 workspace 快照、无网络/无环境 Secret、固定资源与快照
   上限，不拉取且不回退 Host；快照复制新增目录 FD 锚定、no-follow 与版本复核，替换竞态 fail-closed；
   legacy SSE 的 endpoint/bearer 改由 SecretBroker 短租约按需解析，到期自动断开并清空；
