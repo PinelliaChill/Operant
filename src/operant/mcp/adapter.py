@@ -4,23 +4,36 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import re
+import shutil
+import tempfile
 import time
 from collections.abc import AsyncIterator, Mapping
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, suppress
 from enum import Enum
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urljoin, urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from operant.domain.models import CommandExecutionPolicy, CommandRunnerType
 from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
+from operant.tools.execution import DockerCommandRunner
 
 
 class McpError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        detail: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.detail = {} if detail is None else dict(detail)
 
 
 class McpLimits(BaseModel):
@@ -43,7 +56,9 @@ class McpStdioConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     argv: tuple[str, ...] = Field(min_length=1, max_length=64)
-    cwd: str | None = None
+    workspace: str = Field(min_length=1, max_length=4096)
+    cwd: str = Field(default=".", min_length=1, max_length=4096)
+    docker_image: str = Field(min_length=1, max_length=300)
     environment_refs: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("argv")
@@ -56,8 +71,15 @@ class McpStdioConfig(BaseModel):
     @field_validator("environment_refs")
     @classmethod
     def validate_environment_refs(cls, value: dict[str, str]) -> dict[str, str]:
-        if len(value) > 64 or any(not key or not ref for key, ref in value.items()):
-            raise ValueError("environment references are invalid or too numerous")
+        if value:
+            raise ValueError("stdio environment secrets are unsupported for long-lived servers")
+        return value
+
+    @field_validator("docker_image")
+    @classmethod
+    def validate_docker_image(cls, value: str) -> str:
+        if re.fullmatch(r"(?:[A-Za-z0-9][A-Za-z0-9._:/-]*@)?sha256:[0-9a-f]{64}", value) is None:
+            raise ValueError("stdio Docker image must be pinned by sha256 digest")
         return value
 
 
@@ -107,6 +129,7 @@ class McpGatewayResult(BaseModel):
     decision: GatewayDecision
     reason_code: str = Field(min_length=1, max_length=200)
     lease: McpCapabilityLease | None = None
+    approval_id: str | None = Field(default=None, max_length=300)
 
     @model_validator(mode="after")
     def validate_decision(self) -> McpGatewayResult:
@@ -155,6 +178,22 @@ class McpActionGateway(Protocol):
 
     async def record_audit(self, fact: McpAuditFact) -> None: ...
 
+    async def reserve_outcome(
+        self,
+        *,
+        action_hash: str,
+        server_id: str,
+        tool_name: str,
+        schema_sha256: str,
+        arguments: Mapping[str, Any],
+    ) -> tuple[str, Any | None]: ...
+
+    async def mark_sent(self, action_hash: str) -> None: ...
+
+    async def complete_outcome(self, action_hash: str, result: Any) -> None: ...
+
+    async def mark_outcome_unknown(self, action_hash: str, error_code: str) -> None: ...
+
 
 class JsonRpcTransport(Protocol):
     async def start(self) -> None: ...
@@ -184,6 +223,8 @@ class StdioTransport:
         self._lock = asyncio.Lock()
         self._stderr_task: asyncio.Task[None] | None = None
         self._stderr = ""
+        self._temporary_root: Path | None = None
+        self._cidfile: Path | None = None
 
     @property
     def safe_stderr(self) -> str:
@@ -192,22 +233,50 @@ class StdioTransport:
     async def start(self) -> None:
         if self._process is not None:
             return
-        # MCP subprocesses receive only explicitly mapped references. They do not
-        # inherit the Core process environment or its unrelated credentials.
-        environment: dict[str, str] = {}
-        if self.config.environment_refs:
-            if self._resolver is None:
-                raise McpError("mcp.reference_resolver_required", "reference resolver is required")
-            environment = {
-                key: self._resolver.resolve(reference)
-                for key, reference in self.config.environment_refs.items()
-            }
+        workspace = Path(self.config.workspace).resolve(strict=True)
+        if (
+            not workspace.is_dir()
+            or workspace == Path(workspace.anchor)
+            or workspace == Path.home().resolve()
+            or "," in str(workspace)
+        ):
+            raise McpError("mcp.stdio_workspace_invalid", "MCP stdio workspace is unsafe")
+        cwd = (workspace / self.config.cwd).resolve(strict=True)
+        if not cwd.is_dir() or (cwd != workspace and workspace not in cwd.parents):
+            raise McpError("mcp.stdio_cwd_invalid", "MCP stdio cwd escapes its workspace")
+        temporary_root = Path(tempfile.mkdtemp(prefix="operant-mcp-sandbox-"))
+        snapshot = temporary_root / "workspace"
+        cidfile = temporary_root / "container-id"
+        self._temporary_root = temporary_root
+        self._cidfile = cidfile
         try:
+            await asyncio.to_thread(
+                DockerCommandRunner._copy_workspace_snapshot,
+                workspace,
+                snapshot,
+            )
+            policy = CommandExecutionPolicy(
+                runner=CommandRunnerType.DOCKER,
+                docker_image=self.config.docker_image,
+                cpu_limit=1.0,
+                memory_limit_mb=512,
+                pids_limit=128,
+            )
+            docker_argv = DockerCommandRunner.build_argv(
+                argv=self.config.argv,
+                snapshot=snapshot,
+                relative_cwd=cwd.relative_to(workspace),
+                cidfile=cidfile,
+                workspace_write=False,
+                policy=policy,
+            )
+            # The daemon must not pull mutable or unapproved code while handling
+            # a PROCESS_EXEC_NO_NETWORK action. The image is digest-pinned above.
+            docker_argv[2:2] = ["--pull", "never", "--interactive"]
             self._process = await asyncio.wait_for(
                 asyncio.create_subprocess_exec(
-                    *self.config.argv,
-                    cwd=self.config.cwd,
-                    env=environment,
+                    *docker_argv,
+                    cwd=temporary_root,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -215,7 +284,11 @@ class StdioTransport:
                 ),
                 timeout=self.limits.lifecycle_timeout_seconds,
             )
-        except (OSError, asyncio.TimeoutError) as exc:
+        except asyncio.CancelledError:
+            await self._cleanup_sandbox()
+            raise
+        except Exception as exc:
+            await self._cleanup_sandbox()
             raise McpError("mcp.stdio_start_failed", "MCP stdio process could not start") from exc
         assert self._process.stderr is not None
         self._stderr_task = asyncio.create_task(self._drain_stderr(self._process.stderr))
@@ -252,6 +325,7 @@ class StdioTransport:
         process = self._process
         self._process = None
         if process is None:
+            await self._cleanup_sandbox()
             return
         if process.stdin is not None:
             process.stdin.close()
@@ -268,6 +342,15 @@ class StdioTransport:
             except asyncio.TimeoutError:
                 self._stderr_task.cancel()
             self._stderr_task = None
+        await self._cleanup_sandbox()
+
+    async def _cleanup_sandbox(self) -> None:
+        if self._cidfile is not None:
+            await DockerCommandRunner._remove_container(self._cidfile)
+        self._cidfile = None
+        if self._temporary_root is not None:
+            await asyncio.to_thread(shutil.rmtree, self._temporary_root, ignore_errors=True)
+        self._temporary_root = None
 
     def _require_process(self) -> asyncio.subprocess.Process:
         if self._process is None:
@@ -435,6 +518,9 @@ class LegacySseTransport:
             await self._client.aclose()
             self._client = None
         self._headers = {}
+        clear = getattr(self._resolver, "clear", None)
+        if clear is not None:
+            clear()
 
     async def _receive_events(self, response: httpx.Response) -> None:
         try:
@@ -495,12 +581,14 @@ class McpAdapter:
         transport: JsonRpcTransport,
         action_gateway: McpActionGateway,
         limits: McpLimits | None = None,
+        redact_values: tuple[str, ...] = (),
     ) -> None:
         self.server_id = server_id
         self.target_ref = target_ref
         self.transport = transport
         self.action_gateway = action_gateway
         self.limits = limits or McpLimits()
+        self._redact_values = tuple(value for value in redact_values if value)
         self._tools: dict[str, McpTool] = {}
         self._started = False
 
@@ -564,6 +652,20 @@ class McpAdapter:
                 "arguments": dict(arguments),
             }
         )
+        receipt_status, replay = await self.action_gateway.reserve_outcome(
+            action_hash=action_hash,
+            server_id=self.server_id,
+            tool_name=name,
+            schema_sha256=tool.schema_sha256,
+            arguments=dict(arguments),
+        )
+        if receipt_status == "completed":
+            return replay
+        if receipt_status in {"sent", "outcome_unknown"}:
+            raise McpError(
+                "mcp.outcome_unknown",
+                "MCP action may already have executed and requires manual reconciliation",
+            )
         result = await self.action_gateway.authorize(
             server_id=self.server_id,
             tool_name=name,
@@ -587,7 +689,15 @@ class McpAdapter:
                 if result.decision == GatewayDecision.DENY
                 else "mcp.approval_required"
             )
-            raise McpError(code, "MCP tool call is not authorized")
+            raise McpError(
+                code,
+                "MCP tool call is not authorized",
+                detail={
+                    "approval_id": result.approval_id,
+                    "action_hash": action_hash,
+                    "reason_code": result.reason_code,
+                },
+            )
         lease = result.lease
         if (
             lease.action_hash != action_hash
@@ -627,6 +737,13 @@ class McpAdapter:
                 )
             )
             raise
+        try:
+            await self.action_gateway.mark_sent(action_hash)
+        except BaseException as exc:
+            raise McpError(
+                "mcp.outcome_unknown",
+                "another execution owns this MCP action receipt",
+            ) from exc
         started = time.monotonic()
         try:
             value = await asyncio.wait_for(
@@ -635,6 +752,11 @@ class McpAdapter:
             )
             _validate_bounded_json(value, self.limits)
         except BaseException as exc:
+            with suppress(Exception):
+                await self.action_gateway.mark_outcome_unknown(
+                    action_hash,
+                    exc.code if isinstance(exc, McpError) else type(exc).__name__,
+                )
             await self.action_gateway.record_audit(
                 McpAuditFact(
                     event_type="mcp.tool_failed",
@@ -647,7 +769,30 @@ class McpAdapter:
                 )
             )
             raise
-        safe_value = redact_public_data(value)
+        safe_value = redact_public_data(_redact_exact_values(value, self._redact_values))
+        try:
+            await self.action_gateway.complete_outcome(action_hash, safe_value)
+        except BaseException as exc:
+            with suppress(Exception):
+                await self.action_gateway.mark_outcome_unknown(
+                    action_hash,
+                    "mcp.receipt_persist_failed",
+                )
+            await self.action_gateway.record_audit(
+                McpAuditFact(
+                    event_type="mcp.tool_failed",
+                    server_id=self.server_id,
+                    tool_name=name,
+                    action_hash=action_hash,
+                    policy_version=lease.policy_version,
+                    reason_code="mcp.receipt_persist_failed",
+                    duration_ms=int((time.monotonic() - started) * 1_000),
+                )
+            )
+            raise McpError(
+                "mcp.outcome_unknown",
+                "MCP completed but its durable outcome could not be recorded",
+            ) from exc
         result_digest = hashlib.sha256(
             json.dumps(
                 safe_value,
@@ -816,6 +961,21 @@ def _validate_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any])
                 raise McpError("mcp.arguments_invalid", "MCP tool argument type is invalid")
             if not isinstance(value, python_types[expected]):
                 raise McpError("mcp.arguments_invalid", "MCP tool argument type is invalid")
+
+
+def _redact_exact_values(value: Any, secrets: tuple[str, ...]) -> Any:
+    if not secrets:
+        return value
+    if isinstance(value, str):
+        redacted = value
+        for secret in secrets:
+            redacted = redacted.replace(secret, "[REDACTED]")
+        return redacted
+    if isinstance(value, list):
+        return [_redact_exact_values(item, secrets) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_exact_values(item, secrets) for key, item in value.items()}
+    return value
 
 
 def _validate_remote_endpoint(endpoint: str, allow_loopback_http: bool) -> None:

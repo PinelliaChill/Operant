@@ -24,6 +24,13 @@ V11_TABLES = {
     "scheduler_graph_dispatches",
 }
 
+V12_TABLES = {
+    "mcp_action_receipts",
+    "mcp_server_start_leases",
+    "mcp_stdio_sandboxes",
+    "phase45_approval_requests",
+}
+
 FROZEN_V1_TO_V10_MANIFESTS = {
     1: "9efa030568ef8f28749732f82f0023a548d4ff3af708f86be9f8d3a70037ef18",
     2: "1c1d79405a9f422aca4a84a9bd5e45b1647cb16d0c8b496f906932272fd05e98",
@@ -79,6 +86,20 @@ def test_v11_manifest_is_frozen_without_rewriting_v1_to_v10() -> None:
     assert checksum == SQLiteStore._FROZEN_MIGRATION_CHECKSUMS[11]
 
 
+def test_v12_is_additive_and_v11_manifest_remains_frozen(tmp_path: Path) -> None:
+    database = tmp_path / "v12.sqlite3"
+    store = SQLiteStore(database)
+    assert store.migrate(11) == 11
+    assert V12_TABLES.isdisjoint(_table_names(database))
+    v11_manifest = SQLiteStore._migration_manifest(11)
+
+    assert store.migrate() == 12
+    assert V12_TABLES.issubset(_table_names(database))
+    assert SQLiteStore._migration_manifest(11) == v11_manifest
+    manifest = SQLiteStore._migration_manifest(12)
+    assert hashlib.sha256(manifest.encode()).hexdigest() == SQLiteStore._FROZEN_MANIFEST_SHA256[12]
+
+
 @pytest.mark.parametrize("starting_version", range(1, 11))
 def test_v1_through_v10_upgrade_to_v11_preserves_existing_rows(
     tmp_path: Path, starting_version: int
@@ -96,7 +117,7 @@ def test_v1_through_v10_upgrade_to_v11_preserves_existing_rows(
         )
     )
 
-    assert store.migrate() == 11
+    assert store.migrate(11) == 11
     assert store.schema_version() == 11
     assert store.get_model_profile(profile.id) == profile
     assert V11_TABLES.issubset(_table_names(database))
@@ -116,9 +137,9 @@ def test_concurrent_v11_initialization_is_serial_and_repeatable(tmp_path: Path) 
     with ThreadPoolExecutor(max_workers=4) as executor:
         versions = list(executor.map(lambda _index: initialize(), range(8)))
 
-    assert versions == [11] * 8
+    assert versions == [12] * 8
     store = SQLiteStore(database)
-    assert [row["version"] for row in store.list_applied_migrations()] == list(range(1, 12))
+    assert [row["version"] for row in store.list_applied_migrations()] == list(range(1, 13))
     assert V11_TABLES.issubset(_table_names(database))
 
 
@@ -146,7 +167,7 @@ def test_v11_failure_is_atomic_for_v10_and_empty_databases(tmp_path: Path) -> No
 def test_v11_rollback_requires_empty_isolated_database(tmp_path: Path) -> None:
     empty_database = tmp_path / "empty-rollback.sqlite3"
     empty = SQLiteStore(empty_database)
-    assert empty.migrate() == 11
+    assert empty.migrate(11) == 11
     with pytest.raises(MigrationError, match="explicitly isolated"):
         empty.rollback(10)
     assert empty.rollback(10, isolated=True) == 10
@@ -177,7 +198,7 @@ def test_v11_rollback_requires_empty_isolated_database(tmp_path: Path) -> None:
         )
     with pytest.raises(MigrationError, match="Phase 5A tables"):
         populated.rollback(10, isolated=True)
-    assert populated.schema_version() == 11
+    assert populated.schema_version() == 12
 
 
 def test_mcp_lifecycle_events_are_append_only_and_configs_store_references(

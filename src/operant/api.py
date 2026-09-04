@@ -1284,7 +1284,9 @@ def create_app(
     physical_delete_enabled: bool = False,
     physical_delete_authorization: str | None = None,
     phase45_skill_roots: Mapping[str, str | Path] | None = None,
+    phase45_mcp_workspace_roots: Mapping[str, str | Path] | None = None,
     phase45_policy_engine: Any | None = None,
+    phase45_approval_reviewer: Any | None = None,
 ) -> FastAPI:
     load_local_env()
     store = SQLiteStore(db_path or database_path())
@@ -3438,7 +3440,9 @@ def create_app(
         app,
         store,
         skill_roots=phase45_skill_roots,
+        mcp_workspace_roots=phase45_mcp_workspace_roots,
         policy_engine=phase45_policy_engine,
+        approval_reviewer=phase45_approval_reviewer,
     )
 
     # Added last so this pure ASGI guard wraps the BaseHTTP command middleware:

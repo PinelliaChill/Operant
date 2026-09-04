@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 from collections.abc import AsyncIterator, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,10 +21,15 @@ from operant.application.scheduler import (
 )
 from operant.application.security import (
     ActionNormalizer,
+    ApprovalReviewerAdapter,
     CapabilityBroker,
     CapabilityDenied,
     DenialRemediator,
+    PolicyDenied,
     PolicyEngine,
+    SecretBroker,
+    SecretMaterial,
+    SecretUnavailable,
     balanced_policy_bundle,
 )
 from operant.domain.scheduler import RunRequestStatus, ScheduleDefinition, ScheduleStatus
@@ -56,6 +64,8 @@ from operant.runtime.scheduler_integration import (
 from operant.skills import SkillDiscovery, SkillDiscoveryLimits
 
 _SECRET_REF_PATTERN = r"^[A-Z][A-Z0-9_]{1,127}$"
+_ROOT_REF_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+_DOCKER_IMAGE_PATTERN = r"^(?:[A-Za-z0-9][A-Za-z0-9._:/-]*@)?sha256:[0-9a-f]{64}$"
 _MAX_PHASE45_JSON_BYTES = 256_000
 
 
@@ -115,8 +125,15 @@ class McpServerBody(BaseModel):
     endpoint_ref: str | None = Field(default=None, pattern=_SECRET_REF_PATTERN)
     secret_ref: str | None = Field(default=None, pattern=_SECRET_REF_PATTERN)
     stdio_argv: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=64)
-    cwd_ref: str | None = Field(default=None, pattern=_SECRET_REF_PATTERN)
+    cwd_ref: str | None = Field(default=None, min_length=1, max_length=4096)
     environment_refs: dict[str, str] = Field(default_factory=dict)
+    workspace_root_ref: str | None = Field(default=None, pattern=_ROOT_REF_PATTERN)
+    docker_image: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=300,
+        pattern=_DOCKER_IMAGE_PATTERN,
+    )
     allow_loopback_http: bool = False
 
     @model_validator(mode="after")
@@ -129,15 +146,25 @@ class McpServerBody(BaseModel):
         if self.transport == "stdio":
             if (
                 self.stdio_argv is None
+                or self.workspace_root_ref is None
+                or self.docker_image is None
                 or self.endpoint_ref is not None
                 or self.secret_ref is not None
+                or self.environment_refs
             ):
-                raise ValueError("stdio requires argv and forbids remote endpoint fields")
+                raise ValueError(
+                    "stdio requires argv, workspace root, and pinned Docker image; "
+                    "endpoint and environment secrets are forbidden"
+                )
+            if self.cwd_ref is not None and Path(self.cwd_ref).is_absolute():
+                raise ValueError("stdio cwd_ref must be relative to the configured workspace")
         elif (
             self.endpoint_ref is None
             or self.stdio_argv is not None
             or self.cwd_ref is not None
             or self.environment_refs
+            or self.workspace_root_ref is not None
+            or self.docker_image is not None
         ):
             raise ValueError("legacy SSE requires endpoint_ref and forbids stdio fields")
         return self
@@ -147,6 +174,13 @@ class McpToolCallBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class Phase45ApprovalDecisionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool
+    reason_code: str | None = Field(default=None, max_length=200)
 
 
 class ScheduleStatusBody(BaseModel):
@@ -162,12 +196,34 @@ class IdempotentTriggerBody(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=300)
 
 
-class EnvironmentReferenceResolver:
+class LeasedReferenceResolver:
+    """Keep exact SecretBroker material only until the shortest lease expires."""
+
+    def __init__(self, materials: tuple[SecretMaterial, ...]) -> None:
+        if not materials:
+            raise ValueError("leased reference resolver requires secret material")
+        self._values = {
+            key: value for material in materials for key, value in material.environment.items()
+        }
+        self.expires_at = min(material.lease.expires_at for material in materials)
+
+    @property
+    def secret_values(self) -> tuple[str, ...]:
+        return tuple(self._values.values())
+
     def resolve(self, reference: str) -> str:
-        value = os.environ.get(reference)
-        if not value:
-            raise McpError("mcp.reference_unavailable", "configured reference is unavailable")
-        return value
+        if datetime.now(timezone.utc) >= self.expires_at:
+            self.clear()
+            raise McpError("mcp.secret_lease_expired", "MCP secret lease expired")
+        try:
+            return self._values[reference]
+        except KeyError as exc:
+            raise McpError(
+                "mcp.reference_unavailable", "configured reference is unavailable"
+            ) from exc
+
+    def clear(self) -> None:
+        self._values.clear()
 
 
 def install_phase45_routes(
@@ -175,7 +231,9 @@ def install_phase45_routes(
     store: SQLiteStore,
     *,
     skill_roots: Mapping[str, str | Path] | None = None,
+    mcp_workspace_roots: Mapping[str, str | Path] | None = None,
     policy_engine: PolicyEngine | None = None,
+    approval_reviewer: ApprovalReviewerAdapter | None = None,
 ) -> None:
     repository = SQLiteSecurityRepository(store)
     phase_repository = SQLitePhase45Repository(store)
@@ -184,15 +242,28 @@ def install_phase45_routes(
     engine = policy_engine or PolicyEngine(balanced_policy_bundle())
     broker = CapabilityBroker(repository)
     remediator = DenialRemediator(repository)
-    phase_gateway = Phase45ActionGateway(repository, engine)
-    reference_resolver = EnvironmentReferenceResolver()
+    phase_gateway = Phase45ActionGateway(repository, phase_repository, engine)
+    secret_broker = SecretBroker()
     trusted_skill_roots: dict[str, Path] = {}
     for root_ref, configured_root in (skill_roots or {}).items():
         root = Path(configured_root)
         if not root_ref or len(root_ref) > 200 or not root.is_absolute():
             raise ValueError("configured skill roots require bounded references and absolute paths")
         trusted_skill_roots[root_ref] = root.resolve(strict=True)
+    trusted_mcp_workspace_roots: dict[str, Path] = {}
+    for root_ref, configured_root in (mcp_workspace_roots or {}).items():
+        root = Path(configured_root)
+        resolved = root.resolve(strict=True)
+        if (
+            re.fullmatch(_ROOT_REF_PATTERN, root_ref) is None
+            or not root.is_absolute()
+            or not resolved.is_dir()
+            or resolved in {Path(resolved.anchor), Path.home().resolve()}
+        ):
+            raise ValueError("configured MCP roots require safe references and directories")
+        trusted_mcp_workspace_roots[root_ref] = resolved
     mcp_runtimes: dict[str, McpAdapter] = {}
+    mcp_expiry_tasks: dict[str, asyncio.Task[None]] = {}
     phase_repository.reconcile_mcp_lifecycle()
     graph_repository = SQLiteGraphRepository(store)
     graph_runtime = GraphRuntime(graph_repository)
@@ -228,9 +299,15 @@ def install_phase45_routes(
     app.state.trigger_service = trigger_service
     app.state.phase45_action_gateway = phase_gateway
     app.state.mcp_runtimes = mcp_runtimes
+    app.state.mcp_expiry_tasks = mcp_expiry_tasks
     app.state.scheduler_coordinator = scheduler_coordinator
 
     async def close_mcp_runtimes() -> None:
+        for task in mcp_expiry_tasks.values():
+            task.cancel()
+        if mcp_expiry_tasks:
+            await asyncio.gather(*mcp_expiry_tasks.values(), return_exceptions=True)
+        mcp_expiry_tasks.clear()
         runtimes = tuple(mcp_runtimes.items())
         mcp_runtimes.clear()
         for server_id, runtime in runtimes:
@@ -274,9 +351,12 @@ def install_phase45_routes(
         capabilities: tuple[Capability, ...],
         idempotency_key: str,
         secret_refs: tuple[str, ...] = (),
-    ) -> ActionRequest:
+        workspace: str | None = None,
+        sandbox_profile: str = "isolated",
+        network_profile: str = "none",
+    ) -> tuple[ActionRequest, Any]:
         bounded(arguments)
-        action, result = phase_gateway.guard(
+        action, result, evaluation = phase_gateway.guard(
             tool=tool,
             operation=operation,
             target_id=target_id,
@@ -284,12 +364,27 @@ def install_phase45_routes(
             capabilities=capabilities,
             idempotency_key=idempotency_key,
             secret_refs=secret_refs,
+            workspace=workspace,
+            sandbox_profile=sandbox_profile,
+            network_profile=network_profile,
         )
         if result.decision.value != PolicyDecision.ALLOW.value or result.lease is None:
             status = 403 if result.decision.value == PolicyDecision.DENY.value else 409
-            raise HTTPException(status_code=status, detail=result.reason_code)
+            detail: Any = result.reason_code
+            if result.decision.value == PolicyDecision.ASK.value and result.approval_id is not None:
+                detail = {
+                    "code": "approval_required",
+                    "reason_code": result.reason_code,
+                    "approval_id": result.approval_id,
+                    "action_hash": action.action_hash,
+                    "policy_version": action.policy_version,
+                    "expires_at": phase_repository.get_phase45_approval(result.approval_id)[
+                        "expires_at"
+                    ],
+                }
+            raise HTTPException(status_code=status, detail=detail)
         phase_gateway.consume(result.lease, action)
-        return action
+        return action, evaluation
 
     def normalize(body: NormalizeActionBody) -> ActionRequest:
         try:
@@ -364,6 +459,93 @@ def install_phase45_routes(
     async def test_policy(body: PolicyTestBody) -> dict[str, Any]:
         actions = tuple(persist(normalize(item)) for item in body.actions)
         return {"results": [evaluate(action) for action in actions]}
+
+    @app.get("/v1/security/approvals/{approval_id}", operation_id="getPhase45Approval")
+    async def get_phase45_approval(approval_id: str) -> dict[str, Any]:
+        try:
+            return phase_repository.get_phase45_approval(approval_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="approval not found") from exc
+
+    def audit_approval_decision(
+        approval: dict[str, Any], *, approved: bool, decided_by: str, changed: bool
+    ) -> None:
+        if not changed:
+            return
+        action = repository.get_security_action(str(approval["action_hash"]))
+        repository.append_security_audit(
+            SecurityAuditEvent(
+                action_hash=action.action_hash,
+                principal=action.principal,
+                event_type="approval.decided",
+                decision=PolicyDecision.ALLOW if approved else PolicyDecision.DENY,
+                detail={
+                    "approval_id": approval["approval_id"],
+                    "decided_by": decided_by,
+                    "reason_code": approval["reason_code"],
+                },
+            )
+        )
+
+    @app.post("/v1/security/approvals/{approval_id}", operation_id="decidePhase45Approval")
+    async def decide_phase45_approval(
+        approval_id: str, body: Phase45ApprovalDecisionBody
+    ) -> dict[str, Any]:
+        try:
+            approval, changed = phase_repository.decide_phase45_approval(
+                approval_id,
+                approved=body.approved,
+                decided_by="user",
+                reason_code=body.reason_code,
+            )
+            audit_approval_decision(
+                approval,
+                approved=body.approved,
+                decided_by="user",
+                changed=changed,
+            )
+            return approval
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="approval not found") from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        "/v1/security/approvals/{approval_id}/review",
+        operation_id="reviewPhase45Approval",
+    )
+    async def review_phase45_approval(approval_id: str) -> dict[str, Any]:
+        if approval_reviewer is None:
+            raise HTTPException(status_code=409, detail="approval reviewer is not configured")
+        try:
+            pending = phase_repository.get_phase45_approval(approval_id)
+            action = repository.get_security_action(str(pending["action_hash"]))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="approval not found") from exc
+        evaluation = engine.evaluate(action)
+        try:
+            reviewer_decision = await approval_reviewer.review(action, evaluation)
+        except PolicyDenied as exc:
+            raise HTTPException(
+                status_code=409, detail="approval is not reviewer eligible"
+            ) from exc
+        approved = reviewer_decision.decision is PolicyDecision.ALLOW
+        try:
+            approval, changed = phase_repository.decide_phase45_approval(
+                approval_id,
+                approved=approved,
+                decided_by="reviewer",
+                reason_code=reviewer_decision.reason_code,
+            )
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit_approval_decision(
+            approval,
+            approved=approved,
+            decided_by="reviewer",
+            changed=changed,
+        )
+        return {**approval, "review_summary": reviewer_decision.summary}
 
     @app.post("/v1/security/capability-leases", operation_id="issueCapabilityLease")
     async def issue_capability(body: IssueCapabilityBody) -> dict[str, Any]:
@@ -477,7 +659,30 @@ def install_phase45_routes(
     def server_payload(body: McpServerBody) -> dict[str, Any]:
         return body.model_dump(mode="json")
 
+    def mcp_runtime_target_ref(config: dict[str, Any]) -> str:
+        """Bind every tool receipt/approval to this exact persisted server revision."""
+
+        binding = {
+            key: config.get(key)
+            for key in (
+                "server_id",
+                "transport",
+                "endpoint_ref",
+                "secret_ref",
+                "stdio_argv",
+                "cwd_ref",
+                "workspace_root_ref",
+                "docker_image",
+                "allow_loopback_http",
+            )
+        }
+        return (
+            f"{config['transport']}:{config['server_id']}:{ActionRequest.calculate_hash(binding)}"
+        )
+
     def guard_mcp_config(body: McpServerBody, operation: str) -> None:
+        if body.transport == "stdio" and body.workspace_root_ref not in trusted_mcp_workspace_roots:
+            raise HTTPException(status_code=404, detail="configured MCP workspace root not found")
         guard_side_effect(
             tool="mcp_config",
             operation=operation,
@@ -486,6 +691,9 @@ def install_phase45_routes(
                 "transport": body.transport,
                 "endpoint_ref": body.endpoint_ref,
                 "secret_ref": body.secret_ref,
+                "workspace_root_ref": body.workspace_root_ref,
+                "cwd_ref": body.cwd_ref,
+                "docker_image": body.docker_image,
                 "argv_sha256": None
                 if body.stdio_argv is None
                 else ActionRequest.calculate_hash({"argv": body.stdio_argv}),
@@ -520,6 +728,11 @@ def install_phase45_routes(
     async def list_mcp_servers() -> dict[str, Any]:
         return {"items": list(phase_repository.list_mcp_servers())}
 
+    @app.get("/v1/mcp/workspace-roots", operation_id="listMcpWorkspaceRoots")
+    async def list_mcp_workspace_roots() -> dict[str, Any]:
+        # Paths are host authority and never belong in the remote/UI projection.
+        return {"items": [{"root_ref": ref} for ref in sorted(trusted_mcp_workspace_roots)]}
+
     @app.get("/v1/mcp/servers/{server_id}/tools", operation_id="listMcpTools")
     async def list_mcp_tools(server_id: str) -> dict[str, Any]:
         try:
@@ -528,18 +741,46 @@ def install_phase45_routes(
             raise HTTPException(status_code=404, detail="MCP server not found") from exc
         return {"items": list(phase_repository.list_mcp_tools(server_id))}
 
-    def build_transport(config: dict[str, Any]) -> StdioTransport | LegacySseTransport:
+    @app.get(
+        "/v1/mcp/action-receipts/{action_hash}",
+        operation_id="getMcpActionReceipt",
+    )
+    async def get_mcp_action_receipt(action_hash: str) -> dict[str, Any]:
+        if len(action_hash) != 64 or any(
+            character not in "0123456789abcdef" for character in action_hash
+        ):
+            raise HTTPException(status_code=422, detail="invalid MCP action hash")
+        try:
+            return phase_repository.get_mcp_action_receipt(action_hash)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="MCP action receipt not found") from exc
+
+    def build_transport(
+        config: dict[str, Any],
+        *,
+        secret_resolver: LeasedReferenceResolver | None = None,
+    ) -> StdioTransport | LegacySseTransport:
         if config["transport"] == "stdio":
-            cwd = (
-                None if config["cwd_ref"] is None else reference_resolver.resolve(config["cwd_ref"])
-            )
+            root_ref = str(config["workspace_root_ref"])
+            try:
+                workspace = trusted_mcp_workspace_roots[root_ref]
+            except KeyError as exc:
+                raise McpError(
+                    "mcp.workspace_root_unavailable",
+                    "configured MCP workspace root is unavailable",
+                ) from exc
             return StdioTransport(
                 McpStdioConfig(
                     argv=tuple(config["stdio_argv"]),
-                    cwd=cwd,
-                    environment_refs=config["environment_refs"],
+                    workspace=str(workspace),
+                    cwd="." if config["cwd_ref"] is None else config["cwd_ref"],
+                    docker_image=config["docker_image"],
                 ),
-                reference_resolver=reference_resolver,
+            )
+        if secret_resolver is None:
+            raise McpError(
+                "mcp.secret_lease_required",
+                "remote MCP requires a short-lived SecretBroker lease",
             )
         return LegacySseTransport(
             McpServerConfig(
@@ -548,8 +789,34 @@ def install_phase45_routes(
                 secret_ref=config["secret_ref"],
                 allow_loopback_http=config["allow_loopback_http"],
             ),
-            reference_resolver=reference_resolver,
+            reference_resolver=secret_resolver,
         )
+
+    async def expire_mcp_secret_lease(
+        server_id: str,
+        adapter: McpAdapter,
+        resolver: LeasedReferenceResolver,
+    ) -> None:
+        delay = max(
+            0.0,
+            (resolver.expires_at - datetime.now(timezone.utc)).total_seconds(),
+        )
+        try:
+            await asyncio.sleep(delay)
+            if mcp_runtimes.get(server_id) is adapter:
+                with suppress(Exception):
+                    await adapter.close()
+                mcp_runtimes.pop(server_id, None)
+                with suppress(KeyError, ConflictError):
+                    phase_repository.set_mcp_lifecycle(
+                        server_id,
+                        "stopped",
+                        "mcp.secret_lease_expired",
+                        detail={"reason": "secret_lease_expired"},
+                    )
+        finally:
+            resolver.clear()
+            mcp_expiry_tasks.pop(server_id, None)
 
     @app.post("/v1/mcp/servers/{server_id}/start", operation_id="startMcpServer")
     async def start_mcp_server(server_id: str) -> dict[str, Any]:
@@ -559,55 +826,124 @@ def install_phase45_routes(
             config = phase_repository.get_mcp_server(server_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="MCP server not found") from exc
-        capabilities: tuple[Capability, ...] = (
-            (Capability.NETWORK_EGRESS,)
-            if config["transport"] == "legacy_sse"
-            # A host stdio child has no OS-enforced network sandbox. Clearing its
-            # environment does not justify the no-network capability.
-            else (Capability.PROCESS_EXEC,)
+        is_stdio = config["transport"] == "stdio"
+        workspace = (
+            trusted_mcp_workspace_roots.get(str(config["workspace_root_ref"])) if is_stdio else None
         )
-        secret_refs = tuple(config["environment_refs"].values())
-        if config["secret_ref"] is not None:
-            secret_refs += (config["secret_ref"],)
-        if secret_refs:
-            capabilities += (Capability.SECRET_USE,)
-        guard_side_effect(
+        if is_stdio and workspace is None:
+            raise HTTPException(status_code=409, detail="configured MCP workspace is unavailable")
+        capabilities: tuple[Capability, ...] = (
+            (Capability.PROCESS_EXEC_NO_NETWORK, Capability.WORKSPACE_READ)
+            if is_stdio
+            else (Capability.NETWORK_EGRESS, Capability.SECRET_USE)
+        )
+        secret_refs = (
+            ()
+            if is_stdio
+            else tuple(
+                ref for ref in (config["endpoint_ref"], config["secret_ref"]) if ref is not None
+            )
+        )
+        security_arguments: dict[str, Any] = {
+            "transport": config["transport"],
+            "network_profile": "none" if is_stdio else "https",
+        }
+        if is_stdio:
+            security_arguments.update(
+                {
+                    "argv": config["stdio_argv"],
+                    "cwd": "." if config["cwd_ref"] is None else config["cwd_ref"],
+                    "workspace_root_ref": config["workspace_root_ref"],
+                    "docker_image": config["docker_image"],
+                }
+            )
+        else:
+            security_arguments.update(
+                {
+                    "endpoint_ref": config["endpoint_ref"],
+                    "secret_ref": config["secret_ref"],
+                }
+            )
+        action, evaluation = guard_side_effect(
             tool="mcp",
             operation="start",
             target_id=server_id,
-            arguments={"transport": config["transport"]},
+            arguments=security_arguments,
             capabilities=capabilities,
             idempotency_key=f"mcp-start:{server_id}:{config['updated_at']}",
             secret_refs=secret_refs,
+            workspace=None if workspace is None else str(workspace),
+            sandbox_profile="docker-read-only" if is_stdio else "remote-https",
+            network_profile="none" if is_stdio else "https",
         )
-        phase_repository.set_mcp_lifecycle(server_id, "starting", "mcp.starting")
+        secret_resolver: LeasedReferenceResolver | None = None
+        if secret_refs:
+            try:
+                materials = tuple(
+                    secret_broker.issue(
+                        action,
+                        evaluation,
+                        secret_ref=secret_ref,
+                        ttl_seconds=60,
+                    )
+                    for secret_ref in secret_refs
+                )
+            except SecretUnavailable as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="configured MCP secret reference is unavailable",
+                ) from exc
+            secret_resolver = LeasedReferenceResolver(materials)
+        transport = build_transport(config, secret_resolver=secret_resolver)
+        try:
+            start_token, start_fencing = phase_repository.claim_mcp_start(
+                server_id,
+                owner=f"operant-core-{os.getpid()}",
+                expected_updated_at=config["updated_at"],
+            )
+        except ConflictError as exc:
+            if secret_resolver is not None:
+                secret_resolver.clear()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         adapter = McpAdapter(
             server_id=server_id,
-            target_ref=f"{config['transport']}:{server_id}",
-            transport=build_transport(config),
+            target_ref=mcp_runtime_target_ref(config),
+            transport=transport,
             action_gateway=phase_gateway,
             limits=McpLimits(),
+            redact_values=() if secret_resolver is None else secret_resolver.secret_values,
         )
         try:
             tools = await adapter.start()
             snapshot_version = phase_repository.replace_mcp_tools(server_id, tools)
-            phase_repository.set_mcp_lifecycle(
+            phase_repository.finish_mcp_start(
                 server_id,
-                "running",
-                "mcp.started",
+                start_token,
+                start_fencing,
+                status="running",
+                event_type="mcp.started",
                 detail={"snapshot_version": snapshot_version, "tool_count": len(tools)},
             )
         except Exception as exc:
-            phase_repository.set_mcp_lifecycle(
-                server_id,
-                "failed",
-                "mcp.start_failed",
-                detail={
-                    "error_code": exc.code if isinstance(exc, McpError) else "mcp.start_failed"
-                },
-            )
+            with suppress(Exception):
+                await adapter.close()
+            with suppress(ConflictError):
+                phase_repository.finish_mcp_start(
+                    server_id,
+                    start_token,
+                    start_fencing,
+                    status="failed",
+                    event_type="mcp.start_failed",
+                    detail={
+                        "error_code": exc.code if isinstance(exc, McpError) else "mcp.start_failed"
+                    },
+                )
             raise HTTPException(status_code=502, detail="MCP server failed to start") from exc
         mcp_runtimes[server_id] = adapter
+        if secret_resolver is not None:
+            mcp_expiry_tasks[server_id] = asyncio.create_task(
+                expire_mcp_secret_lease(server_id, adapter, secret_resolver)
+            )
         return phase_repository.get_mcp_server(server_id)
 
     @app.post("/v1/mcp/servers/{server_id}/stop", operation_id="stopMcpServer")
@@ -623,6 +959,10 @@ def install_phase45_routes(
             capabilities=(Capability.PROCESS_EXEC_NO_NETWORK,),
             idempotency_key=f"mcp-stop:{server_id}",
         )
+        expiry_task = mcp_expiry_tasks.pop(server_id, None)
+        if expiry_task is not None:
+            expiry_task.cancel()
+            await asyncio.gather(expiry_task, return_exceptions=True)
         await adapter.close()
         mcp_runtimes.pop(server_id, None)
         phase_repository.set_mcp_lifecycle(server_id, "stopped", "mcp.stopped")
@@ -642,8 +982,20 @@ def install_phase45_routes(
         try:
             result = await adapter.call_tool(tool_name, body.arguments)
         except McpError as exc:
-            status = 403 if exc.code in {"mcp.policy_denied", "mcp.approval_required"} else 422
-            raise HTTPException(status_code=status, detail=exc.code) from exc
+            if exc.code in {
+                "mcp.action_receipt_conflict",
+                "mcp.approval_required",
+                "mcp.outcome_unknown",
+            }:
+                status = 409
+            elif exc.code == "mcp.policy_denied":
+                status = 403
+            else:
+                status = 422
+            detail: Any = exc.code
+            if exc.detail:
+                detail = {"code": exc.code, **exc.detail}
+            raise HTTPException(status_code=status, detail=detail) from exc
         return {"result": result}
 
     @app.delete("/v1/mcp/servers/{server_id}", operation_id="deleteMcpServer")
