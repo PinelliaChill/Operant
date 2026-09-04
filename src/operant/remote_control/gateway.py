@@ -17,6 +17,14 @@ from operant.domain.remote_control import EncryptedRemoteCommand
 
 
 class RemoteGatewayService(Protocol):
+    def validate_gateway_binding(
+        self,
+        host_id: str,
+        device_id: str,
+        session_id: str,
+        protocol_version: str,
+    ) -> None: ...
+
     def submit_command(self, command: EncryptedRemoteCommand) -> Any: ...
 
     def list_events(
@@ -26,6 +34,7 @@ class RemoteGatewayService(Protocol):
         session_id: str | None,
         after_cursor: int,
         limit: int,
+        device_id: str | None = None,
     ) -> Sequence[Mapping[str, Any]]: ...
 
 
@@ -40,6 +49,12 @@ class RemoteGatewayConfig:
     max_frame_bytes: int = 512 * 1024
     max_pending_frames: int = 16
     event_page_limit: int = 200
+
+    @property
+    def uvicorn_ws_max_size(self) -> int:
+        """Transport limit that must be passed to Uvicorn's ``ws_max_size``."""
+
+        return self.max_frame_bytes
 
     def __post_init__(self) -> None:
         if not 32 <= len(self.token) <= 512 or any(character.isspace() for character in self.token):
@@ -168,6 +183,11 @@ def install_remote_gateway(
     represented as a Host/Core acknowledgement.
     """
 
+    # Uvicorn enforces this before an application frame exists. Launchers must
+    # pass this value as ``ws_max_size``; exposing it on app.state prevents a
+    # second, drifting transport constant.
+    app.state.remote_gateway_ws_max_size = config.uvicorn_ws_max_size
+
     @app.websocket("/v1/remote-control/gateway", name="connectRemoteGateway")
     async def remote_gateway(websocket: WebSocket) -> None:
         if not _secure_transport(websocket, config):
@@ -187,6 +207,7 @@ def install_remote_gateway(
             maxsize=config.max_pending_frames + 1
         )
         receiver = asyncio.create_task(_receive_frames(websocket, queue, config))
+        binding: tuple[str, str, str, str] | None = None
         try:
             while True:
                 incoming = await queue.get()
@@ -206,17 +227,34 @@ def install_remote_gateway(
                     await _send_error(websocket, "gateway.invalid_frame")
                     continue
                 frame_type = frame.get("type")
+                if binding is None:
+                    if frame_type != "hello":
+                        await _send_error(websocket, "gateway.hello_required")
+                        continue
+                    binding = await _handle_hello(websocket, service, frame)
+                    continue
+                if frame_type == "hello":
+                    await _send_error(websocket, "gateway.already_bound")
+                    continue
                 if frame_type == "ping":
                     await websocket.send_json({"type": "pong"})
                     continue
                 if frame_type == "cursor_sync":
-                    await _handle_cursor_sync(websocket, service, frame, config)
+                    await _handle_cursor_sync(websocket, service, frame, config, binding)
                     continue
                 if frame_type != "command":
                     await _send_error(websocket, "gateway.unknown_frame_type")
                     continue
                 try:
                     command = EncryptedRemoteCommand.model_validate(frame.get("command"))
+                    if (
+                        command.host_id,
+                        command.device_id,
+                        command.remote_session_id,
+                        command.protocol_version,
+                    ) != binding:
+                        await _send_error(websocket, "gateway.command_binding_invalid")
+                        continue
                     receipt = await asyncio.to_thread(service.submit_command, command)
                 except ValidationError:
                     await _send_error(websocket, "gateway.invalid_command")
@@ -237,19 +275,59 @@ def install_remote_gateway(
                 await receiver
 
 
+async def _handle_hello(
+    websocket: WebSocket,
+    service: RemoteGatewayService,
+    frame: Mapping[str, Any],
+) -> tuple[str, str, str, str] | None:
+    host_id = frame.get("host_id")
+    device_id = frame.get("device_id")
+    session_id = frame.get("remote_session_id")
+    protocol_version = frame.get("protocol_version")
+    if not all(
+        isinstance(value, str) and value and len(value) <= 200
+        for value in (host_id, device_id, session_id, protocol_version)
+    ):
+        await _send_error(websocket, "gateway.invalid_hello")
+        return None
+    assert isinstance(host_id, str)
+    assert isinstance(device_id, str)
+    assert isinstance(session_id, str)
+    assert isinstance(protocol_version, str)
+    try:
+        await asyncio.to_thread(
+            service.validate_gateway_binding,
+            host_id,
+            device_id,
+            session_id,
+            protocol_version,
+        )
+    except Exception:
+        await _send_error(websocket, "gateway.hello_rejected")
+        return None
+    await websocket.send_json(
+        {
+            "type": "hello_ack",
+            "host_id": host_id,
+            "device_id": device_id,
+            "remote_session_id": session_id,
+            "protocol_version": protocol_version,
+        }
+    )
+    return host_id, device_id, session_id, protocol_version
+
+
 async def _handle_cursor_sync(
     websocket: WebSocket,
     service: RemoteGatewayService,
     frame: Mapping[str, Any],
     config: RemoteGatewayConfig,
+    binding: tuple[str, str, str, str],
 ) -> None:
-    host_id = frame.get("host_id")
-    session_id = frame.get("session_id")
+    host_id, device_id, session_id, _protocol_version = binding
     after_cursor = frame.get("after_cursor", 0)
     if (
-        not isinstance(host_id, str)
-        or not host_id
-        or (session_id is not None and not isinstance(session_id, str))
+        set(frame).difference({"type", "after_cursor"})
         or not isinstance(after_cursor, int)
         or isinstance(after_cursor, bool)
         or not 0 <= after_cursor <= 2**63 - 1
@@ -263,6 +341,7 @@ async def _handle_cursor_sync(
             session_id=session_id,
             after_cursor=after_cursor,
             limit=config.event_page_limit,
+            device_id=device_id,
         )
     except Exception:
         await _send_error(websocket, "gateway.cursor_sync_failed")

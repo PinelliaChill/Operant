@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -97,18 +98,19 @@ class HttpRemoteTargetConnector:
             },
         ) as client:
             try:
-                response = client.post("/v1/target/jobs/execute", json=payload)
-            except httpx.HTTPError as exc:
+                status_code, headers, content = self._post_bounded(
+                    client, "/v1/target/jobs/execute", payload
+                )
+            except (httpx.HTTPError, TimeoutError) as exc:
                 # Once handed to the transport the target may have executed the
                 # action. The Controller decides whether this becomes failed or
                 # manual_reconcile_required from the job idempotency class.
                 raise RemoteOutcomeUnknown("remote target outcome is unknown") from exc
-        if response.status_code >= 500:
-            raise RemoteOutcomeUnknown("remote target returned an indeterminate server failure")
-        response.raise_for_status()
-        self._verify_response(response)
+        self._verify_response(content, headers)
+        if status_code >= 400:
+            raise RemoteOutcomeUnknown("remote target returned no typed durable result")
         try:
-            body = response.json()
+            body = json.loads(content)
             result = RemoteExecutionResult.model_validate(body["result"])
             encoded_artifact = body.get("artifact_base64")
             artifact = (
@@ -139,27 +141,49 @@ class HttpRemoteTargetConnector:
             },
         ) as client:
             try:
-                response = client.post("/v1/target/jobs/cancel", json=body)
-            except httpx.HTTPError as exc:
+                status_code, headers, content = self._post_bounded(
+                    client, "/v1/target/jobs/cancel", body
+                )
+            except (httpx.HTTPError, TimeoutError) as exc:
                 raise RemoteOutcomeUnknown("remote cancellation outcome is unknown") from exc
-        if response.status_code >= 500:
-            raise RemoteOutcomeUnknown("remote cancellation outcome is unknown")
-        response.raise_for_status()
-        self._verify_response(response)
+        self._verify_response(content, headers)
+        if status_code >= 400:
+            raise RemoteOutcomeUnknown("remote cancellation returned no typed durable receipt")
         try:
-            body = response.json()
+            body = json.loads(content)
         except ValueError as exc:
             raise RemoteOutcomeUnknown("remote cancellation returned an invalid receipt") from exc
         if not isinstance(body, dict) or body.get("job_id") != job_id:
             raise RemoteOutcomeUnknown("remote cancellation receipt is bound to another job")
 
-    def _verify_response(self, response: httpx.Response) -> None:
-        if len(response.content) > self.config.max_response_bytes:
-            raise RemoteOutcomeUnknown("remote target response exceeded the configured limit")
-        signature = response.headers.get("x-operant-target-signature")
+    def _post_bounded(
+        self,
+        client: httpx.Client,
+        path: str,
+        body: dict[str, object],
+    ) -> tuple[int, httpx.Headers, bytes]:
+        deadline = time.monotonic() + self.config.timeout_seconds
+        chunks: list[bytes] = []
+        size = 0
+        with client.stream("POST", path, json=body) as response:
+            for chunk in response.iter_bytes():
+                if time.monotonic() > deadline:
+                    raise TimeoutError("remote target absolute deadline exceeded")
+                size += len(chunk)
+                if size > self.config.max_response_bytes:
+                    raise RemoteOutcomeUnknown(
+                        "remote target response exceeded the configured limit"
+                    )
+                chunks.append(chunk)
+            if time.monotonic() > deadline:
+                raise TimeoutError("remote target absolute deadline exceeded")
+            return response.status_code, response.headers, b"".join(chunks)
+
+    def _verify_response(self, content: bytes, headers: httpx.Headers) -> None:
+        signature = headers.get("x-operant-target-signature")
         if signature is None:
             raise RemoteOutcomeUnknown("remote target response is unsigned")
-        _verify_signature(self.config.identity_public_key, response.content, signature)
+        _verify_signature(self.config.identity_public_key, content, signature)
 
 
 def _decode_public_key(value: str) -> Ed25519PublicKey:

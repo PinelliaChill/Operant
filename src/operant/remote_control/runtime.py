@@ -605,11 +605,9 @@ class RemoteControlService:
         session_id: str | None = None,
         after_cursor: int = 0,
         limit: int = 100,
+        device_id: str | None = None,
     ) -> list[dict[str, Any]]:
         self.repository.get_host(host_id)
-        events = self.repository.list_command_events(
-            host_id, after_cursor=after_cursor, limit=limit
-        )
         if session_id is not None:
             session = self.repository.get_session(session_id)
             if session.host_id != host_id:
@@ -618,11 +616,46 @@ class RemoteControlService:
                     "remote event cursor session belongs to another host",
                     status_code=409,
                 )
-            if events:
-                self.repository.advance_cursor(
-                    session_id, max(int(event["cursor"]) for event in events)
+            if device_id is not None and session.device_id != device_id:
+                raise RemoteControlError(
+                    "remote.session_binding_invalid",
+                    "remote event cursor session belongs to another device",
+                    status_code=409,
                 )
+        events = self.repository.list_command_events(
+            host_id,
+            after_cursor=after_cursor,
+            limit=limit,
+            session_id=session_id,
+            device_id=device_id,
+        )
+        if session_id is not None and events:
+            self.repository.advance_cursor(
+                session_id, max(int(event["cursor"]) for event in events)
+            )
         return events
+
+    def validate_gateway_binding(
+        self,
+        host_id: str,
+        device_id: str,
+        session_id: str,
+        protocol_version: str,
+    ) -> None:
+        host = self._active_host(host_id)
+        device = self._active_device(device_id, host_id=host_id)
+        session = self._active_session(session_id, at=_now())
+        if (
+            session.host_id != host.host_id
+            or session.device_id != device.device_id
+            or session.protocol_version != protocol_version
+            or host.protocol_version != protocol_version
+        ):
+            raise RemoteControlError(
+                "remote.session_binding_invalid",
+                "remote gateway binding is invalid",
+                status_code=403,
+            )
 
     def _active_host(self, host_id: str) -> HostInstance:
         try:
