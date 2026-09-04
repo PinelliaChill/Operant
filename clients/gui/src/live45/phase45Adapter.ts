@@ -5,11 +5,16 @@ export interface Phase45ClientLike {
   listSkills(options?: Phase45.ListSkillsOptions): Promise<Record<string, unknown>>;
   discoverSkills(request: Phase45.SkillDiscoverBody, options?: Phase45.DiscoverSkillsOptions): Promise<Record<string, unknown>>;
   listMcpServers(): Promise<Record<string, unknown>>;
+  listMcpWorkspaceRoots(): Promise<Record<string, unknown>>;
   createMcpServer(request: Phase45.McpServerBody, options?: Phase45.CreateMcpServerOptions): Promise<Record<string, unknown>>;
   startMcpServer(id: string, options?: Phase45.StartMcpServerOptions): Promise<Record<string, unknown>>;
   stopMcpServer(id: string, options?: Phase45.StopMcpServerOptions): Promise<Record<string, unknown>>;
   deleteMcpServer(id: string, options?: Phase45.DeleteMcpServerOptions): Promise<Record<string, unknown>>;
   listMcpTools(id: string): Promise<Record<string, unknown>>;
+  callMcpTool(id: string, toolName: string, request: Phase45.McpToolCallBody, options?: Phase45.CallMcpToolOptions): Promise<Record<string, unknown>>;
+  getMcpActionReceipt(actionHash: string): Promise<Record<string, unknown>>;
+  getPhase45Approval(approvalId: string): Promise<Record<string, unknown>>;
+  decidePhase45Approval(approvalId: string, request: Phase45.Phase45ApprovalDecisionBody, options?: Phase45.DecidePhase45ApprovalOptions): Promise<Record<string, unknown>>;
   explainPolicy(request: Phase45.NormalizeActionBody, options?: Phase45.ExplainPolicyOptions): Promise<Record<string, unknown>>;
   listSecurityAudit(
     actionHash: string,
@@ -22,6 +27,10 @@ export interface Phase45UiError {
   message: string;
   retryable: boolean;
   recovery: string;
+  approvalId?: string;
+  actionHash?: string;
+  reasonCode?: string;
+  outcomeUnknown: boolean;
 }
 
 export interface LiveSkillCandidate {
@@ -52,6 +61,8 @@ export interface LiveMcpServer {
   secretRef?: string;
   stdioArgv: string[];
   cwdRef?: string;
+  workspaceRootRef?: string;
+  dockerImage?: string;
   environmentRefs: Record<string, string>;
   allowLoopbackHttp: boolean;
   lifecycle: McpLifecycle;
@@ -63,6 +74,33 @@ export interface LiveMcpTool {
   name: string;
   description?: string;
   schemaSha256?: string;
+}
+
+export interface LiveMcpWorkspaceRoot {
+  rootRef: string;
+}
+
+export type McpReceiptStatus = 'reserved' | 'sent' | 'completed' | 'outcome_unknown';
+
+export interface LiveMcpReceipt {
+  actionHash: string;
+  serverId: string;
+  toolName: string;
+  status: McpReceiptStatus;
+  errorCode?: string;
+  resultAvailable: boolean;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export type McpApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'consumed';
+
+export interface LiveMcpApproval {
+  approvalId: string;
+  actionHash: string;
+  status: McpApprovalStatus;
+  reasonCode?: string;
+  expiresAt: string;
 }
 
 export interface LivePolicyEvaluation {
@@ -166,6 +204,8 @@ export function mapMcpServer(value: unknown): LiveMcpServer {
     secretRef: optionalText(source.secret_ref),
     stdioArgv: Array.isArray(source.stdio_argv) ? source.stdio_argv.filter((item): item is string => typeof item === 'string') : [],
     cwdRef: optionalText(source.cwd_ref),
+    workspaceRootRef: optionalText(source.workspace_root_ref),
+    dockerImage: optionalText(source.docker_image),
     environmentRefs: source.environment_refs && typeof source.environment_refs === 'object' && !Array.isArray(source.environment_refs)
       ? Object.fromEntries(Object.entries(source.environment_refs).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
       : {},
@@ -174,6 +214,13 @@ export function mapMcpServer(value: unknown): LiveMcpServer {
     createdAt: text(source.created_at, 'MCP server.created_at'),
     updatedAt: text(source.updated_at, 'MCP server.updated_at'),
   };
+}
+
+export function mapMcpWorkspaceRoots(value: unknown): LiveMcpWorkspaceRoot[] {
+  return items(value, 'MCP workspace roots').map((entry) => {
+    const root = record(entry, 'MCP workspace root');
+    return { rootRef: text(root.root_ref, 'MCP workspace root.root_ref') };
+  });
 }
 
 export function mapMcpServerList(value: unknown): LiveMcpServer[] {
@@ -185,6 +232,39 @@ export function mapMcpTools(value: unknown): LiveMcpTool[] {
     const tool = record(entry, 'MCP tool');
     return { name: text(tool.name, 'MCP tool.name'), description: optionalText(tool.description), schemaSha256: optionalText(tool.schema_sha256) };
   });
+}
+
+export function mapMcpReceipt(value: unknown): LiveMcpReceipt {
+  const source = record(value, 'MCP action receipt');
+  const status = source.status;
+  if (!['reserved', 'sent', 'completed', 'outcome_unknown'].includes(String(status))) {
+    throw new Error('MCP receipt status 无效。');
+  }
+  return {
+    actionHash: text(source.action_hash, 'MCP action receipt.action_hash'),
+    serverId: text(source.server_id, 'MCP action receipt.server_id'),
+    toolName: text(source.tool_name, 'MCP action receipt.tool_name'),
+    status: status as McpReceiptStatus,
+    errorCode: optionalText(source.error_code),
+    resultAvailable: source.result_available === true,
+    updatedAt: text(source.updated_at, 'MCP action receipt.updated_at'),
+    completedAt: optionalText(source.completed_at),
+  };
+}
+
+export function mapMcpApproval(value: unknown): LiveMcpApproval {
+  const source = record(value, 'MCP approval');
+  const status = source.status;
+  if (!['pending', 'approved', 'denied', 'expired', 'consumed'].includes(String(status))) {
+    throw new Error('MCP approval status 无效。');
+  }
+  return {
+    approvalId: text(source.approval_id, 'MCP approval.approval_id'),
+    actionHash: text(source.action_hash, 'MCP approval.action_hash'),
+    status: status as McpApprovalStatus,
+    reasonCode: optionalText(source.reason_code),
+    expiresAt: text(source.expires_at, 'MCP approval.expires_at'),
+  };
 }
 
 export function mapPolicyEvaluation(value: unknown): LivePolicyEvaluation {
@@ -237,15 +317,26 @@ export function normalizePhase45Error(error: unknown): Phase45UiError {
   if (error && typeof error === 'object') {
     const source = error as Record<string, unknown>;
     if (typeof source.code === 'string' && typeof source.message === 'string') {
+      const detail = source.detail && typeof source.detail === 'object' && !Array.isArray(source.detail)
+        ? source.detail as Record<string, unknown>
+        : {};
+      const detailText = optionalText(source.detail);
+      const detailCode = optionalText(detail.code);
+      const effectiveCode = detailCode
+        ?? (detailText && /^(?:mcp\.)?(?:approval_required|outcome_unknown)$/.test(detailText) ? detailText : source.code);
       return {
-        code: source.code,
+        code: effectiveCode,
         message: source.message,
         retryable: source.retryable === true,
         recovery: typeof source.recovery === 'string' ? source.recovery : 'none',
+        approvalId: optionalText(detail.approval_id),
+        actionHash: optionalText(detail.action_hash),
+        reasonCode: optionalText(detail.reason_code),
+        outcomeUnknown: effectiveCode === 'mcp.outcome_unknown' || effectiveCode === 'outcome_unknown',
       };
     }
   }
-  return { code: 'invalid_phase45_projection', message: error instanceof Error ? error.message : 'Phase 4/5 返回了无法识别的结果。', retryable: false, recovery: 'none' };
+  return { code: 'invalid_phase45_projection', message: error instanceof Error ? error.message : 'Phase 4/5 返回了无法识别的结果。', retryable: false, recovery: 'none', outcomeUnknown: false };
 }
 
 export class Phase45LiveAdapter {
@@ -264,6 +355,7 @@ export class Phase45LiveAdapter {
     )));
   }
   async listMcpServers() { return mapMcpServerList(await this.client.listMcpServers()); }
+  async listMcpWorkspaceRoots() { return mapMcpWorkspaceRoots(await this.client.listMcpWorkspaceRoots()); }
   async createMcpServer(request: Phase45.McpServerBody) {
     return mapMcpServer(await this.mutate(
       `mcp:create:${JSON.stringify(request)}`,
@@ -289,6 +381,28 @@ export class Phase45LiveAdapter {
     );
   }
   async listMcpTools(id: string) { return mapMcpTools(await this.client.listMcpTools(id)); }
+  async callMcpTool(id: string, toolName: string, request: Phase45.McpToolCallBody) {
+    return this.mutate(
+      `mcp:call:${id}:${toolName}:${JSON.stringify(request.arguments ?? {})}`,
+      (idempotencyKey) => this.client.callMcpTool(id, toolName, request, { idempotencyKey }),
+    );
+  }
+  async getMcpActionReceipt(actionHash: string) {
+    return mapMcpReceipt(await this.client.getMcpActionReceipt(actionHash));
+  }
+  async getMcpApproval(approvalId: string) {
+    return mapMcpApproval(await this.client.getPhase45Approval(approvalId));
+  }
+  async decideMcpApproval(approvalId: string, approved: boolean) {
+    return mapMcpApproval(await this.mutate(
+      `mcp:approval:${approvalId}:${approved ? 'allow' : 'deny'}`,
+      (idempotencyKey) => this.client.decidePhase45Approval(
+        approvalId,
+        { approved, reason_code: approved ? 'user-confirmed' : 'user-denied' },
+        { idempotencyKey },
+      ),
+    ));
+  }
   async explainPolicy(request: Phase45.NormalizeActionBody) {
     return mapPolicyEvaluation(await this.mutate(
       `policy:explain:${request.idempotency_key}`,

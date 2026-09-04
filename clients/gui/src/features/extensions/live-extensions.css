@@ -1,0 +1,169 @@
+.mcp-live-header,
+.mcp-server-heading,
+.mcp-server-actions,
+.mcp-live-actions,
+.mcp-intervention-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mcp-live-header,
+.mcp-server-heading {
+  justify-content: space-between;
+}
+
+.mcp-live-actions .btn,
+.mcp-server-actions .btn,
+.mcp-intervention-actions .btn,
+.mcp-tool > .btn {
+  min-height: 40px;
+}
+
+.mcp-route-alerts .live-alert,
+.mcp-form .live-alert {
+  margin: 0 0 12px;
+}
+
+.mcp-server-card {
+  padding: 16px;
+}
+
+.mcp-server-heading h2,
+.mcp-tool h3,
+.mcp-intervention h2,
+.mcp-receipt h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.mcp-server-heading p,
+.mcp-tool p,
+.mcp-intervention p {
+  overflow-wrap: anywhere;
+}
+
+.mcp-tool-list,
+.mcp-safety-stack {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.mcp-tool,
+.mcp-intervention,
+.mcp-receipt {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.mcp-intervention {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.mcp-intervention-warn {
+  color: var(--status-warn-text);
+  border-color: var(--status-warn-border);
+  background: var(--status-warn-bg);
+}
+
+.mcp-intervention-danger {
+  color: var(--status-error-text);
+  border-color: var(--status-error-border);
+  background: var(--status-error-bg);
+}
+
+.mcp-intervention-content {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.mcp-facts {
+  display: grid;
+  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
+  gap: 5px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.mcp-facts dt {
+  color: inherit;
+  opacity: .78;
+}
+
+.mcp-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mcp-tool-result {
+  max-height: 220px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mcp-form {
+  display: grid;
+  gap: 7px;
+}
+
+.mcp-form label {
+  margin-top: 7px;
+  font-weight: 600;
+}
+
+.mcp-form small {
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.mcp-form .input,
+.mcp-form .select {
+  min-height: 44px;
+}
+
+.mcp-form-error:focus {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .mcp-form .input,
+  .mcp-form .select {
+    font-size: 16px;
+  }
+
+  .mcp-live-actions,
+  .mcp-server-actions,
+  .mcp-intervention-actions {
+    width: 100%;
+  }
+
+  .mcp-live-actions .btn,
+  .mcp-server-actions .btn,
+  .mcp-intervention-actions .btn,
+  .mcp-tool > .btn {
+    min-height: 44px;
+    flex: 1 1 132px;
+  }
+
+  .mcp-facts {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .mcp-facts dd + dt {
+    margin-top: 6px;
+  }
+}

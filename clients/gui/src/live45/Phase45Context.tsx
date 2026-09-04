@@ -6,6 +6,8 @@ import {
   normalizePhase45Error,
   type LiveMcpServer,
   type LiveMcpTool,
+  type LiveMcpWorkspaceRoot,
+  type LiveMcpReceipt,
   type LivePolicyEvaluation,
   type LiveSecurityAuditFact,
   type LiveSkillCandidate,
@@ -22,7 +24,11 @@ interface Phase45ContextValue {
   skills: LiveSkillCandidate[];
   skillIssues: LiveSkillIssue[];
   servers: LiveMcpServer[];
+  workspaceRoots: LiveMcpWorkspaceRoot[];
   toolsByServer: Record<string, LiveMcpTool[]>;
+  toolResults: Record<string, unknown>;
+  mcpIntervention?: LiveMcpIntervention;
+  mcpReceipt?: LiveMcpReceipt;
   auditsByAction: Record<string, LiveSecurityAuditFact[]>;
   auditLoadingActionHash?: string;
   auditError?: Phase45UiError;
@@ -35,8 +41,24 @@ interface Phase45ContextValue {
   stopMcpServer: (id: string) => Promise<boolean>;
   deleteMcpServer: (id: string) => Promise<boolean>;
   loadMcpTools: (id: string) => Promise<void>;
+  callMcpTool: (id: string, toolName: string, argumentsValue: Record<string, unknown>) => Promise<boolean>;
+  decideMcpApproval: (approved: boolean) => Promise<void>;
+  loadMcpReceipt: (actionHash: string) => Promise<void>;
   explainPolicy: (request: Phase45.NormalizeActionBody) => Promise<LivePolicyEvaluation | undefined>;
   loadSecurityAudit: (actionHash: string) => Promise<void>;
+}
+
+type PendingMcpOperation =
+  | { kind: 'start'; serverId: string }
+  | { kind: 'call'; serverId: string; toolName: string; argumentsValue: Record<string, unknown> };
+
+export interface LiveMcpIntervention {
+  status: 'approval_required' | 'denied' | 'outcome_unknown';
+  operation: PendingMcpOperation;
+  approvalId?: string;
+  actionHash?: string;
+  reasonCode?: string;
+  message: string;
 }
 
 const Phase45Context = createContext<Phase45ContextValue | null>(null);
@@ -48,7 +70,11 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
   const [skills, setSkills] = useState<LiveSkillCandidate[]>([]);
   const [skillIssues, setSkillIssues] = useState<LiveSkillIssue[]>([]);
   const [servers, setServers] = useState<LiveMcpServer[]>([]);
+  const [workspaceRoots, setWorkspaceRoots] = useState<LiveMcpWorkspaceRoot[]>([]);
   const [toolsByServer, setToolsByServer] = useState<Record<string, LiveMcpTool[]>>({});
+  const [toolResults, setToolResults] = useState<Record<string, unknown>>({});
+  const [mcpIntervention, setMcpIntervention] = useState<LiveMcpIntervention>();
+  const [mcpReceipt, setMcpReceipt] = useState<LiveMcpReceipt>();
   const [auditsByAction, setAuditsByAction] = useState<Record<string, LiveSecurityAuditFact[]>>({});
   const [auditLoadingActionHash, setAuditLoadingActionHash] = useState<string>();
   const [auditError, setAuditError] = useState<Phase45UiError>();
@@ -68,9 +94,12 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
     setError(undefined);
     try {
       await adapter.connect();
-      const [nextSkills, nextServers] = await Promise.all([adapter.listSkills(), adapter.listMcpServers()]);
+      const [nextSkills, nextServers, nextWorkspaceRoots] = await Promise.all([
+        adapter.listSkills(), adapter.listMcpServers(), adapter.listMcpWorkspaceRoots(),
+      ]);
       setSkills(nextSkills);
       setServers(nextServers);
+      setWorkspaceRoots(nextWorkspaceRoots);
       setPhase('ready');
     } catch (value: unknown) {
       fail(value);
@@ -84,7 +113,11 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
       setSkills([]);
       setSkillIssues([]);
       setServers([]);
+      setWorkspaceRoots([]);
       setToolsByServer({});
+      setToolResults({});
+      setMcpIntervention(undefined);
+      setMcpReceipt(undefined);
       setAuditsByAction({});
       setAuditLoadingActionHash(undefined);
       setAuditError(undefined);
@@ -124,11 +157,63 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
     setServers(await adapter.listMcpServers());
   }), [adapter, runAction]);
 
-  const startMcpServer = useCallback((id: string) => runAction('启动 MCP 服务', async () => {
-    await adapter.startMcpServer(id);
-    setServers(await adapter.listMcpServers());
-    setToolsByServer((current) => ({ ...current, [id]: [] }));
-  }), [adapter, runAction]);
+  const executeMcpOperation = useCallback(async (operation: PendingMcpOperation) => {
+    if (operation.kind === 'start') {
+      await adapter.startMcpServer(operation.serverId);
+      setServers(await adapter.listMcpServers());
+      setToolsByServer((current) => ({ ...current, [operation.serverId]: [] }));
+      return;
+    }
+    const result = await adapter.callMcpTool(
+      operation.serverId,
+      operation.toolName,
+      { arguments: operation.argumentsValue },
+    );
+    setToolResults((current) => ({
+      ...current,
+      [`${operation.serverId}\0${operation.toolName}`]: result.result,
+    }));
+  }, [adapter]);
+
+  const handleMcpFailure = useCallback((operation: PendingMcpOperation, value: unknown) => {
+    const detail = fail(value);
+    const approvalRequired = detail.code === 'approval_required' || detail.code === 'mcp.approval_required';
+    if (approvalRequired && detail.approvalId) {
+      setMcpIntervention({
+        status: 'approval_required', operation, approvalId: detail.approvalId,
+        actionHash: detail.actionHash, reasonCode: detail.reasonCode, message: detail.message,
+      });
+    } else if (detail.outcomeUnknown) {
+      setMcpIntervention((current) => ({
+        status: 'outcome_unknown', operation,
+        actionHash: detail.actionHash ?? current?.actionHash,
+        reasonCode: detail.reasonCode, message: detail.message,
+      }));
+    }
+    return detail;
+  }, [fail]);
+
+  const startMcpServer = useCallback(async (id: string) => {
+    if (clientMode !== 'live' || actionLabel) return false;
+    const operation: PendingMcpOperation = { kind: 'start', serverId: id };
+    setActionLabel('启动 MCP 服务');
+    setError(undefined);
+    setMcpIntervention(undefined);
+    setMcpReceipt(undefined);
+    try {
+      await executeMcpOperation(operation);
+      setMcpIntervention(undefined);
+      setPhase('ready');
+      addNotification('success', '启动 MCP 服务已由 Core 确认。');
+      return true;
+    } catch (value: unknown) {
+      const detail = handleMcpFailure(operation, value);
+      addNotification('error', `启动 MCP 服务失败：${detail.message}`);
+      return false;
+    } finally {
+      setActionLabel(undefined);
+    }
+  }, [actionLabel, addNotification, clientMode, executeMcpOperation, handleMcpFailure]);
 
   const stopMcpServer = useCallback((id: string) => runAction('停止 MCP 服务', async () => {
     await adapter.stopMcpServer(id);
@@ -151,6 +236,70 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
       setToolsByServer((current) => ({ ...current, [id]: tools }));
     });
   }, [adapter, runAction]);
+
+  const callMcpTool = useCallback(async (id: string, toolName: string, argumentsValue: Record<string, unknown>) => {
+    if (clientMode !== 'live' || actionLabel) return false;
+    const operation: PendingMcpOperation = { kind: 'call', serverId: id, toolName, argumentsValue };
+    setActionLabel(`调用 ${toolName}`);
+    setError(undefined);
+    setMcpIntervention(undefined);
+    setMcpReceipt(undefined);
+    try {
+      await executeMcpOperation(operation);
+      setMcpIntervention(undefined);
+      setPhase('ready');
+      addNotification('success', `MCP 工具 ${toolName} 调用完成。`);
+      return true;
+    } catch (value: unknown) {
+      const detail = handleMcpFailure(operation, value);
+      addNotification('error', detail.outcomeUnknown ? '调用结果未知，必须人工核对。' : `MCP 工具调用失败：${detail.message}`);
+      return false;
+    } finally {
+      setActionLabel(undefined);
+    }
+  }, [actionLabel, addNotification, clientMode, executeMcpOperation, handleMcpFailure]);
+
+  const decideMcpApproval = useCallback(async (approved: boolean) => {
+    const pending = mcpIntervention;
+    if (clientMode !== 'live' || actionLabel || pending?.status !== 'approval_required' || !pending.approvalId) return;
+    setActionLabel(approved ? '允许并重试 MCP 操作' : '拒绝 MCP 操作');
+    setError(undefined);
+    try {
+      await adapter.decideMcpApproval(pending.approvalId, approved);
+      if (!approved) {
+        setMcpIntervention({ ...pending, status: 'denied', message: '用户已拒绝；原操作未执行。' });
+        addNotification('info', '已拒绝 MCP 操作。');
+        return;
+      }
+      // The adapter deliberately retains the original mutation key after an
+      // approval_required response. This retry therefore uses the exact same key.
+      await executeMcpOperation(pending.operation);
+      if (pending.operation.kind === 'call' && pending.actionHash) {
+        setMcpReceipt(await adapter.getMcpActionReceipt(pending.actionHash));
+      }
+      setMcpIntervention(undefined);
+      setPhase('ready');
+      addNotification('success', '审批已允许，原 MCP 操作已使用同一 Idempotency-Key 重试。');
+    } catch (value: unknown) {
+      const detail = handleMcpFailure(pending.operation, value);
+      addNotification('error', detail.outcomeUnknown ? '重试结果未知，必须人工核对。' : `审批或重试失败：${detail.message}`);
+    } finally {
+      setActionLabel(undefined);
+    }
+  }, [actionLabel, adapter, addNotification, clientMode, executeMcpOperation, handleMcpFailure, mcpIntervention]);
+
+  const loadMcpReceipt = useCallback(async (actionHash: string) => {
+    if (clientMode !== 'live' || !/^[0-9a-f]{64}$/.test(actionHash)) return;
+    setActionLabel('读取 MCP Receipt');
+    setError(undefined);
+    try {
+      setMcpReceipt(await adapter.getMcpActionReceipt(actionHash));
+    } catch (value: unknown) {
+      fail(value);
+    } finally {
+      setActionLabel(undefined);
+    }
+  }, [adapter, clientMode, fail]);
 
   const explainPolicy = useCallback(async (request: Phase45.NormalizeActionBody) => {
     let result: LivePolicyEvaluation | undefined;
@@ -176,10 +325,12 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [adapter, clientMode]);
 
   return <Phase45Context.Provider value={{
-    phase, skills, skillIssues, servers, toolsByServer, auditsByAction,
+    phase, skills, skillIssues, servers, workspaceRoots, toolsByServer, toolResults,
+    mcpIntervention, mcpReceipt, auditsByAction,
     auditLoadingActionHash, auditError, error, actionLabel, refresh,
     discoverSkills, createMcpServer, startMcpServer, stopMcpServer, deleteMcpServer,
-    loadMcpTools, explainPolicy, loadSecurityAudit,
+    loadMcpTools, callMcpTool, decideMcpApproval, loadMcpReceipt,
+    explainPolicy, loadSecurityAudit,
   }}>{children}</Phase45Context.Provider>;
 };
 

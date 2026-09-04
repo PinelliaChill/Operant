@@ -6,7 +6,7 @@
  * - 提供「测试连接」交互，验证 MCP 进程/端点健康度。
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Puzzle,
   Server,
@@ -28,6 +28,9 @@ import { useDemo } from '../../demo/DemoContext';
 import type { DemoExtension } from '../../demo/types';
 import { usePhase45 } from '../../live45/Phase45Context';
 import { mcpActionState } from '../../live45/phase45State';
+import { buildMcpServerRequest } from '../../live45/mcpForm';
+import { McpSafetyPanels } from './McpSafetyPanels';
+import './live-extensions.css';
 
 export const ExtensionsView: React.FC = () => {
   const { clientMode } = useOperant();
@@ -384,51 +387,115 @@ const DemoExtensionsView: React.FC = () => {
 
 const LiveExtensionsView: React.FC = () => {
   const { connectionStatus } = useOperant();
-  const { servers, toolsByServer, phase, error, actionLabel, refresh, createMcpServer, startMcpServer, stopMcpServer, deleteMcpServer, loadMcpTools } = usePhase45();
+  const {
+    servers, workspaceRoots, toolsByServer, toolResults, mcpIntervention, mcpReceipt,
+    phase, error, actionLabel, refresh, createMcpServer, startMcpServer, stopMcpServer,
+    deleteMcpServer, loadMcpTools, callMcpTool, decideMcpApproval, loadMcpReceipt,
+  } = usePhase45();
   const [modalOpen, setModalOpen] = useState(false);
   const [serverId, setServerId] = useState('');
   const [transport, setTransport] = useState<'stdio' | 'legacy_sse'>('stdio');
   const [stdioArgv, setStdioArgv] = useState('["npx", "-y", "@modelcontextprotocol/server-filesystem"]');
+  const [cwdRef, setCwdRef] = useState('.');
+  const [workspaceRootRef, setWorkspaceRootRef] = useState('');
+  const [dockerImage, setDockerImage] = useState('');
   const [endpointRef, setEndpointRef] = useState('MCP_ENDPOINT');
+  const [secretRef, setSecretRef] = useState('MCP_SECRET');
   const [formError, setFormError] = useState('');
+  const [toolArguments, setToolArguments] = useState<Record<string, string>>({});
+  const [toolError, setToolError] = useState('');
+  const formErrorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!workspaceRootRef && workspaceRoots[0]) setWorkspaceRootRef(workspaceRoots[0].rootRef);
+  }, [workspaceRootRef, workspaceRoots]);
+
+  useEffect(() => {
+    if (formError) formErrorRef.current?.focus();
+  }, [formError]);
 
   const submit = async () => {
     setFormError('');
     try {
-      const request = transport === 'stdio'
-        ? { server_id: serverId.trim(), transport, stdio_argv: JSON.parse(stdioArgv) as string[] }
-        : { server_id: serverId.trim(), transport, endpoint_ref: endpointRef.trim() };
-      if (!request.server_id || (transport === 'stdio' && (!Array.isArray(request.stdio_argv) || request.stdio_argv.length === 0 || request.stdio_argv.some((item) => typeof item !== 'string' || !item)))) throw new Error('请提供服务 ID 和非空 JSON argv 字符串数组。');
-      if (transport === 'legacy_sse' && !/^[A-Z][A-Z0-9_]{1,127}$/.test(endpointRef.trim())) throw new Error('Endpoint Ref 必须是环境变量名，不能直接填写 URL。');
+      const request = buildMcpServerRequest({
+        serverId, transport, stdioArgv, cwdRef, workspaceRootRef,
+        dockerImage, endpointRef, secretRef,
+      }, workspaceRoots.map((root) => root.rootRef));
       if (await createMcpServer(request)) { setModalOpen(false); setServerId(''); }
     } catch (value: unknown) { setFormError(value instanceof Error ? value.message : 'MCP 配置无效。'); }
   };
 
+  const invokeTool = async (server: string, tool: string) => {
+    setToolError('');
+    const key = `${server}\0${tool}`;
+    try {
+      const parsed = JSON.parse(toolArguments[key] ?? '{}') as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('工具参数必须是 JSON 对象。');
+      await callMcpTool(server, tool, parsed as Record<string, unknown>);
+    } catch (value: unknown) {
+      setToolError(value instanceof Error ? value.message : '工具参数无效。');
+    }
+  };
+
+  const disconnected = connectionStatus !== 'connected';
+  const busy = Boolean(actionLabel);
+
   if (phase === 'loading' && servers.length === 0) return <div className="live-route-state" role="status"><RefreshCw size={22} aria-hidden="true" /><h1>正在读取 MCP Projection…</h1><p>Live 模式不会用演示插件填充页面。</p></div>;
 
   return <div className="section-view" data-client-mode="live">
-    <header className="section-header" style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}><div><h1 className="section-title">MCP 服务</h1><p className="section-sub">Phase 5A MCP 配置与生命周期；所有副作用仍由 Action Gateway 裁决。</p></div><div style={{ display: 'flex', gap: 8 }}><button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={Boolean(actionLabel)}><RefreshCw size={13} aria-hidden="true" />刷新</button><button type="button" className="btn btn-primary btn-sm" onClick={() => setModalOpen(true)}><Plus size={13} aria-hidden="true" />添加 MCP</button></div></header>
+    <header className="section-header mcp-live-header"><div><h1 className="section-title">MCP 服务</h1><p className="section-sub">Phase 5A MCP 配置、审批、调用 Receipt 与生命周期；所有副作用仍由 Action Gateway 裁决。</p></div><div className="mcp-live-actions"><button type="button" className="btn btn-secondary" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} aria-hidden="true" />刷新</button><button type="button" className="btn btn-primary" onClick={() => setModalOpen(true)} disabled={disconnected || busy}><Plus size={14} aria-hidden="true" />添加 MCP</button></div></header>
     <div className="section-scroll"><div className="section-inner">
-      <div aria-live="polite">{connectionStatus !== 'connected' && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />Core 连接已断开；现有 MCP Projection 可能过期，生命周期操作已禁用。</div>}{error && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{error.code}：{error.message}</div>}{actionLabel && <div className="live-alert" role="status">{actionLabel}处理中，请等待 Core 确认。</div>}</div>
+      <div className="mcp-route-alerts" aria-live="polite">{disconnected && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />Core 连接已断开；Projection 可能过期，配置、审批和调用操作均已禁用。</div>}{error && !mcpIntervention && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{error.code}：{error.message}</div>}{actionLabel && <div className="live-alert" role="status">{actionLabel}处理中，请等待 Core 确认。</div>}{toolError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{toolError}</div>}</div>
+      <McpSafetyPanels
+        intervention={mcpIntervention}
+        receipt={mcpReceipt}
+        busy={busy}
+        disconnected={disconnected}
+        onDecision={(approved) => void decideMcpApproval(approved)}
+        onLoadReceipt={(hash) => void loadMcpReceipt(hash)}
+      />
       {servers.length === 0 ? <div className="section-empty-wrap"><EmptyState icon={Server} title="没有 MCP 服务" description="只可创建 Core 支持的 stdio 或 legacy SSE 配置；Live 模式不支持演示插件。" /></div> : <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {servers.map((server) => { const tools = toolsByServer[server.id] ?? []; const actions = mcpActionState(server.lifecycle, Boolean(actionLabel) || connectionStatus !== 'connected'); return <section key={server.id} className="card" style={{ padding: 16 }} aria-labelledby={`mcp-${server.id}`}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}><div><h2 id={`mcp-${server.id}`} style={{ margin: 0, fontSize: 15 }}>{server.id}</h2><p><code>{server.transport}</code> · {server.transport === 'stdio' ? `${server.stdioArgv.length} 个 argv 参数` : `Endpoint Ref: ${server.endpointRef}`}</p><StatusBadge status={server.lifecycle === 'running' ? 'connected' : server.lifecycle === 'failed' ? 'denied' : 'pending'} label={server.lifecycle} size="sm" /></div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {servers.map((server) => { const tools = toolsByServer[server.id] ?? []; const actions = mcpActionState(server.lifecycle, busy || disconnected); return <section key={server.id} className="card mcp-server-card" aria-labelledby={`mcp-${server.id}`}>
+          <div className="mcp-server-heading"><div><h2 id={`mcp-${server.id}`}>{server.id}</h2><p><code>{server.transport}</code> · {server.transport === 'stdio' ? `${server.workspaceRootRef ?? 'unknown root'} / ${server.cwdRef ?? '.'} / ${server.stdioArgv.length} 个 argv` : `Endpoint Ref: ${server.endpointRef ?? 'unknown'}`}</p><StatusBadge status={server.lifecycle === 'running' ? 'connected' : server.lifecycle === 'failed' ? 'denied' : 'pending'} label={server.lifecycle} size="sm" /></div>
+          <div className="mcp-server-actions">
             {server.lifecycle === 'running' ? <button type="button" className="btn btn-secondary btn-sm" disabled={!actions.canStop} onClick={() => { if (window.confirm(`停止 MCP 服务“${server.id}”？进行中的调用可能失败。`)) void stopMcpServer(server.id); }}><Square size={13} aria-hidden="true" />停止</button> : <button type="button" className="btn btn-primary btn-sm" disabled={!actions.canStart} onClick={() => { if (window.confirm(`启动 MCP 服务“${server.id}”？Core 将先经过 Policy/Approval 裁决。`)) void startMcpServer(server.id); }}><Play size={13} aria-hidden="true" />启动</button>}
             <button type="button" className="btn btn-secondary btn-sm" disabled={!actions.canRefreshTools} onClick={() => void loadMcpTools(server.id)}><Wrench size={13} aria-hidden="true" />工具</button>
             <button type="button" className="btn btn-ghost btn-sm" disabled={!actions.canDelete} onClick={() => { if (window.confirm(`永久删除已停止的 MCP 配置“${server.id}”？此操作不可撤销。`)) void deleteMcpServer(server.id); }}><Trash2 size={13} aria-hidden="true" />删除</button>
           </div></div>
-          {tools.length > 0 && <ul aria-label={`${server.id} 工具列表`}>{tools.map((tool) => <li key={tool.name}><code>{tool.name}</code>{tool.description ? ` — ${tool.description}` : ''}</li>)}</ul>}
+          {tools.length > 0 && <div className="mcp-tool-list" aria-label={`${server.id} 工具列表`}>{tools.map((tool) => {
+            const key = `${server.id}\0${tool.name}`;
+            const result = toolResults[key];
+            return <section className="mcp-tool" key={tool.name} aria-labelledby={`mcp-tool-${server.id}-${tool.name}`}>
+              <div><h3 id={`mcp-tool-${server.id}-${tool.name}`}><code>{tool.name}</code></h3>{tool.description && <p>{tool.description}</p>}</div>
+              <label htmlFor={`mcp-args-${server.id}-${tool.name}`}>参数（JSON 对象）</label>
+              <textarea id={`mcp-args-${server.id}-${tool.name}`} className="input" rows={3} value={toolArguments[key] ?? '{}'} onChange={(event) => setToolArguments((current) => ({ ...current, [key]: event.target.value }))} disabled={!actions.canRefreshTools} />
+              <button type="button" className="btn btn-secondary" disabled={!actions.canRefreshTools} onClick={() => void invokeTool(server.id, tool.name)} aria-label={`调用 MCP 工具 ${tool.name}`}>调用工具</button>
+              {result !== undefined && <pre className="mcp-tool-result" aria-label={`${tool.name} 调用结果`}>{JSON.stringify(result, null, 2).slice(0, 4000)}</pre>}
+            </section>;
+          })}</div>}
         </section>; })}
       </div>}
-      <p className="section-footnote">客户端不直接执行命令、不解析 Secret，也不提供绕过 Policy 的 MCP tool call 入口。</p>
+      <p className="section-footnote">客户端不直接执行命令、不解析 Secret；MCP tool call 必须经过 Action Gateway，outcome_unknown 永不自动重放。</p>
     </div></div>
-    <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="添加 MCP 服务" footer={<><button type="button" className="btn btn-ghost" onClick={() => setModalOpen(false)}>取消</button><button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={Boolean(actionLabel) || connectionStatus !== 'connected' || !serverId.trim()}>保存配置</button></>}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {formError && <div className="live-alert live-alert-error" role="alert">{formError}</div>}
-        <label>服务 ID<input className="input" value={serverId} onChange={(event) => setServerId(event.target.value)} autoFocus required /></label>
-        <label>Transport<select className="select" value={transport} onChange={(event) => setTransport(event.target.value as typeof transport)}><option value="stdio">stdio</option><option value="legacy_sse">legacy SSE</option></select></label>
-        {transport === 'stdio' ? <label>argv（JSON 字符串数组）<textarea className="input" rows={4} value={stdioArgv} onChange={(event) => setStdioArgv(event.target.value)} aria-describedby="mcp-argv-help" /><small id="mcp-argv-help">参数数组直接交给 Core，不经过 Shell。</small></label> : <label>Endpoint Ref（环境变量名）<input className="input" value={endpointRef} onChange={(event) => setEndpointRef(event.target.value)} aria-describedby="mcp-endpoint-help" /><small id="mcp-endpoint-help">为避免暴露端点，Live API 只接受引用名，不接受 URL。</small></label>}
+    <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="添加 MCP 服务" footer={<><button type="button" className="btn btn-ghost" onClick={() => setModalOpen(false)}>取消</button><button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={busy || disconnected || !serverId.trim() || (transport === 'stdio' && workspaceRoots.length === 0)}>保存配置</button></>}>
+      <div className="mcp-form">
+        {formError && <div ref={formErrorRef} className="live-alert live-alert-error mcp-form-error" role="alert" tabIndex={-1}>{formError}</div>}
+        <label htmlFor="mcp-server-id">服务 ID</label><input id="mcp-server-id" className="input" value={serverId} onChange={(event) => setServerId(event.target.value)} autoFocus required />
+        <label htmlFor="mcp-transport">Transport</label><select id="mcp-transport" className="select" value={transport} onChange={(event) => setTransport(event.target.value as typeof transport)}><option value="stdio">stdio（Docker，无网络）</option><option value="legacy_sse">legacy SSE（引用凭据）</option></select>
+        {transport === 'stdio' ? <>
+          <label htmlFor="mcp-root-ref">工作区 Root Ref</label>
+          <select id="mcp-root-ref" className="select" value={workspaceRootRef} onChange={(event) => setWorkspaceRootRef(event.target.value)} aria-describedby="mcp-root-help" required>
+            <option value="" disabled>{workspaceRoots.length ? '请选择 Core Root Ref' : 'Core 未返回可用 Root Ref'}</option>
+            {workspaceRoots.map((root) => <option key={root.rootRef} value={root.rootRef}>{root.rootRef}</option>)}
+          </select>
+          <small id="mcp-root-help">只能选择 Core 返回的引用；客户端不会显示或提交宿主绝对路径。</small>
+          <label htmlFor="mcp-cwd-ref">相对工作目录</label><input id="mcp-cwd-ref" className="input" value={cwdRef} onChange={(event) => setCwdRef(event.target.value)} aria-describedby="mcp-cwd-help" required /><small id="mcp-cwd-help">相对于所选 Root Ref，例如 <code>.</code> 或 <code>tools/server</code>；禁止绝对路径和 <code>..</code>。</small>
+          <label htmlFor="mcp-docker-image">Docker 镜像 digest</label><input id="mcp-docker-image" className="input" value={dockerImage} onChange={(event) => setDockerImage(event.target.value)} placeholder="registry/image@sha256:…" aria-describedby="mcp-image-help" required /><small id="mcp-image-help">必须固定到 64 位小写 sha256 digest，不接受可变 tag。</small>
+          <label htmlFor="mcp-argv">argv（JSON 字符串数组）</label><textarea id="mcp-argv" className="input" rows={4} value={stdioArgv} onChange={(event) => setStdioArgv(event.target.value)} aria-describedby="mcp-argv-help" required /><small id="mcp-argv-help">命令与参数分项传给 Core，不经过 Shell；文件参数应相对于容器工作目录。</small>
+        </> : <>
+          <label htmlFor="mcp-endpoint-ref">Endpoint Ref</label><input id="mcp-endpoint-ref" className="input" value={endpointRef} onChange={(event) => setEndpointRef(event.target.value)} aria-describedby="mcp-endpoint-help" required /><small id="mcp-endpoint-help">只填环境变量引用名，不填写 URL。</small>
+          <label htmlFor="mcp-secret-ref">Secret Ref（可选）</label><input id="mcp-secret-ref" className="input" value={secretRef} onChange={(event) => setSecretRef(event.target.value)} aria-describedby="mcp-secret-help" /><small id="mcp-secret-help">只填环境变量引用名，不填写 Token 或密钥。</small>
+        </>}
       </div>
     </Modal>
   </div>;

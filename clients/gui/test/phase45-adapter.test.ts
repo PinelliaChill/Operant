@@ -3,6 +3,9 @@ import test from 'node:test';
 import {
   Phase45LiveAdapter,
   mapMcpServer,
+  mapMcpWorkspaceRoots,
+  mapMcpReceipt,
+  normalizePhase45Error,
   mapMcpTools,
   mapPolicyEvaluation,
   mapSecurityAudit,
@@ -48,6 +51,8 @@ test('MCP mapping retains lifecycle and tool snapshot metadata', () => {
     server_id: 'local',
     transport: 'stdio',
     stdio_argv: ['node', 'server.js'],
+    workspace_root_ref: 'workspace',
+    docker_image: `sha256:${'a'.repeat(64)}`,
     environment_refs: {},
     allow_loopback_http: false,
     lifecycle_status: 'running',
@@ -56,11 +61,41 @@ test('MCP mapping retains lifecycle and tool snapshot metadata', () => {
   });
   assert.equal(server.lifecycle, 'running');
   assert.deepEqual(server.stdioArgv, ['node', 'server.js']);
+  assert.equal(server.workspaceRootRef, 'workspace');
+  assert.equal(mapMcpWorkspaceRoots({ items: [{ root_ref: 'workspace' }] })[0].rootRef, 'workspace');
   assert.equal(mapMcpTools({ items: [{ name: 'read', description: 'Read data' }] })[0].name, 'read');
   assert.throws(
     () => mapMcpServer({ ...server, server_id: 'broken', transport: 'websocket' }),
     /transport/,
   );
+});
+
+test('MCP receipt and approval errors preserve only actionable control-plane facts', () => {
+  const receipt = mapMcpReceipt({
+    action_hash: 'a'.repeat(64), server_id: 'local', tool_name: 'read',
+    status: 'outcome_unknown', error_code: 'mcp.transport_failed', result_available: false,
+    updated_at: 'now', completed_at: null,
+  });
+  assert.equal(receipt.status, 'outcome_unknown');
+  assert.equal(receipt.resultAvailable, false);
+
+  const detail = normalizePhase45Error({
+    code: 'http_409', message: 'request failed', retryable: false, recovery: 'none',
+    detail: {
+      code: 'approval_required', approval_id: 'approval-1',
+      action_hash: 'b'.repeat(64), reason_code: 'policy.ask',
+    },
+  });
+  assert.equal(detail.code, 'approval_required');
+  assert.equal(detail.approvalId, 'approval-1');
+  assert.equal(detail.actionHash, 'b'.repeat(64));
+  assert.equal(detail.outcomeUnknown, false);
+  const unknown = normalizePhase45Error({
+    code: 'http_409', message: 'request failed', retryable: false, recovery: 'none',
+    detail: 'mcp.outcome_unknown',
+  });
+  assert.equal(unknown.code, 'mcp.outcome_unknown');
+  assert.equal(unknown.outcomeUnknown, true);
 });
 
 test('Policy mapping retains DENY and remediation evidence', () => {
@@ -151,4 +186,32 @@ test('adapter retains a mutation key through response loss and releases after ou
   assert.equal((await adapter.createMcpServer(request)).id, 'local');
   assert.equal(typeof (options[0] as { idempotencyKey: unknown }).idempotencyKey, 'string');
   assert.deepEqual(options[1], options[0]);
+});
+
+test('approved MCP call retries with the original stable mutation key', async () => {
+  const callOptions: unknown[] = [];
+  const client = {
+    callMcpTool: async (_server: string, _tool: string, _body: unknown, options: unknown) => {
+      callOptions.push(options);
+      if (callOptions.length === 1) {
+        throw Object.assign(new Error('approval required'), {
+          code: 'http_409', recovery: 'none', retryable: false,
+          detail: { code: 'mcp.approval_required', approval_id: 'approval-1', action_hash: 'c'.repeat(64) },
+        });
+      }
+      return { result: { ok: true } };
+    },
+    decidePhase45Approval: async () => ({
+      approval_id: 'approval-1', action_hash: 'c'.repeat(64), status: 'approved',
+      expires_at: 'later', reason_code: 'user-confirmed',
+    }),
+  };
+  const adapter = new Phase45LiveAdapter(client as never);
+  await assert.rejects(adapter.callMcpTool('local', 'read', { arguments: { path: 'README.md' } }));
+  assert.equal((await adapter.decideMcpApproval('approval-1', true)).status, 'approved');
+  assert.deepEqual(
+    await adapter.callMcpTool('local', 'read', { arguments: { path: 'README.md' } }),
+    { result: { ok: true } },
+  );
+  assert.deepEqual(callOptions[1], callOptions[0]);
 });
