@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -20,7 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from operant.domain.models import CommandExecutionPolicy, CommandRunnerType
 from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
-from operant.tools.execution import DockerCommandRunner
+from operant.tools.execution import (
+    SNAPSHOT_EXCLUDED_NAMES,
+    DockerCommandRunner,
+    is_protected_workspace_name,
+)
 
 
 class McpError(RuntimeError):
@@ -48,6 +53,8 @@ class McpLimits(BaseModel):
     max_json_items: int = Field(default=10_000, ge=1, le=100_000)
     max_string_chars: int = Field(default=100_000, ge=1, le=1_000_000)
     max_stderr_chars: int = Field(default=20_000, ge=0, le=200_000)
+    max_snapshot_entries: int = Field(default=20_000, ge=1, le=100_000)
+    max_snapshot_bytes: int = Field(default=512_000_000, ge=1_024, le=2_000_000_000)
 
 
 class McpStdioConfig(BaseModel):
@@ -250,6 +257,7 @@ class StdioTransport:
         self._temporary_root = temporary_root
         self._cidfile = cidfile
         try:
+            await asyncio.to_thread(_validate_snapshot_limits, workspace, self.limits)
             await asyncio.to_thread(
                 DockerCommandRunner._copy_workspace_snapshot,
                 workspace,
@@ -285,6 +293,9 @@ class StdioTransport:
                 timeout=self.limits.lifecycle_timeout_seconds,
             )
         except asyncio.CancelledError:
+            await self._cleanup_sandbox()
+            raise
+        except McpError:
             await self._cleanup_sandbox()
             raise
         except Exception as exc:
@@ -387,6 +398,36 @@ class StdioTransport:
             if len(captured) < byte_limit:
                 captured.extend(chunk[: byte_limit - len(captured)])
         self._stderr = captured.decode("utf-8", errors="replace")
+
+
+def _validate_snapshot_limits(workspace: Path, limits: McpLimits) -> None:
+    entries = 0
+    total_bytes = 0
+    for directory, directory_names, file_names in os.walk(workspace, followlinks=False):
+        directory_names[:] = [
+            name
+            for name in directory_names
+            if name.lower() not in SNAPSHOT_EXCLUDED_NAMES and not is_protected_workspace_name(name)
+        ]
+        visible_files = [
+            name
+            for name in file_names
+            if name.lower() not in SNAPSHOT_EXCLUDED_NAMES and not is_protected_workspace_name(name)
+        ]
+        entries += len(directory_names) + len(visible_files)
+        if entries > limits.max_snapshot_entries:
+            raise McpError("mcp.stdio_snapshot_limit", "MCP workspace snapshot is too large")
+        current = Path(directory)
+        for name in visible_files:
+            try:
+                total_bytes += (current / name).lstat().st_size
+            except OSError as exc:
+                raise McpError(
+                    "mcp.stdio_snapshot_unreadable",
+                    "MCP workspace snapshot changed while it was inspected",
+                ) from exc
+            if total_bytes > limits.max_snapshot_bytes:
+                raise McpError("mcp.stdio_snapshot_limit", "MCP workspace snapshot is too large")
 
 
 class LegacySseTransport:

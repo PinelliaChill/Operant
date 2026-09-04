@@ -97,7 +97,7 @@ from operant.providers.openai_compatible import (
     OpenAICompatibleProvider,
     ProviderError,
 )
-from operant.settings import database_path, load_local_env
+from operant.settings import configured_path_roots, database_path, load_local_env
 
 MAX_ARTIFACT_UPLOAD_BYTES = 16 * 1024 * 1024
 MAX_ARTIFACT_BASE64_CHARS = ((MAX_ARTIFACT_UPLOAD_BYTES + 2) // 3) * 4
@@ -1289,6 +1289,10 @@ def create_app(
     phase45_approval_reviewer: Any | None = None,
 ) -> FastAPI:
     load_local_env()
+    if phase45_skill_roots is None:
+        phase45_skill_roots = configured_path_roots("OPERANT_SKILL_ROOTS_JSON")
+    if phase45_mcp_workspace_roots is None:
+        phase45_mcp_workspace_roots = configured_path_roots("OPERANT_MCP_WORKSPACE_ROOTS_JSON")
     store = SQLiteStore(db_path or database_path())
     configured_artifact_root = (
         store.path.parent.absolute() / "artifacts" if artifact_root is None else Path(artifact_root)

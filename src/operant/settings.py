@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 from pathlib import Path
@@ -63,3 +64,31 @@ def _parse_env_value(raw_value: str, line_number: int) -> str:
 
 def database_path() -> Path:
     return Path(os.environ.get("OPERANT_DB_PATH", ".operant/operant.sqlite3"))
+
+
+def configured_path_roots(environment_name: str, *, max_roots: int = 16) -> dict[str, Path]:
+    """Parse an operator-owned JSON reference-to-path allowlist without resolving it."""
+
+    raw = os.environ.get(environment_name)
+    if raw is None or not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{environment_name} must contain a JSON object") from exc
+    if not isinstance(value, dict) or not 1 <= len(value) <= max_roots:
+        raise ValueError(f"{environment_name} must contain 1-{max_roots} path roots")
+    roots: dict[str, Path] = {}
+    for reference, path in value.items():
+        if (
+            not isinstance(reference, str)
+            or not reference
+            or len(reference) > 200
+            or not isinstance(path, str)
+            or not path
+            or len(path) > 4096
+            or "\x00" in path
+        ):
+            raise ValueError(f"{environment_name} contains an invalid root entry")
+        roots[reference] = Path(path)
+    return roots

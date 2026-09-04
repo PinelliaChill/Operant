@@ -503,3 +503,31 @@ async def test_stdio_timeout_is_fail_closed(
         await transport.request("ping", {})
     await transport.close()
     assert error.value.code == "mcp.request_timeout"
+
+
+@pytest.mark.asyncio
+async def test_stdio_rejects_oversized_snapshot_before_docker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "large.bin").write_bytes(b"x" * 2_048)
+    spawned = False
+
+    async def forbidden_spawn(*_argv: str, **_kwargs: Any) -> None:
+        nonlocal spawned
+        spawned = True
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden_spawn)
+    transport = StdioTransport(
+        McpStdioConfig(
+            argv=("server",),
+            workspace=str(tmp_path),
+            docker_image="sha256:" + "c" * 64,
+        ),
+        limits=McpLimits(max_snapshot_bytes=1_024),
+    )
+
+    with pytest.raises(McpError) as error:
+        await transport.start()
+
+    assert error.value.code == "mcp.stdio_snapshot_limit"
+    assert spawned is False
