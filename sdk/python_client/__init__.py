@@ -25,6 +25,15 @@ from .phase45_generated import (
 from .phase45_generated import (
     ProtocolNegotiationError as Phase45ProtocolNegotiationError,
 )
+from .phase56_generated import (
+    PHASE56_MAX_CURSOR,
+    PHASE56_PROTOCOL_VERSION,
+    PHASE56_SCHEMA_DIGEST,
+    Phase56Client,
+)
+from .phase56_generated import (
+    ProtocolNegotiationError as Phase56ProtocolNegotiationError,
+)
 from .transport import Phase23Error
 
 __all__ = [
@@ -37,11 +46,16 @@ __all__ = [
     "PHASE45_MAX_CURSOR",
     "PHASE45_PROTOCOL_VERSION",
     "PHASE45_SCHEMA_DIGEST",
+    "PHASE56_MAX_CURSOR",
+    "PHASE56_PROTOCOL_VERSION",
+    "PHASE56_SCHEMA_DIGEST",
     "Phase1EClient",
     "Phase23Client",
     "Phase23Error",
     "Phase23ProtocolNegotiationError",
     "Phase45Client",
     "Phase45ProtocolNegotiationError",
+    "Phase56Client",
+    "Phase56ProtocolNegotiationError",
     "ProtocolNegotiationError",
 ]

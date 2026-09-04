@@ -19,6 +19,13 @@ import {
   reduceRuntimeEvent,
 } from '../../live23/runtimeState';
 import { mapRuntimeFrame } from '../../live23/phase23Adapter';
+import {
+  loadMultiWriterProjection,
+  type MergeRunView,
+  type WriterArtifactView,
+  type WriterConflictView,
+  type WriterWorkspaceView,
+} from '../../live23/multiwriterAdapter';
 import './live-graph-team.css';
 
 type LiveTab = 'home' | 'canvas' | 'runs';
@@ -28,7 +35,7 @@ function message(error: unknown): string {
 }
 
 export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab }) => {
-  const { phase23Client, connectionStatus, activeWorkspace, addNotification } = useOperant();
+  const { phase23Client, phase56Client, connectionStatus, activeWorkspace, addNotification } = useOperant();
   const keys = useRef(new IdempotencyKeyRegistry());
   const streamEpoch = useRef(0);
   const graphScopeEpoch = useRef(0);
@@ -46,6 +53,10 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
   const [graphRunId, setGraphRunId] = useState('');
   const [graphRun, setGraphRun] = useState<Phase23.GraphWorkflowRun | null>(null);
   const [nodeRuns, setNodeRuns] = useState<Phase23.NodeRun[]>([]);
+  const [writerWorkspaces, setWriterWorkspaces] = useState<WriterWorkspaceView[]>([]);
+  const [writerArtifacts, setWriterArtifacts] = useState<WriterArtifactView[]>([]);
+  const [writerConflicts, setWriterConflicts] = useState<WriterConflictView[]>([]);
+  const [mergeRuns, setMergeRuns] = useState<MergeRunView[]>([]);
   const [events, setEvents] = useState(emptyRuntimeEventState);
   const [streamStatus, setStreamStatus] = useState<'idle' | 'connecting' | 'live' | 'disconnected'>('idle');
   const [teamRunId, setTeamRunId] = useState('');
@@ -81,9 +92,10 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
     const normalizedRunId = runId.trim();
     if (!normalizedRunId) throw new Error('请先输入 Graph Run ID。');
     const epoch = ++graphQueryEpoch.current;
-    const [nextRun, nextNodes] = await Promise.all([
+    const [nextRun, nextNodes, multiWriter] = await Promise.all([
       phase23Client.getGraphRun(normalizedRunId),
       phase23Client.listNodeRuns(normalizedRunId),
+      loadMultiWriterProjection(phase56Client, normalizedRunId),
     ]);
     if (
       epoch !== graphQueryEpoch.current
@@ -92,6 +104,10 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
     ) return null;
     setGraphRun(nextRun);
     setNodeRuns(nextNodes);
+    setWriterWorkspaces(multiWriter.workspaces);
+    setWriterArtifacts(multiWriter.artifacts);
+    setWriterConflicts(multiWriter.conflicts);
+    setMergeRuns(multiWriter.merges);
     return nextRun;
   };
 
@@ -133,6 +149,10 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
     if (clearEvents) setEvents(emptyRuntimeEventState());
     setGraphRun(null);
     setNodeRuns([]);
+    setWriterWorkspaces([]);
+    setWriterArtifacts([]);
+    setWriterConflicts([]);
+    setMergeRuns([]);
     return graphScopeEpoch.current;
   };
 
@@ -409,6 +429,43 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
             <div className="live23-grid">
               <div><h3>节点</h3><ul>{nodeRuns.map((node) => <li key={node.id}><span>{node.node_id}</span><strong>{node.status}</strong></li>)}</ul></div>
               <div><h3>最近事件</h3><ul>{scopedGraphEvents.slice().reverse().map((event) => <li key={`${event.resourceScope}:${event.id}`}><span>{event.eventType}</span><strong>{event.cursor?.toString() ?? '—'}</strong></li>)}</ul></div>
+            </div>
+            <div className="live23-grid live23-writer-grid" aria-label="多 Writer 隔离与合并状态">
+              <div>
+                <h3>Writer Workspace / Lease</h3>
+                <ul>{writerWorkspaces.map((workspace) => (
+                  <li key={workspace.writerWorkspaceId}>
+                    <span>{workspace.writerKey} · {workspace.isolationKind}<small>{workspace.isolationRef}<br />{workspace.ownershipPaths.join(', ')}</small></span>
+                    <strong>{workspace.lease === null ? '无 Lease' : workspace.lease.releasedAt ? '已释放' : `fence ${workspace.lease.fencing}`}</strong>
+                  </li>
+                ))}</ul>
+              </div>
+              <div>
+                <h3>Patch / Commit Artifact</h3>
+                <ul>{writerArtifacts.map((artifact) => (
+                  <li key={artifact.writerArtifactId}>
+                    <span>{artifact.artifactKind}<small>{artifact.changedPaths.join(', ')}</small></span>
+                    <strong>{artifact.testEvidenceRefs.length} 份测试证据</strong>
+                  </li>
+                ))}</ul>
+              </div>
+              <div>
+                <h3>Conflict</h3>
+                <ul>{writerConflicts.map((conflict) => (
+                  <li key={conflict.conflictId}>
+                    <span>{conflict.paths.join(', ')}</span><strong>{conflict.status}</strong>
+                  </li>
+                ))}</ul>
+              </div>
+              <div>
+                <h3>Merge Node</h3>
+                <ul>{mergeRuns.map((merge) => (
+                  <li key={merge.mergeRunId}>
+                    <span>{merge.mergeNodeId}<small>{merge.resultArtifactRef ?? merge.errorCode ?? '等待结果'}</small></span>
+                    <strong>{merge.status}</strong>
+                  </li>
+                ))}</ul>
+              </div>
             </div>
           </section>
         )}

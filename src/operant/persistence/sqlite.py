@@ -239,6 +239,7 @@ class SQLiteStore:
         10: "cc99b8ac7b8f7b7898d807adb3252ea993a9c435ce8ac31b1109183776c32680",
         11: "9e1fb35ddb1c6fafb19e44e145b5e94258c896530c9e8b6bcc0fa5c4258d2a2d",
         12: "0211f297de06325f636986b174cd068e30c89592260d13ca132f9899d62a3876",
+        13: "24ffd705597380ea6e7c6ae7e120c33520b7cffd6547809b25130f6e5d8647ac",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -253,6 +254,7 @@ class SQLiteStore:
         10: "5153ded0e3637722fc9972c17cca5c9ca55e737e0993e5d46bf5486e041a5765",
         11: "6cc52b1f8c469b66bf907dd8d8dd30ee08951396feb03cb16d8d5f2d45a00003",
         12: "d62b2a3c77cbcbc2131f75067f31d68c6de3d4ed28e3bbedc626d50014bd1bb4",
+        13: "bab03e8bf1473ac17648823637c1ce717824fa544301fbe2a6d4e2bccc219299",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -578,6 +580,12 @@ class SQLiteStore:
                 self._upgrade_v12,
                 self._downgrade_v12,
             ),
+            build(
+                13,
+                "phase5b_remote_phase6_multiwriter",
+                self._upgrade_v13,
+                self._downgrade_v13,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -847,6 +855,8 @@ class SQLiteStore:
             self._validate_v11_schema_shape(connection)
         elif migration.version == 12:
             self._validate_v12_schema_shape(connection)
+        elif migration.version == 13:
+            self._validate_v13_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -1767,6 +1777,232 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v13_required_columns() -> dict[str, set[str]]:
+        return {
+            "remote_control_hosts": {
+                "host_id",
+                "display_name",
+                "signing_public_key",
+                "exchange_public_key",
+                "core_version",
+                "protocol_version",
+                "capabilities_json",
+                "enabled",
+                "online_state",
+                "last_seen_at",
+                "created_at",
+                "updated_at",
+            },
+            "remote_pairing_challenges": {
+                "challenge_id",
+                "host_id",
+                "code_hash",
+                "allowed_scopes_json",
+                "expires_at",
+                "max_uses",
+                "uses",
+                "consumed_at",
+                "created_at",
+            },
+            "remote_devices": {
+                "device_id",
+                "host_id",
+                "display_name",
+                "signing_public_key",
+                "exchange_public_key",
+                "scopes_json",
+                "version",
+                "paired_at",
+                "last_seen_at",
+                "revoked_at",
+            },
+            "remote_sessions": {
+                "remote_session_id",
+                "host_id",
+                "device_id",
+                "transport_mode",
+                "protocol_version",
+                "event_cursor",
+                "connection_state",
+                "session_key_ref",
+                "expires_at",
+                "connected_at",
+                "disconnected_at",
+                "created_at",
+            },
+            "remote_command_receipts": {
+                "command_id",
+                "idempotency_key",
+                "action_hash",
+                "host_id",
+                "device_id",
+                "remote_session_id",
+                "payload_hash",
+                "nonce",
+                "signature",
+                "status",
+                "execution_owner_id",
+                "execution_lease_expires_at",
+                "host_acknowledged_at",
+                "result_ref",
+                "error_code",
+                "created_at",
+                "updated_at",
+            },
+            "relay_envelopes": {
+                "envelope_id",
+                "route_ref",
+                "sender_ref",
+                "recipient_ref",
+                "protocol_version",
+                "ciphertext",
+                "nonce",
+                "status",
+                "expires_at",
+                "created_at",
+                "delivered_at",
+                "acknowledged_at",
+            },
+            "remote_execution_targets": {
+                "target_id",
+                "display_name",
+                "endpoint_ref",
+                "identity_public_key",
+                "credential_ref",
+                "policy_ref",
+                "artifact_namespace",
+                "capability_manifest_json",
+                "status",
+                "fencing",
+                "last_seen_at",
+                "created_at",
+                "updated_at",
+            },
+            "remote_target_leases": {
+                "lease_id",
+                "target_id",
+                "owner",
+                "token_hash",
+                "fencing",
+                "workspace_ref",
+                "expires_at",
+                "released_at",
+            },
+            "remote_execution_jobs": {
+                "job_id",
+                "target_id",
+                "lease_id",
+                "lease_fencing",
+                "capability",
+                "operation",
+                "arguments_json",
+                "action_hash",
+                "idempotency_key",
+                "idempotency",
+                "status",
+                "cancellation_requested",
+                "created_at",
+                "started_at",
+                "finished_at",
+            },
+            "remote_execution_results": {
+                "result_id",
+                "job_id",
+                "result_idempotency_key",
+                "status",
+                "artifact_ref",
+                "artifact_sha256",
+                "postcondition_json",
+                "error_code",
+                "completed_at",
+            },
+            "capability_observations": {
+                "observation_id",
+                "target_id",
+                "capability",
+                "target_ref",
+                "observation_hash",
+                "body_json",
+                "artifact_ref",
+                "created_at",
+                "expires_at",
+            },
+            "capability_action_receipts": {
+                "receipt_id",
+                "target_id",
+                "capability",
+                "action_hash",
+                "observation_hash",
+                "status",
+                "result_json",
+                "error_code",
+                "created_at",
+                "completed_at",
+            },
+            "writer_workspaces": {
+                "writer_workspace_id",
+                "graph_run_id",
+                "node_run_id",
+                "writer_key",
+                "isolation_kind",
+                "isolation_ref",
+                "base_revision",
+                "ownership_paths_json",
+                "created_at",
+                "closed_at",
+            },
+            "writer_leases": {
+                "writer_workspace_id",
+                "owner",
+                "token_hash",
+                "fencing",
+                "expires_at",
+                "released_at",
+            },
+            "writer_artifacts": {
+                "writer_artifact_id",
+                "writer_workspace_id",
+                "artifact_kind",
+                "artifact_ref",
+                "artifact_sha256",
+                "base_revision",
+                "result_revision",
+                "changed_paths_json",
+                "test_evidence_refs_json",
+                "created_at",
+            },
+            "writer_conflicts": {
+                "conflict_id",
+                "graph_run_id",
+                "left_artifact_id",
+                "right_artifact_id",
+                "conflict_hash",
+                "paths_json",
+                "status",
+                "resolution_artifact_ref",
+                "created_at",
+                "resolved_at",
+            },
+            "merge_runs": {
+                "merge_run_id",
+                "graph_run_id",
+                "merge_node_id",
+                "artifact_ids_json",
+                "strategy",
+                "target_isolation_ref",
+                "base_revision",
+                "status",
+                "expected_revision",
+                "execution_owner_id",
+                "execution_lease_expires_at",
+                "result_artifact_ref",
+                "error_code",
+                "created_at",
+                "updated_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -1796,6 +2032,8 @@ class SQLiteStore:
             tables.update(cls._v11_required_columns())
         if version >= 12:
             tables.update(cls._v12_required_columns())
+        if version >= 13:
+            tables.update(cls._v13_required_columns())
         return tables
 
     @staticmethod
@@ -1919,6 +2157,38 @@ class SQLiteStore:
                 ("phase45_approval_requests", "reason_code"),
                 ("phase45_approval_requests", "decided_at"),
                 ("phase45_approval_requests", "consumed_at"),
+                ("remote_control_hosts", "last_seen_at"),
+                ("remote_pairing_challenges", "consumed_at"),
+                ("remote_devices", "last_seen_at"),
+                ("remote_devices", "revoked_at"),
+                ("remote_sessions", "connected_at"),
+                ("remote_sessions", "disconnected_at"),
+                ("remote_command_receipts", "host_acknowledged_at"),
+                ("remote_command_receipts", "execution_owner_id"),
+                ("remote_command_receipts", "execution_lease_expires_at"),
+                ("remote_command_receipts", "result_ref"),
+                ("remote_command_receipts", "error_code"),
+                ("relay_envelopes", "delivered_at"),
+                ("relay_envelopes", "acknowledged_at"),
+                ("remote_execution_targets", "last_seen_at"),
+                ("remote_target_leases", "released_at"),
+                ("remote_execution_jobs", "started_at"),
+                ("remote_execution_jobs", "finished_at"),
+                ("remote_execution_results", "artifact_ref"),
+                ("remote_execution_results", "artifact_sha256"),
+                ("remote_execution_results", "error_code"),
+                ("capability_observations", "artifact_ref"),
+                ("capability_action_receipts", "error_code"),
+                ("capability_action_receipts", "completed_at"),
+                ("writer_workspaces", "closed_at"),
+                ("writer_leases", "released_at"),
+                ("writer_artifacts", "result_revision"),
+                ("writer_conflicts", "resolution_artifact_ref"),
+                ("writer_conflicts", "resolved_at"),
+                ("merge_runs", "result_artifact_ref"),
+                ("merge_runs", "error_code"),
+                ("merge_runs", "execution_owner_id"),
+                ("merge_runs", "execution_lease_expires_at"),
             }
         )
 
@@ -1978,6 +2248,10 @@ class SQLiteStore:
                 "lease_fencing",
                 "side_effect_started",
                 "allow_loopback_http",
+                "enabled",
+                "event_cursor",
+                "cancellation_requested",
+                "expected_revision",
             }
         )
 
@@ -2269,6 +2543,8 @@ class SQLiteStore:
                 store._upgrade_v11(connection)
             if version >= 12:
                 store._upgrade_v12(connection)
+            if version >= 13:
+                store._upgrade_v13(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2434,6 +2710,28 @@ class SQLiteStore:
                     "phase45_approval_requests": ("id",),
                 }
             )
+        if version >= 13:
+            contract.update(
+                {
+                    "remote_control_hosts": ("host_id",),
+                    "remote_pairing_challenges": ("challenge_id",),
+                    "remote_devices": ("device_id",),
+                    "remote_sessions": ("remote_session_id",),
+                    "remote_command_receipts": ("command_id",),
+                    "relay_envelopes": ("envelope_id",),
+                    "remote_execution_targets": ("target_id",),
+                    "remote_target_leases": ("lease_id",),
+                    "remote_execution_jobs": ("job_id",),
+                    "remote_execution_results": ("result_id",),
+                    "capability_observations": ("observation_id",),
+                    "capability_action_receipts": ("receipt_id",),
+                    "writer_workspaces": ("writer_workspace_id",),
+                    "writer_leases": ("writer_workspace_id",),
+                    "writer_artifacts": ("writer_artifact_id",),
+                    "writer_conflicts": ("conflict_id",),
+                    "merge_runs": ("merge_run_id",),
+                }
+            )
         return contract
 
     @staticmethod
@@ -2586,6 +2884,42 @@ class SQLiteStore:
             contract.update(
                 {
                     "phase45_approval_requests": (("action_hash",),),
+                }
+            )
+        if version >= 13:
+            contract.update(
+                {
+                    "remote_pairing_challenges": (("code_hash",),),
+                    "remote_devices": (
+                        ("host_id", "signing_public_key"),
+                        ("host_id", "exchange_public_key"),
+                    ),
+                    "remote_sessions": (("host_id", "device_id", "session_key_ref"),),
+                    "remote_command_receipts": (
+                        ("idempotency_key",),
+                        ("action_hash",),
+                        ("device_id", "nonce"),
+                    ),
+                    "relay_envelopes": (("sender_ref", "nonce"),),
+                    "remote_target_leases": (("token_hash",),),
+                    "remote_execution_jobs": (
+                        ("action_hash",),
+                        ("target_id", "idempotency_key"),
+                    ),
+                    "remote_execution_results": (
+                        ("job_id",),
+                        ("result_idempotency_key",),
+                    ),
+                    "capability_observations": (("target_id", "observation_hash"),),
+                    "capability_action_receipts": (("action_hash",),),
+                    "writer_workspaces": (
+                        ("graph_run_id", "writer_key"),
+                        ("isolation_ref",),
+                    ),
+                    "writer_leases": (("token_hash",),),
+                    "writer_artifacts": (("artifact_ref",),),
+                    "writer_conflicts": (("graph_run_id", "conflict_hash"),),
+                    "merge_runs": (("target_isolation_ref",),),
                 }
             )
         return contract
@@ -2885,6 +3219,86 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 13:
+            contract.update(
+                {
+                    "remote_pairing_challenges": (
+                        ("host_id", "remote_control_hosts", "host_id", "NO ACTION"),
+                    ),
+                    "remote_devices": (
+                        ("host_id", "remote_control_hosts", "host_id", "NO ACTION"),
+                    ),
+                    "remote_sessions": (
+                        ("host_id", "remote_control_hosts", "host_id", "NO ACTION"),
+                        ("device_id", "remote_devices", "device_id", "NO ACTION"),
+                    ),
+                    "remote_command_receipts": (
+                        ("action_hash", "security_action_requests", "action_hash", "NO ACTION"),
+                        ("host_id", "remote_control_hosts", "host_id", "NO ACTION"),
+                        ("device_id", "remote_devices", "device_id", "NO ACTION"),
+                        (
+                            "remote_session_id",
+                            "remote_sessions",
+                            "remote_session_id",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "remote_target_leases": (
+                        ("target_id", "remote_execution_targets", "target_id", "NO ACTION"),
+                    ),
+                    "remote_execution_jobs": (
+                        ("target_id", "remote_execution_targets", "target_id", "NO ACTION"),
+                        ("lease_id", "remote_target_leases", "lease_id", "NO ACTION"),
+                        ("action_hash", "security_action_requests", "action_hash", "NO ACTION"),
+                    ),
+                    "remote_execution_results": (
+                        ("job_id", "remote_execution_jobs", "job_id", "NO ACTION"),
+                    ),
+                    "capability_observations": (
+                        ("target_id", "remote_execution_targets", "target_id", "NO ACTION"),
+                    ),
+                    "capability_action_receipts": (
+                        ("target_id", "remote_execution_targets", "target_id", "NO ACTION"),
+                        ("action_hash", "security_action_requests", "action_hash", "NO ACTION"),
+                    ),
+                    "writer_workspaces": (
+                        ("graph_run_id", "graph_workflow_runs", "id", "NO ACTION"),
+                        ("node_run_id", "node_runs", "id", "NO ACTION"),
+                    ),
+                    "writer_leases": (
+                        (
+                            "writer_workspace_id",
+                            "writer_workspaces",
+                            "writer_workspace_id",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "writer_artifacts": (
+                        (
+                            "writer_workspace_id",
+                            "writer_workspaces",
+                            "writer_workspace_id",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "writer_conflicts": (
+                        ("graph_run_id", "graph_workflow_runs", "id", "NO ACTION"),
+                        (
+                            "left_artifact_id",
+                            "writer_artifacts",
+                            "writer_artifact_id",
+                            "NO ACTION",
+                        ),
+                        (
+                            "right_artifact_id",
+                            "writer_artifacts",
+                            "writer_artifact_id",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "merge_runs": (("graph_run_id", "graph_workflow_runs", "id", "NO ACTION"),),
+                }
+            )
         return contract
 
     @staticmethod
@@ -3078,6 +3492,40 @@ class SQLiteStore:
                     "idx_phase45_approvals_status_expiry": ("status", "expires_at"),
                 }
             )
+        if version >= 13:
+            indexes.update(
+                {
+                    "idx_remote_pairing_host_expiry": ("host_id", "expires_at"),
+                    "idx_remote_devices_host_revoked": ("host_id", "revoked_at"),
+                    "idx_remote_sessions_device_state": ("device_id", "connection_state"),
+                    "idx_remote_commands_device_status": ("device_id", "status", "updated_at"),
+                    "idx_remote_commands_execution_lease": (
+                        "status",
+                        "execution_lease_expires_at",
+                    ),
+                    "idx_relay_route_status_expiry": ("route_ref", "status", "expires_at"),
+                    "idx_remote_targets_status_seen": ("status", "last_seen_at"),
+                    "idx_remote_target_leases_target_expiry": ("target_id", "expires_at"),
+                    "idx_remote_jobs_target_status": ("target_id", "status", "created_at"),
+                    "idx_capability_observations_target_expiry": ("target_id", "expires_at"),
+                    "idx_capability_receipts_target_status": (
+                        "target_id",
+                        "status",
+                        "created_at",
+                    ),
+                    "idx_writer_workspaces_run_writer": ("graph_run_id", "writer_key"),
+                    "idx_writer_artifacts_workspace_created": (
+                        "writer_workspace_id",
+                        "created_at",
+                    ),
+                    "idx_writer_conflicts_run_status": ("graph_run_id", "status"),
+                    "idx_merge_runs_graph_status": ("graph_run_id", "status", "updated_at"),
+                    "idx_merge_runs_execution_lease": (
+                        "status",
+                        "execution_lease_expires_at",
+                    ),
+                }
+            )
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -3181,6 +3629,9 @@ class SQLiteStore:
 
     def _validate_v12_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=12)
+
+    def _validate_v13_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=13)
 
     def _validate_schema_contract(
         self,
@@ -7471,6 +7922,586 @@ class SQLiteStore:
             BEGIN
                 SELECT RAISE(ABORT, 'Phase 4 approval binding is immutable');
             END;
+            """,
+        )
+
+    def _upgrade_v13(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE remote_control_hosts (
+                host_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 200),
+                signing_public_key TEXT NOT NULL CHECK (
+                    length(signing_public_key) BETWEEN 32 AND 500
+                ),
+                exchange_public_key TEXT NOT NULL CHECK (
+                    length(exchange_public_key) BETWEEN 32 AND 500
+                ),
+                core_version TEXT NOT NULL CHECK (length(core_version) BETWEEN 1 AND 100),
+                protocol_version TEXT NOT NULL CHECK (
+                    length(protocol_version) BETWEEN 1 AND 100
+                ),
+                capabilities_json TEXT NOT NULL CHECK (
+                    json_valid(capabilities_json) AND json_type(capabilities_json) = 'array'
+                ),
+                enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+                online_state TEXT NOT NULL CHECK (
+                    online_state IN ('offline', 'online', 'degraded')
+                ),
+                last_seen_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE remote_pairing_challenges (
+                challenge_id TEXT PRIMARY KEY,
+                host_id TEXT NOT NULL,
+                code_hash TEXT NOT NULL UNIQUE CHECK (
+                    length(code_hash) = 64 AND code_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                allowed_scopes_json TEXT NOT NULL CHECK (
+                    json_valid(allowed_scopes_json)
+                    AND json_type(allowed_scopes_json) = 'array'
+                    AND json_array_length(allowed_scopes_json) BETWEEN 1 AND 6
+                ),
+                expires_at TEXT NOT NULL,
+                max_uses INTEGER NOT NULL CHECK (max_uses BETWEEN 1 AND 5),
+                uses INTEGER NOT NULL DEFAULT 0 CHECK (uses BETWEEN 0 AND 5),
+                consumed_at TEXT,
+                created_at TEXT NOT NULL,
+                CHECK (uses <= max_uses),
+                FOREIGN KEY (host_id) REFERENCES remote_control_hosts(host_id)
+            );
+            CREATE INDEX idx_remote_pairing_host_expiry
+                ON remote_pairing_challenges(host_id, expires_at);
+
+            CREATE TABLE remote_devices (
+                device_id TEXT PRIMARY KEY,
+                host_id TEXT NOT NULL,
+                display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 200),
+                signing_public_key TEXT NOT NULL CHECK (
+                    length(signing_public_key) BETWEEN 32 AND 500
+                ),
+                exchange_public_key TEXT NOT NULL CHECK (
+                    length(exchange_public_key) BETWEEN 32 AND 500
+                ),
+                scopes_json TEXT NOT NULL CHECK (
+                    json_valid(scopes_json) AND json_type(scopes_json) = 'array'
+                ),
+                version INTEGER NOT NULL CHECK (version >= 1),
+                paired_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                revoked_at TEXT,
+                UNIQUE (host_id, signing_public_key),
+                UNIQUE (host_id, exchange_public_key),
+                FOREIGN KEY (host_id) REFERENCES remote_control_hosts(host_id)
+            );
+            CREATE INDEX idx_remote_devices_host_revoked
+                ON remote_devices(host_id, revoked_at);
+
+            CREATE TABLE remote_sessions (
+                remote_session_id TEXT PRIMARY KEY,
+                host_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                transport_mode TEXT NOT NULL CHECK (transport_mode IN ('direct', 'relay')),
+                protocol_version TEXT NOT NULL CHECK (
+                    length(protocol_version) BETWEEN 1 AND 100
+                ),
+                event_cursor INTEGER NOT NULL DEFAULT 0 CHECK (event_cursor >= 0),
+                connection_state TEXT NOT NULL CHECK (
+                    connection_state IN ('connecting', 'connected', 'disconnected', 'closed')
+                ),
+                session_key_ref TEXT NOT NULL CHECK (
+                    length(session_key_ref) BETWEEN 1 AND 300
+                ),
+                expires_at TEXT NOT NULL,
+                connected_at TEXT,
+                disconnected_at TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE (host_id, device_id, session_key_ref),
+                FOREIGN KEY (host_id) REFERENCES remote_control_hosts(host_id),
+                FOREIGN KEY (device_id) REFERENCES remote_devices(device_id)
+            );
+            CREATE INDEX idx_remote_sessions_device_state
+                ON remote_sessions(device_id, connection_state);
+            CREATE TRIGGER remote_sessions_host_device_guard
+            BEFORE INSERT ON remote_sessions
+            WHEN NOT EXISTS (
+                SELECT 1 FROM remote_devices
+                WHERE device_id = NEW.device_id AND host_id = NEW.host_id
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'remote session device does not belong to host');
+            END;
+
+            CREATE TABLE remote_command_receipts (
+                command_id TEXT PRIMARY KEY,
+                idempotency_key TEXT NOT NULL UNIQUE CHECK (
+                    length(idempotency_key) BETWEEN 1 AND 300
+                ),
+                action_hash TEXT NOT NULL UNIQUE CHECK (
+                    length(action_hash) = 64 AND action_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                host_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                remote_session_id TEXT NOT NULL,
+                payload_hash TEXT NOT NULL CHECK (
+                    length(payload_hash) = 64 AND payload_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                nonce TEXT NOT NULL CHECK (length(nonce) BETWEEN 16 AND 200),
+                signature TEXT NOT NULL CHECK (length(signature) BETWEEN 32 AND 500),
+                status TEXT NOT NULL CHECK (
+                    status IN ('received', 'accepted', 'rejected', 'completed', 'outcome_unknown')
+                ),
+                execution_owner_id TEXT CHECK (
+                    execution_owner_id IS NULL OR length(execution_owner_id) BETWEEN 1 AND 300
+                ),
+                execution_lease_expires_at TEXT,
+                host_acknowledged_at TEXT,
+                result_ref TEXT,
+                error_code TEXT CHECK (
+                    error_code IS NULL OR length(error_code) BETWEEN 1 AND 200
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (
+                    (status IN ('received', 'accepted'))
+                    = (execution_owner_id IS NOT NULL AND execution_lease_expires_at IS NOT NULL)
+                ),
+                UNIQUE (device_id, nonce),
+                FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash),
+                FOREIGN KEY (host_id) REFERENCES remote_control_hosts(host_id),
+                FOREIGN KEY (device_id) REFERENCES remote_devices(device_id),
+                FOREIGN KEY (remote_session_id) REFERENCES remote_sessions(remote_session_id)
+            );
+            CREATE INDEX idx_remote_commands_device_status
+                ON remote_command_receipts(device_id, status, updated_at);
+            CREATE INDEX idx_remote_commands_execution_lease
+                ON remote_command_receipts(status, execution_lease_expires_at);
+            CREATE TRIGGER remote_commands_binding_guard
+            BEFORE UPDATE ON remote_command_receipts
+            WHEN NEW.command_id != OLD.command_id
+                OR NEW.idempotency_key != OLD.idempotency_key
+                OR NEW.action_hash != OLD.action_hash
+                OR NEW.host_id != OLD.host_id
+                OR NEW.device_id != OLD.device_id
+                OR NEW.remote_session_id != OLD.remote_session_id
+                OR NEW.payload_hash != OLD.payload_hash
+                OR NEW.nonce != OLD.nonce
+                OR NEW.signature != OLD.signature
+                OR NEW.created_at != OLD.created_at
+            BEGIN
+                SELECT RAISE(ABORT, 'remote command binding is immutable');
+            END;
+
+            CREATE TABLE relay_envelopes (
+                envelope_id TEXT PRIMARY KEY,
+                route_ref TEXT NOT NULL CHECK (length(route_ref) BETWEEN 1 AND 300),
+                sender_ref TEXT NOT NULL CHECK (length(sender_ref) BETWEEN 1 AND 300),
+                recipient_ref TEXT NOT NULL CHECK (length(recipient_ref) BETWEEN 1 AND 300),
+                protocol_version TEXT NOT NULL CHECK (
+                    length(protocol_version) BETWEEN 1 AND 100
+                ),
+                ciphertext TEXT NOT NULL CHECK (length(ciphertext) BETWEEN 1 AND 1400000),
+                nonce TEXT NOT NULL CHECK (length(nonce) BETWEEN 16 AND 200),
+                status TEXT NOT NULL CHECK (
+                    status IN ('queued', 'delivered', 'acknowledged', 'expired')
+                ),
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                delivered_at TEXT,
+                acknowledged_at TEXT,
+                UNIQUE (sender_ref, nonce)
+            );
+            CREATE INDEX idx_relay_route_status_expiry
+                ON relay_envelopes(route_ref, status, expires_at);
+
+            CREATE TABLE remote_execution_targets (
+                target_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 200),
+                endpoint_ref TEXT NOT NULL CHECK (length(endpoint_ref) BETWEEN 1 AND 2000),
+                identity_public_key TEXT NOT NULL CHECK (
+                    length(identity_public_key) BETWEEN 32 AND 500
+                ),
+                credential_ref TEXT NOT NULL CHECK (
+                    length(credential_ref) BETWEEN 1 AND 300
+                ),
+                policy_ref TEXT NOT NULL CHECK (length(policy_ref) BETWEEN 1 AND 300),
+                artifact_namespace TEXT NOT NULL CHECK (
+                    length(artifact_namespace) BETWEEN 1 AND 300
+                ),
+                capability_manifest_json TEXT NOT NULL CHECK (
+                    json_valid(capability_manifest_json)
+                    AND json_type(capability_manifest_json) = 'object'
+                ),
+                status TEXT NOT NULL CHECK (
+                    status IN ('registered', 'online', 'offline', 'draining', 'revoked')
+                ),
+                fencing INTEGER NOT NULL DEFAULT 0 CHECK (fencing >= 0),
+                last_seen_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX idx_remote_targets_status_seen
+                ON remote_execution_targets(status, last_seen_at);
+
+            CREATE TABLE remote_target_leases (
+                lease_id TEXT PRIMARY KEY,
+                target_id TEXT NOT NULL,
+                owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 300),
+                token_hash TEXT NOT NULL UNIQUE CHECK (
+                    length(token_hash) = 64
+                    AND token_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                fencing INTEGER NOT NULL CHECK (fencing >= 1),
+                workspace_ref TEXT NOT NULL CHECK (
+                    length(workspace_ref) BETWEEN 1 AND 500
+                ),
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                FOREIGN KEY (target_id) REFERENCES remote_execution_targets(target_id)
+            );
+            CREATE INDEX idx_remote_target_leases_target_expiry
+                ON remote_target_leases(target_id, expires_at);
+
+            CREATE TABLE remote_execution_jobs (
+                job_id TEXT PRIMARY KEY,
+                target_id TEXT NOT NULL,
+                lease_id TEXT NOT NULL,
+                lease_fencing INTEGER NOT NULL CHECK (lease_fencing >= 1),
+                capability TEXT NOT NULL CHECK (length(capability) BETWEEN 1 AND 100),
+                operation TEXT NOT NULL CHECK (length(operation) BETWEEN 1 AND 300),
+                arguments_json TEXT NOT NULL CHECK (
+                    json_valid(arguments_json) AND json_type(arguments_json) = 'object'
+                ),
+                action_hash TEXT NOT NULL UNIQUE CHECK (
+                    length(action_hash) = 64 AND action_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                idempotency_key TEXT NOT NULL CHECK (
+                    length(idempotency_key) BETWEEN 1 AND 300
+                ),
+                idempotency TEXT NOT NULL CHECK (
+                    idempotency IN ('idempotent', 'non_idempotent')
+                ),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'queued', 'leased', 'running', 'succeeded', 'failed', 'cancelled',
+                        'manual_reconcile_required'
+                    )
+                ),
+                cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK (
+                    cancellation_requested IN (0, 1)
+                ),
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                UNIQUE (target_id, idempotency_key),
+                FOREIGN KEY (target_id) REFERENCES remote_execution_targets(target_id),
+                FOREIGN KEY (lease_id) REFERENCES remote_target_leases(lease_id),
+                FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash)
+            );
+            CREATE INDEX idx_remote_jobs_target_status
+                ON remote_execution_jobs(target_id, status, created_at);
+            CREATE TRIGGER remote_execution_jobs_binding_guard
+            BEFORE UPDATE ON remote_execution_jobs
+            WHEN NEW.job_id != OLD.job_id
+                OR NEW.target_id != OLD.target_id
+                OR NEW.lease_id != OLD.lease_id
+                OR NEW.lease_fencing != OLD.lease_fencing
+                OR NEW.capability != OLD.capability
+                OR NEW.operation != OLD.operation
+                OR NEW.arguments_json != OLD.arguments_json
+                OR NEW.action_hash != OLD.action_hash
+                OR NEW.idempotency_key != OLD.idempotency_key
+                OR NEW.idempotency != OLD.idempotency
+                OR NEW.created_at != OLD.created_at
+            BEGIN
+                SELECT RAISE(ABORT, 'remote execution job binding is immutable');
+            END;
+
+            CREATE TABLE remote_execution_results (
+                result_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL UNIQUE,
+                result_idempotency_key TEXT NOT NULL UNIQUE CHECK (
+                    length(result_idempotency_key) BETWEEN 1 AND 300
+                ),
+                status TEXT NOT NULL CHECK (
+                    status IN ('succeeded', 'failed', 'cancelled', 'manual_reconcile_required')
+                ),
+                artifact_ref TEXT,
+                artifact_sha256 TEXT CHECK (
+                    artifact_sha256 IS NULL OR (
+                        length(artifact_sha256) = 64
+                        AND artifact_sha256 NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                postcondition_json TEXT NOT NULL CHECK (
+                    json_valid(postcondition_json) AND json_type(postcondition_json) = 'object'
+                ),
+                error_code TEXT CHECK (
+                    error_code IS NULL OR length(error_code) BETWEEN 1 AND 200
+                ),
+                completed_at TEXT NOT NULL,
+                CHECK ((artifact_ref IS NULL) = (artifact_sha256 IS NULL)),
+                FOREIGN KEY (job_id) REFERENCES remote_execution_jobs(job_id)
+            );
+
+            CREATE TABLE capability_observations (
+                observation_id TEXT PRIMARY KEY,
+                target_id TEXT NOT NULL,
+                capability TEXT NOT NULL CHECK (length(capability) BETWEEN 1 AND 100),
+                target_ref TEXT NOT NULL CHECK (length(target_ref) BETWEEN 1 AND 500),
+                observation_hash TEXT NOT NULL CHECK (
+                    length(observation_hash) = 64
+                    AND observation_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                body_json TEXT NOT NULL CHECK (
+                    json_valid(body_json) AND json_type(body_json) = 'object'
+                ),
+                artifact_ref TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                UNIQUE (target_id, observation_hash),
+                FOREIGN KEY (target_id) REFERENCES remote_execution_targets(target_id)
+            );
+            CREATE INDEX idx_capability_observations_target_expiry
+                ON capability_observations(target_id, expires_at);
+
+            CREATE TABLE capability_action_receipts (
+                receipt_id TEXT PRIMARY KEY,
+                target_id TEXT NOT NULL,
+                capability TEXT NOT NULL CHECK (length(capability) BETWEEN 1 AND 100),
+                action_hash TEXT NOT NULL UNIQUE CHECK (
+                    length(action_hash) = 64 AND action_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                observation_hash TEXT NOT NULL CHECK (
+                    length(observation_hash) = 64
+                    AND observation_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'queued', 'leased', 'running', 'succeeded', 'failed', 'cancelled',
+                        'manual_reconcile_required'
+                    )
+                ),
+                result_json TEXT NOT NULL CHECK (
+                    json_valid(result_json) AND json_type(result_json) = 'object'
+                ),
+                error_code TEXT CHECK (
+                    error_code IS NULL OR length(error_code) BETWEEN 1 AND 200
+                ),
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY (target_id) REFERENCES remote_execution_targets(target_id),
+                FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash)
+            );
+            CREATE INDEX idx_capability_receipts_target_status
+                ON capability_action_receipts(target_id, status, created_at);
+
+            CREATE TABLE writer_workspaces (
+                writer_workspace_id TEXT PRIMARY KEY,
+                graph_run_id TEXT NOT NULL,
+                node_run_id TEXT NOT NULL,
+                writer_key TEXT NOT NULL CHECK (length(writer_key) BETWEEN 1 AND 200),
+                isolation_kind TEXT NOT NULL CHECK (
+                    isolation_kind IN ('worktree', 'container')
+                ),
+                isolation_ref TEXT NOT NULL UNIQUE CHECK (
+                    length(isolation_ref) BETWEEN 1 AND 500
+                ),
+                base_revision TEXT NOT NULL CHECK (length(base_revision) BETWEEN 7 AND 128),
+                ownership_paths_json TEXT NOT NULL CHECK (
+                    json_valid(ownership_paths_json)
+                    AND json_type(ownership_paths_json) = 'array'
+                ),
+                created_at TEXT NOT NULL,
+                closed_at TEXT,
+                UNIQUE (graph_run_id, writer_key),
+                FOREIGN KEY (graph_run_id) REFERENCES graph_workflow_runs(id),
+                FOREIGN KEY (node_run_id) REFERENCES node_runs(id)
+            );
+            CREATE INDEX idx_writer_workspaces_run_writer
+                ON writer_workspaces(graph_run_id, writer_key);
+
+            CREATE TABLE writer_leases (
+                writer_workspace_id TEXT PRIMARY KEY,
+                owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 300),
+                token_hash TEXT NOT NULL UNIQUE CHECK (
+                    length(token_hash) = 64
+                    AND token_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                fencing INTEGER NOT NULL CHECK (fencing >= 1),
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                FOREIGN KEY (writer_workspace_id)
+                    REFERENCES writer_workspaces(writer_workspace_id)
+            );
+
+            CREATE TABLE writer_artifacts (
+                writer_artifact_id TEXT PRIMARY KEY,
+                writer_workspace_id TEXT NOT NULL,
+                artifact_kind TEXT NOT NULL CHECK (artifact_kind IN ('patch', 'commit')),
+                artifact_ref TEXT NOT NULL UNIQUE CHECK (length(artifact_ref) BETWEEN 1 AND 500),
+                artifact_sha256 TEXT NOT NULL CHECK (
+                    length(artifact_sha256) = 64
+                    AND artifact_sha256 NOT GLOB '*[^0-9a-f]*'
+                ),
+                base_revision TEXT NOT NULL CHECK (length(base_revision) BETWEEN 7 AND 128),
+                result_revision TEXT CHECK (
+                    result_revision IS NULL OR length(result_revision) BETWEEN 7 AND 128
+                ),
+                changed_paths_json TEXT NOT NULL CHECK (
+                    json_valid(changed_paths_json) AND json_type(changed_paths_json) = 'array'
+                ),
+                test_evidence_refs_json TEXT NOT NULL CHECK (
+                    json_valid(test_evidence_refs_json)
+                    AND json_type(test_evidence_refs_json) = 'array'
+                ),
+                created_at TEXT NOT NULL,
+                CHECK (artifact_kind != 'commit' OR result_revision IS NOT NULL),
+                FOREIGN KEY (writer_workspace_id)
+                    REFERENCES writer_workspaces(writer_workspace_id)
+            );
+            CREATE INDEX idx_writer_artifacts_workspace_created
+                ON writer_artifacts(writer_workspace_id, created_at);
+
+            CREATE TABLE writer_conflicts (
+                conflict_id TEXT PRIMARY KEY,
+                graph_run_id TEXT NOT NULL,
+                left_artifact_id TEXT NOT NULL,
+                right_artifact_id TEXT NOT NULL,
+                conflict_hash TEXT NOT NULL CHECK (
+                    length(conflict_hash) = 64 AND conflict_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                paths_json TEXT NOT NULL CHECK (
+                    json_valid(paths_json) AND json_type(paths_json) = 'array'
+                ),
+                status TEXT NOT NULL CHECK (status IN ('open', 'resolved', 'rejected')),
+                resolution_artifact_ref TEXT,
+                created_at TEXT NOT NULL,
+                resolved_at TEXT,
+                UNIQUE (graph_run_id, conflict_hash),
+                CHECK (left_artifact_id != right_artifact_id),
+                FOREIGN KEY (graph_run_id) REFERENCES graph_workflow_runs(id),
+                FOREIGN KEY (left_artifact_id)
+                    REFERENCES writer_artifacts(writer_artifact_id),
+                FOREIGN KEY (right_artifact_id)
+                    REFERENCES writer_artifacts(writer_artifact_id)
+            );
+            CREATE INDEX idx_writer_conflicts_run_status
+                ON writer_conflicts(graph_run_id, status);
+
+            CREATE TABLE merge_runs (
+                merge_run_id TEXT PRIMARY KEY,
+                graph_run_id TEXT NOT NULL,
+                merge_node_id TEXT NOT NULL CHECK (length(merge_node_id) BETWEEN 1 AND 300),
+                artifact_ids_json TEXT NOT NULL CHECK (
+                    json_valid(artifact_ids_json) AND json_type(artifact_ids_json) = 'array'
+                ),
+                strategy TEXT NOT NULL CHECK (
+                    strategy IN ('three_way', 'cherry_pick', 'apply_patch')
+                ),
+                target_isolation_ref TEXT NOT NULL CHECK (
+                    length(target_isolation_ref) BETWEEN 1 AND 500
+                ),
+                base_revision TEXT NOT NULL CHECK (length(base_revision) BETWEEN 7 AND 128),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'created', 'running', 'conflicted', 'review_required', 'succeeded',
+                        'failed', 'rolled_back', 'outcome_unknown'
+                    )
+                ),
+                expected_revision INTEGER NOT NULL DEFAULT 0 CHECK (expected_revision >= 0),
+                execution_owner_id TEXT CHECK (
+                    execution_owner_id IS NULL OR length(execution_owner_id) BETWEEN 1 AND 300
+                ),
+                execution_lease_expires_at TEXT,
+                result_artifact_ref TEXT,
+                error_code TEXT CHECK (
+                    error_code IS NULL OR length(error_code) BETWEEN 1 AND 200
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (
+                    (status = 'running')
+                    = (execution_owner_id IS NOT NULL AND execution_lease_expires_at IS NOT NULL)
+                ),
+                FOREIGN KEY (graph_run_id) REFERENCES graph_workflow_runs(id)
+            );
+            CREATE INDEX idx_merge_runs_graph_status
+                ON merge_runs(graph_run_id, status, updated_at);
+            CREATE UNIQUE INDEX uq_merge_runs_running_target
+                ON merge_runs(target_isolation_ref) WHERE status = 'running';
+            CREATE INDEX idx_merge_runs_execution_lease
+                ON merge_runs(status, execution_lease_expires_at);
+            """,
+        )
+
+    def _downgrade_v13(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT (SELECT COUNT(*) FROM remote_control_hosts)
+                + (SELECT COUNT(*) FROM remote_pairing_challenges)
+                + (SELECT COUNT(*) FROM remote_devices)
+                + (SELECT COUNT(*) FROM remote_sessions)
+                + (SELECT COUNT(*) FROM remote_command_receipts)
+                + (SELECT COUNT(*) FROM relay_envelopes)
+                + (SELECT COUNT(*) FROM remote_execution_targets)
+                + (SELECT COUNT(*) FROM remote_target_leases)
+                + (SELECT COUNT(*) FROM remote_execution_jobs)
+                + (SELECT COUNT(*) FROM remote_execution_results)
+                + (SELECT COUNT(*) FROM capability_observations)
+                + (SELECT COUNT(*) FROM capability_action_receipts)
+                + (SELECT COUNT(*) FROM writer_workspaces)
+                + (SELECT COUNT(*) FROM writer_leases)
+                + (SELECT COUNT(*) FROM writer_artifacts)
+                + (SELECT COUNT(*) FROM writer_conflicts)
+                + (SELECT COUNT(*) FROM merge_runs) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back Phase 5B/6 tables while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP INDEX uq_merge_runs_running_target;
+            DROP INDEX idx_merge_runs_execution_lease;
+            DROP INDEX idx_merge_runs_graph_status;
+            DROP TABLE merge_runs;
+            DROP INDEX idx_writer_conflicts_run_status;
+            DROP TABLE writer_conflicts;
+            DROP INDEX idx_writer_artifacts_workspace_created;
+            DROP TABLE writer_artifacts;
+            DROP TABLE writer_leases;
+            DROP INDEX idx_writer_workspaces_run_writer;
+            DROP TABLE writer_workspaces;
+            DROP INDEX idx_capability_receipts_target_status;
+            DROP TABLE capability_action_receipts;
+            DROP INDEX idx_capability_observations_target_expiry;
+            DROP TABLE capability_observations;
+            DROP TABLE remote_execution_results;
+            DROP TRIGGER remote_execution_jobs_binding_guard;
+            DROP INDEX idx_remote_jobs_target_status;
+            DROP TABLE remote_execution_jobs;
+            DROP INDEX idx_remote_target_leases_target_expiry;
+            DROP TABLE remote_target_leases;
+            DROP INDEX idx_remote_targets_status_seen;
+            DROP TABLE remote_execution_targets;
+            DROP INDEX idx_relay_route_status_expiry;
+            DROP TABLE relay_envelopes;
+            DROP TRIGGER remote_commands_binding_guard;
+            DROP INDEX idx_remote_commands_execution_lease;
+            DROP INDEX idx_remote_commands_device_status;
+            DROP TABLE remote_command_receipts;
+            DROP TRIGGER remote_sessions_host_device_guard;
+            DROP INDEX idx_remote_sessions_device_state;
+            DROP TABLE remote_sessions;
+            DROP INDEX idx_remote_devices_host_revoked;
+            DROP TABLE remote_devices;
+            DROP INDEX idx_remote_pairing_host_expiry;
+            DROP TABLE remote_pairing_challenges;
+            DROP TABLE remote_control_hosts;
             """,
         )
 

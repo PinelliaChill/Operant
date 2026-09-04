@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { MockClient, OperantClient, Phase1EClient, Phase23Client, Phase45Client } from '@operant/sdk';
+import { MockClient, OperantClient, Phase1EClient, Phase23Client, Phase45Client, Phase56Client } from '@operant/sdk';
 import { formatTime } from '../lib/format';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
 
@@ -23,6 +23,8 @@ interface ClientContextValue {
   phase23Client: Phase23Client;
   /** Additive Phase 4/5 security, Skill and MCP client. */
   phase45Client: Phase45Client;
+  /** Additive Phase 5B remote and Phase 6 multi-writer client. */
+  phase56Client: Phase56Client;
   clientMode: ClientMode;
   setClientMode: (mode: ClientMode) => void;
   connectionStatus: ConnectionStatus;
@@ -83,6 +85,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const phase1eClient = useMemo(() => new Phase1EClient(currentBrowserOrigin()), []);
   const phase23Client = useMemo(() => new Phase23Client(currentBrowserOrigin()), []);
   const phase45Client = useMemo(() => new Phase45Client(currentBrowserOrigin()), []);
+  const phase56Client = useMemo(() => new Phase56Client(currentBrowserOrigin()), []);
   const client: OperantClient = mockClient;
 
   const setClientMode = (mode: ClientMode) => {
@@ -152,6 +155,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             phase1eClient.negotiateProtocol(true),
             phase23Client.negotiateProtocol(true),
             phase45Client.negotiateProtocol(true),
+            phase56Client.negotiateProtocol(true),
           ]);
           if (isMounted) setConnectionStatus('connected');
         } catch {
@@ -167,7 +171,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       isMounted = false;
       clearInterval(interval);
     };
-  }, [client, clientMode, phase1eClient, phase23Client, phase45Client, theme]);
+  }, [client, clientMode, phase1eClient, phase23Client, phase45Client, phase56Client, theme]);
 
   return (
     <ClientContext.Provider
@@ -176,6 +180,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         phase1eClient,
         phase23Client,
         phase45Client,
+        phase56Client,
         clientMode,
         setClientMode,
         connectionStatus,

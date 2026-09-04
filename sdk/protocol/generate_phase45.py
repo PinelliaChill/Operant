@@ -57,6 +57,20 @@ EXPECTED_OPERATION_IDS = {
     "listDeadLetter",
     "replayDeadLetter",
 }
+FROZEN_CAPABILITIES = [
+    "workspace.read",
+    "workspace.write",
+    "workspace.delete",
+    "process.exec",
+    "process.exec.no_network",
+    "network.egress",
+    "secret.use",
+    "git.commit",
+    "git.push",
+    "external.message.send",
+    "production.mutate",
+    "policy.modify",
+]
 
 
 def _document() -> dict[str, Any]:
@@ -100,6 +114,9 @@ def _document() -> dict[str, Any]:
                     }
                 )
     schemas = copy.deepcopy(document.get("components", {}).get("schemas", {}))
+    # Capability grows in later additive protocols. Phase 4/5A is frozen and
+    # must not silently absorb those enum members when create_app gains routes.
+    schemas["Capability"]["enum"] = FROZEN_CAPABILITIES
     frozen = json.loads(
         (ROOT / "sdk/protocol/schema/operant-phase1e.openapi.json").read_text(encoding="utf-8")
     )

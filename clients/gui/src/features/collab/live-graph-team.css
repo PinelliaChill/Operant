@@ -141,6 +141,13 @@
   min-width: 0;
 }
 
+.live23-writer-grid small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .live23-grid li > strong {
   flex: 0 0 auto;
   color: var(--text-secondary);

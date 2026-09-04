@@ -93,7 +93,7 @@ def test_v12_is_additive_and_v11_manifest_remains_frozen(tmp_path: Path) -> None
     assert V12_TABLES.isdisjoint(_table_names(database))
     v11_manifest = SQLiteStore._migration_manifest(11)
 
-    assert store.migrate() == 12
+    assert store.migrate(target_version=12) == 12
     assert V12_TABLES.issubset(_table_names(database))
     assert SQLiteStore._migration_manifest(11) == v11_manifest
     manifest = SQLiteStore._migration_manifest(12)
@@ -137,9 +137,9 @@ def test_concurrent_v11_initialization_is_serial_and_repeatable(tmp_path: Path) 
     with ThreadPoolExecutor(max_workers=4) as executor:
         versions = list(executor.map(lambda _index: initialize(), range(8)))
 
-    assert versions == [12] * 8
+    assert versions == [13] * 8
     store = SQLiteStore(database)
-    assert [row["version"] for row in store.list_applied_migrations()] == list(range(1, 13))
+    assert [row["version"] for row in store.list_applied_migrations()] == list(range(1, 14))
     assert V11_TABLES.issubset(_table_names(database))
 
 
@@ -198,7 +198,7 @@ def test_v11_rollback_requires_empty_isolated_database(tmp_path: Path) -> None:
         )
     with pytest.raises(MigrationError, match="Phase 5A tables"):
         populated.rollback(10, isolated=True)
-    assert populated.schema_version() == 12
+    assert populated.schema_version() == 13
 
 
 def test_mcp_lifecycle_events_are_append_only_and_configs_store_references(
