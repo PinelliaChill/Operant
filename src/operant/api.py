@@ -5,7 +5,7 @@ import base64
 import binascii
 import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qsl, quote
@@ -27,6 +27,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from operant.api_phase23 import install_phase23_routes
+from operant.api_phase45 import install_phase45_routes
 from operant.application.client_projection import (
     ProjectProjectionCursorError,
     ProjectProjectionError,
@@ -37,6 +38,7 @@ from operant.application.protocol_metadata import (
     ProtocolSchemaUnavailable,
     phase1e_protocol_metadata,
     phase23_protocol_metadata,
+    phase45_protocol_metadata,
 )
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
@@ -95,7 +97,7 @@ from operant.providers.openai_compatible import (
     OpenAICompatibleProvider,
     ProviderError,
 )
-from operant.settings import database_path, load_local_env
+from operant.settings import configured_path_roots, database_path, load_local_env
 
 MAX_ARTIFACT_UPLOAD_BYTES = 16 * 1024 * 1024
 MAX_ARTIFACT_BASE64_CHARS = ((MAX_ARTIFACT_UPLOAD_BYTES + 2) // 3) * 4
@@ -1281,8 +1283,16 @@ def create_app(
     artifact_capability_secret: bytes | None = None,
     physical_delete_enabled: bool = False,
     physical_delete_authorization: str | None = None,
+    phase45_skill_roots: Mapping[str, str | Path] | None = None,
+    phase45_mcp_workspace_roots: Mapping[str, str | Path] | None = None,
+    phase45_policy_engine: Any | None = None,
+    phase45_approval_reviewer: Any | None = None,
 ) -> FastAPI:
     load_local_env()
+    if phase45_skill_roots is None:
+        phase45_skill_roots = configured_path_roots("OPERANT_SKILL_ROOTS_JSON")
+    if phase45_mcp_workspace_roots is None:
+        phase45_mcp_workspace_roots = configured_path_roots("OPERANT_MCP_WORKSPACE_ROOTS_JSON")
     store = SQLiteStore(db_path or database_path())
     configured_artifact_root = (
         store.path.parent.absolute() / "artifacts" if artifact_root is None else Path(artifact_root)
@@ -1736,6 +1746,17 @@ def create_app(
                     recovery=RecoveryAction.RETRY_LATER,
                     retryable=True,
                 ),
+            )
+
+    @app.get("/v1/protocol/phase45", response_model=None, operation_id="negotiatePhase45")
+    async def get_phase45_protocol() -> dict[str, Any] | Response:
+        try:
+            return phase45_protocol_metadata()
+        except ProtocolSchemaUnavailable:
+            return protocol_response(
+                status_code=503,
+                code="protocol_schema_unavailable",
+                message="generated Phase 4/5A protocol schema is unavailable",
             )
 
     @app.get("/v1/projects", response_model=None)
@@ -3419,6 +3440,14 @@ def create_app(
         return memory.model_dump(mode="json")
 
     install_phase23_routes(app, store)
+    install_phase45_routes(
+        app,
+        store,
+        skill_roots=phase45_skill_roots,
+        mcp_workspace_roots=phase45_mcp_workspace_roots,
+        policy_engine=phase45_policy_engine,
+        approval_reviewer=phase45_approval_reviewer,
+    )
 
     # Added last so this pure ASGI guard wraps the BaseHTTP command middleware:
     # oversized chunked bodies fail before request.body() can buffer them.

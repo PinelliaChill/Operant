@@ -286,7 +286,11 @@ export const RailLayout: React.FC = () => {
     section === 'chat' ||
     section === 'projects' ||
     section === 'approvals' ||
-    section === 'collab';
+    section === 'schedules' ||
+    section === 'collab' ||
+    section === 'skills' ||
+    section === 'extensions' ||
+    section === 'settings';
 
   const isMobile = useMediaQuery('(max-width: 959px)');
 

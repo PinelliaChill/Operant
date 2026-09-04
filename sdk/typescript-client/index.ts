@@ -44,3 +44,16 @@ export type {
   Phase23Response,
   Phase23Transport,
 } from './phase23-transport';
+
+// Phase 4 security is additive and keeps the prior protocol clients frozen.
+export {
+  Phase45Client,
+  ProtocolNegotiationError as Phase45ProtocolNegotiationError,
+} from './phase45.generated';
+export * as Phase45 from './phase45.generated';
+export type {
+  Phase45Body,
+  Phase45Request,
+  Phase45Response,
+  Phase45Transport,
+} from './phase45-transport';

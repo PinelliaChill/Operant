@@ -501,7 +501,7 @@ const SectionHeader: React.FC<{
   </div>
 );
 
-export const SettingsView: React.FC = () => {
+const DemoSettingsView: React.FC = () => {
   const { client, theme, toggleTheme, addNotification, connectionStatus } = useOperant();
   const { resetDemoState } = useDemo();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2623,4 +2623,21 @@ export const SettingsView: React.FC = () => {
       </Modal>
     </div>
   );
+};
+
+const LiveSecuritySettingsView: React.FC = () => (
+  <div className="section-view" data-client-mode="live">
+    <header className="section-header">
+      <h1 className="section-title">安全与治理</h1>
+      <p className="section-sub">Phase 4 Policy 检查与解释。Live 模式不会显示或修改演示设置。</p>
+    </header>
+    <div className="section-scroll">
+      <div className="section-inner"><PolicySettings /></div>
+    </div>
+  </div>
+);
+
+export const SettingsView: React.FC = () => {
+  const { clientMode } = useOperant();
+  return clientMode === 'live' ? <LiveSecuritySettingsView /> : <DemoSettingsView />;
 };

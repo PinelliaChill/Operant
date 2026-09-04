@@ -8,13 +8,22 @@
  * 全部待处理卡，workspace-write 仅自动批准 file_write 卡，切回"询问模式"不影响已处理卡）。
  */
 
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   CheckCheck,
   FolderPen,
   MessageCircleQuestion,
   Unlock,
+  RefreshCw,
+  ShieldAlert,
+  History,
 } from 'lucide-react';
+import type { Phase45 } from '@operant/sdk';
+import { useOperant } from '../../context/ClientContext';
+import { usePhase45 } from '../../live45/Phase45Context';
+import { StatusBadge } from '../../components/StatusBadge';
+import { policyDecisionStatus } from '../../live45/phase45State';
+import { formatDateTime } from '../../lib/format';
 import type { LucideIcon } from 'lucide-react';
 import {
   APPROVAL_ACTION_LABELS,
@@ -65,6 +74,94 @@ const subsectionSubStyle: React.CSSProperties = {
 };
 
 export const PolicySettings: React.FC = () => {
+  const { clientMode } = useOperant();
+  return clientMode === 'live' ? <LivePolicySettings /> : <DemoPolicySettings />;
+};
+
+const CAPABILITIES: Phase45.Capability[] = [
+  'workspace.read', 'workspace.write', 'workspace.delete', 'process.exec',
+  'process.exec.no_network', 'network.egress', 'secret.use', 'git.commit',
+  'git.push', 'external.message.send', 'production.mutate', 'policy.modify',
+];
+
+const LivePolicySettings: React.FC = () => {
+  const { connectionStatus } = useOperant();
+  const {
+    explainPolicy,
+    loadSecurityAudit,
+    auditsByAction,
+    auditLoadingActionHash,
+    auditError,
+    actionLabel,
+    error,
+  } = usePhase45();
+  const [principal, setPrincipal] = useState('gui:user');
+  const [tool, setTool] = useState('apply_patch');
+  const [operation, setOperation] = useState('execute');
+  const [workspace, setWorkspace] = useState('');
+  const [capability, setCapability] = useState<Phase45.Capability>('workspace.write');
+  const [result, setResult] = useState<Awaited<ReturnType<typeof explainPolicy>>>();
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const next = await explainPolicy({
+      principal: principal.trim(), tool: tool.trim(), operation: operation.trim(),
+      requested_capabilities: [capability], idempotency_key: crypto.randomUUID(),
+      arguments: {}, workspace: workspace.trim() || undefined, dry_run: true,
+    });
+    setResult(next);
+    if (next) await loadSecurityAudit(next.actionHash);
+  };
+
+  const audit = result ? auditsByAction[result.actionHash] ?? [] : [];
+  const auditLoading = result?.actionHash === auditLoadingActionHash;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div>
+        <h2 style={subsectionTitleStyle}>Policy 检查与解释</h2>
+        <p style={subsectionSubStyle}>通过 Phase 4 Action Gateway 对一个明确动作做 dry-run。此处不修改 Policy，也不能覆盖 DENY。</p>
+      </div>
+      <form className="card approval-rules" onSubmit={submit} aria-describedby="live-policy-help">
+        <p id="live-policy-help" className="section-footnote">每次检查使用新的幂等键，并由 Core 返回权威 Policy 结果。</p>
+        <label>主体<input className="input" value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
+        <label>工具<input className="input" value={tool} onChange={(event) => setTool(event.target.value)} required /></label>
+        <label>操作<input className="input" value={operation} onChange={(event) => setOperation(event.target.value)} required /></label>
+        <label>能力<select className="select" value={capability} onChange={(event) => setCapability(event.target.value as Phase45.Capability)}>{CAPABILITIES.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label>Workspace（可选）<input className="input" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="绝对路径" /></label>
+        <button type="submit" className="btn btn-primary" disabled={Boolean(actionLabel) || connectionStatus !== 'connected'}><RefreshCw size={14} aria-hidden="true" />{actionLabel === 'Policy 检查' ? '检查中…' : '检查并解释'}</button>
+      </form>
+      <div aria-live="polite" aria-atomic="true">
+        {connectionStatus !== 'connected' && <div className="live-alert live-alert-error" role="alert"><ShieldAlert size={16} aria-hidden="true" />Core 连接已断开；Policy 检查已禁用。</div>}
+        {error && <div className="live-alert live-alert-error" role="alert"><ShieldAlert size={16} aria-hidden="true" />{error.code}：{error.message}</div>}
+        {result && <div className="card" style={{ padding: 16 }}>
+          <StatusBadge status={policyDecisionStatus(result.decision)} label={result.decision.toUpperCase()} />
+          <p>原因：<code>{result.reasonCode}</code> · 风险：{result.riskLevel}{result.hardDeny ? ' · 硬拒绝' : ''}</p>
+          {result.matchedRuleIds.length > 0 && <p>命中规则：{result.matchedRuleIds.join('、')}</p>}
+          {result.remediation !== undefined && <details><summary>合规替代建议</summary><pre>{JSON.stringify(result.remediation, null, 2)}</pre></details>}
+        </div>}
+      </div>
+      {result && <section aria-labelledby="security-audit-title" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div><h2 id="security-audit-title" style={subsectionTitleStyle}>安全审计事实</h2><p style={subsectionSubStyle}>仅展示最新加载的 100 条安全字段；原始参数、detail 与 Secret 不进入客户端状态。</p></div>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={auditLoading || connectionStatus !== 'connected'} onClick={() => void loadSecurityAudit(result.actionHash)}><RefreshCw size={13} aria-hidden="true" />{auditLoading ? '刷新中…' : '刷新审计'}</button>
+        </div>
+        <div aria-live="polite" aria-busy={auditLoading}>
+          {auditError && <div className="live-alert live-alert-error" role="alert"><ShieldAlert size={16} aria-hidden="true" />{auditError.code}：{auditError.message}</div>}
+          {!auditLoading && !auditError && audit.length === 0 && <div className="card" style={{ padding: 16 }}><History size={18} aria-hidden="true" /><p>此 Action Hash 暂无安全审计事实。</p></div>}
+          {audit.length > 0 && <ol className="chat-row-list" aria-label="安全审计事实列表">
+            {audit.map((fact) => <li key={fact.eventId} className="chat-row chat-row-wrap">
+              <span className="chat-row-main"><span className="chat-row-title">#{fact.cursor.toString()} · {fact.eventType}</span><span className="chat-row-sub">{formatDateTime(fact.createdAt)} · 主体 {fact.principal}</span>{fact.ruleIds.length > 0 && <span className="chat-row-sub">规则：{fact.ruleIds.join('、')}</span>}</span>
+              <StatusBadge status={fact.decision ? policyDecisionStatus(fact.decision) : 'pending'} label={fact.decision?.toUpperCase() ?? 'FACT'} size="sm" />
+            </li>)}
+          </ol>}
+        </div>
+      </section>}
+    </div>
+  );
+};
+
+const DemoPolicySettings: React.FC = () => {
   const { approvalPolicy, setApprovalMode, setApprovalRule } = useDemo();
 
   /** 模式卡 roving tabindex 焦点引用（方向键在单选组内循环移动） */

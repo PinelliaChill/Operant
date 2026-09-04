@@ -236,6 +236,9 @@ class SQLiteStore:
         7: "b8516d3a7deec9a93867c45f323992238b17968829001c6af2cf61831fe70df4",
         8: "f3295d7911214ce19f2a6dc7fda63e21eebfe79c7cb4b3a16934ef40297da11b",
         9: "884512be9442684acd9b76a9f478b658e5b3d9fb3a576c52a0fe893baab769d5",
+        10: "cc99b8ac7b8f7b7898d807adb3252ea993a9c435ce8ac31b1109183776c32680",
+        11: "9e1fb35ddb1c6fafb19e44e145b5e94258c896530c9e8b6bcc0fa5c4258d2a2d",
+        12: "0211f297de06325f636986b174cd068e30c89592260d13ca132f9899d62a3876",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -247,6 +250,9 @@ class SQLiteStore:
         7: "15496ba9e4cde4e1dd622abdc141ca2dc63f5b155c3b2eb57a24472c9df3e06b",
         8: "bfd4f8367d6232d39b1fd9e9c916cc6de95fcfb8c89dfedd13d22f3da70b70e0",
         9: "acf376be788cefcdb4640ebd6a282faaf921735a4b0903f071180a3b5e3ef273",
+        10: "5153ded0e3637722fc9972c17cca5c9ca55e737e0993e5d46bf5486e041a5765",
+        11: "6cc52b1f8c469b66bf907dd8d8dd30ee08951396feb03cb16d8d5f2d45a00003",
+        12: "d62b2a3c77cbcbc2131f75067f31d68c6de3d4ed28e3bbedc626d50014bd1bb4",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -554,6 +560,24 @@ class SQLiteStore:
                 self._upgrade_v9,
                 self._downgrade_v9,
             ),
+            build(
+                10,
+                "phase4_security_control_plane",
+                self._upgrade_v10,
+                self._downgrade_v10,
+            ),
+            build(
+                11,
+                "phase5a_skill_mcp_scheduler",
+                self._upgrade_v11,
+                self._downgrade_v11,
+            ),
+            build(
+                12,
+                "phase45_mcp_safety",
+                self._upgrade_v12,
+                self._downgrade_v12,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -815,6 +839,14 @@ class SQLiteStore:
             self._validate_v7_schema_shape(connection)
         elif migration.version == 8:
             self._validate_v8_schema_shape(connection)
+        elif migration.version == 9:
+            self._validate_v9_schema_shape(connection)
+        elif migration.version == 10:
+            self._validate_v10_schema_shape(connection)
+        elif migration.version == 11:
+            self._validate_v11_schema_shape(connection)
+        elif migration.version == 12:
+            self._validate_v12_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -1521,6 +1553,220 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v10_required_columns() -> dict[str, set[str]]:
+        return {
+            "security_action_requests": {
+                "sequence",
+                "id",
+                "action_hash",
+                "principal",
+                "tool",
+                "operation",
+                "target_type",
+                "target_id",
+                "policy_version",
+                "idempotency_key",
+                "body",
+                "created_at",
+            },
+            "capability_leases": {
+                "sequence",
+                "id",
+                "action_hash",
+                "principal",
+                "capability",
+                "target_id",
+                "policy_version",
+                "issued_by",
+                "constraints",
+                "issued_at",
+                "expires_at",
+                "max_uses",
+                "uses",
+                "revoked_at",
+            },
+            "security_audit_events": {
+                "sequence",
+                "id",
+                "action_hash",
+                "principal",
+                "event_type",
+                "decision",
+                "rule_ids",
+                "detail",
+                "created_at",
+            },
+            "policy_denial_observations": {
+                "signature",
+                "last_action_hash",
+                "occurrences",
+                "created_at",
+                "updated_at",
+            },
+        }
+
+    @staticmethod
+    def _v11_required_columns() -> dict[str, set[str]]:
+        return {
+            "skill_candidates": {
+                "candidate_id",
+                "root_ref",
+                "relative_directory",
+                "name",
+                "description",
+                "manifest_sha256",
+                "snapshot_json",
+                "trust_status",
+                "discovered_at",
+            },
+            "mcp_servers": {
+                "server_id",
+                "transport",
+                "endpoint_ref",
+                "secret_ref",
+                "stdio_argv_json",
+                "cwd_ref",
+                "environment_refs_json",
+                "allow_loopback_http",
+                "lifecycle_status",
+                "created_at",
+                "updated_at",
+            },
+            "mcp_tool_snapshots": {
+                "server_id",
+                "snapshot_version",
+                "tool_name",
+                "schema_sha256",
+                "tool_json",
+                "discovered_at",
+            },
+            "mcp_lifecycle_events": {
+                "sequence",
+                "id",
+                "server_id",
+                "event_type",
+                "lifecycle_status",
+                "detail_json",
+                "security_audit_event_id",
+                "created_at",
+            },
+            "schedule_definitions": {
+                "schedule_id",
+                "version",
+                "definition_json",
+                "created_at",
+            },
+            "schedule_heads": {
+                "schedule_id",
+                "current_version",
+                "status",
+                "cursor_at",
+                "updated_at",
+            },
+            "run_requests": {
+                "request_id",
+                "schedule_id",
+                "schedule_version",
+                "occurrence_at",
+                "available_at",
+                "idempotency_key",
+                "replay_of_request_id",
+                "workflow_id",
+                "workflow_version",
+                "workflow_input_json",
+                "dispatch_idempotency",
+                "max_attempts",
+                "attempt_count",
+                "status",
+                "workflow_run_id",
+                "cancel_requested",
+                "last_error_code",
+                "created_at",
+                "updated_at",
+            },
+            "scheduler_authority_leases": {
+                "kind",
+                "owner",
+                "token",
+                "fencing",
+                "expires_at",
+            },
+            "job_leases": {
+                "run_request_id",
+                "owner",
+                "token",
+                "fencing",
+                "expires_at",
+                "attempt_number",
+            },
+            "job_attempts": {
+                "run_request_id",
+                "attempt_number",
+                "lease_owner",
+                "lease_token",
+                "lease_fencing",
+                "status",
+                "side_effect_started",
+                "workflow_run_id",
+                "error_code",
+                "started_at",
+                "finished_at",
+            },
+            "scheduler_graph_dispatches": {
+                "source_run_request_id",
+                "idempotency_key",
+                "action_hash",
+                "status",
+                "graph_run_id",
+                "created_at",
+                "updated_at",
+            },
+        }
+
+    @staticmethod
+    def _v12_required_columns() -> dict[str, set[str]]:
+        return {
+            "mcp_action_receipts": {
+                "action_hash",
+                "server_id",
+                "tool_name",
+                "schema_sha256",
+                "arguments_sha256",
+                "status",
+                "result_json",
+                "error_code",
+                "created_at",
+                "updated_at",
+                "completed_at",
+            },
+            "mcp_server_start_leases": {
+                "server_id",
+                "owner",
+                "token",
+                "fencing",
+                "expires_at",
+            },
+            "mcp_stdio_sandboxes": {
+                "server_id",
+                "workspace_root_ref",
+                "docker_image",
+            },
+            "phase45_approval_requests": {
+                "id",
+                "action_hash",
+                "target_json",
+                "policy_version",
+                "status",
+                "requested_at",
+                "expires_at",
+                "decided_by",
+                "reason_code",
+                "decided_at",
+                "consumed_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -1544,6 +1790,12 @@ class SQLiteStore:
             tables.update(cls._v8_required_columns())
         if version >= 9:
             tables.update(cls._v9_required_columns())
+        if version >= 10:
+            tables.update(cls._v10_required_columns())
+        if version >= 11:
+            tables.update(cls._v11_required_columns())
+        if version >= 12:
+            tables.update(cls._v12_required_columns())
         return tables
 
     @staticmethod
@@ -1643,6 +1895,30 @@ class SQLiteStore:
                 ("team_tasks", "assignee_agent_id"),
                 ("artifact_board_items", "published_by_agent_id"),
                 ("artifact_board_items", "message_id"),
+                ("capability_leases", "revoked_at"),
+                ("security_audit_events", "decision"),
+                ("mcp_servers", "endpoint_ref"),
+                ("mcp_servers", "secret_ref"),
+                ("mcp_servers", "stdio_argv_json"),
+                ("mcp_servers", "cwd_ref"),
+                ("mcp_lifecycle_events", "security_audit_event_id"),
+                ("run_requests", "replay_of_request_id"),
+                ("run_requests", "workflow_run_id"),
+                ("run_requests", "last_error_code"),
+                ("job_attempts", "workflow_run_id"),
+                ("job_attempts", "error_code"),
+                ("job_attempts", "finished_at"),
+                ("scheduler_graph_dispatches", "graph_run_id"),
+                ("mcp_action_receipts", "result_json"),
+                ("mcp_action_receipts", "error_code"),
+                ("mcp_action_receipts", "completed_at"),
+                ("mcp_server_start_leases", "owner"),
+                ("mcp_server_start_leases", "token"),
+                ("mcp_server_start_leases", "expires_at"),
+                ("phase45_approval_requests", "decided_by"),
+                ("phase45_approval_requests", "reason_code"),
+                ("phase45_approval_requests", "decided_at"),
+                ("phase45_approval_requests", "consumed_at"),
             }
         )
 
@@ -1690,6 +1966,18 @@ class SQLiteStore:
                 "requires_ack",
                 "workflow_definition_version",
                 "team_definition_version",
+                "max_uses",
+                "uses",
+                "occurrences",
+                "snapshot_version",
+                "schedule_version",
+                "workflow_version",
+                "max_attempts",
+                "attempt_count",
+                "fencing",
+                "lease_fencing",
+                "side_effect_started",
+                "allow_loopback_http",
             }
         )
 
@@ -1875,6 +2163,65 @@ class SQLiteStore:
                         if version >= 8
                         else {}
                     ),
+                    **(
+                        {
+                            "skill_candidates": [
+                                "length(manifest_sha256) = 64",
+                                "trust_status IN ('untrusted_candidate', 'registered', 'rejected')",
+                            ],
+                            "mcp_servers": [
+                                "transport IN ('stdio', 'legacy_sse')",
+                                "allow_loopback_http IN (0, 1)",
+                                "lifecycle_status IN ('configured', 'starting', 'ready', "
+                                "'running', 'stopped', 'failed', 'deleted')",
+                            ],
+                            "mcp_tool_snapshots": ["snapshot_version >= 1"],
+                            "schedule_heads": [
+                                "status IN ('enabled', 'paused', 'cancelled')",
+                            ],
+                            "run_requests": [
+                                "dispatch_idempotency IN ('idempotent', 'non_idempotent')",
+                                "max_attempts BETWEEN 1 AND 20",
+                                "attempt_count BETWEEN 0 AND 20",
+                                "cancel_requested IN (0, 1)",
+                            ],
+                            "scheduler_authority_leases": ["fencing >= 1"],
+                            "job_leases": [
+                                "fencing >= 1",
+                                "attempt_number BETWEEN 1 AND 20",
+                            ],
+                            "job_attempts": [
+                                "attempt_number BETWEEN 1 AND 20",
+                                "side_effect_started IN (0, 1)",
+                            ],
+                            "scheduler_graph_dispatches": [
+                                "status IN ('pending', 'completed')",
+                                "(status = 'pending' AND graph_run_id IS NULL) OR "
+                                "(status = 'completed' AND graph_run_id IS NOT NULL)",
+                            ],
+                        }
+                        if version >= 11
+                        else {}
+                    ),
+                    **(
+                        {
+                            "mcp_action_receipts": [
+                                "status IN ('reserved', 'sent', 'completed', 'outcome_unknown')",
+                                "length(action_hash) = 64",
+                                "length(schema_sha256) = 64",
+                                "length(arguments_sha256) = 64",
+                            ],
+                            "mcp_server_start_leases": ["fencing >= 0"],
+                            "phase45_approval_requests": [
+                                "status IN ('pending', 'approved', 'denied', "
+                                "'expired', 'consumed')",
+                                "length(action_hash) = 64",
+                                "decided_by IS NULL OR decided_by IN ('user', 'reviewer')",
+                            ],
+                        }
+                        if version >= 12
+                        else {}
+                    ),
                 }
                 if version >= 3
                 else {}
@@ -1916,6 +2263,12 @@ class SQLiteStore:
                 store._upgrade_v8(connection)
             if version >= 9:
                 store._upgrade_v9(connection)
+            if version >= 10:
+                store._upgrade_v10(connection)
+            if version >= 11:
+                store._upgrade_v11(connection)
+            if version >= 12:
+                store._upgrade_v12(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2043,6 +2396,44 @@ class SQLiteStore:
                     "team_run_events": ("sequence",),
                 }
             )
+        if version >= 10:
+            contract.update(
+                {
+                    "security_action_requests": ("sequence",),
+                    "capability_leases": ("sequence",),
+                    "security_audit_events": ("sequence",),
+                    "policy_denial_observations": ("signature",),
+                }
+            )
+        if version >= 11:
+            contract.update(
+                {
+                    "skill_candidates": ("candidate_id",),
+                    "mcp_servers": ("server_id",),
+                    "mcp_tool_snapshots": (
+                        "server_id",
+                        "snapshot_version",
+                        "tool_name",
+                    ),
+                    "mcp_lifecycle_events": ("sequence",),
+                    "schedule_definitions": ("schedule_id", "version"),
+                    "schedule_heads": ("schedule_id",),
+                    "run_requests": ("request_id",),
+                    "scheduler_authority_leases": ("kind",),
+                    "job_leases": ("run_request_id",),
+                    "job_attempts": ("run_request_id", "attempt_number"),
+                    "scheduler_graph_dispatches": ("source_run_request_id",),
+                }
+            )
+        if version >= 12:
+            contract.update(
+                {
+                    "mcp_action_receipts": ("action_hash",),
+                    "mcp_server_start_leases": ("server_id",),
+                    "mcp_stdio_sandboxes": ("server_id",),
+                    "phase45_approval_requests": ("id",),
+                }
+            )
         return contract
 
     @staticmethod
@@ -2164,6 +2555,37 @@ class SQLiteStore:
                         ("team_run_id", "artifact_id"),
                     ),
                     "team_run_events": (("id",), ("team_run_id", "run_sequence")),
+                }
+            )
+        if version >= 10:
+            contract.update(
+                {
+                    "security_action_requests": (
+                        ("id",),
+                        ("action_hash",),
+                        ("principal", "idempotency_key"),
+                    ),
+                    "capability_leases": (("id",),),
+                    "security_audit_events": (("id",),),
+                }
+            )
+        if version >= 11:
+            contract.update(
+                {
+                    "skill_candidates": (("root_ref", "relative_directory", "manifest_sha256"),),
+                    "mcp_lifecycle_events": (("id",),),
+                    "run_requests": (("idempotency_key",),),
+                    "scheduler_graph_dispatches": (
+                        ("idempotency_key",),
+                        ("action_hash",),
+                        ("graph_run_id",),
+                    ),
+                }
+            )
+        if version >= 12:
+            contract.update(
+                {
+                    "phase45_approval_requests": (("action_hash",),),
                 }
             )
         return contract
@@ -2389,6 +2811,80 @@ class SQLiteStore:
                     "team_run_events": (("team_run_id", "team_runs", "id", "NO ACTION"),),
                 }
             )
+        if version >= 10:
+            contract.update(
+                {
+                    "capability_leases": (
+                        ("action_hash", "security_action_requests", "action_hash", "NO ACTION"),
+                    ),
+                    "security_audit_events": (
+                        ("action_hash", "security_action_requests", "action_hash", "NO ACTION"),
+                    ),
+                    "policy_denial_observations": (
+                        (
+                            "last_action_hash",
+                            "security_action_requests",
+                            "action_hash",
+                            "NO ACTION",
+                        ),
+                    ),
+                }
+            )
+        if version >= 11:
+            contract.update(
+                {
+                    "mcp_tool_snapshots": (("server_id", "mcp_servers", "server_id", "NO ACTION"),),
+                    "mcp_lifecycle_events": (
+                        ("server_id", "mcp_servers", "server_id", "NO ACTION"),
+                        (
+                            "security_audit_event_id",
+                            "security_audit_events",
+                            "id",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "schedule_heads": (
+                        ("schedule_id", "schedule_definitions", "schedule_id", "NO ACTION"),
+                        ("current_version", "schedule_definitions", "version", "NO ACTION"),
+                    ),
+                    "run_requests": (
+                        ("schedule_id", "schedule_definitions", "schedule_id", "NO ACTION"),
+                        (
+                            "schedule_version",
+                            "schedule_definitions",
+                            "version",
+                            "NO ACTION",
+                        ),
+                        ("replay_of_request_id", "run_requests", "request_id", "NO ACTION"),
+                    ),
+                    "job_leases": (("run_request_id", "run_requests", "request_id", "NO ACTION"),),
+                    "job_attempts": (
+                        ("run_request_id", "run_requests", "request_id", "NO ACTION"),
+                    ),
+                }
+            )
+        if version >= 12:
+            contract.update(
+                {
+                    "mcp_action_receipts": (
+                        ("server_id", "mcp_servers", "server_id", "NO ACTION"),
+                    ),
+                    "mcp_server_start_leases": (
+                        ("server_id", "mcp_servers", "server_id", "NO ACTION"),
+                    ),
+                    "mcp_stdio_sandboxes": (
+                        ("server_id", "mcp_servers", "server_id", "NO ACTION"),
+                    ),
+                    "phase45_approval_requests": (
+                        (
+                            "action_hash",
+                            "security_action_requests",
+                            "action_hash",
+                            "NO ACTION",
+                        ),
+                    ),
+                }
+            )
         return contract
 
     @staticmethod
@@ -2549,6 +3045,39 @@ class SQLiteStore:
                     "idx_team_run_events_run_sequence": ("team_run_id", "run_sequence"),
                 }
             )
+        if version >= 10:
+            indexes.update(
+                {
+                    "idx_security_actions_principal_sequence": ("principal", "sequence"),
+                    "idx_capability_leases_action_expiry": ("action_hash", "expires_at"),
+                    "idx_security_audit_action_sequence": ("action_hash", "sequence"),
+                }
+            )
+        if version >= 11:
+            indexes.update(
+                {
+                    "idx_skill_candidates_name_discovered": ("name", "discovered_at"),
+                    "idx_mcp_servers_lifecycle_updated": ("lifecycle_status", "updated_at"),
+                    "idx_mcp_tool_snapshots_server_version": (
+                        "server_id",
+                        "snapshot_version",
+                    ),
+                    "idx_mcp_lifecycle_server_sequence": ("server_id", "sequence"),
+                    "idx_run_requests_due": ("status", "available_at", "created_at"),
+                    "idx_run_requests_schedule_status": ("schedule_id", "status"),
+                }
+            )
+        if version >= 12:
+            indexes.update(
+                {
+                    "idx_mcp_action_receipts_server_status": (
+                        "server_id",
+                        "status",
+                        "updated_at",
+                    ),
+                    "idx_phase45_approvals_status_expiry": ("status", "expires_at"),
+                }
+            )
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -2643,6 +3172,15 @@ class SQLiteStore:
 
     def _validate_v9_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=9)
+
+    def _validate_v10_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=10)
+
+    def _validate_v11_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=11)
+
+    def _validate_v12_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=12)
 
     def _validate_schema_contract(
         self,
@@ -6483,6 +7021,525 @@ class SQLiteStore:
             DROP TABLE team_definitions;
             DROP INDEX idx_workflow_definitions_workflow_status_version;
             DROP TABLE workflow_definitions;
+            """,
+        )
+
+    def _upgrade_v10(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE security_action_requests (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                action_hash TEXT UNIQUE NOT NULL CHECK (
+                    length(action_hash) = 64 AND action_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                principal TEXT NOT NULL CHECK (length(principal) BETWEEN 1 AND 300),
+                tool TEXT NOT NULL CHECK (length(tool) BETWEEN 1 AND 200),
+                operation TEXT NOT NULL CHECK (length(operation) BETWEEN 1 AND 200),
+                target_type TEXT NOT NULL CHECK (length(target_type) BETWEEN 1 AND 100),
+                target_id TEXT NOT NULL CHECK (length(target_id) BETWEEN 1 AND 500),
+                policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+                idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 300),
+                body TEXT NOT NULL CHECK (json_valid(body) AND json_type(body) = 'object'),
+                created_at TEXT NOT NULL,
+                UNIQUE (principal, idempotency_key)
+            );
+
+            CREATE INDEX idx_security_actions_principal_sequence
+                ON security_action_requests(principal, sequence);
+
+            CREATE TABLE capability_leases (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                action_hash TEXT NOT NULL,
+                principal TEXT NOT NULL CHECK (length(principal) BETWEEN 1 AND 300),
+                capability TEXT NOT NULL CHECK (length(capability) BETWEEN 1 AND 100),
+                target_id TEXT NOT NULL CHECK (length(target_id) BETWEEN 1 AND 500),
+                policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+                issued_by TEXT NOT NULL CHECK (length(issued_by) BETWEEN 1 AND 300),
+                constraints TEXT NOT NULL CHECK (
+                    json_valid(constraints) AND json_type(constraints) = 'object'
+                ),
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                max_uses INTEGER NOT NULL CHECK (max_uses BETWEEN 1 AND 100),
+                uses INTEGER NOT NULL DEFAULT 0 CHECK (uses >= 0 AND uses <= max_uses),
+                revoked_at TEXT,
+                FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash)
+            );
+
+            CREATE INDEX idx_capability_leases_action_expiry
+                ON capability_leases(action_hash, expires_at);
+
+            CREATE TABLE security_audit_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                action_hash TEXT NOT NULL,
+                principal TEXT NOT NULL CHECK (length(principal) BETWEEN 1 AND 300),
+                event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 200),
+                decision TEXT CHECK (decision IS NULL OR decision IN ('deny', 'ask', 'allow')),
+                rule_ids TEXT NOT NULL CHECK (
+                    json_valid(rule_ids) AND json_type(rule_ids) = 'array'
+                ),
+                detail TEXT NOT NULL CHECK (json_valid(detail) AND json_type(detail) = 'object'),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash)
+            );
+
+            CREATE INDEX idx_security_audit_action_sequence
+                ON security_audit_events(action_hash, sequence);
+
+            CREATE TABLE policy_denial_observations (
+                signature TEXT PRIMARY KEY CHECK (
+                    length(signature) = 64 AND signature NOT GLOB '*[^0-9a-f]*'
+                ),
+                last_action_hash TEXT NOT NULL,
+                occurrences INTEGER NOT NULL CHECK (occurrences >= 1),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (last_action_hash) REFERENCES security_action_requests(action_hash)
+            );
+
+            CREATE TRIGGER security_action_requests_no_update
+            BEFORE UPDATE ON security_action_requests
+            BEGIN
+                SELECT RAISE(ABORT, 'Security action requests are immutable');
+            END;
+
+            CREATE TRIGGER security_action_requests_no_delete
+            BEFORE DELETE ON security_action_requests
+            BEGIN
+                SELECT RAISE(ABORT, 'Security action requests are immutable');
+            END;
+
+            CREATE TRIGGER security_audit_events_no_update
+            BEFORE UPDATE ON security_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Security audit events are append-only');
+            END;
+
+            CREATE TRIGGER security_audit_events_no_delete
+            BEFORE DELETE ON security_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'Security audit events are append-only');
+            END;
+            """,
+        )
+
+    def _downgrade_v10(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM security_action_requests)
+                + (SELECT COUNT(*) FROM capability_leases)
+                + (SELECT COUNT(*) FROM security_audit_events)
+                + (SELECT COUNT(*) FROM policy_denial_observations) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back security control-plane tables with data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER security_audit_events_no_delete;
+            DROP TRIGGER security_audit_events_no_update;
+            DROP TRIGGER security_action_requests_no_delete;
+            DROP TRIGGER security_action_requests_no_update;
+            DROP INDEX idx_security_audit_action_sequence;
+            DROP TABLE security_audit_events;
+            DROP TABLE policy_denial_observations;
+            DROP INDEX idx_capability_leases_action_expiry;
+            DROP TABLE capability_leases;
+            DROP INDEX idx_security_actions_principal_sequence;
+            DROP TABLE security_action_requests;
+            """,
+        )
+
+    def _upgrade_v11(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE skill_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                root_ref TEXT NOT NULL CHECK (length(root_ref) BETWEEN 1 AND 500),
+                relative_directory TEXT NOT NULL CHECK (
+                    length(relative_directory) BETWEEN 1 AND 500
+                ),
+                name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+                description TEXT NOT NULL CHECK (length(description) BETWEEN 1 AND 10000),
+                manifest_sha256 TEXT NOT NULL CHECK (
+                    length(manifest_sha256) = 64
+                    AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'
+                ),
+                snapshot_json TEXT NOT NULL CHECK (
+                    json_valid(snapshot_json) AND json_type(snapshot_json) = 'object'
+                ),
+                trust_status TEXT NOT NULL CHECK (
+                    trust_status IN ('untrusted_candidate', 'registered', 'rejected')
+                ),
+                discovered_at TEXT NOT NULL,
+                UNIQUE (root_ref, relative_directory, manifest_sha256)
+            );
+
+            CREATE INDEX idx_skill_candidates_name_discovered
+                ON skill_candidates(name, discovered_at);
+
+            CREATE TABLE mcp_servers (
+                server_id TEXT PRIMARY KEY,
+                transport TEXT NOT NULL CHECK (transport IN ('stdio', 'legacy_sse')),
+                endpoint_ref TEXT CHECK (
+                    endpoint_ref IS NULL OR length(endpoint_ref) BETWEEN 1 AND 300
+                ),
+                secret_ref TEXT CHECK (
+                    secret_ref IS NULL OR length(secret_ref) BETWEEN 1 AND 300
+                ),
+                stdio_argv_json TEXT CHECK (
+                    stdio_argv_json IS NULL OR (
+                        json_valid(stdio_argv_json) AND json_type(stdio_argv_json) = 'array'
+                    )
+                ),
+                cwd_ref TEXT CHECK (cwd_ref IS NULL OR length(cwd_ref) BETWEEN 1 AND 500),
+                environment_refs_json TEXT NOT NULL CHECK (
+                    json_valid(environment_refs_json)
+                    AND json_type(environment_refs_json) = 'object'
+                ),
+                allow_loopback_http INTEGER NOT NULL DEFAULT 0 CHECK (
+                    allow_loopback_http IN (0, 1)
+                ),
+                lifecycle_status TEXT NOT NULL CHECK (
+                    lifecycle_status IN (
+                        'configured', 'starting', 'ready', 'running', 'stopped', 'failed',
+                        'deleted'
+                    )
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (
+                    (transport = 'stdio' AND endpoint_ref IS NULL AND stdio_argv_json IS NOT NULL)
+                    OR
+                    (transport = 'legacy_sse'
+                        AND endpoint_ref IS NOT NULL
+                        AND stdio_argv_json IS NULL)
+                )
+            );
+
+            CREATE INDEX idx_mcp_servers_lifecycle_updated
+                ON mcp_servers(lifecycle_status, updated_at);
+
+            CREATE TABLE mcp_tool_snapshots (
+                server_id TEXT NOT NULL,
+                snapshot_version INTEGER NOT NULL CHECK (snapshot_version >= 1),
+                tool_name TEXT NOT NULL CHECK (length(tool_name) BETWEEN 1 AND 200),
+                schema_sha256 TEXT NOT NULL CHECK (
+                    length(schema_sha256) = 64
+                    AND schema_sha256 NOT GLOB '*[^0-9a-f]*'
+                ),
+                tool_json TEXT NOT NULL CHECK (
+                    json_valid(tool_json) AND json_type(tool_json) = 'object'
+                ),
+                discovered_at TEXT NOT NULL,
+                PRIMARY KEY (server_id, snapshot_version, tool_name),
+                FOREIGN KEY (server_id) REFERENCES mcp_servers(server_id)
+            );
+
+            CREATE INDEX idx_mcp_tool_snapshots_server_version
+                ON mcp_tool_snapshots(server_id, snapshot_version);
+
+            CREATE TABLE mcp_lifecycle_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                server_id TEXT NOT NULL,
+                event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 100),
+                lifecycle_status TEXT NOT NULL CHECK (
+                    lifecycle_status IN (
+                        'configured', 'starting', 'ready', 'running', 'stopped', 'failed',
+                        'deleted'
+                    )
+                ),
+                detail_json TEXT NOT NULL CHECK (
+                    json_valid(detail_json) AND json_type(detail_json) = 'object'
+                ),
+                security_audit_event_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (server_id) REFERENCES mcp_servers(server_id),
+                FOREIGN KEY (security_audit_event_id) REFERENCES security_audit_events(id)
+            );
+
+            CREATE INDEX idx_mcp_lifecycle_server_sequence
+                ON mcp_lifecycle_events(server_id, sequence);
+
+            CREATE TRIGGER mcp_lifecycle_events_no_update
+            BEFORE UPDATE ON mcp_lifecycle_events
+            BEGIN
+                SELECT RAISE(ABORT, 'MCP lifecycle events are append-only');
+            END;
+
+            CREATE TRIGGER mcp_lifecycle_events_no_delete
+            BEFORE DELETE ON mcp_lifecycle_events
+            BEGIN
+                SELECT RAISE(ABORT, 'MCP lifecycle events are append-only');
+            END;
+
+            CREATE TABLE IF NOT EXISTS schedule_definitions (
+                schedule_id TEXT NOT NULL,
+                version INTEGER NOT NULL CHECK(version >= 1),
+                definition_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(schedule_id, version)
+            );
+            CREATE TABLE IF NOT EXISTS schedule_heads (
+                schedule_id TEXT PRIMARY KEY,
+                current_version INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('enabled','paused','cancelled')),
+                cursor_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(schedule_id, current_version)
+                  REFERENCES schedule_definitions(schedule_id, version)
+            );
+            CREATE TABLE IF NOT EXISTS run_requests (
+                request_id TEXT PRIMARY KEY,
+                schedule_id TEXT NOT NULL,
+                schedule_version INTEGER NOT NULL,
+                occurrence_at TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                replay_of_request_id TEXT REFERENCES run_requests(request_id),
+                workflow_id TEXT NOT NULL,
+                workflow_version INTEGER NOT NULL,
+                workflow_input_json TEXT NOT NULL,
+                dispatch_idempotency TEXT NOT NULL
+                  CHECK(dispatch_idempotency IN ('idempotent','non_idempotent')),
+                max_attempts INTEGER NOT NULL CHECK(max_attempts BETWEEN 1 AND 20),
+                attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+                status TEXT NOT NULL CHECK(status IN
+                  ('queued','leased','retry_wait','succeeded','cancelled','dead_letter','manual_reconcile_required')),
+                workflow_run_id TEXT,
+                cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1)),
+                last_error_code TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(schedule_id, schedule_version)
+                  REFERENCES schedule_definitions(schedule_id, version)
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_requests_due
+              ON run_requests(status, available_at, created_at);
+            CREATE INDEX IF NOT EXISTS idx_run_requests_schedule_status
+              ON run_requests(schedule_id, status);
+            CREATE TABLE IF NOT EXISTS scheduler_authority_leases (
+                kind TEXT PRIMARY KEY CHECK(kind IN ('scheduler_leader','runtime_writer')),
+                owner TEXT NOT NULL,
+                token TEXT NOT NULL,
+                fencing INTEGER NOT NULL CHECK(fencing >= 1),
+                expires_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS job_leases (
+                run_request_id TEXT PRIMARY KEY REFERENCES run_requests(request_id),
+                owner TEXT NOT NULL,
+                token TEXT NOT NULL,
+                fencing INTEGER NOT NULL CHECK(fencing >= 1),
+                expires_at TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL CHECK(attempt_number BETWEEN 1 AND 20)
+            );
+            CREATE TABLE IF NOT EXISTS job_attempts (
+                run_request_id TEXT NOT NULL REFERENCES run_requests(request_id),
+                attempt_number INTEGER NOT NULL,
+                lease_owner TEXT NOT NULL,
+                lease_token TEXT NOT NULL,
+                lease_fencing INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK(status IN
+                  ('running','succeeded','failed','outcome_unknown')),
+                side_effect_started INTEGER NOT NULL DEFAULT 0 CHECK(side_effect_started IN (0,1)),
+                workflow_run_id TEXT,
+                error_code TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                PRIMARY KEY(run_request_id, attempt_number)
+            );
+            CREATE TABLE IF NOT EXISTS scheduler_graph_dispatches (
+                source_run_request_id TEXT PRIMARY KEY,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                action_hash TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL CHECK(status IN ('pending','completed')),
+                graph_run_id TEXT UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK(
+                  (status='pending' AND graph_run_id IS NULL)
+                  OR (status='completed' AND graph_run_id IS NOT NULL)
+                )
+            );
+            """,
+        )
+
+    def _upgrade_v12(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE mcp_action_receipts (
+                action_hash TEXT PRIMARY KEY CHECK (
+                    length(action_hash) = 64 AND action_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                server_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL CHECK (length(tool_name) BETWEEN 1 AND 200),
+                schema_sha256 TEXT NOT NULL CHECK (
+                    length(schema_sha256) = 64 AND schema_sha256 NOT GLOB '*[^0-9a-f]*'
+                ),
+                arguments_sha256 TEXT NOT NULL CHECK (
+                    length(arguments_sha256) = 64 AND arguments_sha256 NOT GLOB '*[^0-9a-f]*'
+                ),
+                status TEXT NOT NULL CHECK (
+                    status IN ('reserved', 'sent', 'completed', 'outcome_unknown')
+                ),
+                result_json TEXT CHECK (
+                    result_json IS NULL OR json_valid(result_json)
+                ),
+                error_code TEXT CHECK (
+                    error_code IS NULL OR length(error_code) BETWEEN 1 AND 200
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY (server_id) REFERENCES mcp_servers(server_id)
+            );
+            CREATE INDEX idx_mcp_action_receipts_server_status
+                ON mcp_action_receipts(server_id, status, updated_at);
+            CREATE TRIGGER mcp_action_receipts_binding_guard
+            BEFORE UPDATE ON mcp_action_receipts
+            WHEN NEW.action_hash != OLD.action_hash
+                OR NEW.server_id != OLD.server_id
+                OR NEW.tool_name != OLD.tool_name
+                OR NEW.schema_sha256 != OLD.schema_sha256
+                OR NEW.arguments_sha256 != OLD.arguments_sha256
+                OR NEW.created_at != OLD.created_at
+            BEGIN
+                SELECT RAISE(ABORT, 'MCP action receipt binding is immutable');
+            END;
+
+            CREATE TABLE mcp_server_start_leases (
+                server_id TEXT PRIMARY KEY,
+                owner TEXT,
+                token TEXT,
+                fencing INTEGER NOT NULL DEFAULT 0 CHECK (fencing >= 0),
+                expires_at TEXT,
+                FOREIGN KEY (server_id) REFERENCES mcp_servers(server_id)
+            );
+
+            CREATE TABLE mcp_stdio_sandboxes (
+                server_id TEXT PRIMARY KEY,
+                workspace_root_ref TEXT NOT NULL CHECK (
+                    length(workspace_root_ref) BETWEEN 1 AND 128
+                ),
+                docker_image TEXT NOT NULL CHECK (length(docker_image) BETWEEN 1 AND 300),
+                FOREIGN KEY (server_id) REFERENCES mcp_servers(server_id)
+            );
+
+            CREATE TABLE phase45_approval_requests (
+                id TEXT PRIMARY KEY,
+                action_hash TEXT UNIQUE NOT NULL CHECK (
+                    length(action_hash) = 64 AND action_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                target_json TEXT NOT NULL CHECK (
+                    json_valid(target_json) AND json_type(target_json) = 'object'
+                ),
+                policy_version TEXT NOT NULL CHECK (length(policy_version) BETWEEN 1 AND 100),
+                status TEXT NOT NULL CHECK (
+                    status IN ('pending', 'approved', 'denied', 'expired', 'consumed')
+                ),
+                requested_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                decided_by TEXT CHECK (
+                    decided_by IS NULL OR decided_by IN ('user', 'reviewer')
+                ),
+                reason_code TEXT CHECK (
+                    reason_code IS NULL OR length(reason_code) BETWEEN 1 AND 200
+                ),
+                decided_at TEXT,
+                consumed_at TEXT,
+                FOREIGN KEY (action_hash) REFERENCES security_action_requests(action_hash)
+            );
+            CREATE INDEX idx_phase45_approvals_status_expiry
+                ON phase45_approval_requests(status, expires_at);
+            CREATE TRIGGER phase45_approval_binding_guard
+            BEFORE UPDATE ON phase45_approval_requests
+            WHEN NEW.id != OLD.id
+                OR NEW.action_hash != OLD.action_hash
+                OR NEW.target_json != OLD.target_json
+                OR NEW.policy_version != OLD.policy_version
+                OR NEW.requested_at != OLD.requested_at
+                OR NEW.expires_at != OLD.expires_at
+            BEGIN
+                SELECT RAISE(ABORT, 'Phase 4 approval binding is immutable');
+            END;
+            """,
+        )
+
+    def _downgrade_v12(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT (SELECT COUNT(*) FROM mcp_action_receipts)
+                + (SELECT COUNT(*) FROM mcp_server_start_leases)
+                + (SELECT COUNT(*) FROM mcp_stdio_sandboxes)
+                + (SELECT COUNT(*) FROM phase45_approval_requests) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back MCP safety tables while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER phase45_approval_binding_guard;
+            DROP INDEX idx_phase45_approvals_status_expiry;
+            DROP TABLE phase45_approval_requests;
+            DROP TABLE mcp_stdio_sandboxes;
+            DROP TABLE mcp_server_start_leases;
+            DROP TRIGGER mcp_action_receipts_binding_guard;
+            DROP INDEX idx_mcp_action_receipts_server_status;
+            DROP TABLE mcp_action_receipts;
+            """,
+        )
+
+    def _downgrade_v11(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM skill_candidates)
+                + (SELECT COUNT(*) FROM mcp_servers)
+                + (SELECT COUNT(*) FROM mcp_tool_snapshots)
+                + (SELECT COUNT(*) FROM mcp_lifecycle_events)
+                + (SELECT COUNT(*) FROM schedule_definitions)
+                + (SELECT COUNT(*) FROM schedule_heads)
+                + (SELECT COUNT(*) FROM run_requests)
+                + (SELECT COUNT(*) FROM scheduler_authority_leases)
+                + (SELECT COUNT(*) FROM job_leases)
+                + (SELECT COUNT(*) FROM job_attempts)
+                + (SELECT COUNT(*) FROM scheduler_graph_dispatches) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError("refusing to roll back Phase 5A tables while they contain data")
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TABLE scheduler_graph_dispatches;
+            DROP TABLE job_attempts;
+            DROP TABLE job_leases;
+            DROP TABLE scheduler_authority_leases;
+            DROP INDEX idx_run_requests_schedule_status;
+            DROP INDEX idx_run_requests_due;
+            DROP TABLE run_requests;
+            DROP TABLE schedule_heads;
+            DROP TABLE schedule_definitions;
+            DROP TRIGGER mcp_lifecycle_events_no_delete;
+            DROP TRIGGER mcp_lifecycle_events_no_update;
+            DROP INDEX idx_mcp_lifecycle_server_sequence;
+            DROP TABLE mcp_lifecycle_events;
+            DROP INDEX idx_mcp_tool_snapshots_server_version;
+            DROP TABLE mcp_tool_snapshots;
+            DROP INDEX idx_mcp_servers_lifecycle_updated;
+            DROP TABLE mcp_servers;
+            DROP INDEX idx_skill_candidates_name_discovered;
+            DROP TABLE skill_candidates;
             """,
         )
 

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from operant.application.service import ApplicationService
-from operant.application.workflow import SequentialCodingWorkflow
+from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
 from operant.domain.memory import MemoryKind, MemoryStatus
 from operant.domain.messages import (
     Message,
@@ -121,6 +121,43 @@ def memory_workflow_service(
     return service
 
 
+async def consume_with_expected_unittest_approval(
+    service: ApplicationService,
+    stream: AsyncIterator[WorkflowEvent],
+) -> list[WorkflowEvent]:
+    events: list[WorkflowEvent] = []
+    approved_session_id: str | None = None
+    async for event in stream:
+        events.append(event)
+        if event.event_type != "tool.approval_required":
+            continue
+        assert approved_session_id is None
+        assert event.role == "coder"
+        assert event.payload["tool_call_id"] == "verify_unittest"
+        assert event.payload["name"] == "run_command"
+        assert event.payload["category"] == "security_policy"
+        assert event.payload["detail"] == (
+            "run_command category=security_policy; executable=python3; argument_count=4"
+        )
+        assert service.submit_approval(
+            event.session_id,
+            "verify_unittest",
+            approved=True,
+        )
+        approved_session_id = event.session_id
+
+    assert approved_session_id is not None
+    approval = service.store.list_approval_requests(approved_session_id, status=None)[0]
+    assert [
+        audit.event_type for audit in service.store.list_approval_audit_events(approval.id)
+    ] == ["approval.requested", "approval.decided"]
+    assert [event.event_type for event in events].count("tool.approval_required") == 1
+    decided = [event for event in events if event.event_type == "tool.approval_decided"]
+    assert len(decided) == 1
+    assert decided[0].payload["approved"] is True
+    return events
+
+
 @pytest.mark.asyncio
 async def test_workflow_retrieves_prior_memory_and_generates_candidates(tmp_path: Path) -> None:
     (tmp_path / "test_sample.py").write_text(
@@ -145,9 +182,9 @@ async def test_workflow_retrieves_prior_memory_and_generates_candidates(tmp_path
         confirmed=True,
     )
 
-    events = [
-        event
-        async for event in SequentialCodingWorkflow(service).run(
+    events = await consume_with_expected_unittest_approval(
+        service,
+        SequentialCodingWorkflow(service).run(
             task="Fix calculator",
             workspace=tmp_path,
             main_role_id="role_main",
@@ -155,8 +192,8 @@ async def test_workflow_retrieves_prior_memory_and_generates_candidates(tmp_path
             explorer_role_ids=("role_explorer",),
             coder_role_id="role_coder",
             reviewer_role_id="role_reviewer",
-        )
-    ]
+        ),
+    )
 
     assert prior.content in provider.messages["Planner"][0]
     memory_events = [event for event in events if event.event_type == "workflow.memory_candidate"]
@@ -227,9 +264,9 @@ async def test_workflow_evaluation_memory_controls_skip_reads_and_writeback(
         raise AssertionError("memory_enabled=False must not query project Memory")
 
     monkeypatch.setattr(service, "query_memories", fail_if_read)
-    events = [
-        event
-        async for event in SequentialCodingWorkflow(service).run(
+    events = await consume_with_expected_unittest_approval(
+        service,
+        SequentialCodingWorkflow(service).run(
             task="Fix calculator",
             workspace=tmp_path,
             main_role_id="role_main",
@@ -240,8 +277,8 @@ async def test_workflow_evaluation_memory_controls_skip_reads_and_writeback(
             memory_enabled=False,
             memory_project_scope=tmp_path,
             persist_memory_candidates=False,
-        )
-    ]
+        ),
+    )
 
     assert events[-1].event_type == "workflow.completed"
     assert all(
