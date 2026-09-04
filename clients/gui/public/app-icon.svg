@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Operant">
+  <rect width="512" height="512" rx="112" fill="#0f766e"/>
+  <path d="M146 256c0-64 47-112 110-112s110 48 110 112-47 112-110 112-110-48-110-112Z" fill="none" stroke="#fff" stroke-width="42"/>
+  <path d="M256 87v74M256 351v74M87 256h74M351 256h74" stroke="#99f6e4" stroke-width="30" stroke-linecap="round"/>
+</svg>

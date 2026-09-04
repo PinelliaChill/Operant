@@ -70,6 +70,7 @@ const RAIL_SECTIONS = [
 const TABBAR_ITEMS = [
   { to: '/chat', label: '会话', icon: MessageSquare },
   { to: '/tasks', label: '任务', icon: ListTodo },
+  { to: '/approvals', label: '审批', icon: ShieldCheck },
   { to: '/projects', label: '项目', icon: FolderKanban },
   { to: '/settings', label: '设置', icon: Settings },
 ] as const;
@@ -621,8 +622,7 @@ export const RailLayout: React.FC = () => {
                 : '切换到协作模式'}
             </span>
           </div>
-          {/* 移动端审批入口（v5 把审批中心移到 rail 一级分区后，<960px TabBar 无审批项）：
-              模式钮下方一行"审批"，复用侧栏行样式，点击进 /approvals 并关闭抽屉 */}
+          {/* 抽屉内保留审批入口，便于窄屏用户在上下文导航中直接进入。 */}
           <div className="rail-drawer-approvals">
             <NavLink
               to="/approvals"
@@ -652,7 +652,7 @@ export const RailLayout: React.FC = () => {
               to={item.to}
               className={({ isActive }) => `bottom-tabbar-item${isActive ? ' active' : ''}`}
             >
-              <Icon size={18} />
+              <Icon size={18} aria-hidden="true" />
               <span>{item.label}</span>
             </NavLink>
           );

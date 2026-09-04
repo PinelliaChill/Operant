@@ -81,6 +81,28 @@ html, body, #root {
   -webkit-font-smoothing: antialiased;
 }
 
+.offline-boundary {
+  width: 100%;
+  height: 100%;
+}
+
+.offline-banner {
+  position: fixed;
+  top: env(safe-area-inset-top, 0px);
+  left: 50%;
+  z-index: 220;
+  max-width: min(680px, calc(100vw - 24px));
+  transform: translateX(-50%);
+  padding: 10px 14px;
+  border: 1px solid var(--status-warn-border);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--status-warn-bg);
+  color: var(--status-warn-text);
+  box-shadow: var(--shadow-md);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 /* 覆盖抽屉打开时禁止 body 滚动 */
 body.no-scroll {
   overflow: hidden;

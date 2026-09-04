@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   CircleStop,
+  Pause,
   Play,
   RefreshCw,
   RotateCcw,
@@ -209,6 +210,44 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
       () => refreshGraph(graphRunId, expectedScopeEpoch),
       () => expectedScopeEpoch === graphScopeEpoch.current,
     );
+  };
+
+  const resumeGraph = () => {
+    const runId = graphRunId.trim();
+    const expectedScopeEpoch = graphScopeEpoch.current;
+    const logical = `resume-graph:${runId}`;
+    return run(async () => {
+      if (!runId) throw new Error('请先输入 Graph Run ID。');
+      await phase23Client.resumeGraphRun(
+        runId,
+        { allow_unknown_side_effect_replay: false },
+        { idempotencyKey: keys.current.get(logical) },
+      );
+      keys.current.release(logical);
+      await refreshGraph(runId, expectedScopeEpoch);
+      addNotification('success', '恢复请求已由 Core 接收；当前状态以刷新后的投影为准。');
+    }, () => expectedScopeEpoch === graphScopeEpoch.current);
+  };
+
+  const cancelGraph = () => {
+    const runId = graphRunId.trim();
+    if (!runId) {
+      setError('请先输入 Graph Run ID。');
+      return Promise.resolve();
+    }
+    if (!window.confirm(`确认取消 Graph Run ${runId}？取消由 Core 裁决，已发出的外部副作用不保证可撤回。`)) {
+      return Promise.resolve();
+    }
+    const expectedScopeEpoch = graphScopeEpoch.current;
+    const logical = `cancel-graph:${runId}`;
+    return run(async () => {
+      await phase23Client.cancelGraphRun(runId, {
+        idempotencyKey: keys.current.get(logical),
+      });
+      keys.current.release(logical);
+      await refreshGraph(runId, expectedScopeEpoch);
+      addNotification('success', '取消请求已由 Core 接收；当前状态以刷新后的投影为准。');
+    }, () => expectedScopeEpoch === graphScopeEpoch.current);
   };
 
   const clearTeamProjection = (cancelPending = false, clearRunId = false) => {
@@ -423,6 +462,9 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
               <button className="btn btn-secondary" disabled={busy} onClick={requestGraphRefresh}><RefreshCw size={14} aria-hidden="true" />刷新投影</button>
               <button className="btn btn-primary" disabled={busy || streamStatus === 'live'} onClick={monitorGraph}><RotateCcw size={14} aria-hidden="true" />{streamStatus === 'disconnected' ? '从 Cursor 重连' : '监控事件'}</button>
               <button className="btn btn-secondary" disabled={streamStatus === 'idle'} onClick={stopStream}><CircleStop size={14} aria-hidden="true" />停止监控</button>
+              <button className="btn btn-primary" disabled={busy || connectionStatus !== 'connected' || !graphRunId.trim()} onClick={resumeGraph}><Play size={14} aria-hidden="true" />恢复</button>
+              <button className="btn btn-secondary" disabled title="当前 phase23.v1 未提供 Graph Pause Command"><Pause size={14} aria-hidden="true" />暂停（协议待补）</button>
+              <button className="btn btn-danger" disabled={busy || connectionStatus !== 'connected' || !graphRunId.trim()} onClick={cancelGraph}><CircleStop size={14} aria-hidden="true" />取消运行</button>
             </div>
             <p className="live23-muted">流状态：{streamStatus} · Cursor {cursorForScope(events, graphScope).toString()}</p>
             {graphRun && <p><strong>{graphRun.status}</strong> · revision {graphRun.revision} · 当前节点 {graphRun.current_node_ids.join(', ') || '无'}</p>}
