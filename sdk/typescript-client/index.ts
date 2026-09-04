@@ -70,3 +70,16 @@ export type {
   Phase56Response,
   Phase56Transport,
 } from './phase56-transport';
+
+// Operant 2.0 Beta/RC adds durable Gateway and Container Writer lifecycle APIs.
+export {
+  BetaClient,
+  ProtocolNegotiationError as BetaProtocolNegotiationError,
+} from './beta.generated';
+export * as Beta from './beta.generated';
+export type {
+  BetaBody,
+  BetaRequest,
+  BetaResponse,
+  BetaTransport,
+} from './beta-transport';
