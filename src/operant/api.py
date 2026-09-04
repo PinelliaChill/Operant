@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qsl, quote
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -61,6 +62,7 @@ from operant.artifacts import (
     ArtifactTooLargeError,
     ArtifactValidationError,
 )
+from operant.auth import OAuthConfig, OAuthControl, install_oauth_control, oauth_config_from_env
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
 from operant.domain.commands import ContextBaselineOperation, SlashCommandKind
 from operant.domain.context import ContextRevision, ReferenceRequest
@@ -1309,6 +1311,8 @@ def create_app(
     phase56_container_lifecycle: ContainerWriterLifecycle | None = None,
     phase56_writer_artifact_adapter: Any | None = None,
     phase56_merge_adapter: Any | None = None,
+    oauth_config: OAuthConfig | None = None,
+    oauth_http_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     load_local_env()
     if phase45_skill_roots is None:
@@ -3593,6 +3597,11 @@ def create_app(
         _ArtifactRequestBodyLimitMiddleware,
         max_body_bytes=MAX_ARTIFACT_REQUEST_BODY_BYTES,
     )
+    configured_oauth = oauth_config if oauth_config is not None else oauth_config_from_env()
+    if configured_oauth is not None:
+        oauth_control = OAuthControl(configured_oauth, http_client=oauth_http_client)
+        install_oauth_control(app, oauth_control)
+        app.router.add_event_handler("shutdown", oauth_control.close)
     return app
 
 
