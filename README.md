@@ -167,11 +167,11 @@ OAuth，WSS Gateway 也必须使用 TLS。`operant serve` 会拒绝公网、通�
 npm ci --prefix clients/gui
 npm run build --prefix clients/gui
 
-# Textual TUI
+# Textual TUI（候选构建使用 --no-sources，依赖同版本 operant-agent）
 uv sync --project clients/tui
 uv run --project clients/tui operant-tui --core-url http://127.0.0.1:8000
 
-# Tauri 候选包；当前要求本机 PATH 中已有 operant Core
+# Tauri 候选包；当前只生成未签名 macOS .app，并要求 PATH 中已有 operant Core
 npm ci --prefix clients/desktop
 npm run tauri --prefix clients/desktop -- build
 
@@ -185,8 +185,8 @@ uv run python scripts/release_checks.py verify --dist dist
 `OPERANT_OAUTH_SUBJECT`、`OPERANT_OAUTH_REDIRECT_URI`、授权/token/JWKS endpoint 等环境变量；可选
 client secret 只配置变量名引用。WSS Gateway 使用 `OPERANT_REMOTE_GATEWAY_TOKEN_REF` 引用运行环境中的
 Bearer，并用 `OPERANT_REMOTE_GATEWAY_ALLOWED_ORIGINS_JSON` 配置精确 Origin。不要把 secret 真值写入
-配置、日志或文档。当前候选包没有代码签名、公证或 provenance 签名，检查会标记为
-`unsigned_candidate_not_for_release`，不得当作正式发布物。
+配置、日志或文档。当前 Tauri 候选只生成 `.app`，不生成 DMG；候选包没有代码签名、公证、自动更新
+或 provenance 签名，检查会标记为 `unsigned_candidate_not_for_release`，不得当作正式发布物。
 
 ## 文档入口
 

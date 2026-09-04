@@ -84,6 +84,13 @@ def test_desktop_bridge_has_exact_origin_and_stays_on_loopback(tmp_path: Path) -
         "http://tauri.localhost",
         "https://tauri.localhost",
     ]
+    assert middleware[0].kwargs["allow_headers"] == [
+        "Accept",
+        "Content-Type",
+        "Idempotency-Key",
+        "Last-Event-ID",
+        "X-Operant-Client-Version",
+    ]
     with pytest.raises(ServerConfigurationError, match="desktop bridge"):
         build_server_config(
             host="192.168.1.20",

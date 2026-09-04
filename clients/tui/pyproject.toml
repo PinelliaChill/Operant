@@ -7,7 +7,11 @@ name = "operant-tui"
 version = "0.1.0"
 description = "Textual client for an Operant Core"
 requires-python = ">=3.10"
-dependencies = ["textual>=1.0", "typing-extensions>=4.12"]
+dependencies = [
+  "operant-agent==0.1.0",
+  "textual>=1.0",
+  "typing-extensions>=4.12",
+]
 
 [project.scripts]
 operant-tui = "operant_tui.__main__:main"
@@ -15,8 +19,5 @@ operant-tui = "operant_tui.__main__:main"
 [tool.hatch.build.targets.wheel]
 packages = ["operant_tui"]
 
-# Ship the repository's unchanged generated Python Client with the standalone
-# TUI wheel. This is packaging only; sdk/python_client remains the sole source.
-[tool.hatch.build.targets.wheel.force-include]
-"../../sdk/__init__.py" = "sdk/__init__.py"
-"../../sdk/python_client" = "sdk/python_client"
+[tool.uv.sources]
+operant-agent = { path = "../..", editable = true }

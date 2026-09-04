@@ -2,7 +2,7 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-04
+> 最后更新：2026-09-05
 >
 > 对应版本：Operant 2.0 Beta/RC 收口（SQLite v14；`phase56.v1` + additive `operant-beta.v1`）
 
@@ -227,7 +227,8 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   有界读取、回调一次性消费、登录限流、Secure/HttpOnly/SameSite Cookie 与可选撤销。Access/refresh
   Token 只保存在 Core 进程内存，退出、过期或重启即失效，不写 SQLite 或本地 token 文件；
 - `operant serve` 拒绝公网、通配和含糊 hostname；私网监听必须同时启用 TLS 与 OAuth，WSS Gateway
-  必须启用 TLS。`--desktop` 只允许 loopback，并只为固定 Tauri Origin 开启最小 CORS；
+  必须启用 TLS。运行时显式依赖 WebSocket transport；`--desktop` 只允许 loopback，并只为固定 Tauri
+  Origin 和生成 Client 所需请求头开启最小 CORS；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
 - v1—v14 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
@@ -2306,7 +2307,8 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 10. React PWA、Textual TUI 与 Tauri 薄壳已使用生成 Client；OAuth、WSS Gateway 和 HTTPS Host/Target
     Connector 已实现。Skill 信任/安装、Policy 修改、Graph Proposal/智能创建、Graph Timer/任意节点、
     多 Host 发现/通知、移动推送和完整安装向导仍未实现。Browser/Computer 仍不是内置驱动；Relay 和
-    Gateway 不是已审计的公网托管产品，Tauri 候选包仍要求本机已有 `operant` Core。
+    Gateway 不是已审计的公网托管产品；Tauri 候选只生成未签名 macOS `.app`，仍要求本机已有
+    `operant` Core，不包含 DMG、签名、公证或自动更新。
 11. Artifact 已有对象级 Retention、Pin、宽限期、Trash、只读审计和显式孤儿修复，但
     Session/Workflow/Evaluation 事件、Thread Canonical History、Tool/Command Receipt、Approval Audit、
     Memory 和 Context/Compaction 仍没有清理执行器，会随运行持续增长；Artifact 也没有后台自动清扫，
@@ -2365,7 +2367,7 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 
 ## 20. 变更记录
 
-### 2026-09-04（Operant 2.0 Beta/RC 产品化收口）
+### 2026-09-05（Operant 2.0 Beta/RC 产品化收口）
 
 - 从 `main@d06d6fb` 建立隔离集成分支，Codex 统一持有 additive `operant-beta.v1` Schema、SQLite v14
   Migration 与最终集成；三条 coder 实现轨分别交付 Gateway/Connector/Container、PWA/TUI/Tauri、
@@ -2376,7 +2378,11 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 - WSS Gateway、HTTPS Host/Target Connector 与 Container Writer 生命周期保持 Host/Device/Session、
   route/recipient/nonce/TTL/fencing、Action Gateway、lease/CAS、未知结果人工核对和 SQLite 权威；
 - React PWA 做路由/SDK 分块与 500 kB 预算，TUI 增加 scope Cursor 单调去重及 SSE EOF Query 校正，
-  Tauri 只管理 loopback Core 和 WebView；候选构建生成锁文件依赖闭包 SBOM，未签名产物明确禁止发布；
+  Tauri 只管理 loopback Core 和 WebView；候选构建生成锁文件依赖闭包 SBOM，Python 分发显式携带生成
+  Client 和 WSS transport，TUI 候选依赖同版本 Core，未签名产物明确禁止发布；
+- 使用本地自签名证书、真实 TLS Core 与真实 WebSocket Client 验证 WSS hello/ping/cursor 和持久化关闭
+  投影；真实 Tauri macOS `.app`/WebView 切换 live 后连接 loopback Core，验证固定 Origin 的 CORS 预检、
+  版本请求头、协议协商和 Projection Query。该证据不外推为公网部署、签名安装器或浏览器矩阵验收；
 - 范围继续排除 SaaS、多用户、分布式 Core、高可用、多 Host 自动发现、移动推送与未验收公网暴露。
 
 ### 2026-09-04（Phase 5B Remote + Phase 6 Multi-Writer）

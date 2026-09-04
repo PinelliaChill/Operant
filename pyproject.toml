@@ -18,6 +18,7 @@ dependencies = [
   "rich>=13.9,<16",
   "typer>=0.15,<1",
   "uvicorn>=0.34,<1",
+  "websockets>=15,<17",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,21 @@ operant = "operant.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/operant"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"sdk/__init__.py" = "sdk/__init__.py"
+"sdk/python_client" = "sdk/python_client"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/LICENSE",
+  "/README.md",
+  "/pyproject.toml",
+  "/sdk/__init__.py",
+  "/sdk/python_client",
+  "/src/operant",
+]
+exclude = ["**/__pycache__", "**/*.pyc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

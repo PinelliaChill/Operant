@@ -124,7 +124,13 @@ def build_server_config(
                 "https://tauri.localhost",
             ],
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            allow_headers=["Accept", "Content-Type", "Idempotency-Key", "Last-Event-ID"],
+            allow_headers=[
+                "Accept",
+                "Content-Type",
+                "Idempotency-Key",
+                "Last-Event-ID",
+                "X-Operant-Client-Version",
+            ],
             allow_credentials=False,
             max_age=600,
         )

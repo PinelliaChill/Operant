@@ -1,8 +1,8 @@
 # Operant Textual TUI
 
-The TUI is an optional client. Its wheel includes the repository's unchanged
-generated Python clients from `sdk/python_client`; it does not read SQLite,
-logs, or the Core event bus.
+The TUI is an optional client. Its wheel depends on the exact matching
+`operant-agent` release, which ships the generated Python clients from
+`sdk/python_client`; it does not read SQLite, logs, or the Core event bus.
 
 ```bash
 python -m pip install -e clients/tui
