@@ -2,11 +2,43 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import operant.skills.discovery as discovery_module
 from operant.skills import SkillDiscovery, SkillDiscoveryLimits
+
+
+class _ScandirSpy:
+    def __init__(self, iterator: Any, yielded: list[int]) -> None:
+        self._iterator = iterator
+        self._yielded = yielded
+
+    def __enter__(self) -> _ScandirSpy:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self._iterator.close()
+
+    def __iter__(self) -> _ScandirSpy:
+        return self
+
+    def __next__(self) -> os.DirEntry[str]:
+        entry = next(self._iterator)
+        self._yielded[0] += 1
+        return entry
+
+
+def _spy_on_scandir(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    real_scandir = os.scandir
+    yielded = [0]
+
+    def counting_scandir(path: int) -> _ScandirSpy:
+        return _ScandirSpy(real_scandir(path), yielded)
+
+    monkeypatch.setattr(discovery_module.os, "scandir", counting_scandir)
+    return yielded
 
 
 def _write_skill(
@@ -101,6 +133,98 @@ def test_rejects_oversized_manifest_and_bounded_resource_set(tmp_path: Path) -> 
     assert result.candidates == ()
     assert len(result.issues) == 2
     assert all(issue.code == "candidate_rejected" for issue in result.issues)
+
+
+def test_root_entry_limit_stops_before_sorting_or_stating_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skills"
+    root.mkdir()
+    for index in range(20):
+        (root / f"entry-{index:02d}").mkdir()
+    discovery = SkillDiscovery([root], limits=SkillDiscoveryLimits(max_root_entries=2))
+    yielded = _spy_on_scandir(monkeypatch)
+    real_stat = os.stat
+    child_stats = 0
+
+    def counting_stat(
+        path: str | bytes | int | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        nonlocal child_stats
+        if dir_fd is not None and isinstance(path, str) and path.startswith("entry-"):
+            child_stats += 1
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(discovery_module.os, "stat", counting_stat)
+
+    result = discovery.discover()
+
+    assert result.candidates == ()
+    assert [issue.code for issue in result.issues] == ["root_unreadable"]
+    assert yielded == [3]
+    assert child_stats == 0
+
+
+def test_resource_entry_limit_stops_before_sorting_or_stating_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skills"
+    candidate = root / "candidate"
+    _write_skill(candidate)
+    scripts = candidate / "scripts"
+    scripts.mkdir()
+    for index in range(20):
+        (scripts / f"resource-{index:02d}.py").write_text("safe", encoding="utf-8")
+    discovery = SkillDiscovery([root], limits=SkillDiscoveryLimits(max_resource_entries=2))
+    yielded = _spy_on_scandir(monkeypatch)
+    real_stat = os.stat
+    resource_stats = 0
+
+    def counting_stat(
+        path: str | bytes | int | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        nonlocal resource_stats
+        if dir_fd is not None and isinstance(path, str) and path.startswith("resource-"):
+            resource_stats += 1
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(discovery_module.os, "stat", counting_stat)
+
+    result = discovery.discover()
+
+    assert result.candidates == ()
+    assert result.issues[0].code == "candidate_rejected"
+    assert "entry limit" in result.issues[0].message
+    assert yielded == [4]
+    assert resource_stats == 0
+
+
+def test_resource_entry_limit_accumulates_across_nested_and_named_folders(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "skills"
+    candidate = root / "candidate"
+    _write_skill(candidate)
+    nested = candidate / "scripts" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "a.py").write_text("a", encoding="utf-8")
+    (nested / "b.py").write_text("b", encoding="utf-8")
+    references = candidate / "references"
+    references.mkdir()
+    (references / "a.md").write_text("a", encoding="utf-8")
+    (references / "b.md").write_text("b", encoding="utf-8")
+
+    result = SkillDiscovery([root], limits=SkillDiscoveryLimits(max_resource_entries=4)).discover()
+
+    assert result.candidates == ()
+    assert result.issues[0].code == "candidate_rejected"
+    assert "entry limit" in result.issues[0].message
 
 
 def test_requires_real_absolute_allowlist_root(tmp_path: Path) -> None:

@@ -23,11 +23,13 @@ class SkillDiscoveryLimits(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     max_roots: int = Field(default=16, ge=1, le=64)
+    max_root_entries: int = Field(default=4_096, ge=1, le=100_000)
     max_skill_directories: int = Field(default=256, ge=1, le=2_048)
     max_manifest_bytes: int = Field(default=128_000, ge=256, le=1_000_000)
     max_frontmatter_bytes: int = Field(default=16_000, ge=64, le=128_000)
     max_body_chars: int = Field(default=100_000, ge=1, le=1_000_000)
     max_resource_files: int = Field(default=256, ge=0, le=4_096)
+    max_resource_entries: int = Field(default=4_096, ge=1, le=100_000)
     max_resource_bytes_each: int = Field(default=2_000_000, ge=1, le=20_000_000)
     max_resource_bytes_total: int = Field(default=20_000_000, ge=1, le=200_000_000)
     max_resource_depth: int = Field(default=8, ge=1, le=32)
@@ -135,6 +137,7 @@ class SkillDiscovery:
         candidates: list[DiscoveredSkill] = []
         issues: list[DiscoveryIssue] = []
         visited = 0
+        root_entry_budget = {"entries": 0}
         for root_index, root in enumerate(self._roots):
             root_candidates: list[DiscoveredSkill] = []
             root_issues: list[DiscoveryIssue] = []
@@ -149,7 +152,12 @@ class SkillDiscovery:
                 if self._entry_exists(root_fd, "SKILL.md"):
                     directories.append((None, root_opened, "."))
                 try:
-                    root_children = self._directory_names(root_fd)
+                    root_children = self._directory_names(
+                        root_fd,
+                        budget=root_entry_budget,
+                        limit=self.limits.max_root_entries,
+                        limit_message="skill roots exceed the entry limit",
+                    )
                 except OSError:
                     raise ValueError("skill root changed while it was enumerated") from None
                 for child_name in root_children:
@@ -306,7 +314,7 @@ class SkillDiscovery:
 
     def _list_resources(self, directory_fd: int) -> tuple[SkillResource, ...]:
         resources: list[SkillResource] = []
-        budget = {"bytes": 0}
+        budget = {"bytes": 0, "entries": 0}
         for folder_name, kind in (("scripts", "script"), ("references", "reference")):
             try:
                 folder_stat = os.stat(folder_name, dir_fd=directory_fd, follow_symlinks=False)
@@ -344,7 +352,12 @@ class SkillDiscovery:
         resources: list[SkillResource],
         budget: dict[str, int],
     ) -> None:
-        names = self._directory_names(directory_fd)
+        names = self._directory_names(
+            directory_fd,
+            budget=budget,
+            limit=self.limits.max_resource_entries,
+            limit_message="skill resources exceed the entry limit",
+        )
         directories: list[tuple[str, os.stat_result]] = []
         files: list[tuple[str, os.stat_result]] = []
         for name in names:
@@ -453,9 +466,21 @@ class SkillDiscovery:
         return True
 
     @staticmethod
-    def _directory_names(directory_fd: int) -> list[str]:
+    def _directory_names(
+        directory_fd: int,
+        *,
+        budget: dict[str, int],
+        limit: int,
+        limit_message: str,
+    ) -> list[str]:
+        names: list[str] = []
         with os.scandir(directory_fd) as entries:
-            return sorted(entry.name for entry in entries)
+            for entry in entries:
+                budget["entries"] += 1
+                if budget["entries"] > limit:
+                    raise ValueError(limit_message)
+                names.append(entry.name)
+        return sorted(names)
 
     def _open_bound_directory(
         self,
