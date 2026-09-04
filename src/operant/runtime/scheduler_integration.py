@@ -431,7 +431,7 @@ class SchedulerWorkerPort(Protocol):
 async def _wait_for_stop(stop_event: asyncio.Event, interval_seconds: float) -> None:
     try:
         await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
-    except TimeoutError:
+    except asyncio.TimeoutError:
         return
 
 

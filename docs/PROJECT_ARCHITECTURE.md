@@ -2338,6 +2338,8 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
   和一次性响应不以明文写入 SQLite/Command Receipt；
 - Reviewer 复核后补强 Remote Command/Merge Run 的 owner lease 与 CAS 恢复、Gateway 人工核对、
   Git 私有 expected-tree/固定 tree commit/old-HEAD CAS；外部干扰保留现场并进入 unknown，不破坏性回滚；
+- PR 的 Python 3.10 门禁发现调度器等待超时捕获类型只适配 3.11+；改为显式捕获
+  `asyncio.TimeoutError`，保持 3.10/3.12/3.13 的 lifespan 停机语义一致；
 - 新增 additive `phase56.v1` 确定生成 Client并冻结旧协议；GUI live 接入 Remote 与 Multi-Writer 投影，
   不新增视觉方案、不静默回退 Mock。OAuth、TUI、Tauri、完整 Remote PWA/WSS、多 Host 运维套件、
   生产 Target connector 与 Container Writer 生命周期仍明确排除或后续处理。
