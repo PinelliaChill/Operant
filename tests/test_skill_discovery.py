@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import operant.skills.discovery as discovery_module
 from operant.skills import SkillDiscovery, SkillDiscoveryLimits
 
 
@@ -112,3 +113,146 @@ def test_requires_real_absolute_allowlist_root(tmp_path: Path) -> None:
         SkillDiscovery([Path("relative")])
     with pytest.raises(ValueError, match="not a symlink"):
         SkillDiscovery([link])
+
+
+def test_fails_closed_without_no_follow_primitive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skills"
+    root.mkdir()
+    monkeypatch.delattr(discovery_module.os, "O_NOFOLLOW")
+
+    with pytest.raises(RuntimeError, match="safe skill discovery is unavailable"):
+        SkillDiscovery([root])
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW is unavailable")
+def test_candidate_parent_symlink_swap_does_not_read_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skills"
+    candidate = root / "candidate"
+    _write_skill(candidate)
+    outside = tmp_path / "outside"
+    _write_skill(
+        outside,
+        frontmatter="name: outside-candidate\ndescription: Must not be read",
+        body="outside candidate body",
+    )
+    discovery = SkillDiscovery([root])
+    real_open = os.open
+    swapped = False
+
+    def racing_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == "candidate" and dir_fd is not None and not swapped:
+            swapped = True
+            candidate.rename(root / "candidate-original")
+            candidate.symlink_to(outside, target_is_directory=True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(discovery_module.os, "open", racing_open)
+
+    result = discovery.discover()
+
+    assert swapped is True
+    assert result.candidates == ()
+    assert all(candidate.name != "outside-candidate" for candidate in result.candidates)
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW is unavailable")
+@pytest.mark.parametrize("swapped_name", ["scripts", "nested"])
+def test_resource_directory_symlink_swap_does_not_read_outside(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    swapped_name: str,
+) -> None:
+    root = tmp_path / "skills"
+    candidate = root / "candidate"
+    _write_skill(candidate)
+    scripts = candidate / "scripts"
+    nested = scripts / "nested"
+    nested.mkdir(parents=True)
+    (nested / "safe.py").write_text("safe", encoding="utf-8")
+    outside = tmp_path / "outside-resources"
+    outside.mkdir()
+    (outside / "outside.py").write_text("outside resource body", encoding="utf-8")
+    discovery = SkillDiscovery([root])
+    real_open = os.open
+    swapped = False
+
+    def racing_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if path == swapped_name and dir_fd is not None and not swapped:
+            swapped = True
+            target = scripts if swapped_name == "scripts" else nested
+            target.rename(target.with_name(f"{swapped_name}-original"))
+            target.symlink_to(outside, target_is_directory=True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(discovery_module.os, "open", racing_open)
+
+    result = discovery.discover()
+
+    assert swapped is True
+    assert result.candidates == ()
+    assert all(
+        resource.relative_path != "scripts/outside.py"
+        for candidate_result in result.candidates
+        for resource in candidate_result.resources
+    )
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW is unavailable")
+def test_registered_root_replacement_is_rejected_by_identity(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    _write_skill(root / "safe")
+    discovery = SkillDiscovery([root])
+    root.rename(tmp_path / "original-skills")
+    _write_skill(
+        root / "outside",
+        frontmatter="name: replacement-root\ndescription: Must not be read",
+    )
+
+    result = discovery.discover()
+
+    assert result.candidates == ()
+    assert [issue.code for issue in result.issues] == ["root_unreadable"]
+
+
+def test_root_version_change_discards_staged_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "skills"
+    _write_skill(root / "safe")
+    discovery = SkillDiscovery([root])
+    original_read_candidate = discovery._read_candidate
+    changed = False
+
+    def changing_read_candidate(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal changed
+        result = original_read_candidate(*args, **kwargs)  # type: ignore[arg-type]
+        if not changed:
+            changed = True
+            (root / "late-entry").write_text("changed", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(discovery, "_read_candidate", changing_read_candidate)
+
+    result = discovery.discover()
+
+    assert changed is True
+    assert result.candidates == ()
+    assert [issue.code for issue in result.issues] == ["root_unreadable"]

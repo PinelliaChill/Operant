@@ -75,10 +75,23 @@ class SkillDiscoveryResult(BaseModel):
 
 
 @dataclass(frozen=True)
-class _SafeEntry:
+class _RegisteredRoot:
     path: Path
-    relative: str
     stat_result: os.stat_result
+
+
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | int(getattr(os, "O_DIRECTORY", 0))
+    | int(getattr(os, "O_NOFOLLOW", 0))
+    | int(getattr(os, "O_CLOEXEC", 0))
+)
+_FILE_FLAGS = (
+    os.O_RDONLY
+    | int(getattr(os, "O_NOFOLLOW", 0))
+    | int(getattr(os, "O_NONBLOCK", 0))
+    | int(getattr(os, "O_CLOEXEC", 0))
+)
 
 
 class SkillDiscovery:
@@ -91,9 +104,10 @@ class SkillDiscovery:
         limits: SkillDiscoveryLimits | None = None,
     ) -> None:
         self.limits = limits or SkillDiscoveryLimits()
+        self._require_safe_primitives()
         if not allowlist_roots or len(allowlist_roots) > self.limits.max_roots:
             raise ValueError("skill discovery requires a bounded, non-empty root allowlist")
-        roots: list[Path] = []
+        roots: list[_RegisteredRoot] = []
         identities: set[tuple[int, int]] = set()
         for supplied in allowlist_roots:
             root = Path(supplied)
@@ -106,7 +120,15 @@ class SkillDiscovery:
             if identity in identities:
                 raise ValueError("duplicate skill allowlist root")
             identities.add(identity)
-            roots.append(root.resolve(strict=True))
+            canonical = root.resolve(strict=True)
+            descriptor = self._open_absolute_directory(canonical)
+            try:
+                opened = os.fstat(descriptor)
+                if not self._same_identity(root_stat, opened):
+                    raise ValueError("skill allowlist root changed while it was registered")
+            finally:
+                os.close(descriptor)
+            roots.append(_RegisteredRoot(path=canonical, stat_result=root_stat))
         self._roots = tuple(roots)
 
     def discover(self) -> SkillDiscoveryResult:
@@ -114,77 +136,114 @@ class SkillDiscovery:
         issues: list[DiscoveryIssue] = []
         visited = 0
         for root_index, root in enumerate(self._roots):
-            directories: list[Path] = []
-            if (root / "SKILL.md").exists():
-                directories.append(root)
+            root_candidates: list[DiscoveredSkill] = []
+            root_issues: list[DiscoveryIssue] = []
             try:
-                root_children = sorted(root.iterdir(), key=lambda item: item.name)
-            except OSError:
+                root_fd = self._open_registered_root(root)
+            except (OSError, ValueError):
                 issues.append(self._issue(root_index, ".", "root_unreadable"))
                 continue
-            for child in root_children:
+            root_opened = os.fstat(root_fd)
+            try:
+                directories: list[tuple[str | None, os.stat_result, str]] = []
+                if self._entry_exists(root_fd, "SKILL.md"):
+                    directories.append((None, root_opened, "."))
                 try:
-                    child_stat = child.lstat()
+                    root_children = self._directory_names(root_fd)
                 except OSError:
-                    issues.append(self._issue(root_index, child.name, "entry_unreadable"))
-                    continue
-                if stat.S_ISLNK(child_stat.st_mode):
-                    issues.append(self._issue(root_index, child.name, "symlink_rejected"))
-                elif stat.S_ISDIR(child_stat.st_mode) and (child / "SKILL.md").exists():
-                    directories.append(child)
-            for directory in directories:
-                visited += 1
-                relative = "." if directory == root else directory.name
-                if visited > self.limits.max_skill_directories:
-                    issues.append(
-                        self._issue(root_index, relative, "skill_directory_limit_exceeded")
-                    )
-                    return SkillDiscoveryResult(candidates=tuple(candidates), issues=tuple(issues))
-                try:
-                    candidates.append(self._read_candidate(root_index, root, directory, relative))
-                except (OSError, UnicodeError, ValueError) as exc:
-                    issues.append(
-                        DiscoveryIssue(
-                            root_index=root_index,
-                            relative_directory=relative,
-                            code="candidate_rejected",
-                            message=str(exc)[:300],
+                    raise ValueError("skill root changed while it was enumerated") from None
+                for child_name in root_children:
+                    try:
+                        child_stat = os.stat(child_name, dir_fd=root_fd, follow_symlinks=False)
+                    except OSError:
+                        root_issues.append(self._issue(root_index, child_name, "entry_unreadable"))
+                        continue
+                    if stat.S_ISLNK(child_stat.st_mode):
+                        root_issues.append(self._issue(root_index, child_name, "symlink_rejected"))
+                    elif stat.S_ISDIR(child_stat.st_mode) and self._directory_has_manifest(
+                        root_fd, child_name, child_stat
+                    ):
+                        directories.append((child_name, child_stat, child_name))
+                for candidate_name, expected, relative in directories:
+                    visited += 1
+                    if visited > self.limits.max_skill_directories:
+                        issues.extend(root_issues)
+                        issues.append(
+                            self._issue(root_index, relative, "skill_directory_limit_exceeded")
                         )
-                    )
+                        return SkillDiscoveryResult(
+                            candidates=tuple(candidates), issues=tuple(issues)
+                        )
+                    try:
+                        root_candidates.append(
+                            self._read_candidate(
+                                root_index, root_fd, candidate_name, expected, relative
+                            )
+                        )
+                    except (OSError, UnicodeError, ValueError) as exc:
+                        root_issues.append(
+                            DiscoveryIssue(
+                                root_index=root_index,
+                                relative_directory=relative,
+                                code="candidate_rejected",
+                                message=str(exc)[:300],
+                            )
+                        )
+                if not self._same_version(root_opened, os.fstat(root_fd)):
+                    raise ValueError("skill root changed during discovery")
+                rebound_fd = self._open_registered_root(root)
+                try:
+                    if not self._same_version(root_opened, os.fstat(rebound_fd)):
+                        raise ValueError("skill root was replaced during discovery")
+                finally:
+                    os.close(rebound_fd)
+            except (OSError, ValueError):
+                issues.append(self._issue(root_index, ".", "root_unreadable"))
+            else:
+                candidates.extend(root_candidates)
+                issues.extend(root_issues)
+            finally:
+                os.close(root_fd)
         return SkillDiscoveryResult(candidates=tuple(candidates), issues=tuple(issues))
 
     def _read_candidate(
-        self, root_index: int, root: Path, directory: Path, relative: str
+        self,
+        root_index: int,
+        root_fd: int,
+        child_name: str | None,
+        expected: os.stat_result,
+        relative: str,
     ) -> DiscoveredSkill:
-        self._assert_contained(root, directory)
-        directory_stat = directory.lstat()
-        if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(directory_stat.st_mode):
-            raise ValueError("skill directory must be a real directory")
-        manifest = self._safe_regular_file(root, directory / "SKILL.md", "SKILL.md")
-        if manifest.stat_result.st_size > self.limits.max_manifest_bytes:
-            raise ValueError("SKILL.md exceeds the configured byte limit")
-        raw = self._read_unchanged(manifest, self.limits.max_manifest_bytes)
-        text = raw.decode("utf-8", errors="strict")
-        frontmatter, body = self._parse_manifest(text)
-        name_value = frontmatter.get("name")
-        description_value = frontmatter.get("description")
-        if not isinstance(name_value, str) or not _NAME_RE.fullmatch(name_value):
-            raise ValueError("frontmatter name is missing or invalid")
-        if not isinstance(description_value, str) or not description_value.strip():
-            raise ValueError("frontmatter description is missing or invalid")
-        if len(body) > self.limits.max_body_chars:
-            raise ValueError("SKILL.md body exceeds the configured character limit")
-        resources = self._list_resources(root, directory)
-        return DiscoveredSkill(
-            root_index=root_index,
-            relative_directory=relative,
-            name=name_value,
-            description=description_value,
-            body=body,
-            manifest_sha256=hashlib.sha256(raw).hexdigest(),
-            frontmatter=frontmatter,
-            resources=resources,
-        )
+        directory_fd = self._open_bound_directory(root_fd, child_name, expected, relative)
+        opened = os.fstat(directory_fd)
+        try:
+            raw = self._read_regular_file(
+                directory_fd, "SKILL.md", "SKILL.md", self.limits.max_manifest_bytes
+            )
+            text = raw.decode("utf-8", errors="strict")
+            frontmatter, body = self._parse_manifest(text)
+            name_value = frontmatter.get("name")
+            description_value = frontmatter.get("description")
+            if not isinstance(name_value, str) or not _NAME_RE.fullmatch(name_value):
+                raise ValueError("frontmatter name is missing or invalid")
+            if not isinstance(description_value, str) or not description_value.strip():
+                raise ValueError("frontmatter description is missing or invalid")
+            if len(body) > self.limits.max_body_chars:
+                raise ValueError("SKILL.md body exceeds the configured character limit")
+            resources = self._list_resources(directory_fd)
+            self._verify_directory_binding(root_fd, child_name, opened, directory_fd, relative)
+            return DiscoveredSkill(
+                root_index=root_index,
+                relative_directory=relative,
+                name=name_value,
+                description=description_value,
+                body=body,
+                manifest_sha256=hashlib.sha256(raw).hexdigest(),
+                frontmatter=frontmatter,
+                resources=resources,
+            )
+        finally:
+            os.close(directory_fd)
 
     def _parse_manifest(self, text: str) -> tuple[dict[str, str | list[str]], str]:
         if not text.startswith("---\n"):
@@ -245,82 +304,248 @@ class SkillDiscovery:
             raise ValueError("frontmatter scalar is invalid or too large")
         return value
 
-    def _list_resources(self, root: Path, directory: Path) -> tuple[SkillResource, ...]:
+    def _list_resources(self, directory_fd: int) -> tuple[SkillResource, ...]:
         resources: list[SkillResource] = []
-        total_bytes = 0
+        budget = {"bytes": 0}
         for folder_name, kind in (("scripts", "script"), ("references", "reference")):
-            folder = directory / folder_name
-            if not folder.exists():
+            try:
+                folder_stat = os.stat(folder_name, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
                 continue
-            folder_stat = folder.lstat()
             if stat.S_ISLNK(folder_stat.st_mode) or not stat.S_ISDIR(folder_stat.st_mode):
                 raise ValueError(f"{folder_name} must be a real directory")
-            for current, directory_names, file_names in os.walk(folder, followlinks=False):
-                current_path = Path(current)
-                depth = len(current_path.relative_to(folder).parts)
-                if depth >= self.limits.max_resource_depth and directory_names:
-                    raise ValueError("skill resource nesting exceeds the configured depth")
-                for child_name in tuple(directory_names):
-                    child = current_path / child_name
-                    if stat.S_ISLNK(child.lstat().st_mode):
-                        raise ValueError("symlinks in skill resources are rejected")
-                directory_names[:] = sorted(directory_names)
-                for file_name in sorted(file_names):
-                    path = current_path / file_name
-                    relative_path = path.relative_to(directory).as_posix()
-                    entry = self._safe_regular_file(root, path, relative_path)
-                    if entry.stat_result.st_size > self.limits.max_resource_bytes_each:
-                        raise ValueError("a skill resource exceeds the per-file byte limit")
-                    total_bytes += entry.stat_result.st_size
-                    if total_bytes > self.limits.max_resource_bytes_total:
-                        raise ValueError("skill resources exceed the total byte limit")
-                    if len(resources) >= self.limits.max_resource_files:
-                        raise ValueError("skill resources exceed the file-count limit")
-                    content = self._read_unchanged(entry, self.limits.max_resource_bytes_each)
-                    resources.append(
-                        SkillResource(
-                            relative_path=relative_path,
-                            kind=kind,
-                            size_bytes=len(content),
-                            sha256=hashlib.sha256(content).hexdigest(),
-                        )
-                    )
+            folder_fd = self._open_bound_directory(
+                directory_fd, folder_name, folder_stat, folder_name
+            )
+            opened = os.fstat(folder_fd)
+            try:
+                self._walk_resources(
+                    folder_fd,
+                    prefix=folder_name,
+                    kind=kind,
+                    depth=0,
+                    resources=resources,
+                    budget=budget,
+                )
+                self._verify_directory_binding(
+                    directory_fd, folder_name, opened, folder_fd, folder_name
+                )
+            finally:
+                os.close(folder_fd)
         return tuple(resources)
 
-    def _safe_regular_file(self, root: Path, path: Path, relative: str) -> _SafeEntry:
-        self._assert_contained(root, path)
-        path_stat = path.lstat()
-        if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
-            raise ValueError(f"{relative} must be a regular non-symlink file")
-        return _SafeEntry(path=path, relative=relative, stat_result=path_stat)
+    def _walk_resources(
+        self,
+        directory_fd: int,
+        *,
+        prefix: str,
+        kind: str,
+        depth: int,
+        resources: list[SkillResource],
+        budget: dict[str, int],
+    ) -> None:
+        names = self._directory_names(directory_fd)
+        directories: list[tuple[str, os.stat_result]] = []
+        files: list[tuple[str, os.stat_result]] = []
+        for name in names:
+            entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISLNK(entry.st_mode):
+                raise ValueError("symlinks in skill resources are rejected")
+            if stat.S_ISDIR(entry.st_mode):
+                directories.append((name, entry))
+            else:
+                files.append((name, entry))
+        if depth >= self.limits.max_resource_depth and directories:
+            raise ValueError("skill resource nesting exceeds the configured depth")
+        for name, expected in files:
+            relative = f"{prefix}/{name}"
+            if not stat.S_ISREG(expected.st_mode):
+                raise ValueError(f"{relative} must be a regular non-symlink file")
+            if expected.st_size > self.limits.max_resource_bytes_each:
+                raise ValueError("a skill resource exceeds the per-file byte limit")
+            budget["bytes"] += expected.st_size
+            if budget["bytes"] > self.limits.max_resource_bytes_total:
+                raise ValueError("skill resources exceed the total byte limit")
+            if len(resources) >= self.limits.max_resource_files:
+                raise ValueError("skill resources exceed the file-count limit")
+            content = self._read_regular_file(
+                directory_fd,
+                name,
+                relative,
+                self.limits.max_resource_bytes_each,
+                expected=expected,
+            )
+            resources.append(
+                SkillResource(
+                    relative_path=relative,
+                    kind=kind,
+                    size_bytes=len(content),
+                    sha256=hashlib.sha256(content).hexdigest(),
+                )
+            )
+        for name, expected in directories:
+            relative = f"{prefix}/{name}"
+            child_fd = self._open_bound_directory(directory_fd, name, expected, relative)
+            opened = os.fstat(child_fd)
+            try:
+                self._walk_resources(
+                    child_fd,
+                    prefix=relative,
+                    kind=kind,
+                    depth=depth + 1,
+                    resources=resources,
+                    budget=budget,
+                )
+                self._verify_directory_binding(directory_fd, name, opened, child_fd, relative)
+            finally:
+                os.close(child_fd)
 
-    @staticmethod
-    def _read_unchanged(entry: _SafeEntry, max_bytes: int) -> bytes:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(entry.path, flags)
+    def _read_regular_file(
+        self,
+        parent_fd: int,
+        name: str,
+        relative: str,
+        max_bytes: int,
+        *,
+        expected: os.stat_result | None = None,
+    ) -> bytes:
+        before = expected or os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{relative} must be a regular non-symlink file")
+        if before.st_size > max_bytes:
+            raise ValueError(f"{relative} exceeds the configured byte limit")
+        descriptor = os.open(name, _FILE_FLAGS, dir_fd=parent_fd)
         try:
-            before = os.fstat(descriptor)
-            if (before.st_dev, before.st_ino) != (
-                entry.stat_result.st_dev,
-                entry.stat_result.st_ino,
-            ):
-                raise ValueError(f"{entry.relative} changed during discovery")
-            data = os.read(descriptor, max_bytes + 1)
+            opened = os.fstat(descriptor)
+            if not self._same_identity(before, opened) or not stat.S_ISREG(opened.st_mode):
+                raise ValueError(f"{relative} changed during discovery")
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, min(64 * 1024, max_bytes + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError(f"{relative} exceeds the configured byte limit")
             after = os.fstat(descriptor)
         finally:
             os.close(descriptor)
-        if len(data) > max_bytes:
-            raise ValueError(f"{entry.relative} exceeds the configured byte limit")
-        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-            raise ValueError(f"{entry.relative} changed during discovery")
-        return data
+        rebound = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not self._same_version(opened, after) or not self._same_version(opened, rebound):
+            raise ValueError(f"{relative} changed during discovery")
+        return b"".join(chunks)
+
+    def _directory_has_manifest(self, parent_fd: int, name: str, expected: os.stat_result) -> bool:
+        child_fd = self._open_bound_directory(parent_fd, name, expected, name)
+        try:
+            return self._entry_exists(child_fd, "SKILL.md")
+        finally:
+            os.close(child_fd)
 
     @staticmethod
-    def _assert_contained(root: Path, path: Path) -> None:
+    def _entry_exists(directory_fd: int, name: str) -> bool:
         try:
-            path.resolve(strict=True).relative_to(root)
-        except (OSError, ValueError) as exc:
-            raise ValueError("skill path escapes its allowlisted root") from exc
+            os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        return True
+
+    @staticmethod
+    def _directory_names(directory_fd: int) -> list[str]:
+        with os.scandir(directory_fd) as entries:
+            return sorted(entry.name for entry in entries)
+
+    def _open_bound_directory(
+        self,
+        parent_fd: int,
+        name: str | None,
+        expected: os.stat_result,
+        relative: str,
+    ) -> int:
+        descriptor = (
+            os.dup(parent_fd) if name is None else os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if not self._same_identity(expected, opened) or not stat.S_ISDIR(opened.st_mode):
+                raise ValueError(f"{relative} changed during discovery")
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def _verify_directory_binding(
+        self,
+        parent_fd: int,
+        name: str | None,
+        opened: os.stat_result,
+        descriptor: int,
+        relative: str,
+    ) -> None:
+        after = os.fstat(descriptor)
+        rebound = (
+            os.fstat(parent_fd)
+            if name is None
+            else os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        )
+        if not self._same_version(opened, after) or not self._same_version(opened, rebound):
+            raise ValueError(f"{relative} changed during discovery")
+
+    def _open_registered_root(self, root: _RegisteredRoot) -> int:
+        descriptor = self._open_absolute_directory(root.path)
+        opened = os.fstat(descriptor)
+        if not self._same_identity(root.stat_result, opened):
+            os.close(descriptor)
+            raise ValueError("skill allowlist root was replaced")
+        return descriptor
+
+    @staticmethod
+    def _open_absolute_directory(path: Path) -> int:
+        parts = path.parts
+        if not path.is_absolute() or not parts or not parts[0].startswith(os.sep):
+            raise ValueError("skill allowlist roots must be absolute")
+        descriptor = os.open(os.sep, _DIRECTORY_FLAGS)
+        try:
+            for component in parts[1:]:
+                if component in {"", ".", ".."}:
+                    raise ValueError("skill allowlist root is invalid")
+                child_fd = os.open(component, _DIRECTORY_FLAGS, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child_fd
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    @staticmethod
+    def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+        return (left.st_dev, left.st_ino, stat.S_IFMT(left.st_mode)) == (
+            right.st_dev,
+            right.st_ino,
+            stat.S_IFMT(right.st_mode),
+        )
+
+    @classmethod
+    def _same_version(cls, left: os.stat_result, right: os.stat_result) -> bool:
+        return cls._same_identity(left, right) and (
+            left.st_size,
+            left.st_mtime_ns,
+            left.st_ctime_ns,
+        ) == (right.st_size, right.st_mtime_ns, right.st_ctime_ns)
+
+    @staticmethod
+    def _require_safe_primitives() -> None:
+        if (
+            not hasattr(os, "O_NOFOLLOW")
+            or not hasattr(os, "O_DIRECTORY")
+            or os.open not in getattr(os, "supports_dir_fd", ())
+            or os.stat not in getattr(os, "supports_dir_fd", ())
+            or os.stat not in getattr(os, "supports_follow_symlinks", ())
+            or os.scandir not in getattr(os, "supports_fd", ())
+        ):
+            raise RuntimeError("safe skill discovery is unavailable on this platform")
 
     @staticmethod
     def _issue(root_index: int, relative: str, code: str) -> DiscoveryIssue:
