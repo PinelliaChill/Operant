@@ -14,7 +14,7 @@ import {
   type LiveSkillIssue,
   type Phase45UiError,
 } from './phase45Adapter';
-import { boundedAuditFacts } from './phase45State';
+import { boundedAuditFacts, preservePhase45Projection } from './phase45State';
 
 type Phase45LoadPhase = 'idle' | 'loading' | 'ready' | 'error';
 export const SECURITY_AUDIT_LIMIT = 100;
@@ -102,6 +102,10 @@ export const Phase45Provider: React.FC<{ children: React.ReactNode }> = ({ child
       setWorkspaceRoots(nextWorkspaceRoots);
       setPhase('ready');
     } catch (value: unknown) {
+      setSkills(preservePhase45Projection);
+      setServers(preservePhase45Projection);
+      setWorkspaceRoots(preservePhase45Projection);
+      setToolsByServer(preservePhase45Projection);
       fail(value);
     }
   }, [adapter, clientMode, fail]);

@@ -10,6 +10,10 @@ const styles = readFileSync(
   new URL('../src/features/extensions/live-extensions.css', import.meta.url),
   'utf8',
 );
+const viewSource = readFileSync(
+  new URL('../src/features/extensions/ExtensionsView.tsx', import.meta.url),
+  'utf8',
+);
 
 test('approval component keeps manual decisions keyboard reachable and disconnect-safe', () => {
   assert.match(source, /type="button"/);
@@ -33,4 +37,11 @@ test('MCP controls stay reachable at wide and narrow widths', () => {
   assert.match(styles, /flex: 1 1 132px/);
   assert.match(styles, /grid-template-columns: 1fr/);
   assert.match(styles, /font-size: 16px/);
+});
+
+test('Extensions add and mutation controls consume the fail-closed availability state', () => {
+  assert.match(viewSource, /disabled=\{sideEffectsDisabled\}/);
+  assert.match(viewSource, /mcpActionState\(server\.lifecycle, sideEffectsDisabled\)/);
+  assert.match(viewSource, /disconnected=\{sideEffectsDisabled\}/);
+  assert.match(viewSource, /error && !unavailableMessage/);
 });
