@@ -29,6 +29,7 @@ class HostConnectorConfig:
     request_timeout_seconds: float = 10.0
     max_batch: int = 32
     max_response_bytes: int = 48 * 1024 * 1024
+    max_ack_response_bytes: int = 64 * 1024
     allow_loopback_http: bool = False
     protocol_version: str = "phase56.v1"
     max_envelope_ttl_seconds: int = 120
@@ -65,6 +66,8 @@ class HostConnectorConfig:
             raise ValueError("Host Connector batch size is out of bounds")
         if not 1024 <= self.max_response_bytes <= 64 * 1024 * 1024:
             raise ValueError("Host Connector response limit is out of bounds")
+        if not 1024 <= self.max_ack_response_bytes <= 1024 * 1024:
+            raise ValueError("Host Connector acknowledgement limit is out of bounds")
         if not self.protocol_version or len(self.protocol_version) > 100:
             raise ValueError("Host Connector protocol version is invalid")
         if not 1 <= self.max_envelope_ttl_seconds <= 120:
@@ -115,7 +118,7 @@ class RelayHostConnector:
             while not self._stopped.is_set():
                 try:
                     processed = await self.poll_once(client)
-                except (httpx.HTTPError, ValueError, KeyError):
+                except (httpx.HTTPError, TimeoutError, ValueError, KeyError):
                     await self._wait(delay)
                     delay = min(self.config.max_backoff_seconds, delay * 2)
                     continue
@@ -161,11 +164,16 @@ class RelayHostConnector:
                 getattr(receipt, "model_dump", None)
             ):
                 raise ValueError("Host did not return a durable receipt for the submitted command")
-            acknowledgement = await client.post(
-                f"/v1/relay/envelopes/{envelope.envelope_id}/acknowledge",
-                json={"recipient_ref": self.config.recipient_ref},
+            acknowledgement_status = await asyncio.wait_for(
+                self._post_ack_bounded(
+                    client,
+                    f"/v1/relay/envelopes/{envelope.envelope_id}/acknowledge",
+                    body={"recipient_ref": self.config.recipient_ref},
+                ),
+                timeout=self.config.request_timeout_seconds,
             )
-            acknowledgement.raise_for_status()
+            if acknowledgement_status >= 400:
+                raise ValueError("Relay rejected the delivery acknowledgement")
             processed += 1
         return processed
 
@@ -185,6 +193,21 @@ class RelayHostConnector:
                     raise ValueError("Relay response exceeded the configured limit")
                 chunks.append(chunk)
             return response.status_code, b"".join(chunks)
+
+    async def _post_ack_bounded(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        body: dict[str, str],
+    ) -> int:
+        size = 0
+        async with client.stream("POST", path, json=body) as response:
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > self.config.max_ack_response_bytes:
+                    raise ValueError("Relay acknowledgement exceeded the configured limit")
+            return response.status_code
 
     def _validate_envelope(self, envelope: RelayEnvelope) -> None:
         now = datetime.now(timezone.utc)

@@ -140,8 +140,13 @@ class ContainerWriterLifecycle:
                 raise ValueError("Container Writer root is unsafe")
             if candidate.is_symlink():
                 raise ValueError("Container Writer root cannot be a symlink")
-            if resolved in resolved_roots:
-                raise ValueError("each Container Writer must have an independent root")
+            if any(
+                resolved == existing
+                or resolved.is_relative_to(existing)
+                or existing.is_relative_to(resolved)
+                for existing in resolved_roots
+            ):
+                raise ValueError("Container Writer roots must be independent and non-overlapping")
             resolved_roots.add(resolved)
             self._roots[reference] = resolved
             stat = resolved.stat()

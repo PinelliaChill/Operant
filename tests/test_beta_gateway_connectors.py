@@ -511,6 +511,10 @@ def test_container_writer_roots_are_independent_and_revalidated(tmp_path: Path) 
     root.mkdir()
     with pytest.raises(ValueError, match="independent"):
         ContainerWriterLifecycle({"one": root, "two": root})
+    child = root / "child"
+    child.mkdir()
+    with pytest.raises(ValueError, match="non-overlapping"):
+        ContainerWriterLifecycle({"one": root, "two": child})
     lifecycle = ContainerWriterLifecycle({"container_root_1": root})
     moved = tmp_path / "moved"
     root.rename(moved)

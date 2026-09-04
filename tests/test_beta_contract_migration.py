@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from operant.application.graph import GraphConflictError
+from operant.persistence.beta import SQLiteRemoteGatewayConnectionRepository
 from operant.persistence.sqlite import MigrationError, SQLiteStore
 
 
@@ -185,3 +187,36 @@ def test_v14_rollback_requires_empty_tables(tmp_path: Path) -> None:
         )
     with pytest.raises(MigrationError, match="contain data"):
         populated.rollback(13, isolated=True)
+
+
+def test_v14_gateway_connection_registry_is_fenced_and_append_only(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "registry.sqlite3")
+    store.initialize()
+    with store._connect() as connection:
+        session_id, device_id = _insert_remote_session(connection)
+    registry = SQLiteRemoteGatewayConnectionRepository(
+        store, owner_id="gateway-test", lease_seconds=30
+    )
+    connection_id = registry.open(
+        remote_session_id=session_id,
+        device_id=device_id,
+        event_cursor=2,
+    )
+    with pytest.raises(GraphConflictError, match="active Gateway"):
+        registry.open(
+            remote_session_id=session_id,
+            device_id=device_id,
+            event_cursor=2,
+        )
+    registry.heartbeat(connection_id, event_cursor=7)
+    assert registry.list()[0]["event_cursor"] == 7
+    registry.close(connection_id)
+    assert registry.list()[0]["status"] == "closed"
+    with (
+        store._connect() as connection,
+        pytest.raises(sqlite3.IntegrityError, match="append-only"),
+    ):
+        connection.execute(
+            "UPDATE remote_gateway_events SET event_type = 'changed' WHERE connection_id = ?",
+            (connection_id,),
+        )

@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import queue
+import threading
 import time
 from dataclasses import dataclass
 
@@ -83,29 +85,17 @@ class HttpRemoteTargetConnector:
         ):
             raise ValueError("remote job does not match connector lease fencing")
         payload = job.model_dump(mode="json")
-        with httpx.Client(
-            base_url=self.config.endpoint,
-            timeout=self.config.timeout_seconds,
-            follow_redirects=False,
-            transport=self.transport,
-            headers={
-                "authorization": f"Bearer {self.config.bearer_token}",
-                "idempotency-key": job.idempotency_key,
-                "x-operant-target-id": self.target_id,
-                "x-operant-lease-id": self.lease_id,
-                "x-operant-lease-token": self.lease_token,
-                "x-operant-lease-fencing": str(self.lease_fencing),
-            },
-        ) as client:
-            try:
-                status_code, headers, content = self._post_bounded(
-                    client, "/v1/target/jobs/execute", payload
-                )
-            except (httpx.HTTPError, TimeoutError) as exc:
-                # Once handed to the transport the target may have executed the
-                # action. The Controller decides whether this becomes failed or
-                # manual_reconcile_required from the job idempotency class.
-                raise RemoteOutcomeUnknown("remote target outcome is unknown") from exc
+        try:
+            status_code, headers, content = self._post_with_deadline(
+                "/v1/target/jobs/execute",
+                payload,
+                idempotency_key=job.idempotency_key,
+            )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            # Once handed to the transport the target may have executed the
+            # action. The Controller decides whether this becomes failed or
+            # manual_reconcile_required from the job idempotency class.
+            raise RemoteOutcomeUnknown("remote target outcome is unknown") from exc
         self._verify_response(content, headers)
         if status_code >= 400:
             raise RemoteOutcomeUnknown("remote target returned no typed durable result")
@@ -126,26 +116,14 @@ class HttpRemoteTargetConnector:
 
     def cancel(self, job_id: str) -> None:
         body = {"job_id": job_id, "lease_id": self.lease_id, "fencing": self.lease_fencing}
-        with httpx.Client(
-            base_url=self.config.endpoint,
-            timeout=self.config.timeout_seconds,
-            follow_redirects=False,
-            transport=self.transport,
-            headers={
-                "authorization": f"Bearer {self.config.bearer_token}",
-                "idempotency-key": f"cancel:{self.target_id}:{self.lease_id}:{job_id}",
-                "x-operant-target-id": self.target_id,
-                "x-operant-lease-id": self.lease_id,
-                "x-operant-lease-token": self.lease_token,
-                "x-operant-lease-fencing": str(self.lease_fencing),
-            },
-        ) as client:
-            try:
-                status_code, headers, content = self._post_bounded(
-                    client, "/v1/target/jobs/cancel", body
-                )
-            except (httpx.HTTPError, TimeoutError) as exc:
-                raise RemoteOutcomeUnknown("remote cancellation outcome is unknown") from exc
+        try:
+            status_code, headers, content = self._post_with_deadline(
+                "/v1/target/jobs/cancel",
+                body,
+                idempotency_key=f"cancel:{self.target_id}:{self.lease_id}:{job_id}",
+            )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise RemoteOutcomeUnknown("remote cancellation outcome is unknown") from exc
         self._verify_response(content, headers)
         if status_code >= 400:
             raise RemoteOutcomeUnknown("remote cancellation returned no typed durable receipt")
@@ -178,6 +156,58 @@ class HttpRemoteTargetConnector:
             if time.monotonic() > deadline:
                 raise TimeoutError("remote target absolute deadline exceeded")
             return response.status_code, response.headers, b"".join(chunks)
+
+    def _post_with_deadline(
+        self,
+        path: str,
+        body: dict[str, object],
+        *,
+        idempotency_key: str,
+    ) -> tuple[int, httpx.Headers, bytes]:
+        """Return at the configured wall-clock deadline even if a read is stalled.
+
+        The daemon worker may finish transport cleanup after the caller has
+        conservatively returned ``outcome_unknown``. It never retries the write.
+        """
+
+        result_queue: queue.Queue[
+            tuple[tuple[int, httpx.Headers, bytes] | None, Exception | None]
+        ] = queue.Queue(maxsize=1)
+
+        def request() -> None:
+            try:
+                with httpx.Client(
+                    base_url=self.config.endpoint,
+                    timeout=self.config.timeout_seconds,
+                    follow_redirects=False,
+                    transport=self.transport,
+                    headers={
+                        "authorization": f"Bearer {self.config.bearer_token}",
+                        "idempotency-key": idempotency_key,
+                        "x-operant-target-id": self.target_id,
+                        "x-operant-lease-id": self.lease_id,
+                        "x-operant-lease-token": self.lease_token,
+                        "x-operant-lease-fencing": str(self.lease_fencing),
+                    },
+                ) as client:
+                    result_queue.put((self._post_bounded(client, path, body), None))
+            except Exception as exc:
+                result_queue.put((None, exc))
+
+        worker = threading.Thread(
+            target=request,
+            name=f"operant-target-{self.target_id[:32]}",
+            daemon=True,
+        )
+        worker.start()
+        try:
+            result, error = result_queue.get(timeout=self.config.timeout_seconds)
+        except queue.Empty as exc:
+            raise TimeoutError("remote target absolute deadline exceeded") from exc
+        if error is not None:
+            raise error
+        assert result is not None
+        return result
 
     def _verify_response(self, content: bytes, headers: httpx.Headers) -> None:
         signature = headers.get("x-operant-target-signature")

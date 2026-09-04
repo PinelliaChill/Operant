@@ -38,6 +38,20 @@ class RemoteGatewayService(Protocol):
     ) -> Sequence[Mapping[str, Any]]: ...
 
 
+class RemoteGatewayConnectionRegistry(Protocol):
+    def open(
+        self,
+        *,
+        remote_session_id: str,
+        device_id: str,
+        event_cursor: int,
+    ) -> str: ...
+
+    def heartbeat(self, connection_id: str, *, event_cursor: int | None = None) -> None: ...
+
+    def close(self, connection_id: str, *, error_code: str | None = None) -> None: ...
+
+
 @dataclass(frozen=True)
 class RemoteGatewayConfig:
     """Fail-closed transport policy for the direct Remote Control gateway."""
@@ -174,6 +188,7 @@ def install_remote_gateway(
     *,
     config: RemoteGatewayConfig,
     on_connect: Callable[[str], Awaitable[None]] | None = None,
+    connection_registry: RemoteGatewayConnectionRegistry | None = None,
 ) -> None:
     """Install the direct WSS endpoint without changing Relay semantics.
 
@@ -200,14 +215,12 @@ def install_remote_gateway(
             await websocket.close(code=4406, reason="gateway subprotocol required")
             return
         await websocket.accept(subprotocol="operant.remote.v1")
-        if on_connect is not None:
-            await on_connect(str(websocket.client))
-
         queue: asyncio.Queue[str | _FrameViolation | None] = asyncio.Queue(
             maxsize=config.max_pending_frames + 1
         )
         receiver = asyncio.create_task(_receive_frames(websocket, queue, config))
         binding: tuple[str, str, str, str] | None = None
+        connection_id: str | None = None
         try:
             while True:
                 incoming = await queue.get()
@@ -231,16 +244,35 @@ def install_remote_gateway(
                     if frame_type != "hello":
                         await _send_error(websocket, "gateway.hello_required")
                         continue
-                    binding = await _handle_hello(websocket, service, frame)
+                    opened = await _handle_hello(
+                        websocket,
+                        service,
+                        frame,
+                        connection_registry=connection_registry,
+                    )
+                    if opened is not None:
+                        binding, connection_id = opened
+                        if on_connect is not None:
+                            await on_connect(str(websocket.client))
                     continue
                 if frame_type == "hello":
                     await _send_error(websocket, "gateway.already_bound")
                     continue
                 if frame_type == "ping":
+                    if connection_registry is not None and connection_id is not None:
+                        await asyncio.to_thread(connection_registry.heartbeat, connection_id)
                     await websocket.send_json({"type": "pong"})
                     continue
                 if frame_type == "cursor_sync":
-                    await _handle_cursor_sync(websocket, service, frame, config, binding)
+                    await _handle_cursor_sync(
+                        websocket,
+                        service,
+                        frame,
+                        config,
+                        binding,
+                        connection_id=connection_id,
+                        connection_registry=connection_registry,
+                    )
                     continue
                 if frame_type != "command":
                     await _send_error(websocket, "gateway.unknown_frame_type")
@@ -267,9 +299,14 @@ def install_remote_gateway(
                 await websocket.send_json(
                     {"type": "host_ack", "receipt": receipt.model_dump(mode="json")}
                 )
+                if connection_registry is not None and connection_id is not None:
+                    await asyncio.to_thread(connection_registry.heartbeat, connection_id)
         except WebSocketDisconnect:
             return
         finally:
+            if connection_registry is not None and connection_id is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(connection_registry.close, connection_id)
             receiver.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await receiver
@@ -279,7 +316,9 @@ async def _handle_hello(
     websocket: WebSocket,
     service: RemoteGatewayService,
     frame: Mapping[str, Any],
-) -> tuple[str, str, str, str] | None:
+    *,
+    connection_registry: RemoteGatewayConnectionRegistry | None,
+) -> tuple[tuple[str, str, str, str], str | None] | None:
     host_id = frame.get("host_id")
     device_id = frame.get("device_id")
     session_id = frame.get("remote_session_id")
@@ -305,6 +344,18 @@ async def _handle_hello(
     except Exception:
         await _send_error(websocket, "gateway.hello_rejected")
         return None
+    connection_id = None
+    if connection_registry is not None:
+        try:
+            connection_id = await asyncio.to_thread(
+                connection_registry.open,
+                remote_session_id=session_id,
+                device_id=device_id,
+                event_cursor=0,
+            )
+        except Exception:
+            await _send_error(websocket, "gateway.connection_conflict")
+            return None
     await websocket.send_json(
         {
             "type": "hello_ack",
@@ -312,9 +363,10 @@ async def _handle_hello(
             "device_id": device_id,
             "remote_session_id": session_id,
             "protocol_version": protocol_version,
+            "connection_id": connection_id,
         }
     )
-    return host_id, device_id, session_id, protocol_version
+    return (host_id, device_id, session_id, protocol_version), connection_id
 
 
 async def _handle_cursor_sync(
@@ -323,8 +375,11 @@ async def _handle_cursor_sync(
     frame: Mapping[str, Any],
     config: RemoteGatewayConfig,
     binding: tuple[str, str, str, str],
+    *,
+    connection_id: str | None,
+    connection_registry: RemoteGatewayConnectionRegistry | None,
 ) -> None:
-    host_id, device_id, session_id, _protocol_version = binding
+    host_id, device_id, session_id, protocol_version = binding
     after_cursor = frame.get("after_cursor", 0)
     if (
         set(frame).difference({"type", "after_cursor"})
@@ -335,6 +390,13 @@ async def _handle_cursor_sync(
         await _send_error(websocket, "gateway.invalid_cursor")
         return
     try:
+        await asyncio.to_thread(
+            service.validate_gateway_binding,
+            host_id,
+            device_id,
+            session_id,
+            protocol_version,
+        )
         events = await asyncio.to_thread(
             service.list_events,
             host_id,
@@ -348,4 +410,10 @@ async def _handle_cursor_sync(
         return
     items = [dict(item) for item in events]
     next_cursor = items[-1].get("cursor", after_cursor) if items else after_cursor
+    if connection_registry is not None and connection_id is not None:
+        await asyncio.to_thread(
+            connection_registry.heartbeat,
+            connection_id,
+            event_cursor=next_cursor,
+        )
     await websocket.send_json({"type": "events", "items": items, "next_cursor": next_cursor})
