@@ -446,7 +446,7 @@ async def test_stdio_is_docker_argv_only_bounded_and_stderr_is_redacted(
     await transport.close()
 
     assert result == {"env": None}
-    assert observed["argv"][:4] == ("docker", "run", "--pull", "never")
+    assert observed["argv"][:5] == ("docker", "run", "--pull", "never", "--interactive")
     assert "--network" in observed["argv"]
     assert "none" in observed["argv"]
     assert observed["kwargs"]["cwd"] != tmp_path

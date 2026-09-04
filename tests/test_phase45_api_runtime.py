@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from operant.api import create_app
 from operant.application.security import ApprovalReviewerAdapter, PolicyEngine
 from operant.domain.graph import NodeKind, NodeSpec, WorkflowDefinition, WorkflowDefinitionStatus
-from operant.domain.security import PolicyBundle, PolicyDecision
+from operant.domain.security import ActionRequest, PolicyBundle, PolicyDecision
 from operant.mcp import GatewayDecision, LegacySseTransport, StdioTransport
 from operant.persistence.graph_team import SQLiteGraphRepository
 from operant.protocol import canonical_action_hash
@@ -207,7 +207,11 @@ def test_stdio_mcp_lifecycle_snapshot_call_and_gateway_audit(
         phase45_mcp_workspace_roots={"workspace": tmp_path},
     )
     with TestClient(app) as client:
-        assert client.post("/v1/mcp/servers", json=body).status_code == 201
+        created = client.post("/v1/mcp/servers", json=body)
+        assert created.status_code == 201
+        roots = client.get("/v1/mcp/workspace-roots")
+        assert roots.json() == {"items": [{"root_ref": "workspace"}]}
+        assert str(tmp_path) not in roots.text
         started = client.post("/v1/mcp/servers/local-test/start")
         assert started.status_code == 200, started.text
         tools = client.get("/v1/mcp/servers/local-test/tools").json()["items"]
@@ -224,6 +228,33 @@ def test_stdio_mcp_lifecycle_snapshot_call_and_gateway_audit(
 
     assert [method for method, _params in calls] == ["initialize", "tools/list", "tools/call"]
 
+    persisted = created.json()
+    binding = {
+        key: persisted.get(key)
+        for key in (
+            "server_id",
+            "transport",
+            "endpoint_ref",
+            "secret_ref",
+            "stdio_argv",
+            "cwd_ref",
+            "workspace_root_ref",
+            "docker_image",
+            "allow_loopback_http",
+        )
+    }
+    target_ref = f"stdio:local-test:{ActionRequest.calculate_hash(binding)}"
+    schema_sha256 = app.state.phase45_repository.list_mcp_tools("local-test")[0]["schema_sha256"]
+    expected_action_hash = canonical_action_hash(
+        {
+            "kind": "mcp_tool_call",
+            "server_id": "local-test",
+            "target_ref": target_ref,
+            "tool_name": "echo",
+            "schema_sha256": schema_sha256,
+            "arguments": {"value": "ok"},
+        }
+    )
     with app.state.operant_service.store._connect() as connection:
         event_types = {
             row[0]
@@ -231,7 +262,9 @@ def test_stdio_mcp_lifecycle_snapshot_call_and_gateway_audit(
                 "SELECT event_type FROM security_audit_events WHERE event_type LIKE 'mcp.%'"
             ).fetchall()
         }
+        receipt = connection.execute("SELECT action_hash FROM mcp_action_receipts").fetchone()
     assert "mcp.tool_completed" in event_types
+    assert receipt["action_hash"] == expected_action_hash
 
 
 def test_legacy_sse_start_ask_does_not_resolve_endpoint_or_touch_server(tmp_path: Path) -> None:
