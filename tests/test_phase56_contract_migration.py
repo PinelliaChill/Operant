@@ -16,6 +16,7 @@ from operant.domain.remote_execution import (
     RemoteCapability,
     RemoteTargetRegistration,
 )
+from operant.domain.security import Capability
 from operant.persistence.sqlite import MigrationError, SQLiteStore
 
 
@@ -52,6 +53,10 @@ def test_remote_control_and_execution_are_distinct_contracts() -> None:
     assert target.target_id.startswith("remote_target_")
     assert "device_id" not in RemoteTargetRegistration.model_fields
     assert "credential_ref" not in EncryptedRemoteCommand.model_fields
+    assert Capability.REMOTE_CONTROL_COMMAND.value == "remote.control.command"
+    assert Capability.REMOTE_TARGET_EXEC.value == "remote.target.exec"
+    assert Capability.BROWSER_SUBMIT.value == "browser.submit"
+    assert Capability.COMPUTER_INPUT.value == "computer.input"
 
 
 def test_remote_command_rejects_invalid_expiry() -> None:
