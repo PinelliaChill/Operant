@@ -199,6 +199,8 @@ class Phase1EError(RuntimeError):
 Phase23Error = Phase1EError
 # Phase 4/5A reuses the same bounded wire transport and typed error envelope.
 Phase45Error = Phase1EError
+# Phase 5B/6 reuses the same bounded wire transport and typed error envelope.
+Phase56Error = Phase1EError
 
 
 class SseProtocolError(Phase1EError):

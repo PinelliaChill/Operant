@@ -39,6 +39,7 @@ from operant.application.protocol_metadata import (
     phase1e_protocol_metadata,
     phase23_protocol_metadata,
     phase45_protocol_metadata,
+    phase56_protocol_metadata,
 )
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
@@ -1757,6 +1758,17 @@ def create_app(
                 status_code=503,
                 code="protocol_schema_unavailable",
                 message="generated Phase 4/5A protocol schema is unavailable",
+            )
+
+    @app.get("/v1/protocol/phase56", response_model=None, operation_id="negotiatePhase56")
+    async def get_phase56_protocol() -> dict[str, Any] | Response:
+        try:
+            return phase56_protocol_metadata()
+        except ProtocolSchemaUnavailable:
+            return protocol_response(
+                status_code=503,
+                code="protocol_schema_unavailable",
+                message="generated Phase 5B/6 protocol schema is unavailable",
             )
 
     @app.get("/v1/projects", response_model=None)

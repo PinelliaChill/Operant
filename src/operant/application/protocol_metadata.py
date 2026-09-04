@@ -44,6 +44,20 @@ PHASE45_CAPABILITIES: tuple[str, ...] = (
     "job_lease",
     "dead_letter_replay",
 )
+PHASE56_PROTOCOL_VERSION = "phase56.v1"
+PHASE56_MIN_CLIENT_VERSION = "phase56.v1"
+PHASE56_CAPABILITIES: tuple[str, ...] = (
+    "remote_control",
+    "host_connector",
+    "self_hosted_relay",
+    "remote_execution_target",
+    "browser_capability",
+    "computer_capability",
+    "multi_writer_isolation",
+    "writer_lease",
+    "patch_commit_artifact",
+    "merge_node",
+)
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -98,6 +112,18 @@ def phase45_protocol_metadata() -> dict[str, Any]:
         min_client_version=PHASE45_MIN_CLIENT_VERSION,
         capabilities=PHASE45_CAPABILITIES,
         label="Phase 4/5A",
+    )
+
+
+def phase56_protocol_metadata() -> dict[str, Any]:
+    """Return additive Phase 5B/6 negotiation metadata."""
+
+    return _protocol_metadata(
+        digest_path=_phase56_digest_path(),
+        protocol_version=PHASE56_PROTOCOL_VERSION,
+        min_client_version=PHASE56_MIN_CLIENT_VERSION,
+        capabilities=PHASE56_CAPABILITIES,
+        label="Phase 5B/6",
     )
 
 
@@ -160,4 +186,16 @@ def _phase45_digest_path() -> Path:
         return candidate
     return (
         Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase45.openapi.sha256"
+    )
+
+
+def _phase56_digest_path() -> Path:
+    configured = os.environ.get("OPERANT_PHASE56_SCHEMA_DIGEST_PATH")
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            raise ProtocolSchemaUnavailable("protocol digest path must be absolute")
+        return candidate
+    return (
+        Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase56.openapi.sha256"
     )
