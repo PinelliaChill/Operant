@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -67,6 +66,7 @@ class FakeGateway:
         self.audit: list[McpAuditFact] = []
         self.verify_error: McpError | None = None
         self.expired_lease = False
+        self.receipts: dict[str, tuple[str, Any | None]] = {}
 
     async def authorize(
         self,
@@ -107,6 +107,28 @@ class FakeGateway:
 
     async def record_audit(self, fact: McpAuditFact) -> None:
         self.audit.append(fact)
+
+    async def reserve_outcome(
+        self,
+        *,
+        action_hash: str,
+        server_id: str,
+        tool_name: str,
+        schema_sha256: str,
+        arguments: Mapping[str, Any],
+    ) -> tuple[str, Any | None]:
+        del server_id, tool_name, schema_sha256, arguments
+        return self.receipts.setdefault(action_hash, ("reserved", None))
+
+    async def mark_sent(self, action_hash: str) -> None:
+        self.receipts[action_hash] = ("sent", None)
+
+    async def complete_outcome(self, action_hash: str, result: Any) -> None:
+        self.receipts[action_hash] = ("completed", result)
+
+    async def mark_outcome_unknown(self, action_hash: str, error_code: str) -> None:
+        del error_code
+        self.receipts[action_hash] = ("outcome_unknown", None)
 
 
 @pytest.mark.asyncio
@@ -368,19 +390,55 @@ async def test_legacy_sse_rejects_cross_origin_message_endpoint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stdio_is_argv_only_bounded_and_stderr_is_redacted(tmp_path: Path) -> None:
-    server = tmp_path / "server.py"
-    server.write_text(
-        "import json, os, sys\n"
-        "print('token=server-secret', file=sys.stderr, flush=True)\n"
-        "for line in sys.stdin:\n"
-        " request=json.loads(line)\n"
-        " result={'env': os.environ.get('UNMAPPED_SECRET')}\n"
-        " print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}), flush=True)\n",
-        encoding="utf-8",
-    )
+async def test_stdio_is_docker_argv_only_bounded_and_stderr_is_redacted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeStdin:
+        def __init__(self) -> None:
+            self.frames: list[bytes] = []
+
+        def write(self, frame: bytes) -> None:
+            self.frames.append(frame)
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdin = FakeStdin()
+            self.stdout = asyncio.StreamReader()
+            self.stdout.feed_data(b'{"jsonrpc":"2.0","id":1,"result":{"env":null}}\n')
+            self.stderr = asyncio.StreamReader()
+            self.stderr.feed_data(b"token=server-secret\n")
+            self.stderr.feed_eof()
+            self.returncode: int | None = None
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+        async def wait(self) -> int:
+            return 0 if self.returncode is None else self.returncode
+
+    observed: dict[str, Any] = {}
+
+    async def fake_create_subprocess_exec(*argv: str, **kwargs: Any) -> FakeProcess:
+        observed["argv"] = argv
+        observed["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     transport = StdioTransport(
-        McpStdioConfig(argv=(sys.executable, str(server))),
+        McpStdioConfig(
+            argv=("python", "server.py"),
+            workspace=str(tmp_path),
+            docker_image="sha256:" + "a" * 64,
+        ),
         limits=McpLimits(request_timeout_seconds=2, lifecycle_timeout_seconds=2),
     )
     await transport.start()
@@ -388,19 +446,56 @@ async def test_stdio_is_argv_only_bounded_and_stderr_is_redacted(tmp_path: Path)
     await transport.close()
 
     assert result == {"env": None}
+    assert observed["argv"][:4] == ("docker", "run", "--pull", "never")
+    assert "--network" in observed["argv"]
+    assert "none" in observed["argv"]
+    assert observed["kwargs"]["cwd"] != tmp_path
     assert "server-secret" not in transport.safe_stderr
     assert "[REDACTED]" in transport.safe_stderr
 
 
 @pytest.mark.asyncio
-async def test_stdio_timeout_is_fail_closed(tmp_path: Path) -> None:
-    server = tmp_path / "slow.py"
-    server.write_text(
-        "import sys, time\nfor _ in sys.stdin:\n time.sleep(10)\n",
-        encoding="utf-8",
-    )
+async def test_stdio_timeout_is_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeStdin:
+        def write(self, _frame: bytes) -> None:
+            return None
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdin = FakeStdin()
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+            self.stderr.feed_eof()
+            self.returncode: int | None = None
+
+        def terminate(self) -> None:
+            self.returncode = 0
+            self.stdout.feed_eof()
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+        async def wait(self) -> int:
+            return 0 if self.returncode is None else self.returncode
+
+    async def fake_create_subprocess_exec(*_argv: str, **_kwargs: Any) -> FakeProcess:
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     transport = StdioTransport(
-        McpStdioConfig(argv=(sys.executable, str(server))),
+        McpStdioConfig(
+            argv=("python", "slow.py"),
+            workspace=str(tmp_path),
+            docker_image="sha256:" + "b" * 64,
+        ),
         limits=McpLimits(request_timeout_seconds=0.05, lifecycle_timeout_seconds=1),
     )
     await transport.start()
