@@ -1,0 +1,19 @@
+{
+  "name": "Operant 多智能体工作台",
+  "short_name": "Operant",
+  "description": "连接本地 Operant Core 的响应式控制台",
+  "start_url": "/#/chat",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6faf9",
+  "theme_color": "#0f766e",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

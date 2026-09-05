@@ -545,19 +545,34 @@ class SQLiteRemoteControlRepository:
         return self.get_command(command_id)
 
     def list_command_events(
-        self, host_id: str, *, after_cursor: int = 0, limit: int = 100
+        self,
+        host_id: str,
+        *,
+        after_cursor: int = 0,
+        limit: int = 100,
+        session_id: str | None = None,
+        device_id: str | None = None,
     ) -> list[dict[str, Any]]:
         if after_cursor < 0 or not 1 <= limit <= 500:
             raise ValueError("invalid remote event page")
         with self.store._connect() as connection:
+            clauses = ["host_id=?", "rowid>?"]
+            parameters: list[Any] = [host_id, after_cursor]
+            if session_id is not None:
+                clauses.append("remote_session_id=?")
+                parameters.append(session_id)
+            if device_id is not None:
+                clauses.append("device_id=?")
+                parameters.append(device_id)
+            parameters.append(limit)
             rows = connection.execute(
-                """
+                f"""
                 SELECT rowid AS cursor, command_id, device_id, remote_session_id,
                        status, host_acknowledged_at, error_code, updated_at
                 FROM remote_command_receipts
-                WHERE host_id=? AND rowid>? ORDER BY rowid LIMIT ?
+                WHERE {" AND ".join(clauses)} ORDER BY rowid LIMIT ?
                 """,
-                (host_id, after_cursor, limit),
+                parameters,
             ).fetchall()
         return [dict(row) for row in rows]
 

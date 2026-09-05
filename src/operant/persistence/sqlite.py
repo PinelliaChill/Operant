@@ -240,6 +240,7 @@ class SQLiteStore:
         11: "9e1fb35ddb1c6fafb19e44e145b5e94258c896530c9e8b6bcc0fa5c4258d2a2d",
         12: "0211f297de06325f636986b174cd068e30c89592260d13ca132f9899d62a3876",
         13: "24ffd705597380ea6e7c6ae7e120c33520b7cffd6547809b25130f6e5d8647ac",
+        14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
@@ -255,6 +256,7 @@ class SQLiteStore:
         11: "6cc52b1f8c469b66bf907dd8d8dd30ee08951396feb03cb16d8d5f2d45a00003",
         12: "d62b2a3c77cbcbc2131f75067f31d68c6de3d4ed28e3bbedc626d50014bd1bb4",
         13: "bab03e8bf1473ac17648823637c1ce717824fa544301fbe2a6d4e2bccc219299",
+        14: "dd67974c45a3b16c62ea4cd72c146861ff0cd0275a11ddac66ed065833f3bb0e",
     }
     _TWO_STEP_PREVIEW_HISTORY = (
         (
@@ -586,6 +588,12 @@ class SQLiteStore:
                 self._upgrade_v13,
                 self._downgrade_v13,
             ),
+            build(
+                14,
+                "beta_remote_gateway_container_lifecycle",
+                self._upgrade_v14,
+                self._downgrade_v14,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -857,6 +865,8 @@ class SQLiteStore:
             self._validate_v12_schema_shape(connection)
         elif migration.version == 13:
             self._validate_v13_schema_shape(connection)
+        elif migration.version == 14:
+            self._validate_v14_schema_shape(connection)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -2003,6 +2013,63 @@ class SQLiteStore:
             },
         }
 
+    @staticmethod
+    def _v14_required_columns() -> dict[str, set[str]]:
+        return {
+            "remote_gateway_connections": {
+                "connection_id",
+                "remote_session_id",
+                "device_id",
+                "transport_mode",
+                "event_cursor",
+                "status",
+                "owner_id",
+                "fencing",
+                "lease_expires_at",
+                "last_seen_at",
+                "closed_at",
+                "error_code",
+                "created_at",
+                "updated_at",
+            },
+            "remote_gateway_events": {
+                "sequence",
+                "id",
+                "connection_id",
+                "event_type",
+                "body_json",
+                "created_at",
+            },
+            "writer_container_lifecycles": {
+                "writer_workspace_id",
+                "container_name",
+                "image_ref",
+                "mount_ref",
+                "status",
+                "revision",
+                "owner_id",
+                "fencing",
+                "lease_expires_at",
+                "action_hash",
+                "resource_limits_json",
+                "last_error_code",
+                "created_at",
+                "updated_at",
+                "stopped_at",
+                "removed_at",
+            },
+            "writer_container_lifecycle_events": {
+                "sequence",
+                "id",
+                "writer_workspace_id",
+                "revision",
+                "event_type",
+                "body_json",
+                "action_hash",
+                "created_at",
+            },
+        }
+
     @classmethod
     def _required_columns_contract(cls, version: int) -> dict[str, set[str]]:
         tables = {
@@ -2034,6 +2101,8 @@ class SQLiteStore:
             tables.update(cls._v12_required_columns())
         if version >= 13:
             tables.update(cls._v13_required_columns())
+        if version >= 14:
+            tables.update(cls._v14_required_columns())
         return tables
 
     @staticmethod
@@ -2189,6 +2258,15 @@ class SQLiteStore:
                 ("merge_runs", "error_code"),
                 ("merge_runs", "execution_owner_id"),
                 ("merge_runs", "execution_lease_expires_at"),
+                ("remote_gateway_connections", "closed_at"),
+                ("remote_gateway_connections", "error_code"),
+                ("writer_container_lifecycles", "owner_id"),
+                ("writer_container_lifecycles", "lease_expires_at"),
+                ("writer_container_lifecycles", "action_hash"),
+                ("writer_container_lifecycles", "last_error_code"),
+                ("writer_container_lifecycles", "stopped_at"),
+                ("writer_container_lifecycles", "removed_at"),
+                ("writer_container_lifecycle_events", "action_hash"),
             }
         )
 
@@ -2252,6 +2330,7 @@ class SQLiteStore:
                 "event_cursor",
                 "cancellation_requested",
                 "expected_revision",
+                "revision",
             }
         )
 
@@ -2545,6 +2624,8 @@ class SQLiteStore:
                 store._upgrade_v12(connection)
             if version >= 13:
                 store._upgrade_v13(connection)
+            if version >= 14:
+                store._upgrade_v14(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2730,6 +2811,15 @@ class SQLiteStore:
                     "writer_artifacts": ("writer_artifact_id",),
                     "writer_conflicts": ("conflict_id",),
                     "merge_runs": ("merge_run_id",),
+                }
+            )
+        if version >= 14:
+            contract.update(
+                {
+                    "remote_gateway_connections": ("connection_id",),
+                    "remote_gateway_events": ("sequence",),
+                    "writer_container_lifecycles": ("writer_workspace_id",),
+                    "writer_container_lifecycle_events": ("sequence",),
                 }
             )
         return contract
@@ -2920,6 +3010,21 @@ class SQLiteStore:
                     "writer_artifacts": (("artifact_ref",),),
                     "writer_conflicts": (("graph_run_id", "conflict_hash"),),
                     "merge_runs": (("target_isolation_ref",),),
+                }
+            )
+        if version >= 14:
+            contract.update(
+                {
+                    "remote_gateway_connections": (
+                        ("remote_session_id",),
+                        ("remote_session_id", "connection_id"),
+                    ),
+                    "remote_gateway_events": (("id",),),
+                    "writer_container_lifecycles": (("container_name",),),
+                    "writer_container_lifecycle_events": (
+                        ("id",),
+                        ("writer_workspace_id", "revision"),
+                    ),
                 }
             )
         return contract
@@ -3299,6 +3404,56 @@ class SQLiteStore:
                     "merge_runs": (("graph_run_id", "graph_workflow_runs", "id", "NO ACTION"),),
                 }
             )
+        if version >= 14:
+            contract.update(
+                {
+                    "remote_gateway_connections": (
+                        (
+                            "remote_session_id",
+                            "remote_sessions",
+                            "remote_session_id",
+                            "NO ACTION",
+                        ),
+                        ("device_id", "remote_devices", "device_id", "NO ACTION"),
+                    ),
+                    "remote_gateway_events": (
+                        (
+                            "connection_id",
+                            "remote_gateway_connections",
+                            "connection_id",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "writer_container_lifecycles": (
+                        (
+                            "writer_workspace_id",
+                            "writer_workspaces",
+                            "writer_workspace_id",
+                            "NO ACTION",
+                        ),
+                        (
+                            "action_hash",
+                            "security_action_requests",
+                            "action_hash",
+                            "NO ACTION",
+                        ),
+                    ),
+                    "writer_container_lifecycle_events": (
+                        (
+                            "writer_workspace_id",
+                            "writer_container_lifecycles",
+                            "writer_workspace_id",
+                            "NO ACTION",
+                        ),
+                        (
+                            "action_hash",
+                            "security_action_requests",
+                            "action_hash",
+                            "NO ACTION",
+                        ),
+                    ),
+                }
+            )
         return contract
 
     @staticmethod
@@ -3526,6 +3681,27 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 14:
+            indexes.update(
+                {
+                    "idx_remote_gateway_session_status": (
+                        "remote_session_id",
+                        "status",
+                        "updated_at",
+                    ),
+                    "idx_remote_gateway_lease": ("status", "lease_expires_at"),
+                    "idx_remote_gateway_events_connection_sequence": (
+                        "connection_id",
+                        "sequence",
+                    ),
+                    "idx_writer_container_status_updated": ("status", "updated_at"),
+                    "idx_writer_container_lease": ("status", "lease_expires_at"),
+                    "idx_writer_container_events_workspace_sequence": (
+                        "writer_workspace_id",
+                        "sequence",
+                    ),
+                }
+            )
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -3632,6 +3808,9 @@ class SQLiteStore:
 
     def _validate_v13_schema_shape(self, connection: sqlite3.Connection) -> None:
         self._validate_schema_contract(connection, version=13)
+
+    def _validate_v14_schema_shape(self, connection: sqlite3.Connection) -> None:
+        self._validate_schema_contract(connection, version=14)
 
     def _validate_schema_contract(
         self,
@@ -8435,6 +8614,221 @@ class SQLiteStore:
                 ON merge_runs(target_isolation_ref) WHERE status = 'running';
             CREATE INDEX idx_merge_runs_execution_lease
                 ON merge_runs(status, execution_lease_expires_at);
+            """,
+        )
+
+    def _upgrade_v14(self, connection: sqlite3.Connection) -> None:
+        self._execute_sql_batch(
+            connection,
+            """
+            CREATE TABLE remote_gateway_connections (
+                connection_id TEXT PRIMARY KEY,
+                remote_session_id TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                transport_mode TEXT NOT NULL CHECK (transport_mode IN ('direct', 'relay')),
+                event_cursor INTEGER NOT NULL DEFAULT 0 CHECK (event_cursor >= 0),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'connecting', 'connected', 'backoff', 'disconnected', 'closed',
+                        'outcome_unknown'
+                    )
+                ),
+                owner_id TEXT NOT NULL CHECK (length(owner_id) BETWEEN 1 AND 300),
+                fencing INTEGER NOT NULL CHECK (fencing >= 1),
+                lease_expires_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                closed_at TEXT,
+                error_code TEXT CHECK (
+                    error_code IS NULL OR length(error_code) BETWEEN 1 AND 200
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (remote_session_id, connection_id),
+                CHECK ((status = 'closed') = (closed_at IS NOT NULL)),
+                FOREIGN KEY (remote_session_id)
+                    REFERENCES remote_sessions(remote_session_id),
+                FOREIGN KEY (device_id) REFERENCES remote_devices(device_id)
+            );
+            CREATE UNIQUE INDEX uq_remote_gateway_active_session
+                ON remote_gateway_connections(remote_session_id)
+                WHERE status IN ('connecting', 'connected', 'backoff');
+            CREATE INDEX idx_remote_gateway_session_status
+                ON remote_gateway_connections(remote_session_id, status, updated_at);
+            CREATE INDEX idx_remote_gateway_lease
+                ON remote_gateway_connections(status, lease_expires_at);
+            CREATE TRIGGER remote_gateway_session_device_guard
+            BEFORE INSERT ON remote_gateway_connections
+            WHEN NOT EXISTS (
+                SELECT 1 FROM remote_sessions
+                WHERE remote_session_id = NEW.remote_session_id
+                    AND device_id = NEW.device_id
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'gateway connection device does not match session');
+            END;
+
+            CREATE TABLE remote_gateway_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                connection_id TEXT NOT NULL,
+                event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 200),
+                body_json TEXT NOT NULL CHECK (
+                    json_valid(body_json) AND json_type(body_json) = 'object'
+                ),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (connection_id)
+                    REFERENCES remote_gateway_connections(connection_id)
+            );
+            CREATE INDEX idx_remote_gateway_events_connection_sequence
+                ON remote_gateway_events(connection_id, sequence);
+            CREATE TRIGGER remote_gateway_events_no_update
+            BEFORE UPDATE ON remote_gateway_events
+            BEGIN
+                SELECT RAISE(ABORT, 'remote gateway events are append-only');
+            END;
+            CREATE TRIGGER remote_gateway_events_no_delete
+            BEFORE DELETE ON remote_gateway_events
+            BEGIN
+                SELECT RAISE(ABORT, 'remote gateway events are append-only');
+            END;
+
+            CREATE TABLE writer_container_lifecycles (
+                writer_workspace_id TEXT PRIMARY KEY,
+                container_name TEXT NOT NULL UNIQUE CHECK (
+                    length(container_name) BETWEEN 1 AND 200
+                ),
+                image_ref TEXT NOT NULL CHECK (
+                    length(image_ref) BETWEEN 71 AND 500
+                    AND (
+                        (length(image_ref) = 71 AND substr(image_ref, 1, 7) = 'sha256:')
+                        OR instr(image_ref, '@sha256:') > 1
+                    )
+                ),
+                mount_ref TEXT NOT NULL CHECK (length(mount_ref) BETWEEN 1 AND 500),
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'creating', 'created', 'running', 'stopping', 'stopped',
+                        'removing', 'removed', 'outcome_unknown'
+                    )
+                ),
+                revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+                owner_id TEXT CHECK (
+                    owner_id IS NULL OR length(owner_id) BETWEEN 1 AND 300
+                ),
+                fencing INTEGER NOT NULL DEFAULT 0 CHECK (fencing >= 0),
+                lease_expires_at TEXT,
+                action_hash TEXT CHECK (
+                    action_hash IS NULL OR (
+                        length(action_hash) = 64
+                        AND action_hash NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                resource_limits_json TEXT NOT NULL CHECK (
+                    json_valid(resource_limits_json)
+                    AND json_type(resource_limits_json) = 'object'
+                ),
+                last_error_code TEXT CHECK (
+                    last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 200
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                stopped_at TEXT,
+                removed_at TEXT,
+                CHECK (
+                    (status IN ('creating', 'running', 'stopping', 'removing'))
+                    = (owner_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+                ),
+                CHECK ((status = 'removed') = (removed_at IS NOT NULL)),
+                FOREIGN KEY (writer_workspace_id)
+                    REFERENCES writer_workspaces(writer_workspace_id),
+                FOREIGN KEY (action_hash)
+                    REFERENCES security_action_requests(action_hash)
+            );
+            CREATE INDEX idx_writer_container_status_updated
+                ON writer_container_lifecycles(status, updated_at);
+            CREATE INDEX idx_writer_container_lease
+                ON writer_container_lifecycles(status, lease_expires_at);
+            CREATE TRIGGER writer_container_binding_guard
+            BEFORE UPDATE ON writer_container_lifecycles
+            WHEN NEW.writer_workspace_id != OLD.writer_workspace_id
+                OR NEW.container_name != OLD.container_name
+                OR NEW.image_ref != OLD.image_ref
+                OR NEW.mount_ref != OLD.mount_ref
+                OR NEW.created_at != OLD.created_at
+            BEGIN
+                SELECT RAISE(ABORT, 'writer container binding is immutable');
+            END;
+
+            CREATE TABLE writer_container_lifecycle_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                writer_workspace_id TEXT NOT NULL,
+                revision INTEGER NOT NULL CHECK (revision >= 1),
+                event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 200),
+                body_json TEXT NOT NULL CHECK (
+                    json_valid(body_json) AND json_type(body_json) = 'object'
+                ),
+                action_hash TEXT CHECK (
+                    action_hash IS NULL OR (
+                        length(action_hash) = 64
+                        AND action_hash NOT GLOB '*[^0-9a-f]*'
+                    )
+                ),
+                created_at TEXT NOT NULL,
+                UNIQUE (writer_workspace_id, revision),
+                FOREIGN KEY (writer_workspace_id)
+                    REFERENCES writer_container_lifecycles(writer_workspace_id),
+                FOREIGN KEY (action_hash)
+                    REFERENCES security_action_requests(action_hash)
+            );
+            CREATE INDEX idx_writer_container_events_workspace_sequence
+                ON writer_container_lifecycle_events(writer_workspace_id, sequence);
+            CREATE TRIGGER writer_container_events_no_update
+            BEFORE UPDATE ON writer_container_lifecycle_events
+            BEGIN
+                SELECT RAISE(ABORT, 'writer container lifecycle events are append-only');
+            END;
+            CREATE TRIGGER writer_container_events_no_delete
+            BEFORE DELETE ON writer_container_lifecycle_events
+            BEGIN
+                SELECT RAISE(ABORT, 'writer container lifecycle events are append-only');
+            END;
+            """,
+        )
+
+    def _downgrade_v14(self, connection: sqlite3.Connection) -> None:
+        populated = connection.execute(
+            """
+            SELECT (SELECT COUNT(*) FROM remote_gateway_connections)
+                + (SELECT COUNT(*) FROM remote_gateway_events)
+                + (SELECT COUNT(*) FROM writer_container_lifecycles)
+                + (SELECT COUNT(*) FROM writer_container_lifecycle_events) AS row_count
+            """
+        ).fetchone()
+        if populated is not None and int(populated["row_count"]) > 0:
+            raise MigrationError(
+                "refusing to roll back Beta gateway/container tables while they contain data"
+            )
+        self._execute_sql_batch(
+            connection,
+            """
+            DROP TRIGGER writer_container_events_no_delete;
+            DROP TRIGGER writer_container_events_no_update;
+            DROP INDEX idx_writer_container_events_workspace_sequence;
+            DROP TABLE writer_container_lifecycle_events;
+            DROP TRIGGER writer_container_binding_guard;
+            DROP INDEX idx_writer_container_lease;
+            DROP INDEX idx_writer_container_status_updated;
+            DROP TABLE writer_container_lifecycles;
+            DROP TRIGGER remote_gateway_events_no_delete;
+            DROP TRIGGER remote_gateway_events_no_update;
+            DROP INDEX idx_remote_gateway_events_connection_sequence;
+            DROP TABLE remote_gateway_events;
+            DROP TRIGGER remote_gateway_session_device_guard;
+            DROP INDEX idx_remote_gateway_lease;
+            DROP INDEX idx_remote_gateway_session_status;
+            DROP INDEX uq_remote_gateway_active_session;
+            DROP TABLE remote_gateway_connections;
             """,
         )
 

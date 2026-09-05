@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "operant-tui"
+version = "0.1.0"
+description = "Textual client for an Operant Core"
+requires-python = ">=3.10"
+dependencies = [
+  "operant-agent==0.1.0",
+  "textual>=1.0",
+  "typing-extensions>=4.12",
+]
+
+[project.scripts]
+operant-tui = "operant_tui.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["operant_tui"]
+
+[tool.uv.sources]
+operant-agent = { path = "../..", editable = true }

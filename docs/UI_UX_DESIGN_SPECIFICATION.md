@@ -1,8 +1,8 @@
 # Operant 多 Agent Harness 客户端设计与实现规范
 
-> 文档状态：目标客户端设计 v0.3，尚不代表当前代码已经实现
+> 文档状态：目标客户端设计 v0.3；Beta/RC 实现状态以当前架构文档为准
 >
-> 最后更新：2026-08-27
+> 最后更新：2026-09-04
 >
 > 仓库内权威路径：`docs/UI_UX_DESIGN_SPECIFICATION.md`
 >
@@ -15,10 +15,9 @@
 本文定义 Operant 下一阶段 GUI、桌面壳和 TUI 的产品结构、技术边界、状态来源、交互规则、
 安全要求与实施顺序。它用于指导 Antigravity、OpenCode 和后续实现 Agent 设计客户端，但不改变当前代码状态。
 
-当前仓库已有的是无前端框架、无 CDN 的本地 Web 工作台。React GUI/PWA、Tauri 桌面壳、Textual
-TUI、通用 Graph 编辑器、Team 群聊、Remote Control、Host Connector、自托管 Relay 和智能创建器都
-仍是目标能力。任何目标能力完成后，必须以源码、测试和 `docs/PROJECT_ARCHITECTURE.md` 的更新为准，
-不能仅凭本设计文档宣称已经实现。
+Beta/RC 已交付 React PWA、Textual TUI、Tauri 薄壳、WSS/Host Connector 和生成 Client 接入；其精确
+能力、限制与验收只以源码、测试和 `docs/PROJECT_ARCHITECTURE.md` 为准。本文仍描述目标交互，不把
+未完成的智能创建、多 Host 运维、移动推送、签名/公证或公网部署套件宣称为已实现。
 
 本设计遵循以下原则：
 

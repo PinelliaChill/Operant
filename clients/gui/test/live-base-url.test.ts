@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveLiveBaseUrl } from '../src/lib/liveBaseUrl.ts';
+import { resolveDesktopLiveBaseUrl, resolveLiveBaseUrl } from '../src/lib/liveBaseUrl.ts';
 
 test('live client uses the browser origin for Vite and production proxies', () => {
   assert.equal(
@@ -15,6 +15,11 @@ test('live client uses the browser origin for Vite and production proxies', () =
     resolveLiveBaseUrl('https://operant.example.test/'),
     'https://operant.example.test',
   );
+});
+
+test('Tauri shell uses only the fixed localhost Core endpoint', () => {
+  assert.equal(resolveDesktopLiveBaseUrl(true), 'http://127.0.0.1:8000');
+  assert.equal(resolveDesktopLiveBaseUrl(false), null);
 });
 
 test('missing or non-browser origins fail instead of falling back to Core or Mock', () => {

@@ -1,5 +1,14 @@
 """Generated Operant Python SDK entry points."""
 
+from .beta_generated import (
+    BETA_MAX_CURSOR,
+    BETA_PROTOCOL_VERSION,
+    BETA_SCHEMA_DIGEST,
+    BetaClient,
+)
+from .beta_generated import (
+    ProtocolNegotiationError as BetaProtocolNegotiationError,
+)
 from .phase1e_generated import (
     PHASE1E_MAX_CURSOR,
     PHASE1E_PROTOCOL_VERSION,
@@ -49,6 +58,9 @@ __all__ = [
     "PHASE56_MAX_CURSOR",
     "PHASE56_PROTOCOL_VERSION",
     "PHASE56_SCHEMA_DIGEST",
+    "BETA_MAX_CURSOR",
+    "BETA_PROTOCOL_VERSION",
+    "BETA_SCHEMA_DIGEST",
     "Phase1EClient",
     "Phase23Client",
     "Phase23Error",
@@ -57,5 +69,7 @@ __all__ = [
     "Phase45ProtocolNegotiationError",
     "Phase56Client",
     "Phase56ProtocolNegotiationError",
+    "BetaClient",
+    "BetaProtocolNegotiationError",
     "ProtocolNegotiationError",
 ]

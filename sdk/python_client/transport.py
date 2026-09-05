@@ -202,6 +202,8 @@ Phase45Error = Phase1EError
 # Phase 5B/6 reuses the same bounded wire transport and typed error envelope.
 Phase56Error = Phase1EError
 
+BetaError = Phase1EError
+
 
 class SseProtocolError(Phase1EError):
     """A bounded or malformed SSE response from Core."""

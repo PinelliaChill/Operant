@@ -114,7 +114,7 @@ def test_v13_manifest_is_frozen_and_additive(tmp_path: Path) -> None:
         }
     v12_manifest = SQLiteStore._migration_manifest(12)
 
-    assert store.migrate() == 13
+    assert store.migrate(target_version=13) == 13
     assert store.schema_version() == 13
     assert SQLiteStore._migration_manifest(12) == v12_manifest
     manifest = SQLiteStore._migration_manifest(13)

@@ -145,6 +145,28 @@ def initialize() -> None:
     console.print(f"Operant 数据库已初始化：{database_path()}")
 
 
+@app.command("serve", help="启动仅限本机或私有网络的 Operant Core。")
+def serve(
+    host: str = typer.Option("127.0.0.1", help="仅允许 localhost、回环或明确的私有 IP。"),
+    port: int = typer.Option(8000, min=1, max=65535),
+    ssl_certfile: Path | None = typer.Option(None, help="TLS 证书绝对路径。"),
+    ssl_keyfile: Path | None = typer.Option(None, help="TLS 私钥绝对路径。"),
+    desktop: bool = typer.Option(False, help="仅在回环地址允许固定 Tauri Origin。"),
+) -> None:
+    from operant.server import ServerConfigurationError, run_server
+
+    try:
+        run_server(
+            host=host,
+            port=port,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+            desktop=desktop,
+        )
+    except ServerConfigurationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @model_app.command("add", help="添加一个 Model Profile。")
 def add_model(
     name: str = typer.Option(..., help="Model Profile 名称。"),

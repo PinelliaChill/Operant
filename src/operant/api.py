@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qsl, quote
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -28,6 +29,7 @@ from starlette.background import BackgroundTask
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from operant.api_beta import install_beta_container_routes, install_beta_gateway_routes
 from operant.api_phase23 import install_phase23_routes
 from operant.api_phase45 import install_phase45_routes
 from operant.api_phase56_control import Authorizer, install_phase56_control_routes
@@ -41,6 +43,7 @@ from operant.application.client_projection import (
 from operant.application.evaluation import EvaluationRunner
 from operant.application.protocol_metadata import (
     ProtocolSchemaUnavailable,
+    beta_protocol_metadata,
     phase1e_protocol_metadata,
     phase23_protocol_metadata,
     phase45_protocol_metadata,
@@ -59,6 +62,7 @@ from operant.artifacts import (
     ArtifactTooLargeError,
     ArtifactValidationError,
 )
+from operant.auth import OAuthConfig, OAuthControl, install_oauth_control, oauth_config_from_env
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
 from operant.domain.commands import ContextBaselineOperation, SlashCommandKind
 from operant.domain.context import ContextRevision, ReferenceRequest
@@ -86,6 +90,8 @@ from operant.domain.threads import (
     Turn,
 )
 from operant.multiwriter import TrustedGitMultiWriterAdapter
+from operant.multiwriter.container import ContainerWriterLifecycle
+from operant.persistence.beta import SQLiteRemoteGatewayConnectionRepository
 from operant.persistence.sqlite import (
     ActionOutcomeUnknownError,
     ConflictError,
@@ -104,6 +110,7 @@ from operant.providers.openai_compatible import (
     OpenAICompatibleProvider,
     ProviderError,
 )
+from operant.remote_control.gateway import RemoteGatewayConfig, install_remote_gateway
 from operant.settings import configured_path_roots, database_path, load_local_env
 
 MAX_ARTIFACT_UPLOAD_BYTES = 16 * 1024 * 1024
@@ -1299,9 +1306,13 @@ def create_app(
     phase56_relay_authorizer: Authorizer | None = None,
     phase56_remote_executor: Any | None = None,
     phase56_remote_operation_capabilities: Any | None = None,
+    phase56_gateway_config: RemoteGatewayConfig | None = None,
     phase56_multiwriter_roots: Mapping[str, str | Path] | None = None,
+    phase56_container_lifecycle: ContainerWriterLifecycle | None = None,
     phase56_writer_artifact_adapter: Any | None = None,
     phase56_merge_adapter: Any | None = None,
+    oauth_config: OAuthConfig | None = None,
+    oauth_http_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     load_local_env()
     if phase45_skill_roots is None:
@@ -1318,6 +1329,8 @@ def create_app(
             phase56_writer_artifact_adapter = trusted_git_adapter
         if phase56_merge_adapter is None:
             phase56_merge_adapter = trusted_git_adapter
+        if phase56_container_lifecycle is None:
+            phase56_container_lifecycle = ContainerWriterLifecycle(phase56_multiwriter_roots)
     store = SQLiteStore(db_path or database_path())
     configured_artifact_root = (
         store.path.parent.absolute() / "artifacts" if artifact_root is None else Path(artifact_root)
@@ -1824,6 +1837,17 @@ def create_app(
                 status_code=503,
                 code="protocol_schema_unavailable",
                 message="generated Phase 5B/6 protocol schema is unavailable",
+            )
+
+    @app.get("/v1/protocol/beta", response_model=None, operation_id="negotiateBeta")
+    async def get_beta_protocol() -> dict[str, Any] | Response:
+        try:
+            return beta_protocol_metadata()
+        except ProtocolSchemaUnavailable:
+            return protocol_response(
+                status_code=503,
+                code="protocol_schema_unavailable",
+                message="generated Beta/RC protocol schema is unavailable",
             )
 
     @app.get("/v1/projects", response_model=None)
@@ -3528,7 +3552,7 @@ def create_app(
             return False
         return hmac.compare_digest(supplied.removeprefix("Bearer "), configured_token)
 
-    install_phase56_control_routes(
+    remote_control_service = install_phase56_control_routes(
         app,
         store,
         local_authorizer=local_authorizer,
@@ -3537,6 +3561,19 @@ def create_app(
         executor=phase56_remote_executor,
         operation_capabilities=phase56_remote_operation_capabilities,
     )
+    gateway_connection_repository = SQLiteRemoteGatewayConnectionRepository(store)
+    install_beta_gateway_routes(
+        app,
+        gateway_connection_repository,
+        local_authorizer=local_authorizer,
+    )
+    if phase56_gateway_config is not None:
+        install_remote_gateway(
+            app,
+            remote_control_service,
+            config=phase56_gateway_config,
+            connection_registry=gateway_connection_repository,
+        )
     install_phase56_target_routes(app, store, action_gateway=app.state.phase45_action_gateway)
     install_phase56_writer_routes(
         app,
@@ -3546,6 +3583,13 @@ def create_app(
         artifact_adapter=phase56_writer_artifact_adapter,
         merge_adapter=phase56_merge_adapter,
     )
+    install_beta_container_routes(
+        app,
+        store,
+        action_gateway=app.state.phase45_action_gateway,
+        local_authorizer=local_authorizer,
+        lifecycle=phase56_container_lifecycle,
+    )
 
     # Added last so this pure ASGI guard wraps the BaseHTTP command middleware:
     # oversized chunked bodies fail before request.body() can buffer them.
@@ -3553,6 +3597,11 @@ def create_app(
         _ArtifactRequestBodyLimitMiddleware,
         max_body_bytes=MAX_ARTIFACT_REQUEST_BODY_BYTES,
     )
+    configured_oauth = oauth_config if oauth_config is not None else oauth_config_from_env()
+    if configured_oauth is not None:
+        oauth_control = OAuthControl(configured_oauth, http_client=oauth_http_client)
+        install_oauth_control(app, oauth_control)
+        app.router.add_event_handler("shutdown", oauth_control.close)
     return app
 
 

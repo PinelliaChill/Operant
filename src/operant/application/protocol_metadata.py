@@ -58,6 +58,15 @@ PHASE56_CAPABILITIES: tuple[str, ...] = (
     "patch_commit_artifact",
     "merge_node",
 )
+BETA_PROTOCOL_VERSION = "beta.v1"
+BETA_MIN_CLIENT_VERSION = "beta.v1"
+BETA_CAPABILITIES: tuple[str, ...] = (
+    "oauth_pkce",
+    "remote_gateway_wss",
+    "https_target_connector",
+    "container_writer_lifecycle",
+    "generated_client",
+)
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -124,6 +133,18 @@ def phase56_protocol_metadata() -> dict[str, Any]:
         min_client_version=PHASE56_MIN_CLIENT_VERSION,
         capabilities=PHASE56_CAPABILITIES,
         label="Phase 5B/6",
+    )
+
+
+def beta_protocol_metadata() -> dict[str, Any]:
+    """Return the additive Operant 2.0 Beta/RC negotiation metadata."""
+
+    return _protocol_metadata(
+        digest_path=_beta_digest_path(),
+        protocol_version=BETA_PROTOCOL_VERSION,
+        min_client_version=BETA_MIN_CLIENT_VERSION,
+        capabilities=BETA_CAPABILITIES,
+        label="Beta/RC",
     )
 
 
@@ -199,3 +220,13 @@ def _phase56_digest_path() -> Path:
     return (
         Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase56.openapi.sha256"
     )
+
+
+def _beta_digest_path() -> Path:
+    configured = os.environ.get("OPERANT_BETA_SCHEMA_DIGEST_PATH")
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            raise ProtocolSchemaUnavailable("protocol digest path must be absolute")
+        return candidate
+    return Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-beta.openapi.sha256"

@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-04
+> 最后更新：2026-09-05
 >
-> 对应版本：Operant 2.0 Phase 5B Remote + Phase 6 Multi-Writer（`phase56.v1`；既有协议冻结）
+> 对应版本：Operant 2.0 Beta/RC 收口（SQLite v14；`phase56.v1` + additive `operant-beta.v1`）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -46,6 +46,14 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
     Remote Control 与自托管 Relay MVP，本地 SQLite 继续是恢复权威。
 16. 以独立 Writer Workspace、哈希化 Lease、所有权、Patch/Commit Artifact、冲突与显式 Merge Node
     支持多个 Writer；真实 Git 修改只在管理员映射的隔离 worktree 内验证和合并。
+17. 通过受限生产启动器提供 TLS/WSS 直连 Gateway、HTTPS Host/Target Connector，并将连接与
+    Container Writer 生命周期事实继续落到本地 SQLite 权威。
+18. 让 React PWA、Textual TUI 与 Tauri 薄壳统一消费生成 Client；客户端只保存有限 UI 状态，断线后
+    仍以 Query、Cursor 和服务端 Projection 校正。
+19. 为私有网络部署提供单用户 OAuth 2.0 Authorization Code + PKCE；Token 只在当前 Core 进程内存中
+    保存，重启后必须重新登录。
+20. 交付可复现的候选构建、依赖闭包 SBOM、安装 smoke 与发布检查；候选产物未签名时明确标记为
+    `unsigned_candidate_not_for_release`，不能冒充正式发布物。
 
 ## 2. 当前完成度
 
@@ -188,12 +196,17 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   核对还要再次通过 Action Gateway，并以 CAS 落到已知终态，旧 owner 不能覆盖，不自动重放；
 - 自托管 Relay MVP 只保存有 120 秒上限和大小上限的 opaque 加密 Envelope，采用独立 Bearer 运维鉴权；
   Host Connector 主动拉取、解密、重验设备签名并提交本地 Core，Relay delivery/ack 不冒充 Host Ack。
-  当前 transport 是有界 HTTPS polling API，不宣称已经完成 WSS、多 Host 发现或公网部署套件；
+  Beta/RC 新增 TLS-only WSS 直连 Gateway：精确 Origin、Bearer、子协议、frame/pending 上限、
+  Host/Device/Session 绑定与持久连接租约均失败关闭；Relay Ack 仍不冒充 Host Ack。此能力未经过公网
+  部署验收，不等于允许把 `/web` 或普通 `/v1/*` 暴露到公网；
 - Remote Execution Target 已与 Remote Control 分域：Target 注册、Identity/Heartbeat、Capability
   Manifest、Workspace Lease、fencing、Job/Result 幂等、取消、Artifact checksum，以及 Browser/Computer
   observe-before-act 的 target/precondition/postcondition 证据均由本地 Controller 持久裁决。Target
   凭据只保存环境变量引用，Lease token 只在首次响应返回且 SQLite 仅保存 SHA-256；非幂等运行中断线
   或租约失效进入 `manual_reconcile_required`，不自动重放；
+- Beta/RC 的 Host/Target 生产 Connector 只接受 HTTPS，绑定签名、recipient、route、TTL、nonce、
+  fencing 与调用方绝对 deadline；响应和流式 frame 均有界。发送后无法确认结果的非幂等操作进入人工
+  核对，不能自动重放；
 - Phase 6 Graph Compiler 允许带显式 `WriterNodePolicy` 的多个写节点，并强制独立 isolation ref、互斥
   ownership 和覆盖全部 Writer 的 Merge Node。运行层保存独立 Writer Workspace、token-hash + fencing
   Lease、Patch/Commit Artifact、冲突与 Merge Run；可信 Git adapter 在管理员映射的绝对 worktree 中
@@ -206,8 +219,18 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   1E/23/45 生成物。GUI live 已用该 Client 查询 Remote Host/Device、Remote Target/Job 和多 Writer
   投影，可从本机显式启用 Host、创建一次性票据和撤销设备；错误或断线保留最近投影并明确显示，
   不回退 Demo；
+- additive `operant-beta.v1` 继续从单一 Schema 确定生成 TypeScript/Python Client，覆盖 WSS 连接投影
+  和 Container Writer 生命周期；旧 Phase 1E/23/45/56 Schema 与生成物保持冻结。PWA、Textual TUI
+  与 Tauri 薄壳都只通过生成 Client/正式 HTTP 边界访问 Core；TUI 的 Cursor tracker 按资源单调去重，
+  SSE EOF 后先 Query 校正；Tauri 只负责本地 Core 生命周期与 WebView，不执行 Agent 动作；
+- OAuth 2.0 Authorization Code + PKCE 支持精确 issuer/audience/subject/redirect、state/nonce、JWKS
+  有界读取、回调一次性消费、登录限流、Secure/HttpOnly/SameSite Cookie 与可选撤销。Access/refresh
+  Token 只保存在 Core 进程内存，退出、过期或重启即失效，不写 SQLite 或本地 token 文件；
+- `operant serve` 拒绝公网、通配和含糊 hostname；私网监听必须同时启用 TLS 与 OAuth，WSS Gateway
+  必须启用 TLS。运行时显式依赖 WebSocket transport；`--desktop` 只允许 loopback，并只为固定 Tauri
+  Origin 和生成 Client 所需请求头开启最小 CORS；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1/v2/v3/v4/v5/v6/v7/v8/v9/v10/v11/v12 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1—v14 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -255,16 +278,16 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 - 审批 Future 的跨进程恢复；
 - 使用真实 Provider 完成 Exp 19—24、形成统计性实验结论和用户学习验收；
 - 自动模型价格发现、显著性分析，以及中断 Evaluation Run 的逐 Result 自动续跑；
-- Web/OAuth 身份认证、CSRF 防护和允许公网暴露的接入网关；
+- 允许公网暴露的接入网关、多租户身份系统与通用 CSRF 方案；当前 OAuth 只服务单用户私网部署，
+  本地 loopback 仍可无 OAuth 运行；
 - Graph Proposal/智能创建、Graph IR 中的 Timer 节点执行与任意第三方节点执行器；Phase 5A
   Scheduler 只能触发已发布 Graph Workflow，不会把任意 Graph 节点变成后台作业；
-- 完整 React GUI/PWA、Textual TUI 和 Tauri 桌面壳；当前生成 Client 与 React live 面覆盖冻结
-  Phase 1E、Graph/本地 Team、Phase 4/5A 和 Phase 5B/6 查询及本机设备治理；Skill 信任/安装、
-  Policy 修改、OAuth、完整 Browser/Computer connector、TUI 与 Tauri 尚未实现；
+- 完整的安装向导、自动更新、代码签名/公证与移动端推送；当前 React PWA、Textual TUI 和 Tauri
+  薄壳已统一使用生成 Client，但 Tauri 候选包仍要求本机已安装可执行的 `operant` Core；
 - 复杂 `@` 引用、Provider Cache 的执行/复制，以及面向非可信 HTTP 客户端的 Artifact capability 签发；
-- WSS/直连 Remote Gateway、完整远程 PWA、多 Host 发现/通知/安装器、生产 Remote Target connector，
-  以及 Container Writer 的创建与生命周期 adapter；当前仅交付单 Host HTTPS polling Relay MVP、
-  injectable Target connector 和可信 Git worktree merge adapter。
+- 多 Host 自动发现/通知、允许公网部署的 Gateway、真实浏览器/桌面驱动矩阵与高压容量验收；当前交付
+  单 Host TLS/WSS 直连、HTTPS Host/Target Connector、Container Writer 生命周期和可信 Git worktree
+  merge adapter，不建设 SaaS、多用户、分布式 Core 或高可用。
 
 ## 3. 总体架构
 
@@ -1384,6 +1407,9 @@ SQLiteStore 当前创建以下表：
 13. v13：Remote Control/Relay、Remote Execution Target/Browser/Computer evidence 与 Multi-Writer/
     Merge 表；Command/Merge 执行 owner 与租约支持跨进程保守恢复，一次性 Pairing/Lease Secret 不进入
     Command Receipt，Lease 只保存 hash，并保持 v1—v12 manifest/checksum 不变。
+14. v14：Remote Gateway connection/event 与 Container Writer lifecycle/event；活动连接与容器操作都
+    绑定 owner、lease、revision 和失败事实，事件只追加；空数据时才允许隔离 downgrade，并保持
+    v1—v13 manifest/checksum 不变。
 
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
@@ -1430,6 +1456,11 @@ v13 继续以本地 SQLite 为 Remote 与 Multi-Writer 状态权威。Remote Com
 只在首次 `Cache-Control: no-store` 响应返回，Command Receipt 对该响应标为需要人工核对而不保存响应
 正文。Target 与 Writer 表只保存 token SHA-256，fencing/expiry 在 `BEGIN IMMEDIATE` 事务中核对。
 
+v14 为每个 RemoteSession 最多保留一个活动 WSS connection，连接建立时再次核对 Host/Device/Session
+绑定并登记 owner/lease；关闭、过期和失败都留下只追加事件。Container Writer 在 Docker 调用前先持久
+进入过渡态并绑定 Writer Lease fencing 与 Action Hash；调用后无法确定结果时进入 `outcome_unknown`，
+只能经本机鉴权、Action Gateway 和实际 Docker inspect 人工核对，不能自动重放。
+
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
 全部受管 table/index/view/trigger/FTS shadow object、规范化 DDL、列名/类型/NOT NULL、主键顺序、
@@ -1442,7 +1473,7 @@ preview 收编、逐步升级、每步 manifest 复验和历史写入全部位�
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
 随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v12/v11/v10/v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+v14/v12/v11/v10/v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
 回滚 v12 要求 MCP receipt/start/sandbox 与 Phase 45 Approval 表全空；
 回滚 v11 要求 Skill/MCP/Scheduler/Queue/Lease/Attempt/Graph Dispatch 表全空，回滚 v10 要求
 Security Action/Capability/Audit/Denial 表全空；
@@ -1552,6 +1583,7 @@ workspace 绝对路径。
 | `GET` | `/v1/protocol/phase23` | 独立协商 additive `phase23.v1`、digest 与 Graph/Team capability |
 | `GET` | `/v1/protocol/phase45` | 独立协商 additive `phase45.v1`、digest 与 Security/Skill/MCP/Scheduler capability |
 | `GET` | `/v1/protocol/phase56` | 独立协商 additive `phase56.v1`、digest 与 Remote/Multi-Writer capability |
+| `GET` | `/v1/protocol/beta` | 独立协商 additive `operant-beta.v1`、digest 与 Gateway/Container capability |
 | `GET` | `/v1/projects` | 查询已登记 Workspace 的只读 Project/Thread/Workflow 聚合投影 |
 | `GET` | `/v1/workspaces/{workspace_id}/files` | 安全列出 Workspace 相对目录的有界 metadata |
 | `GET` | `/v1/slash-commands` | 查询冻结版本的 Slash Command Registry |
@@ -1648,6 +1680,8 @@ workspace 绝对路径。
 | `POST/GET` | `/v1/remote-control/{devices,sessions}` 及其 `/pair`、`/{id}/{revoke,close}` 子路由 | 配对/撤销设备、创建/关闭会话并查询安全投影 |
 | `POST/GET` | `/v1/remote-control/commands[/{id}]` | 提交签名加密 Command，或按 ID 查询 Host Ack/终态；`/{id}/reconcile` 仅供本机人工核对 unknown |
 | `GET` | `/v1/remote-control/events` | 按 Host 与可选 Session 绑定 Cursor 查询已提交事件 |
+| `WSS` | `/v1/remote-control/gateway` | 精确 Origin/Bearer/子协议与 Host/Device/Session 绑定的有界直连 Gateway |
+| `GET` | `/v1/remote-control/gateway/connections` | 仅本机查询活动/已关闭 Gateway connection 投影 |
 | `POST/GET` | `/v1/relay/envelopes` | Relay 鉴权后发布/拉取有界 opaque Envelope |
 | `POST` | `/v1/relay/envelopes/{id}/acknowledge` | 只确认 Relay 投递；不表示 Core 已接受动作 |
 | `POST/GET` | `/v1/remote-targets` | 经 Action Gateway 注册 Target 或查询安全投影 |
@@ -1656,6 +1690,8 @@ workspace 绝对路径。
 | `POST` | `/v1/{browser,computer}/{target_id}/observe`、`/v1/{browser,computer}/act` | Browser/Computer observe-before-act Capability |
 | `POST/GET` | `/v1/graph/runs/{id}/writer-workspaces` | 建立/查询冻结策略对应的独立 Writer Workspace |
 | `POST` | `/v1/writer-workspaces/{id}/lease[/renew,/release]` | 获取、续期或释放 token-hash + fencing Writer Lease |
+| `GET/POST` | `/v1/writer-workspaces/{id}/container` | 仅本机查询或创建受 Action Gateway/Writer Lease 约束的 Container Writer |
+| `POST` | `/v1/writer-workspaces/{id}/container/{start,stop,remove,reconcile}` | 仅本机推进或人工核对 Container Writer 生命周期 |
 | `POST/GET` | `/v1/writer-workspaces/{id}/artifacts`, `/v1/graph/runs/{id}/writer-artifacts` | 发布或查询已验证 Patch/Commit Artifact |
 | `POST/GET` | `/v1/graph/runs/{id}/writer-conflicts[/detect]` | 确定性检测或查询多 Writer 冲突 |
 | `POST/GET` | `/v1/merge-runs[/{id}]` 及 `/{id}/{finalize,reconcile}` | 创建/查询显式 Merge Node Run；finalize 经 Git commit 审批，unknown 只允许本机 Gateway 人工核对 |
@@ -1716,6 +1752,11 @@ Control/Relay、Remote Execution Target/Browser/Computer 与 Multi-Writer/Merge�
 FastAPI Schema 产生 TypeScript/Python Client 和 SHA-256；Phase 45 生成器显式冻结旧 Capability 枚举，
 因此新增 Phase 56 capability 不会反向改写 Phase 45 产物。一次性 Pairing/Lease 响应不进入 durable
 Command body；丢失时只能重新建立新的逻辑动作，不允许从 Receipt 回放 Secret。
+
+`sdk/protocol/schema/operant-beta.openapi.json` 是 additive `operant-beta.v1` 协议源，覆盖直连 Gateway
+connection 投影和 Container Writer 生命周期，当前 digest 为
+`1565354a3ce029073212292fd38dcfcc6beced58ff87360d967ff50087c79b91`。生成器保持 Phase
+1E/23/45/56 产物逐字冻结；PWA、TUI、Tauri 不得手写另一套这些 operation 或本地状态机。
 
 ### REST Command Receipt 与统一错误
 
@@ -1794,7 +1835,8 @@ SSE 只承诺回放已经提交 SQLite 的事件，不承诺从任意模型字�
 `/web` 提供本地静态工作台，不依赖 CDN。页面可管理模型和角色、从已有或即时角色创建 Session、
 选择 Main/Planner/Explorer/Coder/Reviewer 运行 Workflow、处理审批、观察按角色分栏的 SSE，并查询、
 恢复、取消持久化任务和查看任务 Trace。动态内容使用 `textContent` 等安全 DOM API，不执行模型
-输出中的 HTML。工作台当前没有身份认证，默认只应绑定受信任的本机地址；不得直接暴露到公网。
+输出中的 HTML。loopback 默认可无 OAuth 运行；私网部署必须通过 `operant serve` 同时启用 TLS 与
+OAuth。两种模式都不得直接暴露到公网。
 
 ## 15. 角色驱动的多 Agent 编排
 
@@ -2071,9 +2113,38 @@ npm run typecheck --prefix clients/gui
 npm run build --prefix clients/gui
 ```
 
-本次最终门禁为 656 项 pytest 通过、1 个条件性 Docker 测试跳过、1 个既有 Starlette 警告，GUI
-75 项测试全部通过；Ruff format/check、mypy、`uv lock --check --offline`、`git diff --check`、GUI
-typecheck/build 均通过。条件性 skip 不算容器验收；Vite 生产主 chunk 为 963.95 kB，继续作为性能债务。
+2026-09-05 的 Beta/RC 最终门禁为 709 项 pytest 通过、1 个条件性 Docker 测试跳过、1 个既有
+Starlette 警告，GUI 79 项、TUI 9 项与 Tauri Rust 1 项测试通过；Ruff format/check、mypy、
+`uv lock --check --offline`、`git diff --check`、GUI typecheck/build 均通过。Vite 路由与依赖分块后最大
+chunk 为 287.96 kB，低于 500 kB 候选预算。条件性测试仍不能单独算作运行验收，但同日另以实际
+Docker 29.7.2 和本地已有的 digest-pinned `python:3.13-slim` 镜像完成 Container Writer
+create/start/inspect/stop/remove/absent 生命周期；容器按宿主 `501:20` 运行，保留 `network=none`、
+只读 rootfs、`cap-drop=ALL`、`no-new-privileges`、CPU/内存/PID 上限与唯一可写 workspace mount。
+真实验收发现 Docker 29 的 not-found stderr 使用小写文本，修正为大小写无关识别并加入原样回归。
+
+同日使用仅限 loopback 的临时自签名证书、实际 TLS Core 和 `websockets` Client 完成 WSS hello、
+ping、cursor sync 及持久化关闭投影。另以两个真实本机 HTTPS Server 完成 Target execute/cancel 与
+Ed25519 响应验签，以及加密 Relay Envelope、签名 Host Command、Action Gateway Receipt 和
+“Host completed Receipt 后才 Relay Ack”的边界。OAuth 使用独立本机 HTTPS IdP 验证完整重定向、
+PKCE S256、RS256 ID Token/JWKS、Secure+HttpOnly Cookie、受保护 API、logout 双 Token revocation
+和退出后重新 401；Token 只在进程内存出现，SQLite 未落盘。该 OAuth 证据不等于外部 IdP 联调。
+
+生产 PWA build 在实际 Chromium 中注册有效 Service Worker/manifest，live 模式连接真实 Core；
+1440×900 与 390×844 均完成视觉/可访问树核对，390px 无水平溢出。真实 Textual TUI 完成协议与 Schema
+digest 协商；真实 macOS Tauri `.app`/WebView 以 `tauri://localhost#/chat` 冷启动并连接 loopback Core，
+Core/协议/Projection Query 均正常。该候选仍未签名、不生成 DMG，也不代表公网、浏览器矩阵、代码签名、
+公证或自动更新验收。
+
+正式 `operant model discover` 发现并选用精确模型 ID `gpt-5.6-luna`，通过正式 ModelProfile 与只读
+Session 精确返回 `BETA_RC_REAL_ACCEPTANCE_20260905_OK`；用量为 543 input + 15 output tokens，请求耗时
+4.143 秒，0 个 Tool Call，隔离 workspace 无写入，SQLite 只保存 `secret_ref=OPERANT_API_KEY` 且未出现
+API Key。Python wheel、sdist 与 TUI wheel 另在全新 Python 环境完成安装和 CLI/生成 Beta Client import
+smoke；SPDX SBOM 与 SHA256 manifest 从冻结 lock 生成并复核。该模型 smoke 与 Container 生命周期是
+两份独立证据，不等于真实模型控制桌面、真实模型加 Docker Coder 或公网链路验收。
+
+首次 GitHub Python 3.10 门禁进一步发现仓库发布检查直接导入仅在 Python 3.11+ 内置的 `tomllib`；
+`release_checks.py` 现于 3.10 使用显式锁定的 `tomli` 回退，Python 3.10.14 隔离环境中的 4 项发布证据/
+篡改拒绝测试通过。该修复不把 `tomli` 加入产品运行时，只在 `dev` extra 且 Python 3.10 时安装。
 
 2026-09-04 的 Phase 5B/6 验收使用隔离 v13 SQLite、实际 localhost Uvicorn 和生成 Python
 `Phase56Client`，完整跑通 Host 显式启用、一次性配对、设备侧 X25519 会话密钥推导、签名加密
@@ -2244,7 +2315,7 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    存在于进程内，不能跨进程恢复；重启后的决定不等于原 Agent 自动继续；
 4. Memory 已有版本、来源、作用域、FTS5 和保守激活，但还没有自动冲突合并、质量评测、容量淘汰
    或跨项目知识共享；
-5. 已有 v1—v13 原子 Migration、旧库识别升级和 Session/Workflow/Scheduler/Remote/Writer lease；v9
+5. 已有 v1—v14 原子 Migration、旧库识别升级和 Session/Workflow/Scheduler/Remote/Writer lease；v9
    Graph lease 仍只是单协调者预留，v11 Scheduler Writer 与 v13 多 Writer 解决的分别是调度派发和隔离
    工作区写入，不是分布式 Core 或高可用协调。downgrade 只用于显式 isolated 且新增表全空的数据库；
    没有通用生产 downgrade，REST Command 也没有跨常驻 Core 进程的 owner/liveness lease；
@@ -2252,9 +2323,9 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
    回放并查询投影校正，但仍不支持任意模型流位置续传；SSE 断线不保证后台继续。Phase 1E 冻结协议没有
    Session 列表/详情 Query，因此刷新后 GUI 只能从 Thread 的权威 `session_id` 恢复运行入口，并把角色/
    模型详情明确标为未查询，不能伪造本地详情；
-7. Web 工作台与 API 仍没有通用身份认证和 CSRF 防护，只能绑定受信任本机地址。Phase 5B 配对和
-   E2E Command 只保护 Remote Control 协议，不能给全部 `/v1/*` 充当公网认证；Relay API 还需单独
-   Bearer 运维鉴权。GUI 生产部署要求受信任同源反向代理，当前仍不得直接暴露到公网；
+7. OAuth PKCE 已为单用户私网部署提供身份保护，但不是多租户身份系统或通用公网 CSRF 方案；loopback
+   默认仍可无 OAuth 运行。Phase 5B 配对和 E2E Command 只保护 Remote Control，不能给全部 `/v1/*`
+   充当公网认证；Relay/Gateway 还有各自 Bearer/Origin 边界。当前仍不得直接暴露到公网；
 8. Evaluation Runner v1 已有可复现 Suite、隔离 artifact、外部验证、指标和五类 Trace RCA，但模型
    价格仍须由配置/Suite 固定提供，尚无自动价格发现、Evaluation Run 级总预算与调度、统计显著性、
    真实模型 Exp 19—24 结果或逐 Result 断点续跑；中断组合会保留为不可重放的 Interrupted Result，
@@ -2262,11 +2333,11 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 9. Docker Runner 已跑通真实隔离集成用例，第三周六角色 Workflow 也已在可信临时 Host fixture 上
     完成真实模型验收；两者仍是不同证据，尚未完成“真实模型 + Docker Coder”的同一次端到端验收，
     也尚未构建专用 Operant 镜像；
-10. React GUI 已实现 Phase 1E/23/45 和 Phase 56 Remote/Multi-Writer 查询及本机设备治理 live 面；
-    Skill 信任/安装、Policy 修改、OAuth、Graph Proposal/智能创建、Graph Timer/任意节点执行、完整
-    Remote PWA、TUI、Tauri、WSS/直连 Gateway、多 Host 发现/通知与生产 Remote Target connector 仍未
-    实现。Browser/Computer 当前是 Target Capability 契约、观察/动作证据与 injectable connector，
-    不是内置浏览器/桌面驱动；Relay 是 HTTPS polling MVP，不是已审计的公网托管产品。
+10. React PWA、Textual TUI 与 Tauri 薄壳已使用生成 Client；OAuth、WSS Gateway 和 HTTPS Host/Target
+    Connector 已实现。Skill 信任/安装、Policy 修改、Graph Proposal/智能创建、Graph Timer/任意节点、
+    多 Host 发现/通知、移动推送和完整安装向导仍未实现。Browser/Computer 仍不是内置驱动；Relay 和
+    Gateway 不是已审计的公网托管产品；Tauri 候选只生成未签名 macOS `.app`，仍要求本机已有
+    `operant` Core，不包含 DMG、签名、公证或自动更新。
 11. Artifact 已有对象级 Retention、Pin、宽限期、Trash、只读审计和显式孤儿修复，但
     Session/Workflow/Evaluation 事件、Thread Canonical History、Tool/Command Receipt、Approval Audit、
     Memory 和 Context/Compaction 仍没有清理执行器，会随运行持续增长；Artifact 也没有后台自动清扫，
@@ -2285,15 +2356,15 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
     实现 MCP Streamable HTTP。Phase 45 Approval 可跨请求/重启保存决定，但不会恢复任意模型流位置。
     BTW Sidecar 的主动取消通知仍是本进程协作式信号；跨进程重启只会安全标为
     `process_interrupted`，不会从任意模型流位置恢复或自动继续。
-15. GUI 当前生产主 chunk 约 964 kB，Vite 会给出大 chunk 警告；尚未做按路由拆包、真实大 Graph/Team/
-    长事件流性能基准、浏览器矩阵或 Tauri WebView 验收。旧 demo SDK 类型继续只服务明确 Mock 表面，
-    不得扩展为第二套正式协议；后续 live operation 必须先进入对应单一 Schema 再生成两种 Client。
-16. Phase 6 已实现可信 Git worktree 验证/合并 adapter，但 Container Writer 目前只有冻结领域契约与
-    adapter 边界，尚无负责创建、挂载、回收容器工作区的生产实现。Merge 进程若在 Git 已提交而 SQLite
+15. GUI 已按路由 lazy-load，并把 React 与生成 SDK 分块；候选构建最大 chunk 约 288 kB，500 kB 预算
+    会在构建时失败。仍缺真实大 Graph/Team/长事件流基准、浏览器矩阵和签名 Tauri WebView 验收。旧
+    demo SDK 类型只服务明确 Mock，后续 live operation 必须先进入单一 Schema 再生成两种 Client。
+16. Phase 6 已实现可信 Git worktree 验证/合并和受限 Container Writer 生命周期。Merge 进程若在 Git
+    已提交而 SQLite
     尚未写入成功之间崩溃，owner lease 过期后会进入 `outcome_unknown`，保留独立 target worktree 供
     本机 Gateway 人工核对，不自动猜测或重放；同一 target 的并发由 SQLite 持久独占状态与跨进程文件锁
-    拒绝；尚未完成多进程高压、超大 patch
-    性能和进程崩溃故障注入演练。
+    拒绝；Container 的真实 Docker 生命周期仍依赖部署环境和 digest-pinned image。尚未完成多进程
+    高压、超大 patch 性能和进程崩溃故障注入演练。
 
 ## 19. 文档维护规则
 
@@ -2324,6 +2395,24 @@ artifact 根目录。最终成功运行对应修正后的代码，并在 Coder �
 不能静默跳过。
 
 ## 20. 变更记录
+
+### 2026-09-05（Operant 2.0 Beta/RC 产品化收口）
+
+- 从 `main@d06d6fb` 建立隔离集成分支，Codex 统一持有 additive `operant-beta.v1` Schema、SQLite v14
+  Migration 与最终集成；三条 coder 实现轨分别交付 Gateway/Connector/Container、PWA/TUI/Tauri、
+  OAuth/性能/候选发布检查，并由独立 Reviewer 复用定向证据审查边缘、安全、性能和 Bug；
+- 生产入口 `operant serve` 限制显式 loopback/私网地址；私网必须 TLS+OAuth，WSS 必须 TLS，desktop
+  CORS 只开放固定 Tauri Origin。OAuth Token 只保存在进程内存，登录、JWKS、token 和 revocation 都
+  有界；
+- WSS Gateway、HTTPS Host/Target Connector 与 Container Writer 生命周期保持 Host/Device/Session、
+  route/recipient/nonce/TTL/fencing、Action Gateway、lease/CAS、未知结果人工核对和 SQLite 权威；
+- React PWA 做路由/SDK 分块与 500 kB 预算，TUI 增加 scope Cursor 单调去重及 SSE EOF Query 校正，
+  Tauri 只管理 loopback Core 和 WebView；候选构建生成锁文件依赖闭包 SBOM，Python 分发显式携带生成
+  Client 和 WSS transport，TUI 候选依赖同版本 Core，未签名产物明确禁止发布；
+- 使用本地自签名证书、真实 TLS Core 与真实 WebSocket Client 验证 WSS hello/ping/cursor 和持久化关闭
+  投影；真实 Tauri macOS `.app`/WebView 切换 live 后连接 loopback Core，验证固定 Origin 的 CORS 预检、
+  版本请求头、协议协商和 Projection Query。该证据不外推为公网部署、签名安装器或浏览器矩阵验收；
+- 范围继续排除 SaaS、多用户、分布式 Core、高可用、多 Host 自动发现、移动推送与未验收公网暴露。
 
 ### 2026-09-04（Phase 5B Remote + Phase 6 Multi-Writer）
 
