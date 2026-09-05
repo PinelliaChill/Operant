@@ -14,7 +14,10 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised by the Python 3.10 CI job
+    import tomli as tomllib
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 LOCK_PATH = REPOSITORY_ROOT / "uv.lock"

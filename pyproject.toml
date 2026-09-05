@@ -27,6 +27,7 @@ dev = [
   "pytest>=8.3,<10",
   "pytest-asyncio>=0.25,<2",
   "ruff>=0.9,<1",
+  "tomli>=2.2; python_version < '3.11'",
 ]
 
 [project.scripts]

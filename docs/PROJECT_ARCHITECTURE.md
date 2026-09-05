@@ -2142,6 +2142,10 @@ API Key。Python wheel、sdist 与 TUI wheel 另在全新 Python 环境完成安
 smoke；SPDX SBOM 与 SHA256 manifest 从冻结 lock 生成并复核。该模型 smoke 与 Container 生命周期是
 两份独立证据，不等于真实模型控制桌面、真实模型加 Docker Coder 或公网链路验收。
 
+首次 GitHub Python 3.10 门禁进一步发现仓库发布检查直接导入仅在 Python 3.11+ 内置的 `tomllib`；
+`release_checks.py` 现于 3.10 使用显式锁定的 `tomli` 回退，Python 3.10.14 隔离环境中的 4 项发布证据/
+篡改拒绝测试通过。该修复不把 `tomli` 加入产品运行时，只在 `dev` extra 且 Python 3.10 时安装。
+
 2026-09-04 的 Phase 5B/6 验收使用隔离 v13 SQLite、实际 localhost Uvicorn 和生成 Python
 `Phase56Client`，完整跑通 Host 显式启用、一次性配对、设备侧 X25519 会话密钥推导、签名加密
 Remote Command、Host Ack/Cursor、Relay publish/pull/ack、独立 Remote Target 注册/心跳/Workspace Lease，
