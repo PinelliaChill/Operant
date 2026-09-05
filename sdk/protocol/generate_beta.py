@@ -49,9 +49,9 @@ def _document() -> dict[str, Any]:
         if operations:
             selected[path] = operations
     selected["/v1/protocol/beta"]["get"]["operationId"] = "negotiateProtocol"
-    selected["/v1/protocol/beta"]["get"]["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"] = {"$ref": "#/components/schemas/ProtocolNegotiation"}
+    selected["/v1/protocol/beta"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] = {"$ref": "#/components/schemas/ProtocolNegotiation"}
     for path_item in selected.values():
         for method, operation in path_item.items():
             if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -182,7 +182,7 @@ def generate() -> str:
 def _python_package_init() -> str:
     source = base._python_package_init()
     source = source.replace(
-        "from .transport import Phase23Error\n",
+        "from .phase1e_generated import (\n",
         "from .beta_generated import (\n"
         "    BETA_MAX_CURSOR,\n"
         "    BETA_PROTOCOL_VERSION,\n"
@@ -192,7 +192,7 @@ def _python_package_init() -> str:
         "from .beta_generated import (\n"
         "    ProtocolNegotiationError as BetaProtocolNegotiationError,\n"
         ")\n"
-        "from .transport import Phase23Error\n",
+        "from .phase1e_generated import (\n",
         1,
     )
     source = source.replace(

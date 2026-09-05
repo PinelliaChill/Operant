@@ -559,6 +559,7 @@ class SQLiteRemoteGatewayConnectionRepository:
         ).fetchone()
         if row is None or row["owner_id"] != self.owner_id or row["status"] != "connected":
             raise GraphConflictError("Gateway connection is missing, closed, or fenced")
+        assert isinstance(row, sqlite3.Row)
         return row
 
     @staticmethod

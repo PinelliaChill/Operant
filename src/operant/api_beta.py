@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from operant.application.graph import GraphConflictError
 from operant.application.phase45_gateway import Phase45ActionGateway
-from operant.domain.multiwriter import WriterIsolationKind, WriterLease
+from operant.domain.multiwriter import WriterIsolationKind, WriterLease, WriterWorkspace
 from operant.domain.security import Capability
 from operant.mcp import GatewayDecision, McpError
 from operant.multiwriter.container import (
@@ -162,7 +162,7 @@ def install_beta_container_routes(
             )
         return lifecycle
 
-    def workspace(workspace_id: str):
+    def workspace(workspace_id: str) -> WriterWorkspace:
         current = writer_repository.get_workspace(workspace_id)
         if current.isolation_kind is not WriterIsolationKind.CONTAINER:
             raise GraphConflictError("writer workspace is not container-isolated")

@@ -328,8 +328,8 @@ class OAuthControl:
                 if token is not None:
                     revocation_tokens.append(token.encode("utf-8"))
         try:
-            for token in revocation_tokens:
-                await self._revoke(token.decode("utf-8"))
+            for revocation_token in revocation_tokens:
+                await self._revoke(revocation_token.decode("utf-8"))
         finally:
             revocation_tokens.clear()
             self._clear_tokens(session)
