@@ -1426,6 +1426,20 @@ def _python_package_init() -> str:
 
     source = _python_package_init_before_phase56()
     source = source.replace(
+        "from .phase1e_generated import (\n",
+        "from .beta_generated import (\n"
+        "    BETA_MAX_CURSOR,\n"
+        "    BETA_PROTOCOL_VERSION,\n"
+        "    BETA_SCHEMA_DIGEST,\n"
+        "    BetaClient,\n"
+        ")\n"
+        "from .beta_generated import (\n"
+        "    ProtocolNegotiationError as BetaProtocolNegotiationError,\n"
+        ")\n"
+        "from .phase1e_generated import (\n",
+        1,
+    )
+    source = source.replace(
         "from .transport import Phase23Error\n",
         "from .phase56_generated import (\n"
         "    PHASE56_MAX_CURSOR,\n"
@@ -1444,14 +1458,19 @@ def _python_package_init() -> str:
         '    "PHASE45_SCHEMA_DIGEST",\n'
         '    "PHASE56_MAX_CURSOR",\n'
         '    "PHASE56_PROTOCOL_VERSION",\n'
-        '    "PHASE56_SCHEMA_DIGEST",\n',
+        '    "PHASE56_SCHEMA_DIGEST",\n'
+        '    "BETA_MAX_CURSOR",\n'
+        '    "BETA_PROTOCOL_VERSION",\n'
+        '    "BETA_SCHEMA_DIGEST",\n',
         1,
     )
     return source.replace(
         '    "Phase45ProtocolNegotiationError",\n',
         '    "Phase45ProtocolNegotiationError",\n'
         '    "Phase56Client",\n'
-        '    "Phase56ProtocolNegotiationError",\n',
+        '    "Phase56ProtocolNegotiationError",\n'
+        '    "BetaClient",\n'
+        '    "BetaProtocolNegotiationError",\n',
         1,
     )
 

@@ -166,7 +166,7 @@ def generate() -> str:
         base._write_if_changed(
             PY_PATH, _python_aliases(python_source, base._operation_specs(document))
         )
-        base._write_if_changed(base.PY_INIT_PATH, _python_package_init())
+        base._write_if_changed(base.PY_INIT_PATH, base._python_package_init())
         return digest
     finally:
         (
@@ -177,39 +177,6 @@ def generate() -> str:
             base.PROTOCOL_VERSION,
             base.EXPECTED_OPERATION_IDS,
         ) = previous
-
-
-def _python_package_init() -> str:
-    source = base._python_package_init()
-    source = source.replace(
-        "from .phase1e_generated import (\n",
-        "from .beta_generated import (\n"
-        "    BETA_MAX_CURSOR,\n"
-        "    BETA_PROTOCOL_VERSION,\n"
-        "    BETA_SCHEMA_DIGEST,\n"
-        "    BetaClient,\n"
-        ")\n"
-        "from .beta_generated import (\n"
-        "    ProtocolNegotiationError as BetaProtocolNegotiationError,\n"
-        ")\n"
-        "from .phase1e_generated import (\n",
-        1,
-    )
-    source = source.replace(
-        '    "PHASE56_SCHEMA_DIGEST",\n',
-        '    "PHASE56_SCHEMA_DIGEST",\n'
-        '    "BETA_MAX_CURSOR",\n'
-        '    "BETA_PROTOCOL_VERSION",\n'
-        '    "BETA_SCHEMA_DIGEST",\n',
-        1,
-    )
-    return source.replace(
-        '    "Phase56ProtocolNegotiationError",\n',
-        '    "Phase56ProtocolNegotiationError",\n'
-        '    "BetaClient",\n'
-        '    "BetaProtocolNegotiationError",\n',
-        1,
-    )
 
 
 if __name__ == "__main__":

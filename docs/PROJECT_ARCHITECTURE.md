@@ -2113,9 +2113,16 @@ npm run typecheck --prefix clients/gui
 npm run build --prefix clients/gui
 ```
 
-本次最终门禁为 656 项 pytest 通过、1 个条件性 Docker 测试跳过、1 个既有 Starlette 警告，GUI
-75 项测试全部通过；Ruff format/check、mypy、`uv lock --check --offline`、`git diff --check`、GUI
-typecheck/build 均通过。条件性 skip 不算容器验收；Vite 生产主 chunk 为 963.95 kB，继续作为性能债务。
+2026-09-05 的 Beta/RC 最终门禁为 709 项 pytest 通过、1 个条件性 Docker 测试跳过、1 个既有
+Starlette 警告，GUI 79 项、TUI 9 项与 Tauri Rust 1 项测试通过；Ruff format/check、mypy、
+`uv lock --check --offline`、`git diff --check`、GUI typecheck/build 均通过。Vite 路由与依赖分块后最大
+chunk 为 287.96 kB，低于 500 kB 候选预算。条件性 skip 不算 Container Writer 运行验收；实际
+Container 生命周期仍依赖部署环境中的 digest-pinned image。
+
+同日使用本地自签名证书、实际 TLS Core 和 `websockets` Client 完成 WSS hello、ping、cursor sync
+及持久化关闭投影；真实 macOS Tauri `.app`/WebView 在固定 Origin CORS 预检后连接 loopback Core，
+协议与 Projection Query 均返回 200。该候选仍未签名、不生成 DMG，也不代表公网、浏览器矩阵、
+代码签名、公证或自动更新验收。
 
 2026-09-04 的 Phase 5B/6 验收使用隔离 v13 SQLite、实际 localhost Uvicorn 和生成 Python
 `Phase56Client`，完整跑通 Host 显式启用、一次性配对、设备侧 X25519 会话密钥推导、签名加密

@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from sdk.protocol.generate_beta import EXPECTED_OPERATION_IDS, generate
+from sdk.protocol.generate_phase1e import generate as generate_phase1e
+from sdk.protocol.generate_phase23 import generate as generate_phase23
+from sdk.protocol.generate_phase45 import generate as generate_phase45
+from sdk.protocol.generate_phase56 import generate as generate_phase56
 from sdk.python_client import BETA_PROTOCOL_VERSION, BETA_SCHEMA_DIGEST, BetaClient
 from sdk.python_client.transport import TransportRequest, TransportResponse
 
@@ -54,6 +58,8 @@ def test_beta_schema_and_clients_are_reproducible_and_additive() -> None:
     }
     first = generate()
     second = generate()
+    for regenerate in (generate_phase1e, generate_phase23, generate_phase45, generate_phase56):
+        regenerate()
     after = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in before}
 
     assert before == after
