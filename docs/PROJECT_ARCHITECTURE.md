@@ -2124,6 +2124,12 @@ Container 生命周期仍依赖部署环境中的 digest-pinned image。
 协议与 Projection Query 均返回 200。该候选仍未签名、不生成 DMG，也不代表公网、浏览器矩阵、
 代码签名、公证或自动更新验收。
 
+正式 `operant model discover` 发现并选用精确模型 ID `gpt-5.6-luna`，通过正式 ModelProfile 与只读
+Session 精确返回 `BETA_RC_REAL_MODEL_OK`；用量为 538 input + 10 output tokens，请求耗时 4.426 秒，
+0 个 Tool Call，隔离 workspace 无写入，SQLite 只保存 `secret_ref=OPERANT_API_KEY`。Python wheel、
+sdist 与 TUI wheel 另在全新 Python 3.14 环境完成安装和 CLI/生成 Beta Client import smoke；SPDX SBOM
+覆盖 29 个锁定运行时包。该模型 smoke 不等于真实模型控制桌面、真实 Container Writer 或公网链路验收。
+
 2026-09-04 的 Phase 5B/6 验收使用隔离 v13 SQLite、实际 localhost Uvicorn 和生成 Python
 `Phase56Client`，完整跑通 Host 显式启用、一次性配对、设备侧 X25519 会话密钥推导、签名加密
 Remote Command、Host Ack/Cursor、Relay publish/pull/ack、独立 Remote Target 注册/心跳/Workspace Lease，
