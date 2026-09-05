@@ -2116,19 +2116,31 @@ npm run build --prefix clients/gui
 2026-09-05 的 Beta/RC 最终门禁为 709 项 pytest 通过、1 个条件性 Docker 测试跳过、1 个既有
 Starlette 警告，GUI 79 项、TUI 9 项与 Tauri Rust 1 项测试通过；Ruff format/check、mypy、
 `uv lock --check --offline`、`git diff --check`、GUI typecheck/build 均通过。Vite 路由与依赖分块后最大
-chunk 为 287.96 kB，低于 500 kB 候选预算。条件性 skip 不算 Container Writer 运行验收；实际
-Container 生命周期仍依赖部署环境中的 digest-pinned image。
+chunk 为 287.96 kB，低于 500 kB 候选预算。条件性测试仍不能单独算作运行验收，但同日另以实际
+Docker 29.7.2 和本地已有的 digest-pinned `python:3.13-slim` 镜像完成 Container Writer
+create/start/inspect/stop/remove/absent 生命周期；容器按宿主 `501:20` 运行，保留 `network=none`、
+只读 rootfs、`cap-drop=ALL`、`no-new-privileges`、CPU/内存/PID 上限与唯一可写 workspace mount。
+真实验收发现 Docker 29 的 not-found stderr 使用小写文本，修正为大小写无关识别并加入原样回归。
 
-同日使用本地自签名证书、实际 TLS Core 和 `websockets` Client 完成 WSS hello、ping、cursor sync
-及持久化关闭投影；真实 macOS Tauri `.app`/WebView 在固定 Origin CORS 预检后连接 loopback Core，
-协议与 Projection Query 均返回 200。该候选仍未签名、不生成 DMG，也不代表公网、浏览器矩阵、
-代码签名、公证或自动更新验收。
+同日使用仅限 loopback 的临时自签名证书、实际 TLS Core 和 `websockets` Client 完成 WSS hello、
+ping、cursor sync 及持久化关闭投影。另以两个真实本机 HTTPS Server 完成 Target execute/cancel 与
+Ed25519 响应验签，以及加密 Relay Envelope、签名 Host Command、Action Gateway Receipt 和
+“Host completed Receipt 后才 Relay Ack”的边界。OAuth 使用独立本机 HTTPS IdP 验证完整重定向、
+PKCE S256、RS256 ID Token/JWKS、Secure+HttpOnly Cookie、受保护 API、logout 双 Token revocation
+和退出后重新 401；Token 只在进程内存出现，SQLite 未落盘。该 OAuth 证据不等于外部 IdP 联调。
+
+生产 PWA build 在实际 Chromium 中注册有效 Service Worker/manifest，live 模式连接真实 Core；
+1440×900 与 390×844 均完成视觉/可访问树核对，390px 无水平溢出。真实 Textual TUI 完成协议与 Schema
+digest 协商；真实 macOS Tauri `.app`/WebView 以 `tauri://localhost#/chat` 冷启动并连接 loopback Core，
+Core/协议/Projection Query 均正常。该候选仍未签名、不生成 DMG，也不代表公网、浏览器矩阵、代码签名、
+公证或自动更新验收。
 
 正式 `operant model discover` 发现并选用精确模型 ID `gpt-5.6-luna`，通过正式 ModelProfile 与只读
-Session 精确返回 `BETA_RC_REAL_MODEL_OK`；用量为 538 input + 10 output tokens，请求耗时 4.426 秒，
-0 个 Tool Call，隔离 workspace 无写入，SQLite 只保存 `secret_ref=OPERANT_API_KEY`。Python wheel、
-sdist 与 TUI wheel 另在全新 Python 3.14 环境完成安装和 CLI/生成 Beta Client import smoke；SPDX SBOM
-覆盖 29 个锁定运行时包。该模型 smoke 不等于真实模型控制桌面、真实 Container Writer 或公网链路验收。
+Session 精确返回 `BETA_RC_REAL_ACCEPTANCE_20260905_OK`；用量为 543 input + 15 output tokens，请求耗时
+4.143 秒，0 个 Tool Call，隔离 workspace 无写入，SQLite 只保存 `secret_ref=OPERANT_API_KEY` 且未出现
+API Key。Python wheel、sdist 与 TUI wheel 另在全新 Python 环境完成安装和 CLI/生成 Beta Client import
+smoke；SPDX SBOM 与 SHA256 manifest 从冻结 lock 生成并复核。该模型 smoke 与 Container 生命周期是
+两份独立证据，不等于真实模型控制桌面、真实模型加 Docker Coder 或公网链路验收。
 
 2026-09-04 的 Phase 5B/6 验收使用隔离 v13 SQLite、实际 localhost Uvicorn 和生成 Python
 `Phase56Client`，完整跑通 Host 显式启用、一次性配对、设备侧 X25519 会话密钥推导、签名加密

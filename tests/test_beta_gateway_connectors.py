@@ -416,7 +416,12 @@ def test_container_writer_create_is_digest_pinned_and_bounded(tmp_path: Path) ->
     root.mkdir()
     runner = _DockerRunner(
         [
-            subprocess.CompletedProcess(("docker", "inspect"), 1, "", "No such object"),
+            subprocess.CompletedProcess(
+                ("docker", "inspect"),
+                1,
+                "[]\n",
+                "error: no such object: operant-writer-writer-workspace-1\n",
+            ),
             subprocess.CompletedProcess(("docker", "create"), 0, "container-id", ""),
         ]
     )

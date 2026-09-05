@@ -290,7 +290,8 @@ class ContainerWriterLifecycle:
         if result.returncode != 0:
             # Docker uses non-zero for not-found, but other daemon errors are
             # not safely distinguishable unless the structured object exists.
-            if "No such object" in result.stderr or "No such container" in result.stderr:
+            stderr = result.stderr.lower()
+            if "no such object" in stderr or "no such container" in stderr:
                 return ContainerLifecycleStatus.ABSENT
             raise ContainerOutcomeUnknown("unable to inspect Container Writer")
         try:
