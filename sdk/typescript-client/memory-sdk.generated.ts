@@ -1,6 +1,6 @@
 // Generated offline interfaces. No runtime transport. DO NOT EDIT.
 export const CONTRACT_VERSION = "operant-memory-sdk.v1" as const;
-export const SCHEMA_DIGEST = "8e73042e644d3cac8cc36244d97f3fcd6f466d45a6f17ea29cc03a45ca0b9b15" as const;
+export const SCHEMA_DIGEST = "eb71eefe97998fa17e3b9d1d538f030c3be569e14ce312d2e26259566fe0f894" as const;
 
 export interface AgentBinding {
   role_preset_id: string;
@@ -366,11 +366,23 @@ export interface PluginManifest {
 
 export interface PrivateIndexRequest {
   context: RpcContext;
-  resource: Resource;
+  resource: PrivateIndexResource;
   operation: "read" | "replace" | "delete";
   expected_revision: number;
   content_digest: string | null;
   payload: string | null;
+}
+
+export interface PrivateIndexResource {
+  resource_id: string;
+  owner: DatasetOwner;
+  installation_id: string;
+  storage: "core_rows" | "managed_directory";
+  category: "index";
+  locator_ref: string;
+  consumer_ids: Array<string>;
+  retention_lock_ids: Array<string>;
+  reconstructible: boolean;
 }
 
 export interface PrivateIndexResult {

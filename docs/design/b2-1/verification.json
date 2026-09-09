@@ -31,5 +31,20 @@
   "ruff_check": "passed",
   "mypy": "passed (92 source files)",
   "uv_lock_offline": "passed",
-  "tauri_runtime": "not_verified"
+  "tauri_runtime": "not_verified",
+  "review_fix": {
+    "contract_benchmark_passed": 25,
+    "gui_tests_passed": 82,
+    "gui_build": "passed",
+    "ruff_format": "passed",
+    "ruff_check": "passed",
+    "mypy": "passed",
+    "browser_route_integration": "passed; not Tauri",
+    "new_contract_cases": 5,
+    "cases": [
+      "Live #/session redirects to #/chat without .live-unavailable-state",
+      "Live #/remote redirects to #/settings?cat=system without unavailable state, including reopening the deep link",
+      "Live #/collab/wf-b2-review/canvas remains blocked"
+    ]
+  }
 }

@@ -43,6 +43,7 @@ Task action 的 availability/reason/revision 是服务端裁决的消费面，�
   scope、deadline、cancel token、request digest、幂等键、binding/permission epoch 与 lease fencing。
 - Host API：有权来源读取、有限搜索、指定 ModelProfile 代理、登记资源的私有索引访问。
   不传 SQLite Connection、ApplicationService、任意文件/SQL 或整套环境变量。配置仅引用 secret_ref。
+- PrivateIndex 只接受当前安装/数据集的 index 资源；read/delete 禁止 payload/digest，replace 必须携带二者且 SHA-256 与 UTF-8 payload 一致。所有操作显式带 expected_revision，真实 CAS 留给 Host 事务执行。
 - deadline/cancel 后不接收迟到提交；幂等键与请求摘要绑定，重复同请求回读原结果，异请求明确冲突。
   checkpoint 不能裁决 Workflow 恢复或未知副作用；未知结果先 Query/人工核对，不自动重放。
 - 未认证插件必须有实际文件/网络/资源隔离证据。隔离不可用返回 isolation_unavailable，不能降级进程内。
@@ -56,7 +57,7 @@ Task action 的 availability/reason/revision 是服务端裁决的消费面，�
 UninstallRequest 必须一次携带 keep/delete、inventory revision、binding epoch、幂等键及明确 stop_run_ids。
 Resource 同时表示 Core 托管行、专属目录、共享依赖、外部资源，以及消费者/锁/可重建性。
 清理对每项返回 pending/deleted/retained/blocked/external_unconfirmed，保留 cursor 和 inventory revision，
-重启幂等续做。目录 identity 改变必须阻断，不能按名字扫描 Home。无法表达的资源不允许进入清理计划。
+重启幂等续做。enabled/disabled/uninstalled 必须配 completed，且 completed 不允许 pending/blocked/external_unconfirmed 清理项；这些关系同时写入 JSON Schema 与 Pydantic 校验。目录 identity 改变必须阻断，不能按名字扫描 Home。无法表达的资源不允许进入清理计划。
 
 - keep：保留数据集及不可重建状态，解除安装绑定，数据管理仍有入口；非数据安装资源按盘点清理。
 - delete：删除专属数据库行和目录；共享消费者、保留锁、活动 Run 明确阻断，不称完整删除。

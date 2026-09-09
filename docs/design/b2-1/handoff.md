@@ -33,3 +33,13 @@
 - 两线代码已完成并集成，将新建独立 gpt-5.6-luna/max Reviewer；工具没有 Fast 开关，须如实说明。
 - 本批只有契约与基线，不提供 PluginHost 执行、数据库升级或新 FTS；运行 Core 与桌面产物不因新接口文件而更新。
 - 不推送、合并或部署。后续进入 MP-1 必须由本批门禁和用户下一步安排决定。
+
+## Reviewer 返工（待同一 Reviewer 增量复核）
+
+首轮报告：`/private/tmp/operant-b2-1-review.md`。已修复两个 P1：正式旧别名通过门禁；
+生命周期 completed 与未完成清理互斥。PrivateIndex 的操作/载荷/hash/所属安装边界也已校验。
+评测改为 fixture_load、bootstrap、first_query 分开测量；service_query_calls 不再冒充 SQL 次数，RSS 不可策略间比较。
+
+新增五项契约用例，受影响契约/评测合计 25 passed，GUI 82 passed/build，Ruff/mypy 通过。
+[实际浏览器组合验证](browser-route-evidence.md) 覆盖两条别名与仍应阻断的画布；不代替 Tauri。
+本次不重复未改变的 Core 全套检查，原分段记录保持原义。

@@ -47,7 +47,7 @@ STRATEGIES = (STRATEGY_NO_MEMORY, STRATEGY_DIRECT, STRATEGY_RECENT)
 # They do not mix task-algorithm quality with Host overhead.
 TASK_PERFORMANCE_GATES: Mapping[str, float] = {
     "warm_wall_p95_max_regression_ratio": 1.25,
-    "cold_wall_max_regression_ratio": 1.50,
+    "first_query_wall_max_regression_ratio": 1.50,
     "warm_cpu_p95_max_regression_ratio": 1.25,
     "warm_peak_alloc_p95_max_regression_ratio": 1.50,
     "absolute_wall_slack_ms": 2.0,
@@ -60,13 +60,15 @@ TASK_PERFORMANCE_GATES: Mapping[str, float] = {
 HOST_PERFORMANCE_GATES: Mapping[str, Mapping[str, float]] = {
     "future_host_in_process": {
         "warm_wall_p95_max_regression_ratio": 1.25,
-        "cold_wall_max_regression_ratio": 1.50,
+        "bootstrap_wall_max_regression_ratio": 1.50,
+        "first_query_wall_max_regression_ratio": 1.50,
         "warm_cpu_p95_max_regression_ratio": 1.25,
         "warm_peak_alloc_p95_max_regression_ratio": 1.50,
     },
     "future_host_isolated": {
         "warm_wall_p95_max_regression_ratio": 2.00,
-        "cold_wall_max_regression_ratio": 3.00,
+        "bootstrap_wall_max_regression_ratio": 3.00,
+        "first_query_wall_max_regression_ratio": 3.00,
         "warm_cpu_p95_max_regression_ratio": 2.00,
         "warm_peak_alloc_p95_max_regression_ratio": 2.00,
     },
@@ -439,9 +441,11 @@ def _run_strategy(
     service: ApplicationService | None = None
     session_id = ""
     snapshot: RoleSnapshot | None = None
+    bootstrap_started = time.perf_counter_ns()
     if strategy != STRATEGY_NO_MEMORY:
         db_path = temp_root / f"{strategy}.sqlite3"
         service, session_id, snapshot = _build_service(db_path, fixture)
+    bootstrap_ms = (time.perf_counter_ns() - bootstrap_started) / 1_000_000.0
     samples: list[Sample] = []
     case_records: list[dict[str, Any]] = []
     try:
@@ -507,7 +511,7 @@ def _run_strategy(
     finally:
         if service is not None:
             service.close()
-    cold = samples[0]
+    first_query = samples[0]
     warm = samples[1:] or samples
     quality_by_split = {
         split: _quality_summary([record for record in case_records if record["split"] == split])
@@ -529,7 +533,16 @@ def _run_strategy(
             **quality_by_split,
         },
         "timing": {
-            "cold_ms": round(cold.wall_ms, 4),
+            "bootstrap_ms": round(bootstrap_ms, 4),
+            "bootstrap_scope": (
+                "no_service_or_sqlite"
+                if strategy == STRATEGY_NO_MEMORY
+                else (
+                    "Service construction, SQLite initialize/migrations, role/session, "
+                    "fixture writes; not process startup"
+                )
+            ),
+            "first_query_ms": round(first_query.wall_ms, 4),
             "wall_p50_ms": _percentile((sample.wall_ms for sample in samples), 0.50),
             "wall_p95_ms": _percentile((sample.wall_ms for sample in samples), 0.95),
             "warm_wall_p50_ms": _percentile((sample.wall_ms for sample in warm), 0.50),
@@ -543,6 +556,7 @@ def _run_strategy(
                 (sample.peak_alloc_kib for sample in warm), 0.95
             ),
             "rss_high_water_kib": _rss_high_water_kib(),
+            "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
             "sample_count": len(samples),
             "repetitions_per_case": repetitions,
         },
@@ -550,12 +564,16 @@ def _run_strategy(
             "model_calls": 0,
             "model_usage": "unknown",
             "token_cost_usd": "unknown",
-            "sqlite_query_calls": 0 if strategy == STRATEGY_NO_MEMORY else len(samples),
+            "service_query_calls": 0 if strategy == STRATEGY_NO_MEMORY else len(samples),
+            "sqlite_sql_calls": "unknown",
             "host_rpc_calls": 0,
             "notes": (
                 "No retrieval or storage path was invoked."
                 if strategy == STRATEGY_NO_MEMORY
-                else "Local SQLite/service cost only; no provider or Host path was invoked."
+                else (
+                    "Service query-call count only; actual SQLite SQL statement count is "
+                    "unknown; no provider or Host path was invoked."
+                )
             ),
         },
     }
@@ -570,7 +588,9 @@ def run_benchmark(
 
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
+    fixture_load_started = time.perf_counter_ns()
     fixture = load_fixture(fixture_path)
+    fixture_load_ms = (time.perf_counter_ns() - fixture_load_started) / 1_000_000.0
     with tempfile.TemporaryDirectory(prefix="operant-b2-1-memory-") as temp_dir:
         temp_root = Path(temp_dir)
         results = {
@@ -613,6 +633,9 @@ def run_benchmark(
             "strategies": list(STRATEGIES),
             "repetitions": repetitions,
             "database": "temporary isolated SQLite per strategy; no_memory bypasses store",
+            "fixture_load_ms": round(fixture_load_ms, 4),
+            "process_startup_measured": False,
+            "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
             "user_database_read": False,
             "environment_file_read": False,
             "network": False,

@@ -70,6 +70,11 @@ def test_b2_1_benchmark_uses_isolated_old_paths_and_no_model(tmp_path: Path) -> 
     assert report["run"]["environment_file_read"] is False
     assert report["run"]["model_calls"] == 0
     assert report["run"]["model_usage"] == "unknown"
+    assert report["run"]["process_startup_measured"] is False
+    assert report["run"]["fixture_load_ms"] >= 0
+    assert report["run"]["rss_scope"] == (
+        "whole_process_high_water_non_comparable_across_sequential_strategies"
+    )
     actual_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"],
         cwd=Path(__file__).resolve().parents[1],
@@ -97,14 +102,23 @@ def test_b2_1_benchmark_uses_isolated_old_paths_and_no_model(tmp_path: Path) -> 
     assert report["safety"]["passed"] is True
     assert report["safety"]["violations"] == {}
     no_memory = report["strategies"][STRATEGY_NO_MEMORY]
-    assert no_memory["cost"]["sqlite_query_calls"] == 0
+    assert no_memory["cost"]["service_query_calls"] == 0
+    assert no_memory["cost"]["sqlite_sql_calls"] == "unknown"
     assert all(not record["returned_ids"] for record in no_memory["cases"])
-    for strategy in (STRATEGY_DIRECT, STRATEGY_RECENT):
+    for strategy in (STRATEGY_NO_MEMORY, STRATEGY_DIRECT, STRATEGY_RECENT):
         result = report["strategies"][strategy]
         assert result["cost"]["model_calls"] == 0
         assert result["cost"]["model_usage"] == "unknown"
+        assert result["timing"]["bootstrap_ms"] >= 0
+        assert result["timing"]["first_query_ms"] >= 0
+        assert result["timing"]["rss_scope"] == (
+            "whole_process_high_water_non_comparable_across_sequential_strategies"
+        )
+    for strategy in (STRATEGY_DIRECT, STRATEGY_RECENT):
+        result = report["strategies"][strategy]
+        assert result["cost"]["service_query_calls"] == 84
+        assert result["cost"]["sqlite_sql_calls"] == "unknown"
         assert result["timing"]["sample_count"] == 84
-        assert result["timing"]["cold_ms"] >= 0
         assert result["timing"]["warm_wall_p95_ms"] >= result["timing"]["warm_wall_p50_ms"]
         assert result["timing"]["warm_cpu_p95_ms"] >= result["timing"]["warm_cpu_p50_ms"]
         assert (
@@ -115,7 +129,7 @@ def test_b2_1_benchmark_uses_isolated_old_paths_and_no_model(tmp_path: Path) -> 
 
 def test_b2_1_hard_gate_and_performance_tolerances_are_frozen() -> None:
     assert TASK_PERFORMANCE_GATES["warm_wall_p95_max_regression_ratio"] == 1.25
-    assert TASK_PERFORMANCE_GATES["cold_wall_max_regression_ratio"] == 1.50
+    assert TASK_PERFORMANCE_GATES["first_query_wall_max_regression_ratio"] == 1.50
     assert TASK_PERFORMANCE_GATES["warm_cpu_p95_max_regression_ratio"] == 1.25
     assert TASK_PERFORMANCE_GATES["warm_peak_alloc_p95_max_regression_ratio"] == 1.50
     assert (
@@ -123,7 +137,12 @@ def test_b2_1_hard_gate_and_performance_tolerances_are_frozen() -> None:
         == 1.25
     )
     assert (
-        HOST_PERFORMANCE_GATES["future_host_isolated"]["warm_wall_p95_max_regression_ratio"] == 2.00
+        HOST_PERFORMANCE_GATES["future_host_in_process"]["bootstrap_wall_max_regression_ratio"]
+        == 1.50
+    )
+    assert (
+        HOST_PERFORMANCE_GATES["future_host_isolated"]["bootstrap_wall_max_regression_ratio"]
+        == 3.00
     )
 
     report = run_benchmark(repetitions=1)

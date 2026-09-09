@@ -22,6 +22,12 @@ export function resolveLiveRouteSupport(pathname: string): LiveRouteSupportResul
   const segments = normalized.split('/').filter(Boolean);
   const primary = segments[0] || 'chat';
 
+  // These exact legacy aliases redirect to supported Live pages in routes.tsx.
+  // Permit the Outlet to mount Navigate; do not admit arbitrary nested aliases.
+  if (segments.length === 1 && (primary === 'remote' || primary === 'session')) {
+    return { isSupported: true, unavailableSection: primary };
+  }
+
   // 嵌套路由检查：/collab/:wfId/canvas 是 Demo 独有的画布预览，Live 协作图使用统一的 LiveGraphTeamView
   if (primary === 'collab' && segments.length > 1 && segments[segments.length - 1] === 'canvas') {
     return { isSupported: false, unavailableSection: 'collab_canvas' };

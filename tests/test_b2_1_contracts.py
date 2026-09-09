@@ -97,6 +97,74 @@ def test_uninstall_requires_explicit_policy_and_inventory_and_has_bounded_cleanu
     assert receipt.state == "blocked"
 
 
+@pytest.mark.parametrize("outcome", ["pending", "blocked", "external_unconfirmed"])
+def test_lifecycle_cannot_complete_with_unfinished_cleanup(outcome: str) -> None:
+    receipt = copy.deepcopy(fixtures()["LifecycleReceipt"][0])
+    receipt.update(state="uninstalled", ack="completed")
+    receipt["cleanup"] = [
+        {
+            "resource_id": "resource-a",
+            "outcome": outcome,
+            "reason": "retry_required",
+            "blocker_ids": [],
+        }
+    ]
+    with pytest.raises(ValidationError, match="cleanup_blocked"):
+        c.LifecycleReceipt.model_validate(receipt)
+
+
+def test_lifecycle_acceptance_is_distinct_from_terminal_success() -> None:
+    receipt = {**fixtures()["LifecycleReceipt"][0], "cleanup": []}
+    for state in ("disabled", "uninstalled", "enabled"):
+        with pytest.raises(ValidationError):
+            c.LifecycleReceipt.model_validate({**receipt, "state": state, "ack": "host_accepted"})
+        assert (
+            c.LifecycleReceipt.model_validate({**receipt, "state": state, "ack": "completed"}).ack
+            == "completed"
+        )
+    with pytest.raises(ValidationError):
+        c.LifecycleReceipt.model_validate({**receipt, "state": "uninstalling", "ack": "completed"})
+
+
+def test_private_index_payload_and_owner_are_explicit() -> None:
+    request: dict[str, Any] = {
+        "context": fixtures()["RpcContext"][0],
+        "resource": {
+            "resource_id": "index-a",
+            "owner": fixtures()["DatasetOwner"][0],
+            "installation_id": "install-a",
+            "storage": "managed_directory",
+            "category": "index",
+            "locator_ref": "index-space-a",
+            "consumer_ids": [],
+            "retention_lock_ids": [],
+            "reconstructible": True,
+        },
+        "operation": "read",
+        "expected_revision": 2,
+        "content_digest": None,
+        "payload": None,
+    }
+    assert c.PrivateIndexRequest.model_validate(request).operation == "read"
+    assert c.PrivateIndexRequest.model_validate({**request, "operation": "delete"})
+    content = "合成索引"
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    assert c.PrivateIndexRequest.model_validate(
+        {**request, "operation": "replace", "payload": content, "content_digest": digest}
+    )
+    invalid = [
+        {**request, "operation": "replace"},
+        {**request, "operation": "replace", "payload": content, "content_digest": "a" * 64},
+        {**request, "payload": content},
+        {**request, "operation": "delete", "content_digest": digest},
+        {**request, "resource": {**request["resource"], "installation_id": "foreign"}},
+        {**request, "resource": {**request["resource"], "category": "package"}},
+    ]
+    for value in invalid:
+        with pytest.raises(ValidationError):
+            c.PrivateIndexRequest.model_validate(value)
+
+
 def test_current_admission_evidence_is_required_in_both_modes() -> None:
     eligible = fixtures()["HostAdmission"][0]
     with pytest.raises(ValidationError, match="certification_invalid"):

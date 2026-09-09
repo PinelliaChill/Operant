@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any, Literal, Protocol
 from typing_extensions import NotRequired, TypedDict
 CONTRACT_VERSION = 'operant-memory-sdk.v1'
-SCHEMA_DIGEST = '8e73042e644d3cac8cc36244d97f3fcd6f466d45a6f17ea29cc03a45ca0b9b15'
+SCHEMA_DIGEST = 'eb71eefe97998fa17e3b9d1d538f030c3be569e14ce312d2e26259566fe0f894'
 
 class AgentBinding(TypedDict):
     role_preset_id: str
@@ -335,11 +335,22 @@ class PluginManifest(TypedDict):
 
 class PrivateIndexRequest(TypedDict):
     context: RpcContext
-    resource: Resource
+    resource: PrivateIndexResource
     operation: Literal['read', 'replace', 'delete']
     expected_revision: int
     content_digest: str | None
     payload: str | None
+
+class PrivateIndexResource(TypedDict):
+    resource_id: str
+    owner: DatasetOwner
+    installation_id: str
+    storage: Literal['core_rows', 'managed_directory']
+    category: Literal['index']
+    locator_ref: str
+    consumer_ids: list[str]
+    retention_lock_ids: list[str]
+    reconstructible: bool
 
 class PrivateIndexResult(TypedDict):
     resource_id: str

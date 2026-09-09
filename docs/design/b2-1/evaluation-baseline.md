@@ -2,7 +2,7 @@
 
 状态：已准备合成基线与可复跑脚本；这是旧 Memory 行为/性能记录，不是新插件、Host 或新 FTS 的实现验收。
 
-本报告和脚本在 A 实施 worktree `/private/tmp/operant-b2-1-a`、基线 HEAD `ecb00437e9a44a5e79d54e8cf4944fd0d456bf02` 上核对。脚本报告会写入实际 `worktree`、运行时 `source_root`、固定 `base_head`、运行时 Git `head`、fixture 绝对路径和 `--output` 绝对路径；这些路径字段用于确认没有读写治理根旧副本。
+本报告和脚本在 A 实施 worktree `/private/tmp/operant-b2-1-a` 上核对；固定基线 HEAD 为 `ecb00437e9a44a5e79d54e8cf4944fd0d456bf02`，本次集成运行 HEAD 为 `03cd4b040be56dc6625ceae76adf7d2c4236aab1`。脚本报告会写入实际 `worktree`、运行时 `source_root`、固定 `base_head`、运行时 Git `head`、fixture 绝对路径和 `--output` 绝对路径；这些路径字段用于确认没有读写治理根旧副本。
 
 ## 数据和边界
 
@@ -20,13 +20,13 @@
 - `old_direct_query` 调用 `ApplicationService.query_memories(case.query, ...)`，落到当前 `SQLiteStore.search_memories()`/已有 FTS5，记录案例返回 ID、相关性和安全边界。
 - `old_recent_entries` 调用同一入口但使用空查询 `query=""`，对应当前 `SequentialCodingWorkflow._memory_context()` 的最近项目条目策略（`limit=5`）。它用于记录“最近条目”对任务相关性的代价，不代表新召回算法。
 
-脚本没有实现 Host、插件 RPC、向量索引或新的 FTS；同一 fixture 和权限快照分别运行三条基线。每条样本记录 wall time、进程 CPU 和 Python 峰值分配；报告额外记录进程 RSS high-water、冷启动首样本、warm p50/p95、案例结果和本地 SQLite 查询次数。`ru_maxrss` 的平台单位转换和测量限制由报告说明。
+脚本没有实现 Host、插件 RPC、向量索引或新的 FTS；同一 fixture 和权限快照分别运行三条基线。每条样本记录 wall time、进程 CPU 和 Python 峰值分配；报告额外记录 fixture load、bootstrap、首查询 `first_query_ms`、warm p50/p95、案例结果和 `service_query_calls`。`bootstrap_ms` 包含 Service 构建、临时 SQLite 初始化/迁移、角色/会话和 fixture 写入，不包含进程启动；`ru_maxrss` 只记录整次顺序运行的进程 high-water，策略间不可比较。
 
 ## 冻结门槛
 
 安全门是硬门：每个策略、每个案例的 `forbidden_hits` 必须为零。禁止返回跨项目、角色受限、candidate、inactive/已撤销或压缩污染条目；出现一例就阻断后续候选交付。
 
-非安全性能门分开冻结：任务检索候选若复用同一直接算法，以 `old_direct_query` 为参考，warm wall/CPU p95 回归上限为 1.25 倍，cold wall 为 1.50 倍，warm 峰值分配 p95 为 1.50 倍，绝对余量为 2 ms/256 KiB；这些门不用于把 `old_direct_query` 与 `old_recent_entries` 的任务质量差异混成 Host 开销。未来 Host 必须使用同一任务检索算法再单独比较：可信进程内模式上限为 wall 1.25 倍、cold 1.50 倍、CPU 1.25 倍、峰值分配 1.50 倍；隔离模式上限为 wall 2.00 倍、cold 3.00 倍、CPU 2.00 倍、峰值分配 2.00 倍。当前报告将任务门标为 `baseline_characterization_only`、Host 门标为 `frozen_pending_future_host`，因为没有候选 Host 可比较，不能把基线本身写成“通过”。性能值受同机负载、Python/SQLite 版本影响，比较时应固定运行环境。
+非安全性能门分开冻结：任务检索候选若复用同一直接算法，以 `old_direct_query` 为参考，warm wall/CPU p95 回归上限为 1.25 倍，`first_query_ms` wall 上限为 1.50 倍，warm 峰值分配 p95 为 1.50 倍，绝对余量为 2 ms/256 KiB；这些门不把 `old_direct_query` 与 `old_recent_entries` 的任务质量差异混成 Host 开销。`first_query_ms` 是已完成 bootstrap 后的首个查询，不代表进程或 Service 冷启动。未来 Host 必须使用同一任务检索算法再单独比较启动和查询：可信进程内模式的 bootstrap wall 上限为 1.50 倍、首查询 wall 为 1.50 倍、CPU 为 1.25 倍、峰值分配为 1.50 倍；隔离模式的 bootstrap wall 上限为 3.00 倍、首查询 wall 为 3.00 倍、CPU 为 2.00 倍、峰值分配为 2.00 倍。未来 Host startup 必须独立测量，不能拿 `first_query_ms` 冒充。当前报告将任务门标为 `baseline_characterization_only`、Host 门标为 `frozen_pending_future_host`，因为没有候选 Host 可比较，不能把基线本身写成“通过”。性能值受同机负载、Python/SQLite 版本影响，比较时应固定运行环境。
 
 ## 运行和结果
 
@@ -34,23 +34,23 @@
 
 ```bash
 cd /private/tmp/operant-b2-1-a
-uv run --offline python scripts/benchmark_memory_baseline.py --repetitions 5 \
+uv run --offline python scripts/benchmark_memory_baseline.py --repetitions 3 \
   --output docs/design/b2-1/evaluation-results.json
 ```
 
-不传 `--output` 时报告输出到 stdout。`--repetitions` 至少为 1；默认 3。报告包含 fixture hash、开发/保留集质量摘要、每个策略的直接结果/成本、`cold_ms`、`warm_wall_p50_ms`、`warm_wall_p95_ms`、CPU p50/p95、峰值分配 p50/p95 和 RSS high-water。
+不传 `--output` 时报告输出到 stdout。`--repetitions` 至少为 1；默认 3。报告包含 fixture canonical/file hash、开发/保留集质量摘要、每个策略的直接结果/成本、`fixture_load_ms`、`bootstrap_ms`、`first_query_ms`、`warm_wall_p50_ms`、`warm_wall_p95_ms`、CPU p50/p95、峰值分配 p50/p95 和带不可比范围说明的 RSS high-water。
 
-2026-09-09 在 `/private/tmp/operant-b2-1-a@ecb00437e9a44a5e79d54e8cf4944fd0d456bf02` 用 `uv run --offline`、`--repetitions 5` 实测，fixture 规范化 JSON SHA-256 为 `6e250c0a28de45880ec43a064cba3dbaf8d2ddc1b86a84700beca86172481f51`，fixture 文件 SHA-256 为 `bdc0ebbf4bab331a46a06e6ebdd623740cedc55e0169b94c62193381385f48e4`；三条路径安全硬门均通过（0 forbidden hit）。原始结果见 [`evaluation-results.json`](evaluation-results.json)，文件 SHA-256 为 `c09f9b71cd4ea3a4e397d6572b8758da96d5a9d58c4a1aacf216748a3c3ab248`：
+2026-09-09 在 `/private/tmp/operant-b2-1-a@03cd4b040be56dc6625ceae76adf7d2c4236aab1` 用 `uv run --offline`、`--repetitions 3` 实测，fixture 规范化 JSON SHA-256 为 `6e250c0a28de45880ec43a064cba3dbaf8d2ddc1b86a84700beca86172481f51`，fixture 文件 SHA-256 为 `d4ab1378850a4dbc0691a0cb12f79e3cbb9ec5af225887e849889ad1e3858895`；三条路径安全硬门均通过（0 forbidden hit）。原始结果见 [`evaluation-results.json`](evaluation-results.json)，文件 SHA-256 为 `1cae7e1ce5c3129d9a690bffdabfcf79183fb2a9a01887953dc71aa7bc51d22b`：
 
 本次实际读入 `/private/tmp/operant-b2-1-a/tests/fixtures/b2_1/memory_baseline.json`，输出 `/private/tmp/operant-b2-1-a/docs/design/b2-1/evaluation-results.json`。报告中的 `implementation.worktree`、`implementation.source_root`、`implementation.base_head` 和 `implementation.head` 均回读为目标 A worktree、固定基线和运行 HEAD。
 
-| 策略 | 开发集 macro P/R | 保留集 macro P/R | cold ms | warm wall p50/p95 ms | warm CPU p95 ms | warm 峰值分配 p95 KiB |
+| 策略 | 开发集 macro P/R | 保留集 macro P/R | bootstrap / first-query ms | warm wall p50/p95 ms | warm CPU p95 ms | warm 峰值分配 p95 KiB |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
-| `no_memory` | 0.2667 / 0.2667 | 0.4167 / 0.4167 | 0.0012 | 0.0005 / 0.0005 | 0.0050 | 0.3281 |
-| `old_direct_query` | 0.7000 / 0.7000 | 0.7500 / 0.7500 | 3.4646 | 2.6160 / 3.1281 | 2.7020 | 7.5244 |
-| `old_recent_entries` | 0.0889 / 0.2944 | 0.0833 / 0.3750 | 2.8912 | 2.9223 / 4.1048 | 3.4000 | 23.4258 |
+| `no_memory` | 0.2667 / 0.2667 | 0.4167 / 0.4167 | 0.0002 / 0.0011 | 0.0004 / 0.0005 | 0.0050 | 0.3281 |
+| `old_direct_query` | 0.7000 / 0.7000 | 0.7500 / 0.7500 | 703.3810 / 3.2828 | 2.4322 / 2.7135 | 2.4180 | 7.9902 |
+| `old_recent_entries` | 0.0889 / 0.2944 | 0.0833 / 0.3750 | 686.6783 / 2.8113 | 2.6239 / 2.8749 | 2.6040 | 23.1211 |
 
-这次基线说明空查询最近条目路径返回更多无关条目；独立 Gamma 保留集上的直接查询 macro P/R 为 0.7500/0.7500，最近条目为 0.0833/0.3750。`no_memory` 返回 0 条且零 SQLite 查询，用于质量/成本下界；其 P/R 包含无相关记忆案例的空结果得分。以上结果没有证明任何新算法收益。模型调用为 0，Provider usage、Token 和模型成本为 `unknown`。wall/CPU/RSS 数字是当前机器的观测值，复跑时会随负载变化。
+本次基线结果以 raw JSON 为准：`no_memory` 返回 0 条且零 Service query call；有记忆策略各执行 126 次 Service query call，实际 SQLite SQL 次数保持 `unknown`。bootstrap 值包含 Service/SQLite/fixture 写入初始化，不是进程启动；`first_query_ms` 是 bootstrap 后首个查询。RSS 值是整次顺序运行的进程 high-water，不能用于策略间比较。以上结果没有证明任何新算法收益。模型调用为 0，Provider usage、Token 和模型成本为 `unknown`。wall/CPU 数字是当前机器的观测值，复跑时会随负载变化。
 
 本地确定性检查：
 
@@ -58,7 +58,7 @@ uv run --offline python scripts/benchmark_memory_baseline.py --repetitions 5 \
 uv run pytest tests/test_b2_1_benchmark.py
 ```
 
-测试确认固定拆分和覆盖范围、临时库/零模型调用/unknown usage、两条旧路径的测量字段，以及安全硬门和性能容忍值。耗时数字本身不作跨机器断言。
+测试确认固定拆分和覆盖范围、临时库/零模型调用/unknown usage、三条基线的测量字段，以及安全硬门和性能容忍值。耗时数字本身不作跨机器断言。
 
 ## 待后续补测
 

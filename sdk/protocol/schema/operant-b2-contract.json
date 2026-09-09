@@ -1216,6 +1216,60 @@
     },
     "LifecycleReceipt": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "enabled",
+                  "disabled",
+                  "uninstalled"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ack": {
+                "const": "completed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ack": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cleanup": {
+                "items": {
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "deleted",
+                        "retained"
+                      ]
+                    }
+                  }
+                }
+              },
+              "state": {
+                "enum": [
+                  "enabled",
+                  "disabled",
+                  "uninstalled"
+                ]
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "ack": {
           "enum": [
@@ -2485,6 +2539,37 @@
     },
     "PrivateIndexRequest": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "content_digest": {
+                "type": "null"
+              },
+              "payload": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "replace"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "content_digest": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "content_digest": {
           "anyOf": [
@@ -2529,7 +2614,7 @@
           "title": "Payload"
         },
         "resource": {
-          "$ref": "#/$defs/Resource"
+          "$ref": "#/$defs/PrivateIndexResource"
         }
       },
       "required": [
@@ -2541,6 +2626,85 @@
         "payload"
       ],
       "title": "PrivateIndexRequest",
+      "type": "object"
+    },
+    "PrivateIndexResource": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "const": "index",
+          "title": "Category",
+          "type": "string"
+        },
+        "consumer_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+            "type": "string"
+          },
+          "title": "Consumer Ids",
+          "type": "array"
+        },
+        "installation_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+          "title": "Installation Id",
+          "type": "string"
+        },
+        "locator_ref": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+          "title": "Locator Ref",
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/DatasetOwner"
+        },
+        "reconstructible": {
+          "title": "Reconstructible",
+          "type": "boolean"
+        },
+        "resource_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "retention_lock_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+            "type": "string"
+          },
+          "title": "Retention Lock Ids",
+          "type": "array"
+        },
+        "storage": {
+          "enum": [
+            "core_rows",
+            "managed_directory"
+          ],
+          "title": "Storage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "owner",
+        "installation_id",
+        "storage",
+        "category",
+        "locator_ref",
+        "consumer_ids",
+        "retention_lock_ids",
+        "reconstructible"
+      ],
+      "title": "PrivateIndexResource",
       "type": "object"
     },
     "PrivateIndexResult": {

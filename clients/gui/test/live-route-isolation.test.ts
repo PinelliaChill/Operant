@@ -16,6 +16,10 @@ test('resolveLiveRouteSupport permits all standard Live routes', () => {
     '/skills',
     '/extensions',
     '/settings',
+    '/remote',
+    '/remote/',
+    '/session',
+    '/session/',
   ];
 
   for (const route of supportedRoutes) {
@@ -60,6 +64,8 @@ test('resolveLiveRouteSupport strictly intercepts legacy demo-only routes in Liv
     '/workflow/wf-1/session/s-1': 'workflow',
     '/workflow/session/s-2': 'workflow',
     '/non-existent-subpath': 'non-existent-subpath',
+    '/remote/unknown': 'remote',
+    '/session/unknown': 'session',
   };
 
   for (const [route, expectedSection] of Object.entries(demoOnlyRoutes)) {

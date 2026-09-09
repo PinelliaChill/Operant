@@ -7,6 +7,7 @@ epochs, grants, ownership, CAS and source access inside their commit transaction
 
 from __future__ import annotations
 
+import hashlib
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -430,6 +431,34 @@ class CleanupItem(Contract):
 
 
 class LifecycleReceipt(Contract):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"state": {"enum": ["enabled", "disabled", "uninstalled"]}}
+                    },
+                    "then": {"properties": {"ack": {"const": "completed"}}},
+                },
+                {
+                    "if": {"properties": {"ack": {"const": "completed"}}},
+                    "then": {
+                        "properties": {
+                            "state": {"enum": ["enabled", "disabled", "uninstalled"]},
+                            "cleanup": {
+                                "items": {
+                                    "properties": {"outcome": {"enum": ["deleted", "retained"]}}
+                                }
+                            },
+                        }
+                    },
+                },
+            ]
+        },
+    )
+
     operation_id: Id
     installation_id: Id
     state: Literal[
@@ -447,6 +476,17 @@ class LifecycleReceipt(Contract):
     cleanup: tuple[CleanupItem, ...]
     cursor: Cursor
     ack: Literal["host_accepted", "completed", "failed", "unknown"]
+
+    @model_validator(mode="after")
+    def check_completion(self) -> LifecycleReceipt:
+        terminal_success = self.state in {"enabled", "disabled", "uninstalled"}
+        if terminal_success != (self.ack == "completed"):
+            raise ValueError("terminal lifecycle success requires completed acknowledgement")
+        if self.ack == "completed" and any(
+            item.outcome in {"pending", "blocked", "external_unconfirmed"} for item in self.cleanup
+        ):
+            raise ValueError("cleanup_blocked: unfinished resources cannot report completion")
+        return self
 
 
 class Tombstone(Contract):
@@ -622,13 +662,57 @@ class LifecycleResult(Contract):
     checkpoint_ref: Id | None
 
 
+class PrivateIndexResource(Resource):
+    category: Literal["index"]
+    storage: Literal["core_rows", "managed_directory"]
+
+
 class PrivateIndexRequest(Contract):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"properties": {"operation": {"const": "replace"}}},
+                    "then": {
+                        "properties": {
+                            "payload": {"type": "string"},
+                            "content_digest": {"type": "string"},
+                        }
+                    },
+                    "else": {
+                        "properties": {
+                            "payload": {"type": "null"},
+                            "content_digest": {"type": "null"},
+                        }
+                    },
+                }
+            ]
+        },
+    )
     context: RpcContext
-    resource: Resource
+    resource: PrivateIndexResource
     operation: Literal["read", "replace", "delete"]
     expected_revision: Revision
     content_digest: Digest | None
     payload: Annotated[str | None, Field(max_length=100_000)]
+
+    @model_validator(mode="after")
+    def check_payload_and_owner(self) -> PrivateIndexRequest:
+        if (
+            self.resource.owner.dataset_id != self.context.dataset_id
+            or self.resource.installation_id != self.context.installation_id
+        ):
+            raise ValueError("unknown_owner: private index must belong to the calling binding")
+        if self.operation == "replace":
+            if self.payload is None or self.content_digest is None:
+                raise ValueError("replace requires payload and content digest")
+            if hashlib.sha256(self.payload.encode("utf-8")).hexdigest() != self.content_digest:
+                raise ValueError("private index payload digest mismatch")
+        elif self.payload is not None or self.content_digest is not None:
+            raise ValueError("read/delete cannot carry a write payload or digest")
+        return self
 
 
 class PrivateIndexResult(Contract):
