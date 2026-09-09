@@ -18,8 +18,10 @@
 - SDK 合成隔离：`node --test sdk/typescript-client/http-client.test.mjs` 2 passed，覆盖异步和同步拒绝及网络零调用。
 - 集成 GUI：`npm run typecheck` 通过，`npm test` 82 passed，`npm run build` 通过。
 - 完整 `uv run pytest` 两次被会话中断；最近一次已覆盖前约 598 项，唯一失败为沙箱禁止 bind loopback。
-  该用例在获准 loopback 环境补跑 1 passed；其余未完成区段（从当前收集列表第 576 项起）正补跑。
-  不将中断命令描述为单次完整 PASS；最终补跑结果随后追加。
+  该用例在获准 loopback 环境补跑 1 passed；从当前收集列表第 576 项起补跑 155 passed（66.27s），
+  新增契约/评测最终定向 20 passed。当前共收集 730 项；中断前记录、重叠补跑和定向结果覆盖全部用例，
+  Docker integration 的 1 项环境 skip 保留，不将这些结果描述为单次完整 pytest PASS。
+  [汇总证据](verification.json)：聚合 729 passed / 1 skipped / 0 未覆盖；记录原始日志 hash。
 - 原始评测报告、分组和冻结阈值已保存；模型调用 0，usage/cost unknown，不算真实模型验收。
 
 ## 缺口与下一步

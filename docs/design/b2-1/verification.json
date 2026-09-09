@@ -1,0 +1,35 @@
+{
+  "baseline_head": "ecb00437e9a44a5e79d54e8cf4944fd0d456bf02",
+  "collected": 730,
+  "interrupted_full_prefix_count": 598,
+  "supplemental_range_start_one_based": 576,
+  "supplemental_passed": 155,
+  "latest_contract_benchmark_passed": 20,
+  "loopback_escalated_passed": 1,
+  "aggregate_passed": 729,
+  "skipped": [
+    "tests/test_execution.py::test_docker_runner_integration_when_an_image_is_explicitly_provided"
+  ],
+  "uncovered": [],
+  "failures": [],
+  "single_full_command_completed": false,
+  "notes": [
+    "The interrupted full run collected 729 cases before addition of the cursor boundary test; the final 20-case targeted run includes that test.",
+    "One loopback bind PermissionError was retried outside the network sandbox with a deterministic Provider and passed.",
+    "Docker integration skip is not container acceptance."
+  ],
+  "logs": {
+    "operant-b2-1-pytest.log": "fac08364a51c32e052bffdb9279425d408e0530b4be7af09bfd44d220ddc372b",
+    "operant-b2-1-remaining.log": "e03edcf2f3d72beae7ffa971b56c53e954f0e0a6e3bddd01e7e58090780bb410",
+    "operant-b2-1-nodeids.txt": "342c13e5db5ad34b29bb58f5e53ebc785bf40eb0366821b1669efa8714ae5b3f"
+  },
+  "gui_tests_passed": 82,
+  "sdk_test_groups_passed": 2,
+  "gui_typecheck": "passed",
+  "gui_build": "passed",
+  "ruff_format": "passed",
+  "ruff_check": "passed",
+  "mypy": "passed (92 source files)",
+  "uv_lock_offline": "passed",
+  "tauri_runtime": "not_verified"
+}
