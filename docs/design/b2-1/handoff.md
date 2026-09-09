@@ -25,8 +25,8 @@ SDK 由 Codex 单一持有，未纳入 B 的重复 SDK 测试及仅为 strip-onl
 
 ## 验证与独立审查
 
-- 原后端完整命令被会话中断；通过原记录、重叠补跑和定向结果覆盖原收集的全部 730 项：
-  聚合 729 passed / 1 Docker 条件 skip。loopback 沙箱 bind 失败在获准环境补跑通过；不是单次完整命令 PASS。
+- 后端已补齐单次完整门禁：`uv run --offline pytest -ra` **734 passed / 1 skipped**，exit 0，382.62 秒。
+  跳过项明确要求 Docker 与 OPERANT_DOCKER_TEST_IMAGE，不算容器验收；此前分段证据作为历史保留。
 - Reviewer 返工新增 5 项契约用例，受影响契约/评测合计 **25 passed**；Ruff format/check、mypy、offline lock、diff 检查通过。
 - 集成 GUI：**82 passed**，类型检查与生产构建通过；SDK：**2 组通过**。
 - 真实浏览器验证 HashRouter 两条正式别名及画布阻断；临时浏览器/Vite 已关闭。该证据不替代 Tauri。
@@ -36,9 +36,8 @@ SDK 由 Codex 单一持有，未纳入 B 的重复 SDK 测试及仅为 strip-onl
 
 ## 缺口与下一步
 
-Antigravity 已实名交代码，但其交接只包含 npm/cargo check；真实 Tauri 窗口、旧深链、刷新、
-Mock→Live 与错误/断线证据仍未提供。Codex 已直接在共享 `COM-20260909-001` 发出补证要求，
-由 Antigravity 独立完成并实名回交，Codex 再核对绑定版本并关闭本批门禁。
+Antigravity 已补构建和进程记录；Codex 经 User 当次授权后，已在真实原生 WebView 验证 Mock→Live、任务页阻断、任务页刷新与连接失败行为，见 [原生窗口证据](tauri-native-evidence.md)。
+原生旧别名及其他深链仍未覆盖。续接工具集缺少 CUA，当前无法继续窗口操作；恢复工具后直接复用已有产物和证据，完成剩余项再关闭本批门禁，无需重新授权。
 
 没有迁移用户库、复制凭据、启用 MP-1、推送、合并或部署。模型调用为 0，Provider usage/cost unknown；
 Host 两模式、真实生命周期执行、新 FTS 和真实模型链路按后续对应批次验收。

@@ -12,7 +12,7 @@
   ],
   "uncovered": [],
   "failures": [],
-  "single_full_command_completed": false,
+  "single_full_command_completed": true,
   "notes": [
     "The interrupted full run collected 729 cases before addition of the cursor boundary test; the final 20-case targeted run includes that test.",
     "One loopback bind PermissionError was retried outside the network sandbox with a deterministic Provider and passed.",
@@ -31,7 +31,7 @@
   "ruff_check": "passed",
   "mypy": "passed (92 source files)",
   "uv_lock_offline": "passed",
-  "tauri_runtime": "not_verified",
+  "tauri_runtime": "partially_verified_native_debug_webview",
   "review_fix": {
     "contract_benchmark_passed": 25,
     "gui_tests_passed": 82,
@@ -50,5 +50,38 @@
     "evaluation_raw_sha256": "85e895e5b83be582da7cbb788aef2ca16b4bb1cb66fbdbad0fb9e8f459504f25",
     "code_review": "passed; all code and provenance findings closed",
     "reviewed_code_head": "1e0cfc749125de98c85fe15001f2bf72811361f8"
+  },
+  "tauri_native": {
+    "evidence": "tauri-native-evidence.md",
+    "source_head": "79d21e8d7b9e0bbb9dcfae7173c81820a65fa855",
+    "binary_sha256": "9cfa47df5c9bebe4d72da6fdf089d5dbd04cf3a51690ca9b8133be6ce103497c",
+    "passed": [
+      "native window from approved binary",
+      "explicit mock display",
+      "mock to live removes demo views and visible selection",
+      "live tasks blocked",
+      "native tasks reload retains live mode and blocked view",
+      "connection failure explicitly shown with disabled actions"
+    ],
+    "pending": [
+      "native remote/session alias navigation",
+      "native collab canvas/agents/runs/workflow deep-link walkthrough"
+    ],
+    "controller": "unavailable in resumed tool set",
+    "permission": "already granted by User; no new permission required for same binary"
+  },
+  "completed_full_run": {
+    "source_head": "79d21e8d7b9e0bbb9dcfae7173c81820a65fa855",
+    "command": "UV_CACHE_DIR=/private/tmp/operant-b2-1-uv-cache uv run --offline pytest -ra",
+    "exit_code": 0,
+    "collected": 735,
+    "passed": 734,
+    "skipped": 1,
+    "duration_seconds": 382.62,
+    "skip_reason": "requires Docker and OPERANT_DOCKER_TEST_IMAGE",
+    "log_path": "/private/tmp/operant-b2-1-final-full-pytest.log",
+    "log_sha256": "08c33e538825d691b6641c019ba381dc2ad87913812e695b93fa470b043fa980",
+    "environment": "local loopback permitted; no real model invocation",
+    "committed_log": "full-pytest.txt"
   }
 }
