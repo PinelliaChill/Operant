@@ -16,7 +16,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
-import { FileCheck, Menu, PanelLeftOpen, Save, Trash2, Zap } from 'lucide-react';
+import { FileCheck, Menu, PanelLeftOpen, Save, Trash2 } from 'lucide-react';
 import type {
   GraphCompilerDiagnostic,
   GraphDraft,
@@ -39,6 +39,82 @@ import { LiveGraphTeamView } from './LiveGraphTeamView';
 type CollabTab = 'home' | 'canvas' | 'runs';
 
 export const CollabView: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') return <LiveCollabView />;
+  return <DemoCollabView />;
+};
+
+const LiveCollabView: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const viewParam = searchParams.get('view');
+  const activeTab: CollabTab = viewParam === 'canvas' || viewParam === 'runs' ? viewParam : 'home';
+
+  const setTab = (tab: CollabTab) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('view', tab);
+      return next;
+    });
+  };
+
+  return (
+    <div className="section-view">
+      <header className="section-header">
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <div style={{ minWidth: 0 }}>
+              <h1 className="section-title">协作工作台</h1>
+              <p className="section-sub">实时 Graph 工作流与 Team 协作运行监控（Phase 2/3）</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="section-chips" role="group" aria-label="协作视图切换">
+          <button
+            type="button"
+            className={`section-chip${activeTab === 'home' ? ' active' : ''}`}
+            aria-pressed={activeTab === 'home'}
+            onClick={() => setTab('home')}
+          >
+            总览
+          </button>
+          <button
+            type="button"
+            className={`section-chip${activeTab === 'canvas' ? ' active' : ''}`}
+            aria-pressed={activeTab === 'canvas'}
+            onClick={() => setTab('canvas')}
+          >
+            编排画布
+          </button>
+          <button
+            type="button"
+            className={`section-chip${activeTab === 'runs' ? ' active' : ''}`}
+            aria-pressed={activeTab === 'runs'}
+            onClick={() => setTab('runs')}
+          >
+            运行进度
+          </button>
+        </div>
+      </header>
+
+      <div className="collab-main">
+        <div className="collab-tab-body">
+          <LiveGraphTeamView activeTab={activeTab} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DemoCollabView: React.FC = () => {
   const { client, clientMode, activeWorkspace, addNotification } = useOperant();
   const { canPublishTemplate, getWorkflowDirectory } = useDemo();
   const { showSidebarOpenBtn, openSidebar, isMobile, setCollabStatus } =
@@ -313,14 +389,10 @@ export const CollabView: React.FC = () => {
 
       <div className="collab-main">
         <div className="collab-tab-body">
-          {clientMode === 'live' ? (
-            <LiveGraphTeamView activeTab={activeTab} />
-          ) : (
-            <>
-              {activeTab === 'home' && <WorkflowOverview />}
+          {activeTab === 'home' && <WorkflowOverview />}
 
-              {activeTab === 'canvas' && (
-                <>
+          {activeTab === 'canvas' && (
+            <>
               {/* 工具行：草稿名（可改名）| 删除 | 校验 | 发布版本 | 保存草稿 */}
               <div className="collab-toolbar">
                 <input
@@ -328,33 +400,32 @@ export const CollabView: React.FC = () => {
                   className="input collab-draft-name"
                   value={draftName}
                   onChange={(e) => setDraftName(e.target.value)}
+                  placeholder="草稿名称…"
                   aria-label="草稿名称"
-                  disabled={!loadedDraftId}
                 />
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className="btn btn-ghost btn-icon btn-danger"
                   onClick={handleDeleteSelection}
-                  disabled={!selectedNodeId && !selectedEdgeId}
-                  title="删除选中的节点或连线（Delete）"
+                  disabled={drafts.length <= 1}
+                  aria-label="删除草稿"
+                  title="删除草稿"
                 >
-                  <Trash2 size={13} />
-                  <span>删除</span>
+                  <Trash2 size={14} aria-hidden="true" />
                 </button>
-                <div style={{ flex: 1 }} />
                 <button
                   type="button"
-                  onClick={handleCompile}
                   className="btn btn-secondary btn-sm"
-                  disabled={!loadedDraftId}
+                  onClick={handleCompile}
+                  aria-label="校验工作流"
                 >
-                  <Zap size={13} />
-                  <span>校验</span>
+                  <FileCheck size={14} aria-hidden="true" />
+                  校验
                 </button>
                 <button
                   type="button"
+                  className={`btn btn-sm ${publishBlock.ok ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={openPublishModal}
-                  className="btn btn-primary btn-sm"
                   disabled={!loadedDraftId}
                 >
                   <FileCheck size={13} />
@@ -394,10 +465,8 @@ export const CollabView: React.FC = () => {
               )}
 
               {activeTab === 'runs' && <MonitorPanel runs={runs} />}
-            </>
-          )}
-        </div>
-      </div>
+            </div>
+          </div>
 
       {/* 发布版本 Modal（复用原 WorkflowView 逻辑与文案） */}
       {clientMode === 'mock' && <Modal

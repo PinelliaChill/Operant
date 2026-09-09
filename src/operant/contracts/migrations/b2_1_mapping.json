@@ -1,0 +1,35 @@
+{
+  "mapping_version": "operant-b2-mapping.v1",
+  "source_head": "ecb00437e9a44a5e79d54e8cf4944fd0d456bf02",
+  "source_sqlite_version": 14,
+  "target_sqlite_version": null,
+  "execution": "mapping_only_no_database_mutation",
+  "owner": "Codex",
+  "rows": [
+    {"source": "workspace_initializations.id/workspace_ref", "target": "ProjectIdentity + WorkspaceIdentity", "rule": "Preserve existing public project id as alias; administrator explicitly registers project/worktree association; do not merge by path, remote or display name.", "failure": "unknown_scope"},
+    {"source": "workflow_runs.id", "target": "TaskProjection.source(workflow_run,id)", "rule": "Keep source status and supported action projection. GET /v1/tasks remains legacy WorkflowRun; do not convert to TeamTask.", "failure": "unsupported"},
+    {"source": "sessions.id + team_tasks.id", "target": "TaskProjection.source(session|team_task,id)", "rule": "Keep discriminated compound identity and durable source; TaskAssignment mailbox message is not a Task Board row.", "failure": "unknown_scope"},
+    {"source": "role_heads + role_versions + sessions.body.role_snapshot + agents.body.role_snapshot", "target": "AgentBinding", "rule": "Resolve actual stored snapshot/version and model_profile/provider model mapping; editing RolePreset never mutates running AgentInstance. Legacy RoleSnapshot is embedded without an independent id; derive and store a stable snapshot reference from owning source and immutable snapshot digest, never invent a live id.", "failure": "upgrade_required"},
+    {"source": "memories.id/current_version", "target": "MemoryHead + MemoryProposal", "rule": "Preserve id and all versions. current_version is latest old head, not proof of approved publication. Latest candidate becomes proposal; retain earlier publication only with explicit trustworthy evidence, else published_version null.", "failure": "revision_conflict"},
+    {"source": "memory_versions.memory_id/version/body/body_hash", "target": "MemoryVersion.ref + immutable legacy evidence", "rule": "Preserve original body hash and history without rewriting. New canonical content digest is separately calculated from new content; never present old body hash as new content digest.", "failure": "upgrade_required"},
+    {"source": "memory_versions.kind/project_scope/role_scope/source_session_id", "target": "MemoryVersion.kind/scope/role_ids + DatasetOwner", "rule": "Use exact registered workspace and authenticated session scope; working requires session. Unknown role string, path mapping or owner is quarantined, never made global. Explicit migration manifest assigns dataset and owner namespace; no automatic ownership inference.", "failure": "unknown_owner"},
+    {"source": "memory_versions.source_task/confidence/status", "target": "SourceRef + MemoryVersion.evidence + MemoryProposal", "rule": "Task text and confidence are not source IDs or verification. Source lacking immutable evidence is legacy_unverified, displayed as such; active is not auto-approved under new policy. Resolve valid source_session/history links separately.", "failure": "upgrade_required"},
+    {"source": "memory_fts", "target": "dataset-owned derived index", "rule": "Rebuild from authorized versions only; register index resource and generation. Old tokenizer/recent-entry strategy is baseline, not migrated retrieval authority.", "failure": "stale_epoch"},
+    {"source": "context_revisions + compactions + source snapshots", "target": "unchanged execution evidence + new ContextMemoryUse for new requests", "rule": "Do not rewrite historical sent context. Active run, source references and retention locks block relevant cleanup; revoked memory and dependent summaries must not enter next request.", "failure": "cleanup_blocked"},
+    {"source": "no existing plugin installation/dataset/manifest table", "target": "Dataset + Resource + Certification + PluginManifest", "rule": "Only future isolated migration creates explicit ownership and inventory for Core rows and directories. Program, config, state, index, log, tmp, jobs, subscriptions and all knowledge versions are inventoried. PluginHost and certification are MP-1 work.", "failure": "unknown_owner"},
+    {"source": "remote_control_hosts + remote receipts", "target": "HostAdmission reference to host_instance_id", "rule": "Remote HostInstance and PluginHost installation are distinct. Relay receipt, Host accepted, execution completion and cleanup completion stay separate.", "failure": "outcome_unknown"}
+  ],
+  "cleanup": {
+    "keep": "Detach installation; retain dataset-owned records and declared irreplaceable state under independent dataset id, visible via inspect/export/delete/rebind; rebind requires authorization and schema compatibility.",
+    "delete": "Inventory and remove exclusive registered Core rows and directories; shared consumer, retention lock, active run and identity mismatch return per-resource blocked/retained. Persist progress, revoke epoch, never revive namespace on retry.",
+    "exceptions": ["Canonical history and current run recovery are ordinary Core evidence, not plugin-owned copies", "External copies return external_unconfirmed", "WAL, freed pages, backups and snapshots are not secure-erasure guarantees"],
+    "audit": "Only content-free installation/cleanup tombstones retained by Core"
+  },
+  "rollback": {
+    "rehearsal_batch": "B2-3 / MP-2, isolated copied database only",
+    "preconditions": ["hash and schema inventory", "ownership and unresolved rows count", "active-run and shared-consumer blockers", "verified snapshot/restore plan", "explicit user-library migration approval"],
+    "old_binary": "New migration must fail closed for old binary writes; keep existing checksummed migration mechanism. No migration number reserved here.",
+    "application": "Disable new recall/maintenance only; never restore keyword auto-activation, old write bypass or revoked authority.",
+    "database": "No generic downgrade promised; use existing isolated restricted rollback only where validated. Keep user database unchanged in B2-1."
+  }
+}

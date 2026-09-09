@@ -69,8 +69,14 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('mock_active');
   const [pendingApprovalCount, setPendingApprovalCount] = useState<number>(0);
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>('thread_main_alpha');
-  const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<string | null>('run_operant_001');
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() => {
+    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'mock';
+    return mode === 'live' ? null : 'thread_main_alpha';
+  });
+  const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<string | null>(() => {
+    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'mock';
+    return mode === 'live' ? null : 'run_operant_001';
+  });
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('context');
   const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
@@ -91,6 +97,13 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const setClientMode = (mode: ClientMode) => {
     localStorage.setItem('operant_client_mode', mode);
     setClientModeState(mode);
+    if (mode === 'live') {
+      setSelectedThreadId(null);
+      setSelectedWorkflowRunId(null);
+    } else {
+      setSelectedThreadId('thread_main_alpha');
+      setSelectedWorkflowRunId('run_operant_001');
+    }
     addNotification('info', mode === 'mock' ? '已切换到演示模式（内置演示数据）' : '已切换到实时连接（Core 后端 /v1/*）');
   };
 

@@ -16,7 +16,16 @@ import { useOperant } from '../../context/ClientContext';
 import { useDemo } from '../../demo/DemoContext';
 import type { RailOutletContext } from '../../app/RailLayout';
 import type { DemoWorkflowDirectoryItem } from '../../demo/types';
+import { LiveUnavailableView } from '../../live/LiveUnavailableView';
 import { GraphCanvas } from './canvas/GraphCanvas';
+
+export const CollabWorkflowCanvas: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') {
+    return <LiveUnavailableView section="collab_canvas" />;
+  }
+  return <DemoCollabWorkflowCanvas />;
+};
 
 /** persisted 类条目无真实 GraphDraft：按 nodeCount/edgeCount 生成确定性演示节点链 */
 function buildPersistedDemoGraph(item: DemoWorkflowDirectoryItem): {
@@ -51,7 +60,7 @@ function buildPersistedDemoGraph(item: DemoWorkflowDirectoryItem): {
   return { nodes, edges };
 }
 
-export const CollabWorkflowCanvas: React.FC = () => {
+const DemoCollabWorkflowCanvas: React.FC = () => {
   const { wfId = '' } = useParams<{ wfId: string }>();
   const navigate = useNavigate();
   const { client } = useOperant();

@@ -13,8 +13,17 @@ import { StatusBadge, STATUS_LABELS } from '../../components/StatusBadge';
 import { Modal } from '../../components/Modal';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { formatNumber, formatStage } from '../../lib/format';
+import { LiveUnavailableView } from '../../live/LiveUnavailableView';
 
 export const RunDetailView: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') {
+    return <LiveUnavailableView section="runs" />;
+  }
+  return <DemoRunDetailView />;
+};
+
+const DemoRunDetailView: React.FC = () => {
   const { client, selectedWorkflowRunId, addNotification } = useOperant();
   // v6 修复轮：取消运行成功后同步解除绑定工作流的演示实例运行中标记（DemoContext 守卫口径）
   const { clearRunningRunStatus } = useDemo();

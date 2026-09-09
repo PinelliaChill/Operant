@@ -57,6 +57,24 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
+### B2-1 / MP-0 增量（2026-09-09）
+
+基于 main `ecb0043` 新增离线契约 `src/operant/contracts/b2_1.py`：Project/Workspace、Task 来源、
+Agent 配置与实例、插件数据集/资源/认证、Memory Head/Proposal/CAS、Manifest/Context 使用和 Host RPC。
+`sdk/protocol/generate_b2_1.py` 从同一 Pydantic 源生成两份独立版本的 JSON Schema/digest 与
+Python/TypeScript Client 接口声明；**未注册运行 API、未实现 PluginHost、未执行用户库迁移**。
+当前数据库仍为 SQLite v14；实际 Beta 协商字符串为 `beta.v1`，现有五个协议保持不变。
+
+源码核对、迁移映射、合成 fixture、旧直接策略评测与限制见 [B2-1 契约边界](design/b2-1/contract-boundaries.md)
+和 [源码基线](design/b2-1/source-baseline.md)。新契约 workspace 引用只返回 hash；旧 ProjectProjection
+仍可能返回绝对 workspace_ref，不以新契约声明反推旧实现已完成路径隐藏。
+本批完成状态及验证结果见 [交接](design/b2-1/handoff.md)，不得将契约准备等同于 MP-1 或产品验收。
+GUI-L0 集成 Antigravity `ce2ab66` 的嵌套路由、旧深链和 Demo Hook 隔离，模式切换清空演示选择。
+旧 HttpClient 的合成 Thread/消息/Context/审批/Graph/Workflow/Remote 与伪造 SSE Cursor 路径显式失败；
+已有协商生成 Client 继续承载受支持 Live 功能。当前测试/构建证据不等于真实 Tauri 桌面验收。
+
+
+
 ### 已实现
 
 - Pydantic 领域模型；

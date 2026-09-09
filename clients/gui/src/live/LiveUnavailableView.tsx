@@ -1,9 +1,13 @@
 import React from 'react';
 import { LockKeyhole, Radio } from 'lucide-react';
 import { useOperant } from '../context/ClientContext';
+import type { LiveUnavailableSection } from './liveRouteSupport';
+
+export type { LiveUnavailableSection };
 
 const SECTION_LABELS: Record<string, string> = {
   collab: '协作工作台',
+  collab_canvas: '工作流画布预览',
   tasks: '任务',
   schedules: '调度',
   agents: 'Agent',
@@ -12,6 +16,7 @@ const SECTION_LABELS: Record<string, string> = {
   settings: '设置',
   runs: '运行详情',
   workflow: '工作流深链',
+  session: '会话',
 };
 
 /** Explicit live boundary for demo-only routes.  It never renders Demo data. */

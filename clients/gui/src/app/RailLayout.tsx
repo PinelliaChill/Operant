@@ -276,22 +276,15 @@ const DemoModeIndicator: React.FC = () => (
   </div>
 );
 
+import { resolveLiveRouteSupport } from '../live/liveRouteSupport';
+export { resolveLiveRouteSupport };
+
 export const RailLayout: React.FC = () => {
   const { theme, toggleTheme, notifications, removeNotification, clientMode } = useOperant();
   const location = useLocation();
   const section = location.pathname.split('/')[1] || 'chat';
 
-  // Phase 1E surfaces plus the additive Phase 2/3 collaboration runtime may
-  // render in live mode. Other routes stay explicitly demo-only.
-  const liveSupportedSection =
-    section === 'chat' ||
-    section === 'projects' ||
-    section === 'approvals' ||
-    section === 'schedules' ||
-    section === 'collab' ||
-    section === 'skills' ||
-    section === 'extensions' ||
-    section === 'settings';
+  const { isSupported: liveSupportedRoute, unavailableSection } = resolveLiveRouteSupport(location.pathname);
 
   const isMobile = useMediaQuery('(max-width: 959px)');
 
@@ -583,8 +576,8 @@ export const RailLayout: React.FC = () => {
 
         {/* 主区：侧栏开启按钮由各分区经 Outlet context 静态嵌入页头，避免浮动遮挡 */}
         <main id="main-content" tabIndex={-1} className="rail-main">
-          {clientMode === 'live' && !liveSupportedSection ? (
-            <LiveUnavailableView section={section} />
+          {clientMode === 'live' && !liveSupportedRoute ? (
+            <LiveUnavailableView section={unavailableSection} />
           ) : (
             <Outlet
               context={{

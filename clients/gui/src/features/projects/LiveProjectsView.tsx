@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { Folder, FolderKanban, File, Loader2, PanelLeftOpen, RefreshCw } from 'lucide-react';
-import { useNavigate, useOutletContext } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useLive } from '../../live/LiveContext';
@@ -36,6 +36,7 @@ const ProjectFiles: React.FC<{
 );
 
 export const LiveProjectsView: React.FC = () => {
+  const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const { showSidebarOpenBtn, openSidebar } = useOutletContext<RailOutletContext>();
   const {
@@ -52,6 +53,12 @@ export const LiveProjectsView: React.FC = () => {
     reconnect,
   } = useLive();
   const [filesLoadingId, setFilesLoadingId] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (projectId && projects.length > 0) {
+      selectProject(projectId);
+    }
+  }, [projectId, projects, selectProject]);
 
   const getProjectThreads = useCallback((project: LiveProjectProjection) => (
     threads.filter((thread) => project.threadIds.includes(thread.id))
@@ -87,6 +94,11 @@ export const LiveProjectsView: React.FC = () => {
         <div className="live-route-header-actions"><StatusBadge status={phase === 'ready' ? 'connected' : 'pending'} label={phase === 'ready' ? 'Core 已连接' : '读取中'} size="sm" /><button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新 Project Projection" title="刷新 Project Projection"><RefreshCw size={15} aria-hidden="true" /></button></div>
       </header>
       {lastError && <div className="live-alert live-alert-error" role="alert"><span>{lastError.code}：{lastError.message}</span></div>}
+      {projectId && phase === 'ready' && projects.length > 0 && !projects.some((p) => p.id === projectId) && (
+        <div className="live-alert live-alert-error" role="alert">
+          <span>未在 Core Workspace 中找到项目 ID: {projectId}</span>
+        </div>
+      )}
       <p className="live-route-description">以下内容来自已注册 Workspace 的服务端只读 Projection。项目不支持本阶段 CRUD、默认标记或删除。</p>
       <div className="live-project-grid">
         {projects.filter((project) => project.readable).map((project) => {
