@@ -53,3 +53,31 @@
 ## 结论
 
 代码审查结论：**需修改后再通过**。至少修复 P1 生命周期回执矛盾，并修复/明确 `/remote` 与 `/session` 的 Live 旧入口路由；修复后复用本 Reviewer 做增量复核。其余 MP-1/真实 Tauri/真实模型属于明确的后续或未验证门，不作为本批代码缺陷替代。
+
+## 同一 Reviewer 增量复核（03cd4b0..1e0cfc7）
+
+- 实际配置仍为 `gpt-5.6-luna` / reasoning `max`；工具没有 Fast 开关，Fast 未启用且不可配置。
+- 最新 worktree HEAD `1e0cfc749125de98c85fe15001f2bf72811361f8`，工作树 clean。本次只复核返工差异与原报告发现，没有重跑全套门禁或扩大范围。
+
+### 原发现关闭
+
+- 路由 P1 已关闭：`resolveLiveRouteSupport` 只放行精确的单段 `/remote`、`/session`（含尾斜杠归一化），`/remote/unknown`、`/session/unknown` 仍拒绝；新增 resolver 用例覆盖别名和嵌套拒绝。`browser-route-evidence.md` 记录真实 Vite + React HashRouter：`#/session -> #/chat`、`#/remote -> #/settings?cat=system`（重新打开仍成立），`.live-unavailable-state=false`；画布深链仍为 true。这是浏览器组合证据，不能替代真实 Tauri。
+- 生命周期 P1 已关闭：`LifecycleReceipt` 的 Pydantic 校验和生成 JSON Schema `allOf` 同时要求 terminal success 使用 `completed`，且 completed 的 cleanup 只能为 `deleted|retained`；新增负例覆盖 pending/blocked/external_unconfirmed 及 host_accepted。当前契约不再接受原报告中的矛盾回执。
+- PrivateIndex P2 已关闭：新增 `PrivateIndexResource` 限定 index 与 managed_directory/core_rows，校验 resource 所属 dataset/installation、read/delete 的空 payload、replace 的 UTF-8 SHA-256、expected_revision 和生成 Schema；新增负例覆盖错误 owner/storage/载荷/digest。
+- 评测指标问题已关闭：`cold_ms` 改为 `first_query_ms`，新增 fixture/bootstrap 计时，`service_query_calls` 与 `sqlite_sql_calls=unknown` 分开，raw/docs 明确 RSS 为顺序整进程 high-water、策略间不可比较；阈值同步改为 first-query/bootstrap 语义，未将 Host 门写成通过。
+
+### 仍需修正的证据追踪项（P2，非运行代码缺陷）
+
+- `docs/design/b2-1/evaluation-results.json` 的 `implementation.head` 仍为 `03cd4b040be56dc6625ceae76adf7d2c4236aab1`，但 raw 中已包含本次 `1e0cfc7` 才提交的 `first_query_ms`、`service_query_calls` 等脚本输出；`evaluation-baseline.md:5,43` 也将运行 HEAD 写为 03cd。也就是说，按记录的 clean HEAD 03cd 重跑会得到旧字段，冻结 raw report 没有精确指向其生成脚本版本。
+- 最小修复：在 clean `1e0cfc7` 上重新生成一次 raw/report 并更新其文件 hash、文档运行 HEAD；若保留现有 timing 结果，则至少记录生成时 worktree dirty/source script digest，并明确 raw 是 03cd 上的未提交返工脚本产物。该项不改变指标口径或安全结论，但在修复前不应称 raw report 可由记录 HEAD 完全复现。
+
+### 增量结论
+
+代码审查：**通过（原 P1/P2 已关闭）**；保留一项评测 raw provenance 文档修正。真实 Tauri 窗口/深链/刷新/模式切换仍单列为未验证，MP-1、真实 keep/delete、真实模型和用户库迁移仍不属于本批代码验收。
+
+## raw provenance 增量关闭（1e0cfc7）
+
+- 已核对当前 HEAD 为 `1e0cfc749125de98c85fe15001f2bf72811361f8`；当前脚本相对该 HEAD 无差异，dirty 仅限评测/交接证据文档和 raw JSON。
+- `evaluation-results.json` 的 `implementation.head` 已更新为 `1e0cfc749125de98c85fe15001f2bf72811361f8`，文件 SHA-256 为 `85e895e5b83be582da7cbb788aef2ca16b4bb1cb66fbdbad0fb9e8f459504f25`。
+- `evaluation-baseline.md` 已同步该 HEAD、raw hash、bootstrap/first-query/service-query 字段与表格数值；raw 中的 timing 字段与当前脚本一致，且报告仍明确 RSS 仅为整次进程 high-water、SQL 次数为 unknown、Host 门 pending。
+- 因此最后一项 raw provenance P2 **已关闭**。最终代码/证据审查结论保持：**通过**；真实 Tauri 仍未验证，单独保留为验收限制。

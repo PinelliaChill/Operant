@@ -4,7 +4,7 @@
     "worktree": "/private/tmp/operant-b2-1-a",
     "source_root": "/private/tmp/operant-b2-1-a",
     "base_head": "ecb00437e9a44a5e79d54e8cf4944fd0d456bf02",
-    "head": "03cd4b040be56dc6625ceae76adf7d2c4236aab1"
+    "head": "1e0cfc749125de98c85fe15001f2bf72811361f8"
   },
   "dataset": {
     "id": "b2_1_memory_baseline",
@@ -27,7 +27,7 @@
     ],
     "repetitions": 3,
     "database": "temporary isolated SQLite per strategy; no_memory bypasses store",
-    "fixture_load_ms": 1.3297,
+    "fixture_load_ms": 1.5129,
     "process_startup_measured": false,
     "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
     "user_database_read": false,
@@ -121,19 +121,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0011,
-              "cpu_ms": 0.009,
-              "peak_alloc_kib": 0.3047
+              "wall_ms": 0.0013,
+              "cpu_ms": 0.011,
+              "peak_alloc_kib": 0.3359
             },
             {
-              "wall_ms": 0.0008,
+              "wall_ms": 0.0009,
               "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0006,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -176,17 +176,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -229,17 +229,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -281,18 +281,18 @@
           "samples": [
             {
               "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -333,19 +333,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -388,18 +388,18 @@
           "samples": [
             {
               "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -441,19 +441,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -494,19 +494,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.01,
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -547,19 +547,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -601,18 +601,18 @@
           "samples": [
             {
               "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "cpu_ms": 0.006,
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -653,19 +653,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -706,19 +706,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -757,19 +757,19 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -810,17 +810,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -860,18 +860,18 @@
           "samples": [
             {
               "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -910,19 +910,19 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.006,
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -963,19 +963,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1014,19 +1014,19 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1065,19 +1065,19 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.002,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1118,17 +1118,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1167,19 +1167,19 @@
           "recall": 1.0,
           "samples": [
             {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3594
+            },
+            {
               "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1230,19 +1230,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.3281
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
+              "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1293,19 +1293,19 @@
           "recall": 0.0,
           "samples": [
             {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3594
+            },
+            {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0008,
-              "cpu_ms": 0.008,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0006,
+              "cpu_ms": 0.006,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1350,17 +1350,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1402,18 +1402,18 @@
           "samples": [
             {
               "wall_ms": 0.0005,
-              "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.3281
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1455,18 +1455,18 @@
           "samples": [
             {
               "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1507,19 +1507,19 @@
           "recall": 0.0,
           "samples": [
             {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
+            },
+            {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1562,19 +1562,19 @@
           "recall": 0.0,
           "samples": [
             {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
+            },
+            {
               "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1616,19 +1616,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.3281
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1670,19 +1670,19 @@
           "recall": 0.0,
           "samples": [
             {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
+            },
+            {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1731,17 +1731,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1788,19 +1788,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1847,19 +1847,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1907,19 +1907,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -1967,18 +1967,18 @@
           "samples": [
             {
               "wall_ms": 0.0005,
-              "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.3281
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.007,
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0004,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -2027,17 +2027,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.003,
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -2084,17 +2084,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -2141,17 +2141,17 @@
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             },
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -2198,17 +2198,17 @@
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
+              "peak_alloc_kib": 0.3594
             },
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
-            },
-            {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0005,
+              "cpu_ms": 0.005,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -2253,19 +2253,19 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
+              "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -2312,19 +2312,19 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.005,
-              "peak_alloc_kib": 0.3281
-            },
-            {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0004,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         },
@@ -2369,19 +2369,19 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 0.0005,
-              "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.3281
-            },
-            {
               "wall_ms": 0.0004,
               "cpu_ms": 0.004,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3594
             },
             {
               "wall_ms": 0.0005,
               "cpu_ms": 0.003,
-              "peak_alloc_kib": 0.2812
+              "peak_alloc_kib": 0.3125
+            },
+            {
+              "wall_ms": 0.0004,
+              "cpu_ms": 0.004,
+              "peak_alloc_kib": 0.3125
             }
           ]
         }
@@ -2416,18 +2416,18 @@
         }
       },
       "timing": {
-        "bootstrap_ms": 0.0002,
+        "bootstrap_ms": 0.0001,
         "bootstrap_scope": "no_service_or_sqlite",
-        "first_query_ms": 0.0011,
-        "wall_p50_ms": 0.0004,
+        "first_query_ms": 0.0013,
+        "wall_p50_ms": 0.0005,
         "wall_p95_ms": 0.0005,
-        "warm_wall_p50_ms": 0.0004,
+        "warm_wall_p50_ms": 0.0005,
         "warm_wall_p95_ms": 0.0005,
-        "warm_cpu_p50_ms": 0.003,
+        "warm_cpu_p50_ms": 0.004,
         "warm_cpu_p95_ms": 0.005,
-        "warm_peak_alloc_p50_kib": 0.2812,
-        "warm_peak_alloc_p95_kib": 0.3281,
-        "rss_high_water_kib": 52880.0,
+        "warm_peak_alloc_p50_kib": 0.3125,
+        "warm_peak_alloc_p95_kib": 0.3594,
+        "rss_high_water_kib": 52992.0,
         "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
         "sample_count": 126,
         "repetitions_per_case": 3
@@ -2483,18 +2483,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 3.2828,
-              "cpu_ms": 3.112,
+              "wall_ms": 3.2377,
+              "cpu_ms": 3.048,
               "peak_alloc_kib": 5.876
             },
             {
-              "wall_ms": 2.3555,
-              "cpu_ms": 2.23,
+              "wall_ms": 2.4505,
+              "cpu_ms": 2.231,
               "peak_alloc_kib": 3.6582
             },
             {
-              "wall_ms": 2.5428,
-              "cpu_ms": 2.302,
+              "wall_ms": 2.7865,
+              "cpu_ms": 2.452,
               "peak_alloc_kib": 3.6426
             }
           ]
@@ -2536,18 +2536,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.4695,
-              "cpu_ms": 2.304,
+              "wall_ms": 2.4955,
+              "cpu_ms": 2.175,
               "peak_alloc_kib": 3.5732
             },
             {
-              "wall_ms": 2.3568,
-              "cpu_ms": 2.193,
+              "wall_ms": 2.3565,
+              "cpu_ms": 2.213,
               "peak_alloc_kib": 3.5576
             },
             {
-              "wall_ms": 2.4338,
-              "cpu_ms": 2.264,
+              "wall_ms": 2.7153,
+              "cpu_ms": 2.347,
               "peak_alloc_kib": 3.542
             }
           ]
@@ -2593,18 +2593,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.6306,
-              "cpu_ms": 2.469,
+              "wall_ms": 2.5572,
+              "cpu_ms": 2.226,
               "peak_alloc_kib": 5.2207
             },
             {
-              "wall_ms": 2.4651,
-              "cpu_ms": 2.204,
+              "wall_ms": 2.4083,
+              "cpu_ms": 2.221,
               "peak_alloc_kib": 4.9453
             },
             {
-              "wall_ms": 2.6153,
-              "cpu_ms": 2.469,
+              "wall_ms": 2.852,
+              "cpu_ms": 2.381,
               "peak_alloc_kib": 4.9297
             }
           ]
@@ -2646,18 +2646,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.5707,
-              "cpu_ms": 2.238,
+              "wall_ms": 2.5413,
+              "cpu_ms": 2.186,
               "peak_alloc_kib": 3.4648
             },
             {
-              "wall_ms": 2.574,
-              "cpu_ms": 2.255,
+              "wall_ms": 2.3207,
+              "cpu_ms": 2.186,
               "peak_alloc_kib": 3.4492
             },
             {
-              "wall_ms": 2.2864,
-              "cpu_ms": 2.161,
+              "wall_ms": 2.5343,
+              "cpu_ms": 2.306,
               "peak_alloc_kib": 3.4258
             }
           ]
@@ -2699,18 +2699,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.9078,
-              "cpu_ms": 2.325,
+              "wall_ms": 2.2478,
+              "cpu_ms": 2.09,
               "peak_alloc_kib": 3.4053
             },
             {
-              "wall_ms": 2.5247,
-              "cpu_ms": 2.182,
+              "wall_ms": 2.2883,
+              "cpu_ms": 2.153,
               "peak_alloc_kib": 3.3896
             },
             {
-              "wall_ms": 2.2505,
-              "cpu_ms": 2.112,
+              "wall_ms": 2.3881,
+              "cpu_ms": 2.234,
               "peak_alloc_kib": 3.3896
             }
           ]
@@ -2759,18 +2759,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.6371,
-              "cpu_ms": 2.433,
+              "wall_ms": 2.8194,
+              "cpu_ms": 2.487,
               "peak_alloc_kib": 7.9902
             },
             {
-              "wall_ms": 2.3881,
-              "cpu_ms": 2.184,
+              "wall_ms": 2.5045,
+              "cpu_ms": 2.231,
               "peak_alloc_kib": 7.5244
             },
             {
-              "wall_ms": 2.577,
-              "cpu_ms": 2.269,
+              "wall_ms": 2.511,
+              "cpu_ms": 2.357,
               "peak_alloc_kib": 7.5244
             }
           ]
@@ -2819,18 +2819,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5395,
-              "cpu_ms": 2.37,
+              "wall_ms": 2.7933,
+              "cpu_ms": 2.43,
               "peak_alloc_kib": 7.6084
             },
             {
-              "wall_ms": 2.6959,
-              "cpu_ms": 2.357,
+              "wall_ms": 2.6715,
+              "cpu_ms": 2.376,
               "peak_alloc_kib": 7.5146
             },
             {
-              "wall_ms": 2.5907,
-              "cpu_ms": 2.311,
+              "wall_ms": 2.6728,
+              "cpu_ms": 2.516,
               "peak_alloc_kib": 7.5146
             }
           ]
@@ -2876,18 +2876,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.493,
-              "cpu_ms": 2.363,
+              "wall_ms": 2.966,
+              "cpu_ms": 2.744,
               "peak_alloc_kib": 5.0508
             },
             {
-              "wall_ms": 2.8501,
-              "cpu_ms": 2.491,
+              "wall_ms": 2.5171,
+              "cpu_ms": 2.372,
               "peak_alloc_kib": 4.7949
             },
             {
-              "wall_ms": 2.4606,
-              "cpu_ms": 2.167,
+              "wall_ms": 2.5214,
+              "cpu_ms": 2.299,
               "peak_alloc_kib": 4.7949
             }
           ]
@@ -2933,18 +2933,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.4689,
-              "cpu_ms": 2.335,
+              "wall_ms": 2.8593,
+              "cpu_ms": 2.478,
               "peak_alloc_kib": 4.8848
             },
             {
-              "wall_ms": 3.0432,
-              "cpu_ms": 2.535,
+              "wall_ms": 2.7639,
+              "cpu_ms": 2.616,
               "peak_alloc_kib": 4.8145
             },
             {
-              "wall_ms": 2.7135,
-              "cpu_ms": 2.356,
+              "wall_ms": 2.5236,
+              "cpu_ms": 2.383,
               "peak_alloc_kib": 4.8145
             }
           ]
@@ -2990,18 +2990,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.7281,
-              "cpu_ms": 2.413,
+              "wall_ms": 2.9924,
+              "cpu_ms": 2.756,
               "peak_alloc_kib": 5.0439
             },
             {
-              "wall_ms": 2.7258,
-              "cpu_ms": 2.404,
+              "wall_ms": 2.714,
+              "cpu_ms": 2.567,
               "peak_alloc_kib": 4.7715
             },
             {
-              "wall_ms": 2.5129,
-              "cpu_ms": 2.25,
+              "wall_ms": 2.5425,
+              "cpu_ms": 2.398,
               "peak_alloc_kib": 4.7715
             }
           ]
@@ -3047,18 +3047,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.4647,
-              "cpu_ms": 2.321,
+              "wall_ms": 3.0574,
+              "cpu_ms": 2.78,
               "peak_alloc_kib": 5.1328
             },
             {
-              "wall_ms": 2.7074,
-              "cpu_ms": 2.395,
+              "wall_ms": 2.6327,
+              "cpu_ms": 2.505,
               "peak_alloc_kib": 4.8604
             },
             {
-              "wall_ms": 2.73,
-              "cpu_ms": 2.395,
+              "wall_ms": 2.5832,
+              "cpu_ms": 2.431,
               "peak_alloc_kib": 4.8604
             }
           ]
@@ -3100,18 +3100,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.4588,
-              "cpu_ms": 2.308,
+              "wall_ms": 3.1058,
+              "cpu_ms": 2.775,
               "peak_alloc_kib": 3.4697
             },
             {
-              "wall_ms": 2.4665,
-              "cpu_ms": 2.267,
+              "wall_ms": 3.8316,
+              "cpu_ms": 2.314,
               "peak_alloc_kib": 3.4229
             },
             {
-              "wall_ms": 2.3115,
-              "cpu_ms": 2.177,
+              "wall_ms": 2.5208,
+              "cpu_ms": 2.366,
               "peak_alloc_kib": 3.4229
             }
           ]
@@ -3151,18 +3151,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.2882,
-              "cpu_ms": 2.147,
+              "wall_ms": 2.948,
+              "cpu_ms": 2.643,
               "peak_alloc_kib": 3.4434
             },
             {
-              "wall_ms": 2.316,
-              "cpu_ms": 2.161,
+              "wall_ms": 2.8488,
+              "cpu_ms": 2.361,
               "peak_alloc_kib": 3.3965
             },
             {
-              "wall_ms": 2.4995,
-              "cpu_ms": 2.349,
+              "wall_ms": 2.4505,
+              "cpu_ms": 2.297,
               "peak_alloc_kib": 3.3965
             }
           ]
@@ -3202,18 +3202,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5551,
-              "cpu_ms": 2.281,
+              "wall_ms": 2.6317,
+              "cpu_ms": 2.41,
               "peak_alloc_kib": 3.4404
             },
             {
-              "wall_ms": 2.3856,
-              "cpu_ms": 2.231,
+              "wall_ms": 2.4598,
+              "cpu_ms": 2.251,
               "peak_alloc_kib": 3.3936
             },
             {
-              "wall_ms": 2.4039,
-              "cpu_ms": 2.223,
+              "wall_ms": 2.7475,
+              "cpu_ms": 2.65,
               "peak_alloc_kib": 3.3936
             }
           ]
@@ -3253,18 +3253,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.2995,
-              "cpu_ms": 2.163,
+              "wall_ms": 2.8559,
+              "cpu_ms": 2.714,
               "peak_alloc_kib": 3.4141
             },
             {
-              "wall_ms": 2.3698,
-              "cpu_ms": 2.125,
+              "wall_ms": 2.6421,
+              "cpu_ms": 2.456,
               "peak_alloc_kib": 3.3672
             },
             {
-              "wall_ms": 2.3111,
-              "cpu_ms": 2.147,
+              "wall_ms": 2.7575,
+              "cpu_ms": 2.526,
               "peak_alloc_kib": 3.3672
             }
           ]
@@ -3304,18 +3304,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.4277,
-              "cpu_ms": 2.255,
+              "wall_ms": 3.3335,
+              "cpu_ms": 3.074,
               "peak_alloc_kib": 3.4961
             },
             {
-              "wall_ms": 2.3975,
-              "cpu_ms": 2.119,
+              "wall_ms": 2.6155,
+              "cpu_ms": 2.488,
               "peak_alloc_kib": 3.4492
             },
             {
-              "wall_ms": 2.323,
-              "cpu_ms": 2.17,
+              "wall_ms": 2.4778,
+              "cpu_ms": 2.35,
               "peak_alloc_kib": 3.4492
             }
           ]
@@ -3357,18 +3357,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.4922,
-              "cpu_ms": 2.285,
+              "wall_ms": 2.7768,
+              "cpu_ms": 2.608,
               "peak_alloc_kib": 3.4385
             },
             {
-              "wall_ms": 2.3633,
-              "cpu_ms": 2.211,
+              "wall_ms": 2.4793,
+              "cpu_ms": 2.279,
               "peak_alloc_kib": 3.3916
             },
             {
-              "wall_ms": 2.3022,
-              "cpu_ms": 2.11,
+              "wall_ms": 2.3287,
+              "cpu_ms": 2.189,
               "peak_alloc_kib": 3.3916
             }
           ]
@@ -3408,18 +3408,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.4134,
-              "cpu_ms": 2.225,
+              "wall_ms": 2.707,
+              "cpu_ms": 2.481,
               "peak_alloc_kib": 3.4717
             },
             {
-              "wall_ms": 2.4397,
-              "cpu_ms": 2.263,
+              "wall_ms": 2.6127,
+              "cpu_ms": 2.421,
               "peak_alloc_kib": 3.4248
             },
             {
-              "wall_ms": 2.4289,
-              "cpu_ms": 2.136,
+              "wall_ms": 2.3802,
+              "cpu_ms": 2.262,
               "peak_alloc_kib": 3.4248
             }
           ]
@@ -3459,18 +3459,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.3333,
-              "cpu_ms": 2.158,
+              "wall_ms": 2.5123,
+              "cpu_ms": 2.372,
               "peak_alloc_kib": 3.4717
             },
             {
-              "wall_ms": 2.51,
-              "cpu_ms": 2.31,
+              "wall_ms": 2.6037,
+              "cpu_ms": 2.448,
               "peak_alloc_kib": 3.4248
             },
             {
-              "wall_ms": 2.3391,
-              "cpu_ms": 2.144,
+              "wall_ms": 2.3505,
+              "cpu_ms": 2.241,
               "peak_alloc_kib": 3.4248
             }
           ]
@@ -3510,18 +3510,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.3021,
-              "cpu_ms": 2.117,
+              "wall_ms": 2.5043,
+              "cpu_ms": 2.359,
               "peak_alloc_kib": 3.5645
             },
             {
-              "wall_ms": 2.3643,
-              "cpu_ms": 2.17,
+              "wall_ms": 2.5307,
+              "cpu_ms": 2.272,
               "peak_alloc_kib": 3.4082
             },
             {
-              "wall_ms": 2.4447,
-              "cpu_ms": 2.176,
+              "wall_ms": 2.6279,
+              "cpu_ms": 2.263,
               "peak_alloc_kib": 3.4082
             }
           ]
@@ -3561,18 +3561,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.3936,
-              "cpu_ms": 2.124,
+              "wall_ms": 2.4643,
+              "cpu_ms": 2.282,
               "peak_alloc_kib": 3.8252
             },
             {
-              "wall_ms": 2.3497,
-              "cpu_ms": 2.164,
+              "wall_ms": 2.6408,
+              "cpu_ms": 2.339,
               "peak_alloc_kib": 3.3643
             },
             {
-              "wall_ms": 2.4156,
-              "cpu_ms": 2.228,
+              "wall_ms": 2.4573,
+              "cpu_ms": 2.193,
               "peak_alloc_kib": 3.3643
             }
           ]
@@ -3628,18 +3628,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.522,
-              "cpu_ms": 2.239,
+              "wall_ms": 2.5069,
+              "cpu_ms": 2.333,
               "peak_alloc_kib": 5.499
             },
             {
-              "wall_ms": 2.442,
-              "cpu_ms": 2.19,
+              "wall_ms": 2.6441,
+              "cpu_ms": 2.363,
               "peak_alloc_kib": 4.6641
             },
             {
-              "wall_ms": 2.5017,
-              "cpu_ms": 2.295,
+              "wall_ms": 2.565,
+              "cpu_ms": 2.29,
               "peak_alloc_kib": 4.6641
             }
           ]
@@ -3695,18 +3695,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5038,
-              "cpu_ms": 2.34,
+              "wall_ms": 2.7119,
+              "cpu_ms": 2.598,
               "peak_alloc_kib": 5.4111
             },
             {
-              "wall_ms": 2.5461,
-              "cpu_ms": 2.244,
+              "wall_ms": 3.965,
+              "cpu_ms": 3.339,
               "peak_alloc_kib": 4.6904
             },
             {
-              "wall_ms": 2.4312,
-              "cpu_ms": 2.242,
+              "wall_ms": 3.0631,
+              "cpu_ms": 2.728,
               "peak_alloc_kib": 4.6904
             }
           ]
@@ -3758,18 +3758,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.6152,
-              "cpu_ms": 2.418,
+              "wall_ms": 3.3416,
+              "cpu_ms": 3.065,
               "peak_alloc_kib": 10.7324
             },
             {
-              "wall_ms": 2.6014,
-              "cpu_ms": 2.299,
+              "wall_ms": 3.1939,
+              "cpu_ms": 2.986,
               "peak_alloc_kib": 9.7715
             },
             {
-              "wall_ms": 2.4921,
-              "cpu_ms": 2.274,
+              "wall_ms": 2.8125,
+              "cpu_ms": 2.672,
               "peak_alloc_kib": 9.7715
             }
           ]
@@ -3815,18 +3815,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5155,
-              "cpu_ms": 2.344,
+              "wall_ms": 3.2582,
+              "cpu_ms": 2.99,
               "peak_alloc_kib": 5.4062
             },
             {
-              "wall_ms": 2.5185,
-              "cpu_ms": 2.266,
+              "wall_ms": 2.7435,
+              "cpu_ms": 2.44,
               "peak_alloc_kib": 4.5859
             },
             {
-              "wall_ms": 2.4007,
-              "cpu_ms": 2.198,
+              "wall_ms": 2.5165,
+              "cpu_ms": 2.334,
               "peak_alloc_kib": 4.5859
             }
           ]
@@ -3868,18 +3868,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.5156,
-              "cpu_ms": 2.29,
+              "wall_ms": 2.7944,
+              "cpu_ms": 2.585,
               "peak_alloc_kib": 3.8076
             },
             {
-              "wall_ms": 2.3362,
-              "cpu_ms": 2.183,
+              "wall_ms": 2.6749,
+              "cpu_ms": 2.459,
               "peak_alloc_kib": 3.4014
             },
             {
-              "wall_ms": 2.3079,
-              "cpu_ms": 2.079,
+              "wall_ms": 2.3483,
+              "cpu_ms": 2.224,
               "peak_alloc_kib": 3.4014
             }
           ]
@@ -3921,18 +3921,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.428,
-              "cpu_ms": 2.189,
+              "wall_ms": 2.5678,
+              "cpu_ms": 2.341,
               "peak_alloc_kib": 4.125
             },
             {
-              "wall_ms": 2.4367,
-              "cpu_ms": 2.224,
+              "wall_ms": 2.6476,
+              "cpu_ms": 2.343,
               "peak_alloc_kib": 3.4297
             },
             {
-              "wall_ms": 2.4223,
-              "cpu_ms": 2.151,
+              "wall_ms": 2.381,
+              "cpu_ms": 2.242,
               "peak_alloc_kib": 3.4297
             }
           ]
@@ -3976,18 +3976,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.3968,
-              "cpu_ms": 2.178,
+              "wall_ms": 2.4194,
+              "cpu_ms": 2.304,
               "peak_alloc_kib": 4.1807
             },
             {
-              "wall_ms": 2.5045,
-              "cpu_ms": 2.227,
+              "wall_ms": 3.2825,
+              "cpu_ms": 2.246,
               "peak_alloc_kib": 3.4854
             },
             {
-              "wall_ms": 2.3147,
-              "cpu_ms": 2.111,
+              "wall_ms": 2.4477,
+              "cpu_ms": 2.23,
               "peak_alloc_kib": 3.4854
             }
           ]
@@ -4036,18 +4036,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.3718,
-              "cpu_ms": 2.207,
+              "wall_ms": 2.5071,
+              "cpu_ms": 2.389,
               "peak_alloc_kib": 8.3389
             },
             {
-              "wall_ms": 2.3878,
-              "cpu_ms": 2.188,
+              "wall_ms": 2.9214,
+              "cpu_ms": 2.707,
               "peak_alloc_kib": 7.3057
             },
             {
-              "wall_ms": 2.5107,
-              "cpu_ms": 2.28,
+              "wall_ms": 2.546,
+              "cpu_ms": 2.389,
               "peak_alloc_kib": 7.3057
             }
           ]
@@ -4096,18 +4096,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.4016,
-              "cpu_ms": 2.183,
+              "wall_ms": 2.5223,
+              "cpu_ms": 2.368,
               "peak_alloc_kib": 8.2061
             },
             {
-              "wall_ms": 2.4104,
-              "cpu_ms": 2.258,
+              "wall_ms": 3.2955,
+              "cpu_ms": 3.049,
               "peak_alloc_kib": 7.4092
             },
             {
-              "wall_ms": 2.6513,
-              "cpu_ms": 2.318,
+              "wall_ms": 3.257,
+              "cpu_ms": 3.105,
               "peak_alloc_kib": 7.4092
             }
           ]
@@ -4155,18 +4155,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.3194,
-              "cpu_ms": 2.12,
+              "wall_ms": 3.24,
+              "cpu_ms": 3.004,
               "peak_alloc_kib": 4.0518
             },
             {
-              "wall_ms": 2.2716,
-              "cpu_ms": 2.126,
+              "wall_ms": 2.7943,
+              "cpu_ms": 2.591,
               "peak_alloc_kib": 3.4111
             },
             {
-              "wall_ms": 2.4102,
-              "cpu_ms": 2.206,
+              "wall_ms": 2.7048,
+              "cpu_ms": 2.525,
               "peak_alloc_kib": 3.4111
             }
           ]
@@ -4214,18 +4214,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.2752,
-              "cpu_ms": 2.127,
+              "wall_ms": 2.6789,
+              "cpu_ms": 2.46,
               "peak_alloc_kib": 4.0918
             },
             {
-              "wall_ms": 2.3696,
-              "cpu_ms": 2.089,
+              "wall_ms": 2.6798,
+              "cpu_ms": 2.511,
               "peak_alloc_kib": 3.3965
             },
             {
-              "wall_ms": 2.2454,
-              "cpu_ms": 2.072,
+              "wall_ms": 2.4149,
+              "cpu_ms": 2.269,
               "peak_alloc_kib": 3.3965
             }
           ]
@@ -4273,18 +4273,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.4963,
-              "cpu_ms": 2.255,
+              "wall_ms": 2.5512,
+              "cpu_ms": 2.331,
               "peak_alloc_kib": 4.166
             },
             {
-              "wall_ms": 2.5229,
-              "cpu_ms": 2.226,
+              "wall_ms": 2.6855,
+              "cpu_ms": 2.45,
               "peak_alloc_kib": 3.4707
             },
             {
-              "wall_ms": 2.2923,
-              "cpu_ms": 2.131,
+              "wall_ms": 2.4399,
+              "cpu_ms": 2.251,
               "peak_alloc_kib": 3.4707
             }
           ]
@@ -4339,18 +4339,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5044,
-              "cpu_ms": 2.278,
+              "wall_ms": 2.546,
+              "cpu_ms": 2.361,
               "peak_alloc_kib": 8.6973
             },
             {
-              "wall_ms": 2.362,
-              "cpu_ms": 2.225,
+              "wall_ms": 2.9977,
+              "cpu_ms": 2.624,
               "peak_alloc_kib": 7.4033
             },
             {
-              "wall_ms": 2.4865,
-              "cpu_ms": 2.214,
+              "wall_ms": 2.4849,
+              "cpu_ms": 2.349,
               "peak_alloc_kib": 7.4033
             }
           ]
@@ -4402,18 +4402,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.3912,
-              "cpu_ms": 2.192,
+              "wall_ms": 2.4356,
+              "cpu_ms": 2.275,
               "peak_alloc_kib": 5.5547
             },
             {
-              "wall_ms": 2.4498,
-              "cpu_ms": 2.278,
+              "wall_ms": 2.9999,
+              "cpu_ms": 2.641,
               "peak_alloc_kib": 4.7812
             },
             {
-              "wall_ms": 2.3283,
-              "cpu_ms": 2.121,
+              "wall_ms": 2.4121,
+              "cpu_ms": 2.294,
               "peak_alloc_kib": 4.7812
             }
           ]
@@ -4465,18 +4465,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.4338,
-              "cpu_ms": 2.219,
+              "wall_ms": 2.4848,
+              "cpu_ms": 2.294,
               "peak_alloc_kib": 5.793
             },
             {
-              "wall_ms": 2.4789,
-              "cpu_ms": 2.296,
+              "wall_ms": 2.9427,
+              "cpu_ms": 2.606,
               "peak_alloc_kib": 4.8301
             },
             {
-              "wall_ms": 2.3964,
-              "cpu_ms": 2.195,
+              "wall_ms": 2.3873,
+              "cpu_ms": 2.224,
               "peak_alloc_kib": 4.8301
             }
           ]
@@ -4522,18 +4522,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.3809,
-              "cpu_ms": 2.19,
+              "wall_ms": 2.3925,
+              "cpu_ms": 2.202,
               "peak_alloc_kib": 4.0547
             },
             {
-              "wall_ms": 2.4022,
-              "cpu_ms": 2.159,
+              "wall_ms": 2.6779,
+              "cpu_ms": 2.454,
               "peak_alloc_kib": 3.4141
             },
             {
-              "wall_ms": 2.4129,
-              "cpu_ms": 2.208,
+              "wall_ms": 2.5391,
+              "cpu_ms": 2.28,
               "peak_alloc_kib": 3.4141
             }
           ]
@@ -4579,18 +4579,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.3138,
-              "cpu_ms": 2.119,
+              "wall_ms": 2.517,
+              "cpu_ms": 2.376,
               "peak_alloc_kib": 4.0635
             },
             {
-              "wall_ms": 2.321,
-              "cpu_ms": 2.146,
+              "wall_ms": 2.7799,
+              "cpu_ms": 2.494,
               "peak_alloc_kib": 3.3682
             },
             {
-              "wall_ms": 2.3847,
-              "cpu_ms": 2.212,
+              "wall_ms": 2.5122,
+              "cpu_ms": 2.404,
               "peak_alloc_kib": 3.3682
             }
           ]
@@ -4636,18 +4636,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5598,
-              "cpu_ms": 2.313,
+              "wall_ms": 2.3072,
+              "cpu_ms": 2.187,
               "peak_alloc_kib": 4.1475
             },
             {
-              "wall_ms": 2.3385,
-              "cpu_ms": 2.143,
+              "wall_ms": 2.4435,
+              "cpu_ms": 2.284,
               "peak_alloc_kib": 3.4521
             },
             {
-              "wall_ms": 2.346,
-              "cpu_ms": 2.155,
+              "wall_ms": 2.7878,
+              "cpu_ms": 2.453,
               "peak_alloc_kib": 3.4521
             }
           ]
@@ -4693,18 +4693,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5473,
-              "cpu_ms": 2.304,
+              "wall_ms": 2.39,
+              "cpu_ms": 2.267,
               "peak_alloc_kib": 4.1221
             },
             {
-              "wall_ms": 2.4861,
-              "cpu_ms": 2.152,
+              "wall_ms": 2.3865,
+              "cpu_ms": 2.259,
               "peak_alloc_kib": 3.4268
             },
             {
-              "wall_ms": 2.3978,
-              "cpu_ms": 2.16,
+              "wall_ms": 2.9333,
+              "cpu_ms": 2.567,
               "peak_alloc_kib": 3.4268
             }
           ]
@@ -4756,18 +4756,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.644,
-              "cpu_ms": 2.441,
+              "wall_ms": 2.528,
+              "cpu_ms": 2.248,
               "peak_alloc_kib": 5.8877
             },
             {
-              "wall_ms": 2.3475,
-              "cpu_ms": 2.157,
+              "wall_ms": 2.5613,
+              "cpu_ms": 2.4,
               "peak_alloc_kib": 4.8623
             },
             {
-              "wall_ms": 2.3878,
-              "cpu_ms": 2.193,
+              "wall_ms": 2.9307,
+              "cpu_ms": 2.574,
               "peak_alloc_kib": 4.8623
             }
           ]
@@ -4813,18 +4813,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5167,
-              "cpu_ms": 2.313,
+              "wall_ms": 2.4929,
+              "cpu_ms": 2.205,
               "peak_alloc_kib": 4.0254
             },
             {
-              "wall_ms": 2.2524,
-              "cpu_ms": 2.106,
+              "wall_ms": 2.4109,
+              "cpu_ms": 2.268,
               "peak_alloc_kib": 3.3848
             },
             {
-              "wall_ms": 2.4322,
-              "cpu_ms": 2.142,
+              "wall_ms": 2.744,
+              "cpu_ms": 2.398,
               "peak_alloc_kib": 3.3848
             }
           ]
@@ -4860,18 +4860,18 @@
         }
       },
       "timing": {
-        "bootstrap_ms": 703.381,
+        "bootstrap_ms": 673.7747,
         "bootstrap_scope": "Service construction, SQLite initialize/migrations, role/session, fixture writes; not process startup",
-        "first_query_ms": 3.2828,
-        "wall_p50_ms": 2.4322,
-        "wall_p95_ms": 2.7258,
-        "warm_wall_p50_ms": 2.4322,
-        "warm_wall_p95_ms": 2.7135,
-        "warm_cpu_p50_ms": 2.223,
-        "warm_cpu_p95_ms": 2.418,
+        "first_query_ms": 3.2377,
+        "wall_p50_ms": 2.5832,
+        "wall_p95_ms": 3.2582,
+        "warm_wall_p50_ms": 2.5832,
+        "warm_wall_p95_ms": 3.2582,
+        "warm_cpu_p50_ms": 2.372,
+        "warm_cpu_p95_ms": 2.99,
         "warm_peak_alloc_p50_kib": 3.8076,
         "warm_peak_alloc_p95_kib": 7.9902,
-        "rss_high_water_kib": 66432.0,
+        "rss_high_water_kib": 68816.0,
         "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
         "sample_count": 126,
         "repetitions_per_case": 3
@@ -4939,18 +4939,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.8113,
-              "cpu_ms": 2.644,
+              "wall_ms": 2.7521,
+              "cpu_ms": 2.482,
               "peak_alloc_kib": 23.208
             },
             {
-              "wall_ms": 2.5704,
-              "cpu_ms": 2.397,
+              "wall_ms": 2.5576,
+              "cpu_ms": 2.39,
               "peak_alloc_kib": 22.3242
             },
             {
-              "wall_ms": 2.6839,
-              "cpu_ms": 2.501,
+              "wall_ms": 2.785,
+              "cpu_ms": 2.525,
               "peak_alloc_kib": 22.3242
             }
           ]
@@ -5004,18 +5004,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.8032,
-              "cpu_ms": 2.604,
+              "wall_ms": 2.6067,
+              "cpu_ms": 2.439,
               "peak_alloc_kib": 22.3242
             },
             {
-              "wall_ms": 2.5801,
-              "cpu_ms": 2.362,
+              "wall_ms": 2.5863,
+              "cpu_ms": 2.422,
               "peak_alloc_kib": 22.3242
             },
             {
-              "wall_ms": 2.6936,
-              "cpu_ms": 2.494,
+              "wall_ms": 2.7858,
+              "cpu_ms": 2.582,
               "peak_alloc_kib": 22.3242
             }
           ]
@@ -5070,18 +5070,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.6887,
-              "cpu_ms": 2.432,
+              "wall_ms": 2.5957,
+              "cpu_ms": 2.345,
               "peak_alloc_kib": 22.3242
             },
             {
-              "wall_ms": 2.5245,
-              "cpu_ms": 2.36,
+              "wall_ms": 2.5903,
+              "cpu_ms": 2.448,
               "peak_alloc_kib": 22.3242
             },
             {
-              "wall_ms": 2.5279,
-              "cpu_ms": 2.362,
+              "wall_ms": 2.7741,
+              "cpu_ms": 2.526,
               "peak_alloc_kib": 22.3242
             }
           ]
@@ -5135,18 +5135,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.8126,
-              "cpu_ms": 2.632,
+              "wall_ms": 2.6719,
+              "cpu_ms": 2.403,
               "peak_alloc_kib": 22.3242
             },
             {
-              "wall_ms": 2.7155,
-              "cpu_ms": 2.526,
+              "wall_ms": 2.4967,
+              "cpu_ms": 2.371,
               "peak_alloc_kib": 22.3242
             },
             {
-              "wall_ms": 2.5836,
-              "cpu_ms": 2.42,
+              "wall_ms": 2.7268,
+              "cpu_ms": 2.517,
               "peak_alloc_kib": 22.3242
             }
           ]
@@ -5200,18 +5200,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.7749,
-              "cpu_ms": 2.533,
+              "wall_ms": 2.6561,
+              "cpu_ms": 2.322,
               "peak_alloc_kib": 22.4648
             },
             {
-              "wall_ms": 2.6262,
-              "cpu_ms": 2.377,
+              "wall_ms": 2.4696,
+              "cpu_ms": 2.284,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.5235,
-              "cpu_ms": 2.349,
+              "wall_ms": 2.6916,
+              "cpu_ms": 2.48,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5266,18 +5266,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.6633,
-              "cpu_ms": 2.479,
+              "wall_ms": 2.4827,
+              "cpu_ms": 2.286,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.5134,
-              "cpu_ms": 2.344,
+              "wall_ms": 2.6535,
+              "cpu_ms": 2.418,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.5153,
-              "cpu_ms": 2.35,
+              "wall_ms": 2.661,
+              "cpu_ms": 2.451,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5332,18 +5332,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.6965,
-              "cpu_ms": 2.481,
+              "wall_ms": 2.4946,
+              "cpu_ms": 2.31,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.5294,
-              "cpu_ms": 2.394,
+              "wall_ms": 2.5207,
+              "cpu_ms": 2.265,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.4502,
-              "cpu_ms": 2.298,
+              "wall_ms": 2.4726,
+              "cpu_ms": 2.331,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5397,18 +5397,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.7275,
-              "cpu_ms": 2.5,
+              "wall_ms": 2.6195,
+              "cpu_ms": 2.445,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.6676,
-              "cpu_ms": 2.539,
+              "wall_ms": 2.6973,
+              "cpu_ms": 2.38,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.548,
-              "cpu_ms": 2.385,
+              "wall_ms": 2.5676,
+              "cpu_ms": 2.433,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5462,18 +5462,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.7268,
-              "cpu_ms": 2.51,
+              "wall_ms": 7.5327,
+              "cpu_ms": 4.328,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.5672,
-              "cpu_ms": 2.434,
+              "wall_ms": 34.1787,
+              "cpu_ms": 3.751,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.5981,
-              "cpu_ms": 2.412,
+              "wall_ms": 3.8233,
+              "cpu_ms": 3.083,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5527,18 +5527,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.6389,
-              "cpu_ms": 2.483,
+              "wall_ms": 6.1314,
+              "cpu_ms": 5.033,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.6133,
-              "cpu_ms": 2.458,
+              "wall_ms": 2.8272,
+              "cpu_ms": 2.718,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.6174,
-              "cpu_ms": 2.347,
+              "wall_ms": 2.7836,
+              "cpu_ms": 2.715,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5592,18 +5592,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.515,
-              "cpu_ms": 2.339,
+              "wall_ms": 2.7505,
+              "cpu_ms": 2.64,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.707,
-              "cpu_ms": 2.502,
+              "wall_ms": 2.5268,
+              "cpu_ms": 2.457,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.6133,
-              "cpu_ms": 2.352,
+              "wall_ms": 2.64,
+              "cpu_ms": 2.555,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5657,18 +5657,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.5033,
-              "cpu_ms": 2.315,
+              "wall_ms": 3.0481,
+              "cpu_ms": 2.873,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.7754,
-              "cpu_ms": 2.549,
+              "wall_ms": 2.6082,
+              "cpu_ms": 2.539,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.8556,
-              "cpu_ms": 2.357,
+              "wall_ms": 2.6242,
+              "cpu_ms": 2.544,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5720,18 +5720,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.7047,
-              "cpu_ms": 2.443,
+              "wall_ms": 2.811,
+              "cpu_ms": 2.555,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.7893,
-              "cpu_ms": 2.527,
+              "wall_ms": 2.5067,
+              "cpu_ms": 2.364,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.5576,
-              "cpu_ms": 2.381,
+              "wall_ms": 2.4816,
+              "cpu_ms": 2.321,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5783,18 +5783,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.5536,
-              "cpu_ms": 2.378,
+              "wall_ms": 2.6202,
+              "cpu_ms": 2.417,
               "peak_alloc_kib": 22.6289
             },
             {
-              "wall_ms": 2.7442,
-              "cpu_ms": 2.507,
+              "wall_ms": 2.6976,
+              "cpu_ms": 2.556,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.6141,
-              "cpu_ms": 2.321,
+              "wall_ms": 2.6827,
+              "cpu_ms": 2.446,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5846,18 +5846,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.5689,
-              "cpu_ms": 2.381,
+              "wall_ms": 2.5769,
+              "cpu_ms": 2.42,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.639,
-              "cpu_ms": 2.41,
+              "wall_ms": 2.6222,
+              "cpu_ms": 2.431,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.6401,
-              "cpu_ms": 2.31,
+              "wall_ms": 2.638,
+              "cpu_ms": 2.355,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5909,18 +5909,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.4475,
-              "cpu_ms": 2.286,
+              "wall_ms": 2.551,
+              "cpu_ms": 2.394,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.671,
-              "cpu_ms": 2.455,
+              "wall_ms": 2.6572,
+              "cpu_ms": 2.432,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.6183,
-              "cpu_ms": 2.456,
+              "wall_ms": 2.501,
+              "cpu_ms": 2.324,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -5975,18 +5975,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5765,
-              "cpu_ms": 2.392,
+              "wall_ms": 2.5134,
+              "cpu_ms": 2.349,
               "peak_alloc_kib": 22.6523
             },
             {
-              "wall_ms": 2.8145,
-              "cpu_ms": 2.474,
+              "wall_ms": 2.7333,
+              "cpu_ms": 2.488,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.5154,
-              "cpu_ms": 2.328,
+              "wall_ms": 2.6257,
+              "cpu_ms": 2.325,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6038,18 +6038,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.6033,
-              "cpu_ms": 2.318,
+              "wall_ms": 2.5319,
+              "cpu_ms": 2.366,
               "peak_alloc_kib": 22.6758
             },
             {
-              "wall_ms": 2.4824,
-              "cpu_ms": 2.308,
+              "wall_ms": 2.622,
+              "cpu_ms": 2.392,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.8168,
-              "cpu_ms": 2.607,
+              "wall_ms": 2.6203,
+              "cpu_ms": 2.324,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6101,18 +6101,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.6407,
-              "cpu_ms": 2.466,
+              "wall_ms": 2.5232,
+              "cpu_ms": 2.352,
               "peak_alloc_kib": 22.9805
             },
             {
-              "wall_ms": 2.5644,
-              "cpu_ms": 2.39,
+              "wall_ms": 2.6568,
+              "cpu_ms": 2.46,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.769,
-              "cpu_ms": 2.575,
+              "wall_ms": 2.489,
+              "cpu_ms": 2.346,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6164,18 +6164,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.737,
-              "cpu_ms": 2.439,
+              "wall_ms": 2.484,
+              "cpu_ms": 2.314,
               "peak_alloc_kib": 23.1211
             },
             {
-              "wall_ms": 2.5832,
-              "cpu_ms": 2.339,
+              "wall_ms": 2.6501,
+              "cpu_ms": 2.421,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.7972,
-              "cpu_ms": 2.584,
+              "wall_ms": 2.5165,
+              "cpu_ms": 2.308,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6227,18 +6227,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.6832,
-              "cpu_ms": 2.379,
+              "wall_ms": 2.4506,
+              "cpu_ms": 2.278,
               "peak_alloc_kib": 23.1211
             },
             {
-              "wall_ms": 2.6005,
-              "cpu_ms": 2.396,
+              "wall_ms": 2.5252,
+              "cpu_ms": 2.355,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.8508,
-              "cpu_ms": 2.637,
+              "wall_ms": 2.8283,
+              "cpu_ms": 2.616,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6299,18 +6299,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.6771,
-              "cpu_ms": 2.374,
+              "wall_ms": 2.5155,
+              "cpu_ms": 2.372,
               "peak_alloc_kib": 11.2314
             },
             {
-              "wall_ms": 2.5799,
-              "cpu_ms": 2.347,
+              "wall_ms": 2.5445,
+              "cpu_ms": 2.386,
               "peak_alloc_kib": 10.4424
             },
             {
-              "wall_ms": 2.7323,
-              "cpu_ms": 2.434,
+              "wall_ms": 2.5942,
+              "cpu_ms": 2.373,
               "peak_alloc_kib": 10.4424
             }
           ]
@@ -6371,18 +6371,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5171,
-              "cpu_ms": 2.322,
+              "wall_ms": 2.375,
+              "cpu_ms": 2.216,
               "peak_alloc_kib": 11.0283
             },
             {
-              "wall_ms": 2.5473,
-              "cpu_ms": 2.316,
+              "wall_ms": 2.3707,
+              "cpu_ms": 2.209,
               "peak_alloc_kib": 10.4424
             },
             {
-              "wall_ms": 2.7938,
-              "cpu_ms": 2.486,
+              "wall_ms": 2.5488,
+              "cpu_ms": 2.363,
               "peak_alloc_kib": 10.4424
             }
           ]
@@ -6439,18 +6439,18 @@
           "recall": 0.6667,
           "samples": [
             {
-              "wall_ms": 2.8894,
-              "cpu_ms": 2.516,
+              "wall_ms": 2.5278,
+              "cpu_ms": 2.355,
               "peak_alloc_kib": 23.4102
             },
             {
-              "wall_ms": 2.6169,
-              "cpu_ms": 2.427,
+              "wall_ms": 2.5431,
+              "cpu_ms": 2.384,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.792,
-              "cpu_ms": 2.573,
+              "wall_ms": 2.588,
+              "cpu_ms": 2.389,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6505,18 +6505,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.6278,
-              "cpu_ms": 2.433,
+              "wall_ms": 2.4638,
+              "cpu_ms": 2.319,
               "peak_alloc_kib": 23.1211
             },
             {
-              "wall_ms": 2.6209,
-              "cpu_ms": 2.434,
+              "wall_ms": 2.4442,
+              "cpu_ms": 2.304,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.7645,
-              "cpu_ms": 2.527,
+              "wall_ms": 2.472,
+              "cpu_ms": 2.295,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6571,18 +6571,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.672,
-              "cpu_ms": 2.424,
+              "wall_ms": 2.7057,
+              "cpu_ms": 2.537,
               "peak_alloc_kib": 23.1211
             },
             {
-              "wall_ms": 2.5703,
-              "cpu_ms": 2.383,
+              "wall_ms": 2.5812,
+              "cpu_ms": 2.41,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.7682,
-              "cpu_ms": 2.553,
+              "wall_ms": 2.5463,
+              "cpu_ms": 2.374,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6637,18 +6637,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5288,
-              "cpu_ms": 2.381,
+              "wall_ms": 2.7032,
+              "cpu_ms": 2.513,
               "peak_alloc_kib": 23.3555
             },
             {
-              "wall_ms": 2.5753,
-              "cpu_ms": 2.411,
+              "wall_ms": 2.5888,
+              "cpu_ms": 2.29,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.6609,
-              "cpu_ms": 2.456,
+              "wall_ms": 2.5262,
+              "cpu_ms": 2.36,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6705,18 +6705,18 @@
           "recall": 0.6667,
           "samples": [
             {
-              "wall_ms": 2.5643,
-              "cpu_ms": 2.426,
+              "wall_ms": 2.7325,
+              "cpu_ms": 2.508,
               "peak_alloc_kib": 23.3555
             },
             {
-              "wall_ms": 2.5891,
-              "cpu_ms": 2.362,
+              "wall_ms": 2.5144,
+              "cpu_ms": 2.327,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.5886,
-              "cpu_ms": 2.399,
+              "wall_ms": 2.4761,
+              "cpu_ms": 2.284,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6772,18 +6772,18 @@
           "recall": 0.5,
           "samples": [
             {
-              "wall_ms": 2.6801,
-              "cpu_ms": 2.516,
+              "wall_ms": 2.621,
+              "cpu_ms": 2.439,
               "peak_alloc_kib": 23.3555
             },
             {
-              "wall_ms": 2.5783,
-              "cpu_ms": 2.382,
+              "wall_ms": 2.5712,
+              "cpu_ms": 2.413,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.5404,
-              "cpu_ms": 2.337,
+              "wall_ms": 2.4721,
+              "cpu_ms": 2.288,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6838,18 +6838,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.7896,
-              "cpu_ms": 2.51,
+              "wall_ms": 2.7255,
+              "cpu_ms": 2.516,
               "peak_alloc_kib": 23.3555
             },
             {
-              "wall_ms": 2.82,
-              "cpu_ms": 2.404,
+              "wall_ms": 2.4068,
+              "cpu_ms": 2.243,
               "peak_alloc_kib": 22.3945
             },
             {
-              "wall_ms": 2.5701,
-              "cpu_ms": 2.365,
+              "wall_ms": 2.5254,
+              "cpu_ms": 2.369,
               "peak_alloc_kib": 22.3945
             }
           ]
@@ -6909,18 +6909,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.7462,
-              "cpu_ms": 2.457,
+              "wall_ms": 2.4882,
+              "cpu_ms": 2.339,
               "peak_alloc_kib": 18.7354
             },
             {
-              "wall_ms": 2.5392,
-              "cpu_ms": 2.291,
+              "wall_ms": 2.5229,
+              "cpu_ms": 2.378,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.4718,
-              "cpu_ms": 2.277,
+              "wall_ms": 2.4578,
+              "cpu_ms": 2.206,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -6980,17 +6980,17 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.7193,
-              "cpu_ms": 2.423,
+              "wall_ms": 2.5093,
+              "cpu_ms": 2.324,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.6598,
-              "cpu_ms": 2.328,
+              "wall_ms": 2.6854,
+              "cpu_ms": 2.425,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.4706,
+              "wall_ms": 2.4411,
               "cpu_ms": 2.284,
               "peak_alloc_kib": 17.3447
             }
@@ -7052,18 +7052,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.6204,
-              "cpu_ms": 2.409,
+              "wall_ms": 2.4603,
+              "cpu_ms": 2.294,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.6347,
-              "cpu_ms": 2.37,
+              "wall_ms": 2.5487,
+              "cpu_ms": 2.358,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.4573,
-              "cpu_ms": 2.296,
+              "wall_ms": 2.3902,
+              "cpu_ms": 2.231,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7125,18 +7125,18 @@
           "recall": 0.5,
           "samples": [
             {
-              "wall_ms": 2.6156,
-              "cpu_ms": 2.419,
+              "wall_ms": 2.5983,
+              "cpu_ms": 2.318,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.5029,
-              "cpu_ms": 2.293,
+              "wall_ms": 2.5652,
+              "cpu_ms": 2.398,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.5997,
-              "cpu_ms": 2.26,
+              "wall_ms": 2.3965,
+              "cpu_ms": 2.237,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7197,18 +7197,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.5909,
-              "cpu_ms": 2.365,
+              "wall_ms": 2.5959,
+              "cpu_ms": 2.319,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.791,
-              "cpu_ms": 2.378,
+              "wall_ms": 2.557,
+              "cpu_ms": 2.291,
               "peak_alloc_kib": 17.3447
             },
             {
               "wall_ms": 2.5448,
-              "cpu_ms": 2.298,
+              "cpu_ms": 2.324,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7269,18 +7269,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.494,
-              "cpu_ms": 2.305,
+              "wall_ms": 2.5091,
+              "cpu_ms": 2.321,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.9584,
-              "cpu_ms": 2.706,
+              "wall_ms": 2.418,
+              "cpu_ms": 2.268,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.704,
-              "cpu_ms": 2.497,
+              "wall_ms": 2.5843,
+              "cpu_ms": 2.377,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7338,18 +7338,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.5466,
-              "cpu_ms": 2.384,
+              "wall_ms": 2.4645,
+              "cpu_ms": 2.31,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.7372,
-              "cpu_ms": 2.457,
+              "wall_ms": 2.5184,
+              "cpu_ms": 2.343,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.544,
-              "cpu_ms": 2.322,
+              "wall_ms": 2.7698,
+              "cpu_ms": 2.371,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7407,18 +7407,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.4725,
-              "cpu_ms": 2.302,
+              "wall_ms": 2.4457,
+              "cpu_ms": 2.273,
               "peak_alloc_kib": 18.2822
             },
             {
-              "wall_ms": 3.333,
-              "cpu_ms": 2.916,
+              "wall_ms": 2.5268,
+              "cpu_ms": 2.308,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.8749,
-              "cpu_ms": 2.559,
+              "wall_ms": 2.5748,
+              "cpu_ms": 2.34,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7476,18 +7476,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.756,
-              "cpu_ms": 2.596,
+              "wall_ms": 2.685,
+              "cpu_ms": 2.412,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.6239,
-              "cpu_ms": 2.439,
+              "wall_ms": 2.6427,
+              "cpu_ms": 2.35,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.5329,
-              "cpu_ms": 2.329,
+              "wall_ms": 2.5133,
+              "cpu_ms": 2.325,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7545,18 +7545,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.5877,
-              "cpu_ms": 2.425,
+              "wall_ms": 2.66,
+              "cpu_ms": 2.435,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 3.0829,
-              "cpu_ms": 2.761,
+              "wall_ms": 2.6197,
+              "cpu_ms": 2.302,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.7515,
-              "cpu_ms": 2.458,
+              "wall_ms": 2.4184,
+              "cpu_ms": 2.248,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7617,18 +7617,18 @@
           "recall": 1.0,
           "samples": [
             {
-              "wall_ms": 2.85,
-              "cpu_ms": 2.554,
+              "wall_ms": 2.7083,
+              "cpu_ms": 2.467,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.9257,
-              "cpu_ms": 2.488,
+              "wall_ms": 2.563,
+              "cpu_ms": 2.321,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.4798,
-              "cpu_ms": 2.318,
+              "wall_ms": 2.4106,
+              "cpu_ms": 2.261,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7686,18 +7686,18 @@
           "recall": 0.0,
           "samples": [
             {
-              "wall_ms": 2.6398,
-              "cpu_ms": 2.459,
+              "wall_ms": 2.5513,
+              "cpu_ms": 2.382,
               "peak_alloc_kib": 18.3057
             },
             {
-              "wall_ms": 2.8929,
-              "cpu_ms": 2.575,
+              "wall_ms": 2.4615,
+              "cpu_ms": 2.32,
               "peak_alloc_kib": 17.3447
             },
             {
-              "wall_ms": 2.6322,
-              "cpu_ms": 2.369,
+              "wall_ms": 2.5024,
+              "cpu_ms": 2.267,
               "peak_alloc_kib": 17.3447
             }
           ]
@@ -7733,18 +7733,18 @@
         }
       },
       "timing": {
-        "bootstrap_ms": 686.6783,
+        "bootstrap_ms": 658.933,
         "bootstrap_scope": "Service construction, SQLite initialize/migrations, role/session, fixture writes; not process startup",
-        "first_query_ms": 2.8113,
-        "wall_p50_ms": 2.6239,
-        "wall_p95_ms": 2.8749,
-        "warm_wall_p50_ms": 2.6239,
-        "warm_wall_p95_ms": 2.8749,
-        "warm_cpu_p50_ms": 2.411,
-        "warm_cpu_p95_ms": 2.604,
+        "first_query_ms": 2.7521,
+        "wall_p50_ms": 2.5676,
+        "wall_p95_ms": 2.8272,
+        "warm_wall_p50_ms": 2.5676,
+        "warm_wall_p95_ms": 2.8272,
+        "warm_cpu_p50_ms": 2.371,
+        "warm_cpu_p95_ms": 2.715,
         "warm_peak_alloc_p50_kib": 22.3945,
         "warm_peak_alloc_p95_kib": 23.1211,
-        "rss_high_water_kib": 69024.0,
+        "rss_high_water_kib": 70048.0,
         "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
         "sample_count": 126,
         "repetitions_per_case": 3

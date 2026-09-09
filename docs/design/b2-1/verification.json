@@ -45,6 +45,10 @@
       "Live #/session redirects to #/chat without .live-unavailable-state",
       "Live #/remote redirects to #/settings?cat=system without unavailable state, including reopening the deep link",
       "Live #/collab/wf-b2-review/canvas remains blocked"
-    ]
+    ],
+    "evaluation_source_head": "1e0cfc749125de98c85fe15001f2bf72811361f8",
+    "evaluation_raw_sha256": "85e895e5b83be582da7cbb788aef2ca16b4bb1cb66fbdbad0fb9e8f459504f25",
+    "code_review": "passed; all code and provenance findings closed",
+    "reviewed_code_head": "1e0cfc749125de98c85fe15001f2bf72811361f8"
   }
 }

@@ -2,7 +2,7 @@
 
 状态：已准备合成基线与可复跑脚本；这是旧 Memory 行为/性能记录，不是新插件、Host 或新 FTS 的实现验收。
 
-本报告和脚本在 A 实施 worktree `/private/tmp/operant-b2-1-a` 上核对；固定基线 HEAD 为 `ecb00437e9a44a5e79d54e8cf4944fd0d456bf02`，本次集成运行 HEAD 为 `03cd4b040be56dc6625ceae76adf7d2c4236aab1`。脚本报告会写入实际 `worktree`、运行时 `source_root`、固定 `base_head`、运行时 Git `head`、fixture 绝对路径和 `--output` 绝对路径；这些路径字段用于确认没有读写治理根旧副本。
+本报告和脚本在 A 实施 worktree `/private/tmp/operant-b2-1-a` 上核对；固定基线 HEAD 为 `ecb00437e9a44a5e79d54e8cf4944fd0d456bf02`，本次集成运行 HEAD 为 `1e0cfc749125de98c85fe15001f2bf72811361f8`。脚本报告会写入实际 `worktree`、运行时 `source_root`、固定 `base_head`、运行时 Git `head`、fixture 绝对路径和 `--output` 绝对路径；这些路径字段用于确认没有读写治理根旧副本。
 
 ## 数据和边界
 
@@ -40,15 +40,15 @@ uv run --offline python scripts/benchmark_memory_baseline.py --repetitions 3 \
 
 不传 `--output` 时报告输出到 stdout。`--repetitions` 至少为 1；默认 3。报告包含 fixture canonical/file hash、开发/保留集质量摘要、每个策略的直接结果/成本、`fixture_load_ms`、`bootstrap_ms`、`first_query_ms`、`warm_wall_p50_ms`、`warm_wall_p95_ms`、CPU p50/p95、峰值分配 p50/p95 和带不可比范围说明的 RSS high-water。
 
-2026-09-09 在 `/private/tmp/operant-b2-1-a@03cd4b040be56dc6625ceae76adf7d2c4236aab1` 用 `uv run --offline`、`--repetitions 3` 实测，fixture 规范化 JSON SHA-256 为 `6e250c0a28de45880ec43a064cba3dbaf8d2ddc1b86a84700beca86172481f51`，fixture 文件 SHA-256 为 `d4ab1378850a4dbc0691a0cb12f79e3cbb9ec5af225887e849889ad1e3858895`；三条路径安全硬门均通过（0 forbidden hit）。原始结果见 [`evaluation-results.json`](evaluation-results.json)，文件 SHA-256 为 `1cae7e1ce5c3129d9a690bffdabfcf79183fb2a9a01887953dc71aa7bc51d22b`：
+2026-09-09 在 `/private/tmp/operant-b2-1-a@1e0cfc749125de98c85fe15001f2bf72811361f8` 用 `uv run --offline`、`--repetitions 3` 实测，fixture 规范化 JSON SHA-256 为 `6e250c0a28de45880ec43a064cba3dbaf8d2ddc1b86a84700beca86172481f51`，fixture 文件 SHA-256 为 `d4ab1378850a4dbc0691a0cb12f79e3cbb9ec5af225887e849889ad1e3858895`；三条路径安全硬门均通过（0 forbidden hit）。原始结果见 [`evaluation-results.json`](evaluation-results.json)，文件 SHA-256 为 `85e895e5b83be582da7cbb788aef2ca16b4bb1cb66fbdbad0fb9e8f459504f25`：
 
 本次实际读入 `/private/tmp/operant-b2-1-a/tests/fixtures/b2_1/memory_baseline.json`，输出 `/private/tmp/operant-b2-1-a/docs/design/b2-1/evaluation-results.json`。报告中的 `implementation.worktree`、`implementation.source_root`、`implementation.base_head` 和 `implementation.head` 均回读为目标 A worktree、固定基线和运行 HEAD。
 
 | 策略 | 开发集 macro P/R | 保留集 macro P/R | bootstrap / first-query ms | warm wall p50/p95 ms | warm CPU p95 ms | warm 峰值分配 p95 KiB |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
-| `no_memory` | 0.2667 / 0.2667 | 0.4167 / 0.4167 | 0.0002 / 0.0011 | 0.0004 / 0.0005 | 0.0050 | 0.3281 |
-| `old_direct_query` | 0.7000 / 0.7000 | 0.7500 / 0.7500 | 703.3810 / 3.2828 | 2.4322 / 2.7135 | 2.4180 | 7.9902 |
-| `old_recent_entries` | 0.0889 / 0.2944 | 0.0833 / 0.3750 | 686.6783 / 2.8113 | 2.6239 / 2.8749 | 2.6040 | 23.1211 |
+| `no_memory` | 0.2667 / 0.2667 | 0.4167 / 0.4167 | 0.0001 / 0.0013 | 0.0005 / 0.0005 | 0.0050 | 0.3594 |
+| `old_direct_query` | 0.7000 / 0.7000 | 0.7500 / 0.7500 | 673.7747 / 3.2377 | 2.5832 / 3.2582 | 2.9900 | 7.9902 |
+| `old_recent_entries` | 0.0889 / 0.2944 | 0.0833 / 0.3750 | 658.9330 / 2.7521 | 2.5676 / 2.8272 | 2.7150 | 23.1211 |
 
 本次基线结果以 raw JSON 为准：`no_memory` 返回 0 条且零 Service query call；有记忆策略各执行 126 次 Service query call，实际 SQLite SQL 次数保持 `unknown`。bootstrap 值包含 Service/SQLite/fixture 写入初始化，不是进程启动；`first_query_ms` 是 bootstrap 后首个查询。RSS 值是整次顺序运行的进程 high-water，不能用于策略间比较。以上结果没有证明任何新算法收益。模型调用为 0，Provider usage、Token 和模型成本为 `unknown`。wall/CPU 数字是当前机器的观测值，复跑时会随负载变化。
 
@@ -63,3 +63,5 @@ uv run pytest tests/test_b2_1_benchmark.py
 ## 待后续补测
 
 以下项目在 B2-1 明确保持 pending：未来 Host 可信进程内模式、未来 Host 隔离模式、新任务 FTS、真实模型 usage/Token/端到端成本，以及生产用户数据。`no_memory` 仅是已完成的确定性检索控制，不能替代真实模型无记忆端到端对照。Host 两模式需要对应契约、实现和正式入口就绪后，使用同一直接算法、固定权限/预算和隔离数据集另行测量；本基线不会读取或回写真实知识。
+
+本报告在已提交的 `1e0cfc749125de98c85fe15001f2bf72811361f8` 上重新生成，所记录 HEAD 含实际指标脚本；没有用未提交的脚本冒充该 HEAD。
