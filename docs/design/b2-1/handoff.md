@@ -2,7 +2,7 @@
 
 记录身份：Codex（本批协调方与公共契约负责人）；适用对象：Antigravity、集成 Codex、Reviewer。
 
-**A 线已交付，B GUI 代码已集成；独立代码/证据审查通过。B2-1 整批仍待真实 Tauri 补证，不进入 MP-1。**
+**A 线已交付，B GUI 代码已集成；独立代码/证据审查通过。GUI-L0 原生补证及同一 Reviewer 增量复核通过，B2-1 本批完成；不进入 MP-1。**
 代码验收 HEAD：`1e0cfc749125de98c85fe15001f2bf72811361f8`，worktree `/private/tmp/operant-b2-1-a`；
 分支 `codex/b2-1-contract-baseline`，基线 `ecb0043`。本文件及最终报告的后续提交仅同步证据。
 治理根 `/Users/bigo/agentworkspace/codexworkspace/operant`，治理版本与归属见 [任务包](task-package.md)。
@@ -36,8 +36,8 @@ SDK 由 Codex 单一持有，未纳入 B 的重复 SDK 测试及仅为 strip-onl
 
 ## 缺口与下一步
 
-Antigravity 已补构建和进程记录；Codex 经 User 当次授权后，已在真实原生 WebView 验证 Mock→Live、任务页阻断、任务页刷新与连接失败行为，见 [原生窗口证据](tauri-native-evidence.md)。
-原生旧别名及其他深链仍未覆盖。续接工具集缺少 CUA，当前无法继续窗口操作；恢复工具后直接复用已有产物和证据，完成剩余项再关闭本批门禁，无需重新授权。
+Antigravity 已实名交付 B 代码及构建/进程记录；Codex 已补齐真实 Tauri debug WebView 的模式切换、任务/画布刷新、remote/session 别名、Agent/Run/Workflow 深链和显式连接失败观察，见 [原生窗口证据](tauri-native-evidence.md)。
+同一 `gpt-5.6-luna / max` Reviewer 已通过新增证据的增量复核，本批门禁关闭；Fast 无可用开关。Core 预检失败明确可见；本批不声称成功模型调用或打包 dist 验收。
 
 没有迁移用户库、复制凭据、启用 MP-1、推送、合并或部署。模型调用为 0，Provider usage/cost unknown；
 Host 两模式、真实生命周期执行、新 FTS 和真实模型链路按后续对应批次验收。

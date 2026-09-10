@@ -71,7 +71,8 @@ Python/TypeScript Client 接口声明；**未注册运行 API、未实现 Plugin
 本批完成状态及验证结果见 [交接](design/b2-1/handoff.md)，不得将契约准备等同于 MP-1 或产品验收。
 GUI-L0 集成 Antigravity `ce2ab66` 的嵌套路由、旧深链和 Demo Hook 隔离，模式切换清空演示选择。
 旧 HttpClient 的合成 Thread/消息/Context/审批/Graph/Workflow/Remote 与伪造 SSE Cursor 路径显式失败；
-已有协商生成 Client 继续承载受支持 Live 功能。当前测试/构建证据不等于真实 Tauri 桌面验收。
+已有协商生成 Client 继续承载受支持 Live 功能。真实 Tauri debug WebView 已验证本批隔离、别名、嵌套深链与刷新，见 [原生证据](design/b2-1/tauri-native-evidence.md)。
+Core 预检失败明确显示；本批没有成功模型链路或打包发布产物验收。
 
 
 

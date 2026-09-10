@@ -31,7 +31,7 @@
   "ruff_check": "passed",
   "mypy": "passed (92 source files)",
   "uv_lock_offline": "passed",
-  "tauri_runtime": "partially_verified_native_debug_webview",
+  "tauri_runtime": "verified_native_debug_webview_gui_l0",
   "review_fix": {
     "contract_benchmark_passed": 25,
     "gui_tests_passed": 82,
@@ -61,14 +61,20 @@
       "mock to live removes demo views and visible selection",
       "live tasks blocked",
       "native tasks reload retains live mode and blocked view",
-      "connection failure explicitly shown with disabled actions"
-    ],
-    "pending": [
+      "connection failure explicitly shown with disabled actions",
       "native remote/session alias navigation",
-      "native collab canvas/agents/runs/workflow deep-link walkthrough"
+      "native collab canvas/agents/runs/workflow deep-link walkthrough",
+      "native settings and canvas reload retain live routing"
     ],
-    "controller": "unavailable in resumed tool set",
-    "permission": "already granted by User; no new permission required for same binary"
+    "pending": [],
+    "controller": "CUA restored; native App/AX interactions completed 2026-09-10",
+    "permission": "already granted by User; no new permission required for same binary",
+    "supplement_source_head": "6534c2c0ee06e235f297a2c3dd605bd97a3944fe",
+    "limitations": [
+      "debug WebView + Vite, not packaged dist acceptance",
+      "Core preflight 400 explicitly fails; no successful model invocation"
+    ],
+    "review": "passed: same gpt-5.6-luna/max Reviewer, GUI-L0 native debug scope"
   },
   "completed_full_run": {
     "source_head": "79d21e8d7b9e0bbb9dcfae7173c81820a65fa855",
@@ -83,5 +89,6 @@
     "log_sha256": "08c33e538825d691b6641c019ba381dc2ad87913812e695b93fa470b043fa980",
     "environment": "local loopback permitted; no real model invocation",
     "committed_log": "full-pytest.txt"
-  }
+  },
+  "batch_status": "B2-1 complete; MP-1 not started"
 }

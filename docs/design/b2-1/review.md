@@ -81,3 +81,21 @@
 - `evaluation-results.json` 的 `implementation.head` 已更新为 `1e0cfc749125de98c85fe15001f2bf72811361f8`，文件 SHA-256 为 `85e895e5b83be582da7cbb788aef2ca16b4bb1cb66fbdbad0fb9e8f459504f25`。
 - `evaluation-baseline.md` 已同步该 HEAD、raw hash、bootstrap/first-query/service-query 字段与表格数值；raw 中的 timing 字段与当前脚本一致，且报告仍明确 RSS 仅为整次进程 high-water、SQL 次数为 unknown、Host 门 pending。
 - 因此最后一项 raw provenance P2 **已关闭**。最终代码/证据审查结论保持：**通过**；真实 Tauri 仍未验证，单独保留为验收限制。
+
+## GUI-L0 原生 Tauri 证据增量复核（6534c2c）
+
+- 实际配置仍为 `gpt-5.6-luna` / reasoning `max`；工具没有 Fast 开关，Fast 未启用且不可配置。
+- 当前 HEAD `6534c2c0ee06e235f297a2c3dd605bd97a3944fe` 的代码相对已审查 `1e0cfc7` 未变，dirty 仅为架构/交接/验证证据文档。原生二进制来自 `79d21e8`，其与 `1e0cfc7` 的差异为文档证据同步，运行代码绑定一致；既有二进制 SHA-256 `9cfa47df5c9bebe4d72da6fdf089d5dbd04cf3a51690ca9b8133be6ce103497c` 已回读一致。
+
+### GUI-L0 门覆盖
+
+- 原生 Tauri debug WebView 通过 CUA 实际 AX 树观察：Mock→Live 后演示会话/任务和可见选择消失，Core 连接失败明确显示且没有 Demo 回退；任务入口显示 Live unsupported。
+- 旧别名在真实 WebView 中通过 `location.hash` 观察：`#/remote -> #/settings?cat=system`、`#/session -> #/chat`；设置页 reload 后仍保持 Live 路由和失败状态。
+- 嵌套深链均有原生阻断证据：`#/collab/.../canvas`、`#/agents`、`#/runs/...`、`#/workflow/...` 显示明确 Live unsupported；画布 reload 后仍保持同一路径和屏障；任务页刷新证据也已在此前记录中保留。
+- 以上覆盖模式隔离、旧别名、嵌套路由、刷新与显式 unsupported，满足本批 GUI-L0 证据范围；不是 GUI-L1 成功链路验收。
+
+### 结论边界
+
+- CUA 证据来自真实 Tauri debug WebView + Vite，未证明打包 `dist`、签名、公证或发布产物。
+- Inspector 观察到 Core 协议预检 HTTP 400/access-control failure；模型调用为 0。该失败被正确显示，不能据此声称 Core/模型成功或进入 MP-1。
+- 原生证据增量复核：**GUI-L0 原生 debug 范围通过**；代码与既有契约/评测审查结论保持通过。未验证项仅保留为上述打包产物、成功 Core/模型链路及后续 MP-1 边界。

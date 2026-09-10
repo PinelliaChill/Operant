@@ -1,4 +1,4 @@
-# B2-1 原生 Tauri 验证记录（部分完成）
+# B2-1 原生 Tauri 验证记录（GUI-L0 范围完成）
 
 记录身份：Codex；适用对象：Antigravity、Reviewer、User。2026-09-09。
 本记录区分真实窗口观察与尚未覆盖项，不据编译、进程驻留或浏览器测试推断整个桌面验收完成。
@@ -32,14 +32,37 @@
 
 原生刷新是通过 Web Inspector 的可见输入框执行，没有使用外部浏览器冒充 WebView。
 
-## 未覆盖项与恢复点
+## 2026-09-10 恢复后的原生补证
 
-- 原生 `#/remote`、`#/session` 的旧别名跳转尚未取得有效结果。
-  尝试输入时发生剪贴板读取超时，随后 Console 显示拼接命令
-  `location.hash='/remote'location.hash='/remote'` 的 SyntaxError；此尝试不计为通过。
-- 原生画布、Agent、Run、Workflow 深链尚未逐项走查；既有浏览器/单测结果保留各自范围。
-- 目标续接时，当前工具清单已经没有 `cua_repl`，普通 node_repl 中 `cua` 与 `b2App` 均不存在，
-  因此不能继续当前原生 UI 操作。未改用 AppleScript、System Events 或其他 UI 技术绕过。
-- 恢复桌面控制工具后，复用已获准产物，核对并恢复 3000 的本工作树前端服务；取得新的 AX 树，
-  不复用旧元素编号。Console 输入先选中并清空，避免再次拼接，然后逐项检查真实跳转、阻断和刷新。
-- 代码、隔离测试及独立审查已完成；B2-1 整批仍未宣布桌面验收完成，不进入 MP-1。
+记录身份：Codex；源码 HEAD `6534c2c0ee06e235f297a2c3dd605bd97a3944fe`，运行代码仍为 `1e0cfc7`。
+CUA 重新可用后，重新绑定同一临时验证 App；旧 Vite 依赖文件缺失，按本批 package-lock 在
+`/private/tmp/operant-b2-1-verify-deps` 执行 `npm ci --offline --ignore-scripts`，恢复独立依赖。
+未改 package/lock；本工作树 node_modules 链接改指独立目录，未修改旧工作树共享依赖。
+仅恢复本工作树 127.0.0.1:3000 Vite，退出空白旧验证窗口并重开同一已授权产物。
+
+以下均通过原生 Web Inspector 可见 Console 输入导航，并读取实际 WebView 可访问性树：
+
+| 操作 | 实际观察 |
+| --- | --- |
+| 原生重新打开 | `#/chat`；演示模式开关 off；Core 连接失败，未回退 Demo |
+| `location.hash='/remote'` | 跳转 `#/settings?cat=system`，显示“系统与设备”；Load failed 明确可见，启用 Host 禁用 |
+| 设置页 `location.reload()` | Console cleared，WebView 仍为 `#/settings?cat=system`；随后显示系统与设备及失败状态 |
+| `location.hash='/session'` | 跳转 `#/chat`，演示模式开关仍 off |
+| `location.hash='/collab/wf-b2-review/canvas'` | 同一路径显示“工作流画布预览：Live 本阶段未接入” |
+| 画布页 `location.reload()` | Console cleared，仍为该画布路径及未接入屏障 |
+| `location.hash='/agents'` | `#/agents` 显示“Agent：Live 本阶段未接入” |
+| `location.hash='/runs/b2-review'` | 同一路径显示“运行详情：Live 本阶段未接入” |
+| `location.hash='/workflow/b2-review/s/session-review'` | 同一嵌套路径显示“工作流深链：Live 本阶段未接入” |
+
+剪贴板超时后先回读输入，再只提交已输入命令；未把超时、函数引用或 SyntaxError 算作刷新成功。
+本记录是实际 CUA 交互及 AX 观察摘要，不冒充原始截图文件。
+
+## 结论范围与限制
+
+GUI-L0 所需原生模式隔离、旧别名、嵌套深链、刷新与显式错误观察已补齐。
+Inspector 显示 Core 协议请求预检 HTTP 400 / access control checks 失败；未修改既有 Core 配置。
+这证明失败时不回退 Demo，不证明成功的 Core/模型调用；模型调用为 0。
+使用真实 Tauri debug WebView + Vite，未验证打包嵌入 dist、签名、公证或发布产物。
+MP-1、Host 运行和真实模型链路仍按后续批次验收。
+
+补证结束后已退出临时验证 App、停止本轮 Vite；只读进程/端口检查确认没有 operant-desktop 进程及 3000 listener。未停止或重配既有 Core。
