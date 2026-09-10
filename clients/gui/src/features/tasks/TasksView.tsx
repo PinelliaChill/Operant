@@ -28,7 +28,7 @@ const EMPTY_COPY: Record<TaskFilter, { title: string; description: string }> = {
 };
 
 import { useOperant } from '../../context/ClientContext';
-import { LiveUnavailableView } from '../../live/LiveUnavailableView';
+import { LiveTasksView } from './LiveTasksView';
 
 interface TaskGroup {
   id: string;
@@ -39,7 +39,7 @@ interface TaskGroup {
 export const TasksView: React.FC = () => {
   const { clientMode } = useOperant();
   if (clientMode === 'live') {
-    return <LiveUnavailableView section="tasks" />;
+    return <LiveTasksView />;
   }
   return <DemoTasksView />;
 };

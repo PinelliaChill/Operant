@@ -57,6 +57,38 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
+### B2-2 / MP-1 与基础任务接入（2026-09-10，待本批验收）
+
+本批从 `8851a23` 独立实施，验收范围和当前证据见 [任务包](design/b2-2/task-package.md)。
+`src/operant/plugins/` 提供显式安装与 Registry、受控认证记录、配置绑定、Run fencing、资源登记及
+keep/delete 清理续做。Registry 使用单写文件锁和原子 JSON journal；重启使旧活动 lease 失效，不重放
+RPC或自动重装插件。此版本不改 SQLite v14，不实现 MP-2 记忆引擎、数据迁移或新召回。
+
+插件共用 `contracts/b2_1.py` 的 typed Host API。认证进程内方式加载已核对包的 `create_plugin()`；
+它是认证信任边界，不是沙箱。未认证 stdio 使用 macOS sandbox-exec、独立目录及隔离Python参数
+`-I -S`，启动前真实检查受控 Home 文件、目录外写入与回环网络拒绝；沙箱不可用则拒绝。
+首版依赖限定为标准库/包内代码，不安装环境任意依赖，不宣称跨平台沙箱或线上CA。
+包、依赖/权限文件指纹、认证撤销与epoch在调用/提交时复核；资源预算、取消、迟到拒绝和未知清理
+状态不因cleanup Hook缺失而绕过。`create_app(plugin_host=...)` 是显式受信任启动注入面，由Core负责
+shutdown关闭；普通启动默认无Host/无引擎，插件HTTP管理与默认记忆绑定仍属B2-3。
+
+`api_b2.py` 将已提交 Session/WorkflowRun 投影为保留来源身份、动作与明确Workspace关联的任务。
+精确任务Query不受列表分页影响，跨来源同ID必须消歧。历史来自canonical Item、AgentInstance与
+不可变Session snapshot；未绑定Thread不生成消息，Task不伪装成TeamTask。
+Additive `b2.v1` 从FastAPI/Pydantic经 `sdk/protocol/generate_b2.py` 生成Schema/digest及Python/TS Client，
+补模型/角色配置、任务/历史与取消；旧五协议和MP-0契约不变。安装环境可用绝对路径
+`OPERANT_B2_SCHEMA_DIGEST_PATH` 提供digest，不用常量伪造协商。
+
+GUI通过生成Client接入模型/角色配置、Task/Run详情、分页历史和取消；Core Projection与epoch清理
+防止旧请求覆盖新选择。模型ID来自Discovery，secret_ref只存引用名；新Role默认无工具权限，编辑
+既有Role不改变tool_policy；Role新版本不回写已创建Session快照。取消accepted是请求接收，不能
+标为执行完成。Workflow详情链接既有Graph监控/安全恢复，仍保留未知写入人工核对边界。
+Antigravity的任务行样式来自 `a0a4a5d`。HTTP开发WebView使用同源Vite代理，正式Tauri协议及
+`tauri.localhost`保持固定本机Core；`OPERANT_CORE_URL`仅控制开发代理目标。
+
+代码存在不等于本批通过；真实桌面、完整门禁、指定Reviewer与未覆盖项以本批验收记录为准。
+B2-3/MP-2、项目CRUD、后续Graph/Team交互及发布签名不在本次授权范围。
+
 ### B2-1 / MP-0 增量（2026-09-09）
 
 基于 main `ecb0043` 新增离线契约 `src/operant/contracts/b2_1.py`：Project/Workspace、Task 来源、

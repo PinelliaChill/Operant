@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { MockClient, OperantClient, Phase1EClient, Phase23Client, Phase45Client, Phase56Client } from '@operant/sdk';
+import { B2Client } from '../../../../sdk/typescript-client/b2.generated';
 import { formatTime } from '../lib/format';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
 
@@ -14,6 +15,8 @@ export interface AppNotification {
   timestamp: string;
 }
 
+const DEFAULT_WORKSPACE = '/Users/bigo/agentworkspace/codexworkspace/operant';
+
 interface ClientContextValue {
   /** Legacy client retained for explicitly rendered Demo surfaces only. */
   client: OperantClient;
@@ -25,6 +28,8 @@ interface ClientContextValue {
   phase45Client: Phase45Client;
   /** Additive Phase 5B remote and Phase 6 multi-writer client. */
   phase56Client: Phase56Client;
+  /** Additive B2 configuration/task/history client; live surfaces only. */
+  b2Client: B2Client;
   clientMode: ClientMode;
   setClientMode: (mode: ClientMode) => void;
   connectionStatus: ConnectionStatus;
@@ -63,9 +68,10 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return (localStorage.getItem('operant_theme') as 'light' | 'dark') || 'light';
   });
 
-  const [activeWorkspace, setActiveWorkspace] = useState<string>(
-    '/Users/bigo/agentworkspace/codexworkspace/operant'
-  );
+  const [activeWorkspace, setActiveWorkspace] = useState<string>(() => {
+    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'mock';
+    return mode === 'live' ? '' : DEFAULT_WORKSPACE;
+  });
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('mock_active');
   const [pendingApprovalCount, setPendingApprovalCount] = useState<number>(0);
@@ -92,6 +98,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const phase23Client = useMemo(() => new Phase23Client(currentBrowserOrigin()), []);
   const phase45Client = useMemo(() => new Phase45Client(currentBrowserOrigin()), []);
   const phase56Client = useMemo(() => new Phase56Client(currentBrowserOrigin()), []);
+  const b2Client = useMemo(() => new B2Client(currentBrowserOrigin()), []);
   const client: OperantClient = mockClient;
 
   const setClientMode = (mode: ClientMode) => {
@@ -100,9 +107,11 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (mode === 'live') {
       setSelectedThreadId(null);
       setSelectedWorkflowRunId(null);
+      setActiveWorkspace('');
     } else {
       setSelectedThreadId('thread_main_alpha');
       setSelectedWorkflowRunId('run_operant_001');
+      setActiveWorkspace(DEFAULT_WORKSPACE);
     }
     addNotification('info', mode === 'mock' ? '已切换到演示模式（内置演示数据）' : '已切换到实时连接（Core 后端 /v1/*）');
   };
@@ -194,6 +203,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         phase23Client,
         phase45Client,
         phase56Client,
+        b2Client,
         clientMode,
         setClientMode,
         connectionStatus,

@@ -33,6 +33,15 @@ export function resolveLiveRouteSupport(pathname: string): LiveRouteSupportResul
     return { isSupported: false, unavailableSection: 'collab_canvas' };
   }
 
+  // B2-2 owns the live task/config/detail routes. Keep unknown nested aliases
+  // explicit so an old Demo deep link cannot be mistaken for a Core page.
+  if (primary === 'tasks' || primary === 'agents') {
+    return { isSupported: segments.length === 1, unavailableSection: primary };
+  }
+  if (primary === 'runs') {
+    return { isSupported: segments.length === 2, unavailableSection: primary };
+  }
+
   // 一级路由支持判定
   const supportedPrimarySections = new Set([
     'chat',

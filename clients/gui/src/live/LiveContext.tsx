@@ -8,10 +8,14 @@ import React, {
   useState,
 } from 'react';
 import { Phase1E } from '@operant/sdk';
+import type * as B2 from '../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../context/ClientContext';
 import {
+  B2LiveAdapter,
+  normalizeB2Error,
+} from './b2Adapter';
+import {
   LiveClientAdapter,
-  UnsupportedLiveCapabilityError,
   eventPayload,
   mapSseFrame,
   normalizeLiveError,
@@ -62,6 +66,7 @@ export type LiveApprovalDecision = 'approve' | 'reject';
 export interface LiveContextValue {
   phase: LiveProjectionPhase;
   adapter: LiveClientAdapter;
+  b2Adapter: B2LiveAdapter;
   projects: LiveProjectProjection[];
   threads: LiveThread[];
   /** Session details returned by the generated createSession Command. */
@@ -74,8 +79,14 @@ export interface LiveContextValue {
   selectedSessionId: string | null;
   selectedThread: LiveThread | undefined;
   selectedSession: LiveSession | undefined;
-  /** Phase 1E has no message Query; this is always empty in live mode. */
+  /** B2 returns canonical history items; messages remains for legacy callers. */
   messages: LiveMessage[];
+  models: B2.ModelProfile[];
+  roles: B2.RolePreset[];
+  history: B2.B2SessionHistory | null;
+  historyLoading: boolean;
+  historyError?: LiveError;
+  refreshHistory: () => Promise<void>;
   files: LiveWorkspaceFile[];
   filesWorkspaceId: string | null;
   stream: LiveStreamState;
@@ -90,7 +101,7 @@ export interface LiveContextValue {
   canCreateSession: boolean;
   createSessionUnavailableReason?: string;
   messageQueryAvailable: false;
-  cancelCommandAvailable: false;
+  cancelCommandAvailable: boolean;
   selectProject: (projectId: string | null) => boolean;
   selectThread: (threadId: string | null) => boolean;
   selectSession: (sessionId: string | null) => boolean;
@@ -192,8 +203,9 @@ function frameHasTerminalProjection(event: LiveEvent): boolean {
 }
 
 export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { phase1eClient, clientMode, connectionStatus } = useOperant();
+  const { phase1eClient, b2Client, clientMode, connectionStatus, setActiveWorkspace } = useOperant();
   const adapter = useMemo(() => new LiveClientAdapter(phase1eClient), [phase1eClient]);
+  const b2Adapter = useMemo(() => new B2LiveAdapter(b2Client), [b2Client]);
   const [phase, setPhase] = useState<LiveProjectionPhase>('idle');
   const [projects, setProjects] = useState<LiveProjectProjection[]>([]);
   const [threads, setThreads] = useState<LiveThread[]>([]);
@@ -203,6 +215,11 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [messages] = useState<LiveMessage[]>([]);
+  const [models, setModels] = useState<B2.ModelProfile[]>([]);
+  const [roles, setRoles] = useState<B2.RolePreset[]>([]);
+  const [history, setHistory] = useState<B2.B2SessionHistory | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<LiveError | undefined>();
   const [files, setFiles] = useState<LiveWorkspaceFile[]>([]);
   const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | null>(null);
   const [stream, setStream] = useState<LiveStreamState>(initialStream);
@@ -234,6 +251,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const commandDispatchingRef = useRef(false);
   const approvalDispatchingRef = useRef(false);
   const createSessionDispatchingRef = useRef(false);
+  const cancelDispatchingRef = useRef(false);
+  const cancelKeyRef = useRef<string | null>(null);
+  const cancelSessionIdRef = useRef<string | null>(null);
+  const historyRequestSequenceRef = useRef(0);
   const manualReconcileRef = useRef(false);
   const previousConnectionRef = useRef(connectionStatus);
   const phaseRef = useRef(phase);
@@ -265,6 +286,54 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (errorNeedsManualReconcile(normalized)) markManualReconcile(normalized.message);
     return normalized;
   }, [markManualReconcile]);
+
+  /** Read canonical Session history through B2; an old response cannot replace a newer selection. */
+  const refreshHistory = useCallback(async () => {
+    const sessionId = selectedThreadIdRef.current
+      ? threads.find((thread) => thread.id === selectedThreadIdRef.current)?.sessionId
+      : selectedSessionIdRef.current;
+    const requestSequence = historyRequestSequenceRef.current + 1;
+    historyRequestSequenceRef.current = requestSequence;
+    if (!sessionId || clientMode !== 'live' || phase !== 'ready' || connectionStatusRef.current !== 'connected') {
+      setHistory(null);
+      setHistoryLoading(false);
+      setHistoryError(undefined);
+      return;
+    }
+    setHistoryLoading(true);
+    setHistoryError(undefined);
+    try {
+      const nextHistory = await b2Adapter.getSessionHistory(sessionId);
+      const selectedThread = selectedThreadIdRef.current
+        ? threads.find((thread) => thread.id === selectedThreadIdRef.current)
+        : undefined;
+      const stillSelected = selectedSessionIdRef.current === sessionId || selectedThread?.sessionId === sessionId;
+      if (requestSequence !== historyRequestSequenceRef.current || !stillSelected) return;
+      setHistory(nextHistory);
+      setHistoryError(undefined);
+    } catch (error: unknown) {
+      if (requestSequence !== historyRequestSequenceRef.current) return;
+      const detail = normalizeB2Error(error).detail;
+      setHistory(null);
+      setHistoryError(detail);
+      setLastError(detail);
+      setProjectionStale(true);
+      if (errorNeedsManualReconcile(detail)) markManualReconcile(detail.message);
+    } finally {
+      if (requestSequence === historyRequestSequenceRef.current) setHistoryLoading(false);
+    }
+  }, [b2Adapter, clientMode, phase, threads, markManualReconcile]);
+
+  useEffect(() => {
+    if (clientMode !== 'live' || phase !== 'ready') {
+      historyRequestSequenceRef.current += 1;
+      setHistory(null);
+      setHistoryLoading(false);
+      setHistoryError(undefined);
+      return;
+    }
+    void refreshHistory();
+  }, [clientMode, phase, refreshHistory, selectedSessionId, selectedThreadId]);
 
   const rejectThreadSelection = useCallback((nextThreadId: string | null): boolean => {
     if (!isThreadSelectionLocked(
@@ -463,6 +532,19 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setThreads(nextThreads);
     setSessions(nextSessions);
     setApprovals(nextApprovals);
+    const pendingCancelSessionId = cancelSessionIdRef.current;
+    const cancelledThread = pendingCancelSessionId
+      ? nextThreads.find((thread) => thread.sessionId === pendingCancelSessionId)
+      : undefined;
+    if (pendingCancelSessionId && cancelledThread?.status === 'cancelled') {
+      pendingRunRef.current = null;
+      cancelKeyRef.current = null;
+      cancelSessionIdRef.current = null;
+      setCommand({ status: 'idle' });
+    }
+    if (!selectionLocked) {
+      setActiveWorkspace(nextProjects.find((project) => project.id === nextProjectId)?.workspaceRef ?? '');
+    }
     setProjectionStale(false);
     if (!selectionLocked) {
       selectedProjectIdRef.current = nextProjectId;
@@ -509,7 +591,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     return true;
-  }, [adapter]);
+  }, [adapter, setActiveWorkspace]);
 
   const refresh = useCallback(async () => {
     if (clientMode !== 'live') return;
@@ -555,8 +637,15 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       error: manualReconcileRef.current ? current.error : undefined,
     }));
     try {
-      await adapter.connect();
+      await Promise.all([adapter.connect(), b2Adapter.connect()]);
       if (generation !== lifecycleRef.current) return false;
+      const [nextModels, nextRoles] = await Promise.all([
+        b2Adapter.listModels(),
+        b2Adapter.listRoles(),
+      ]);
+      if (generation !== lifecycleRef.current) return false;
+      setModels(nextModels);
+      setRoles(nextRoles);
       const committed = await loadProjection(generation);
       if (!committed || generation !== lifecycleRef.current) return false;
       if (connectionStatusRef.current === 'disconnected' || connectionStatusRef.current === 'reconnecting') return false;
@@ -580,7 +669,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setStream((current) => ({ ...current, status: 'error', error: detail }));
       return false;
     }
-  }, [adapter, applyError, clientMode, loadProjection]);
+  }, [adapter, applyError, b2Adapter, clientMode, loadProjection]);
 
   const handleFrame = useCallback((frame: Phase1E.SseFrame, threadId: string, generation: number) => {
     if (generation !== lifecycleRef.current || selectedThreadIdRef.current !== threadId) return;
@@ -765,6 +854,11 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setThreads([]);
     setSessions([]);
     setApprovals([]);
+    setModels([]);
+    setRoles([]);
+    setHistory(null);
+    setHistoryLoading(false);
+    setHistoryError(undefined);
     setFiles([]);
     setFilesWorkspaceId(null);
     setSelectedProjectId(null);
@@ -794,6 +888,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     approvalKeysRef.current.clear();
     createSessionKeyRef.current = null;
     createSessionInputRef.current = null;
+    cancelDispatchingRef.current = false;
+    cancelKeyRef.current = null;
+    cancelSessionIdRef.current = null;
+    historyRequestSequenceRef.current += 1;
     commandDispatchingRef.current = false;
     approvalDispatchingRef.current = false;
     createSessionDispatchingRef.current = false;
@@ -943,11 +1041,93 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [applyError, clientMode, command.status, connectionStatus, consumeRunStream, manualReconcileRequired, phase, refresh, stream.status, threads]);
 
   const cancelSession = useCallback(async () => {
-    if (clientMode !== 'live') return;
-    const error = new UnsupportedLiveCapabilityError('Session cancel Command');
-    const detail = applyError(error, false);
-    setCommand({ status: 'error', error: detail });
-  }, [applyError, clientMode]);
+    if (
+      clientMode !== 'live'
+      || phase !== 'ready'
+      || connectionStatus !== 'connected'
+      || manualReconcileRequired
+      || cancelDispatchingRef.current
+    ) return;
+    const threadId = selectedThreadIdRef.current;
+    const sessionId = threadId
+      ? threads.find((thread) => thread.id === threadId)?.sessionId
+      : selectedSessionIdRef.current;
+    if (!sessionId) {
+      const detail: LiveError = {
+        code: 'session_required',
+        message: '取消 Session 必须先选择一个已绑定的 Core Session。',
+        retryable: false,
+        recovery: 'none',
+      };
+      setLastError(detail);
+      setCommand({ status: 'error', error: detail });
+      return;
+    }
+    cancelDispatchingRef.current = true;
+    const idempotencyKey = cancelKeyRef.current || createIdempotencyKey();
+    cancelKeyRef.current = idempotencyKey;
+    cancelSessionIdRef.current = sessionId;
+    setCommand({ status: 'sending', idempotencyKey });
+    setLastError(undefined);
+    try {
+      const result = await b2Adapter.cancelSession(sessionId, idempotencyKey);
+      if (!result.accepted) {
+        cancelKeyRef.current = null;
+        cancelSessionIdRef.current = null;
+        const detail: LiveError = {
+          code: 'session_cancel_rejected',
+          message: 'Core 未接受 Session 取消请求，运行状态仍由服务端 Projection 决定。',
+          retryable: false,
+          recovery: 'none',
+          detail: result,
+        };
+        setCommand({ status: 'error', error: detail, idempotencyKey });
+        setLastError(detail);
+        return;
+      }
+      setProjectionStale(true);
+      setCommand({
+        status: 'awaiting_projection',
+        idempotencyKey,
+        error: {
+          code: 'session_cancel_projection_pending',
+          message: 'Core 已接受取消请求，等待 Thread/Task Projection 返回终态；accepted 不等于已完成。',
+          retryable: false,
+          recovery: 'none',
+        },
+      });
+      await refresh();
+      await refreshHistory();
+      let cancelled = false;
+      if (threadId) {
+        try {
+          const projected = await adapter.getThread(threadId);
+          cancelled = projected.status === 'cancelled';
+        } catch {
+          // The authoritative refresh above already reported any transport
+          // error. Keep the cancel command pending when no fresh projection is
+          // available instead of guessing a terminal outcome.
+        }
+      }
+      if (cancelled) {
+        pendingRunRef.current = null;
+        cancelKeyRef.current = null;
+        cancelSessionIdRef.current = null;
+        setProjectionStale(false);
+        setLastError(undefined);
+        setCommand({ status: 'idle' });
+      }
+    } catch (error: unknown) {
+      const detail = normalizeB2Error(error).detail;
+      if (errorNeedsManualReconcile(detail)) markManualReconcile(detail.message);
+      if (!detail.retryable && !errorNeedsManualReconcile(detail)) cancelKeyRef.current = null;
+      setLastError(detail);
+      setProjectionStale(true);
+      setCommand({ status: 'error', error: detail, idempotencyKey });
+    } finally {
+      cancelDispatchingRef.current = false;
+    }
+  }, [adapter, b2Adapter, clientMode, connectionStatus, manualReconcileRequired, phase, refresh, refreshHistory, threads, markManualReconcile]);
 
   const decideApproval = useCallback(async (approval: LiveApproval, decision: LiveApprovalDecision) => {
     if (
@@ -1020,6 +1200,16 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     && command.status === 'idle'
     && !manualReconcileRequired
     && canBindSessionToThread(selectedThread);
+  const cancelCommandInFlight = cancelKeyRef.current !== null
+    && command.idempotencyKey === cancelKeyRef.current
+    && (command.status === 'sending' || command.status === 'awaiting_projection');
+  const cancelCommandAvailable = clientMode === 'live'
+    && phase === 'ready'
+    && connectionStatus === 'connected'
+    && !manualReconcileRequired
+    && !cancelCommandInFlight
+    && Boolean(selectedThread?.sessionId)
+    && selectedThread?.status === 'active';
   const createSessionUnavailableReason = manualReconcileRequired
     ? '需要人工核对，不能创建新命令。'
     : command.status === 'awaiting_projection'
@@ -1039,6 +1229,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const value = useMemo<LiveContextValue>(() => ({
     phase,
     adapter,
+    b2Adapter,
     projects,
     threads,
     sessions,
@@ -1050,6 +1241,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     selectedThread,
     selectedSession,
     messages,
+    models,
+    roles,
+    history,
+    historyLoading,
+    historyError,
+    refreshHistory,
     files,
     filesWorkspaceId,
     stream,
@@ -1064,7 +1261,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     canCreateSession,
     createSessionUnavailableReason,
     messageQueryAvailable: false,
-    cancelCommandAvailable: false,
+    cancelCommandAvailable,
     selectProject,
     selectThread,
     selectSession,
@@ -1079,9 +1276,11 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clearError,
   }), [
     adapter,
+    b2Adapter,
     approvalAction,
     approvals,
     canCreateSession,
+    cancelCommandAvailable,
     cancelSession,
     clearError,
     command,
@@ -1092,17 +1291,22 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     decideApproval,
     files,
     filesWorkspaceId,
+    history,
+    historyError,
+    historyLoading,
     lastError,
     loadFiles,
     manualReconcileReason,
     manualReconcileRequired,
     messages,
+    models,
     phase,
     projects,
     projectionStale,
     reconnect,
     refresh,
     resolveDeepLink,
+    refreshHistory,
     selectProject,
     selectSession,
     selectThread,
@@ -1114,6 +1318,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     sendMessage,
     sessions,
     sessionOptions,
+    roles,
     stream,
     threads,
   ]);

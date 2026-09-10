@@ -13,12 +13,12 @@ import { StatusBadge, STATUS_LABELS } from '../../components/StatusBadge';
 import { Modal } from '../../components/Modal';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { formatNumber, formatStage } from '../../lib/format';
-import { LiveUnavailableView } from '../../live/LiveUnavailableView';
+import { LiveRunDetailView } from './LiveRunDetailView';
 
 export const RunDetailView: React.FC = () => {
   const { clientMode } = useOperant();
   if (clientMode === 'live') {
-    return <LiveUnavailableView section="runs" />;
+    return <LiveRunDetailView />;
   }
   return <DemoRunDetailView />;
 };

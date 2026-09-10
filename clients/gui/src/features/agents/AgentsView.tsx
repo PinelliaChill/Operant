@@ -16,7 +16,7 @@ import { Modal } from '../../components/Modal';
 import { useDemo } from '../../demo/DemoContext';
 import type { DemoAgent } from '../../demo/types';
 import { useOperant } from '../../context/ClientContext';
-import { LiveUnavailableView } from '../../live/LiveUnavailableView';
+import { LiveAgentsView } from './LiveAgentsView';
 
 /** Agent 状态 → 中文标签（online/busy/offline → 在线/忙碌/离线） */
 const AGENT_STATUS_LABELS: Record<DemoAgent['status'], string> = {
@@ -403,7 +403,7 @@ const AgentFormFields: React.FC<{
 export const AgentsView: React.FC = () => {
   const { clientMode } = useOperant();
   if (clientMode === 'live') {
-    return <LiveUnavailableView section="agents" />;
+    return <LiveAgentsView />;
   }
   return <DemoAgentsView />;
 };

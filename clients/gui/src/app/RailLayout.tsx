@@ -241,7 +241,7 @@ const LiveRailStatusBar: React.FC = () => {
   return (
     <footer className="rail-statusbar" data-client-mode="live">
       <div className="rail-statusbar-side">
-        <span className="rail-statusbar-text">Workspace：{selectedThread?.workspace || activeWorkspace}</span>
+        <span className="rail-statusbar-text">Workspace：{selectedThread?.workspace || activeWorkspace || '未选择 Workspace'}</span>
       </div>
       <div className="rail-statusbar-side">
         {projectionStale && <span className="rail-statusbar-text">Projection 待校正 · </span>}

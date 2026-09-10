@@ -7,6 +7,9 @@ test('resolveLiveRouteSupport permits all standard Live routes', () => {
     '/',
     '/chat',
     '/chat/thread_live_001',
+    '/tasks',
+    '/agents',
+    '/runs/run_live_001',
     '/projects',
     '/projects/proj_alpha',
     '/approvals',
@@ -53,12 +56,9 @@ test('resolveLiveRouteSupport strictly intercepts nested /collab/:wfId/canvas de
 
 test('resolveLiveRouteSupport strictly intercepts legacy demo-only routes in Live mode', () => {
   const demoOnlyRoutes: Record<string, string> = {
-    '/tasks': 'tasks',
     '/tasks/task-001': 'tasks',
-    '/agents': 'agents',
     '/agents/coder_agent': 'agents',
     '/runs': 'runs',
-    '/runs/run_operant_001': 'runs',
     '/runs/run_operant_002/details': 'runs',
     '/workflow': 'workflow',
     '/workflow/wf-1/session/s-1': 'workflow',
