@@ -116,6 +116,7 @@ from operant.domain.security import (
     SecurityAuditEvent,
 )
 from operant.domain.threads import (
+    AgentMessagePayload,
     Artifact,
     ArtifactAccessLevel,
     ArtifactAuditFinding,
@@ -133,8 +134,11 @@ from operant.domain.threads import (
     RetentionLifecycle,
     RetentionPolicy,
     SteeringPayload,
+    SystemEventPayload,
     ThreadStatus,
+    ToolCallPayload,
     Turn,
+    UserMessagePayload,
 )
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
 from operant.persistence.security import SQLiteSecurityRepository
@@ -3263,6 +3267,7 @@ class ApplicationService:
                     },
                 )
                 return
+        history_turn: Turn | None = None
         agent = None
         cancellation: asyncio.Event | None = None
         run_lease: SessionRunLease | None = None
@@ -3283,6 +3288,15 @@ class ApplicationService:
                 policy=session.role_snapshot.tool_policy,
             )
             normalized_workspace = str(Path(workspace).resolve())
+            bound_history = thread_id is not None and any(
+                ref.source_type.value == "session" and ref.source_id == session.id
+                for ref in self.get_thread(thread_id).legacy_refs
+            )
+            history_cursor = (
+                self._latest_thread_item_cursor(thread_id)
+                if bound_history and thread_id is not None
+                else None
+            )
             context_composer = PersistentContextComposer(
                 store=self.store,
                 session=session,
@@ -3290,6 +3304,7 @@ class ApplicationService:
                 workspace=normalized_workspace,
                 thread_id=thread_id,
                 references=tuple(references),
+                thread_item_cursor_end=history_cursor,
                 memory_resolver=lambda memory_id: self.get_memory(
                     memory_id,
                     snapshot=session.role_snapshot,
@@ -3299,6 +3314,15 @@ class ApplicationService:
                 artifact_reader=self._read_artifact_for_context,
                 artifact_writer=lambda content: self._write_tool_result_artifact(content=content),
             )
+            if bound_history and thread_id is not None:
+                history_turn = self.store.create_turn(Turn(thread_id=thread_id))
+                self.append_item(
+                    Item(
+                        thread_id=thread_id,
+                        turn_id=history_turn.id,
+                        payload=UserMessagePayload(text=user_message),
+                    )
+                )
             loop = AgentLoop(
                 self.provider,
                 tools,
@@ -3418,7 +3442,9 @@ class ApplicationService:
                         turn=0,
                         payload={"timeout_seconds": (session.role_snapshot.budget.timeout_seconds)},
                     )
-                    timeout_event = self._persist_runtime_event(session.id, agent.id, timeout_event)
+                    timeout_event = self._persist_runtime_event(
+                        session.id, agent.id, timeout_event, history_turn=history_turn
+                    )
                     yield timeout_event
                     final_status = AgentStatus.TIMED_OUT
                     break
@@ -3452,7 +3478,9 @@ class ApplicationService:
                         turn=0,
                         payload={"timeout_seconds": (session.role_snapshot.budget.timeout_seconds)},
                     )
-                    timeout_event = self._persist_runtime_event(session.id, agent.id, timeout_event)
+                    timeout_event = self._persist_runtime_event(
+                        session.id, agent.id, timeout_event, history_turn=history_turn
+                    )
                     yield timeout_event
                     final_status = AgentStatus.TIMED_OUT
                     break
@@ -3465,7 +3493,9 @@ class ApplicationService:
                         turn=0,
                         payload={},
                     )
-                    cancel_event = self._persist_runtime_event(session.id, agent.id, cancel_event)
+                    cancel_event = self._persist_runtime_event(
+                        session.id, agent.id, cancel_event, history_turn=history_turn
+                    )
                     yield cancel_event
                     final_status = AgentStatus.CANCELLED
                     break
@@ -3490,7 +3520,9 @@ class ApplicationService:
                             "detail": str(runtime_event.payload["detail"]),
                         }
 
-                runtime_event = self._persist_runtime_event(session.id, agent.id, runtime_event)
+                runtime_event = self._persist_runtime_event(
+                    session.id, agent.id, runtime_event, history_turn=history_turn
+                )
                 yield runtime_event
                 if runtime_event.event_type == "model.completed":
                     try:
@@ -3513,7 +3545,9 @@ class ApplicationService:
                 turn=0,
                 payload={"reason": "stream_cancelled"},
             )
-            self._persist_runtime_event(session.id, agent.id, cancel_event)
+            self._persist_runtime_event(
+                session.id, agent.id, cancel_event, history_turn=history_turn
+            )
             raise
         except Exception as exc:
             failure_event = RuntimeEvent(
@@ -3521,7 +3555,9 @@ class ApplicationService:
                 turn=0,
                 payload={"error_type": type(exc).__name__},
             )
-            failure_event = self._persist_runtime_event(session.id, agent.id, failure_event)
+            failure_event = self._persist_runtime_event(
+                session.id, agent.id, failure_event, history_turn=history_turn
+            )
             yield failure_event
             final_status = AgentStatus.FAILED
         finally:
@@ -3615,16 +3651,45 @@ class ApplicationService:
         ]
 
     def _persist_runtime_event(
-        self, session_id: str, agent_id: str | None, event: RuntimeEvent
+        self,
+        session_id: str,
+        agent_id: str | None,
+        event: RuntimeEvent,
+        *,
+        history_turn: Turn | None = None,
     ) -> RuntimeEvent:
         sanitized_event = event.model_copy(update={"payload": redact_public_data(event.payload)})
+        history_item = None
+        if history_turn is not None and agent_id is not None:
+            payload: ItemPayload | None = None
+            content = sanitized_event.payload.get("content")
+            if event.event_type == "model.completed" and isinstance(content, str) and content:
+                payload = AgentMessagePayload(text=content, agent_id=agent_id)
+            elif event.event_type == "tool.started":
+                payload = ToolCallPayload(
+                    tool_call_id=str(sanitized_event.payload["tool_call_id"]),
+                    tool_name=str(sanitized_event.payload["name"]),
+                )
+            elif event.event_type.startswith(("agent.", "tool.")):
+                payload = SystemEventPayload(
+                    event_type=event.event_type,
+                    summary=event.event_type,
+                    source_ref=agent_id,
+                )
+            if payload is not None:
+                history_item = Item(
+                    thread_id=history_turn.thread_id,
+                    turn_id=history_turn.id,
+                    payload=payload,
+                )
         persisted = self.store.append_event(
             Event(
                 session_id=session_id,
                 agent_id=agent_id,
                 event_type=sanitized_event.event_type,
                 payload={"turn": sanitized_event.turn, **sanitized_event.payload},
-            )
+            ),
+            history_item=history_item,
         )
         return sanitized_event.model_copy(update={"cursor": persisted.cursor})
 

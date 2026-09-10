@@ -36,6 +36,7 @@ EXPECTED_OPERATION_IDS = {
     "listModels",
     "listTasks",
     "getTask",
+    "createThread",
     "cancelSession",
     "listRoles",
     "negotiateProtocol",
@@ -51,6 +52,7 @@ OPERATION_MAP = {
     "updateB2Role": "updateRole",
     "listB2Tasks": "listTasks",
     "getB2Task": "getTask",
+    "createB2Thread": "createThread",
     "getB2SessionHistory": "getSessionHistory",
     "cancelB2Session": "cancelSession",
 }

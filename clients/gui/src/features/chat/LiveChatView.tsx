@@ -298,6 +298,7 @@ export const LiveChatView: React.FC = () => {
     historyLoading,
     historyError,
     refreshHistory,
+    loadMoreHistory,
     files,
     stream,
     projectionStale,
@@ -307,6 +308,10 @@ export const LiveChatView: React.FC = () => {
     manualReconcileRequired,
     manualReconcileReason,
     deepLinkNotFound,
+    canCreateThread,
+    createThreadUnavailableReason,
+    threadCreationStatus,
+    createThread,
     canCreateSession,
     createSessionUnavailableReason,
     cancelCommandAvailable,
@@ -516,6 +521,10 @@ export const LiveChatView: React.FC = () => {
             ))}
           </select>
         </label>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void createThread()}
+          disabled={!canCreateThread} title={createThreadUnavailableReason}>
+          <PlusIcon />{threadCreationStatus === 'sending' ? '创建中…' : '新建会话'}
+        </button>
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedRoleId || creatingSession} title={createSessionUnavailableReason || '需要一个明确的 RolePreset'}>
           <PlusIcon />
           {creatingSession ? '创建中…' : '创建 Session'}
@@ -648,7 +657,8 @@ export const LiveChatView: React.FC = () => {
                 </button>
               </div>
               <p className="live-composer-note">发送请求只表示命令已提交；GUI 等待 Core 的 Receipt / Projection，不把网络送达当成完成。断线、回放或错误期间会禁用命令。</p>
-            </section>
+            {history && history.next_cursor !== null && <button type="button" className="btn btn-secondary" disabled={historyLoading} onClick={() => void loadMoreHistory()}>加载更多历史</button>}
+              </section>
 
             <aside className="live-inspector-column" aria-label="Core 实时检查器">
               <div className="live-inspector-actions">

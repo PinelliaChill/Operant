@@ -152,7 +152,8 @@ export const LiveAgentsView: React.FC = () => {
 
   const openNewRole = () => {
     setEditingRole(null);
-    setRoleForm({ ...DEFAULT_ROLE_FORM, modelProfileId: models.find((model) => model.id && model.enabled !== false)?.id || '' });
+    const model = models.find((item) => item.id && item.enabled !== false);
+    setRoleForm({ ...DEFAULT_ROLE_FORM, modelProfileId: model?.id || '', effort: model?.default_effort || 'medium' });
     setRoleModalOpen(true);
   };
 
@@ -185,8 +186,6 @@ export const LiveAgentsView: React.FC = () => {
           secret_ref: modelForm.secretRef.trim(),
           context_window: contextWindow,
           default_token_budget: tokenBudget,
-          supported_efforts: ['low', 'medium', 'high'],
-          default_effort: 'medium',
         }, key);
       loadEpoch.current += 1;
       setModels((current) => editingModel?.id
@@ -224,7 +223,7 @@ export const LiveAgentsView: React.FC = () => {
         system_prompt: roleForm.systemPrompt.trim(),
         model_profile_id: roleForm.modelProfileId.trim(),
         effort: roleForm.effort,
-        budget: maxTurns ? { max_turns: maxTurns } : {},
+        budget: { ...(editingRole?.budget ?? {}), ...(maxTurns ? { max_turns: maxTurns } : {}) },
       } satisfies B2.CreateRoleRequest;
       const key = createIdempotencyKey();
       const saved = editingRole?.id
@@ -355,9 +354,9 @@ export const LiveAgentsView: React.FC = () => {
       )}>
         <div className="b2-config-form">
           <label style={fieldLabel} htmlFor="b2-role-name">名称</label><input id="b2-role-name" className="input" value={roleForm.name} onChange={(event) => setRoleForm((current) => ({ ...current, name: event.target.value }))} />
-          <label style={fieldLabel} htmlFor="b2-role-model">ModelProfile</label><select id="b2-role-model" className="select" value={roleForm.modelProfileId} onChange={(event) => setRoleForm((current) => ({ ...current, modelProfileId: event.target.value }))}><option value="">选择模型配置</option>{models.filter((model) => model.id && model.enabled !== false).map((model) => <option key={model.id} value={model.id}>{model.name} · {model.model_id}</option>)}</select>
+          <label style={fieldLabel} htmlFor="b2-role-model">ModelProfile</label><select id="b2-role-model" className="select" value={roleForm.modelProfileId} onChange={(event) => setRoleForm((current) => ({ ...current, modelProfileId: event.target.value, effort: models.find((model) => model.id === event.target.value)?.default_effort || current.effort }))}><option value="">选择模型配置</option>{models.filter((model) => model.id && model.enabled !== false).map((model) => <option key={model.id} value={model.id}>{model.name} · {model.model_id}</option>)}</select>
           <label style={fieldLabel} htmlFor="b2-role-prompt">系统提示词</label><textarea id="b2-role-prompt" className="textarea" rows={5} value={roleForm.systemPrompt} onChange={(event) => setRoleForm((current) => ({ ...current, systemPrompt: event.target.value }))} />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}><div><label style={fieldLabel} htmlFor="b2-role-effort">Effort</label><select id="b2-role-effort" className="select" value={roleForm.effort} onChange={(event) => setRoleForm((current) => ({ ...current, effort: event.target.value as B2.Effort }))}><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div><div><label style={fieldLabel} htmlFor="b2-role-turns">最大轮次</label><input id="b2-role-turns" className="input" type="number" min={1} value={roleForm.maxTurns} onChange={(event) => setRoleForm((current) => ({ ...current, maxTurns: event.target.value }))} /></div></div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}><div><label style={fieldLabel} htmlFor="b2-role-effort">Effort</label><select id="b2-role-effort" className="select" value={roleForm.effort} onChange={(event) => setRoleForm((current) => ({ ...current, effort: event.target.value as B2.Effort }))}>{(models.find((model) => model.id === roleForm.modelProfileId)?.supported_efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></div><div><label style={fieldLabel} htmlFor="b2-role-turns">最大轮次</label><input id="b2-role-turns" className="input" type="number" min={1} value={roleForm.maxTurns} onChange={(event) => setRoleForm((current) => ({ ...current, maxTurns: event.target.value }))} /></div></div>
           <p className="section-sub">新建角色默认没有工具、Workspace 写入或命令执行权限；编辑既有角色只提交名称、提示词、模型、Effort 和预算，已有 ToolPolicy 保持由 Core 管理。</p>
         </div>
       </Modal>

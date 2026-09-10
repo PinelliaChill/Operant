@@ -462,3 +462,71 @@ def test_task_lookup_is_exact_not_limited_to_first_list_page(client: TestClient)
     exact = client.get(f"/v1/b2/tasks/{first}", params={"source_type": "workflow_run"})
     assert exact.status_code == 200
     assert exact.json()["source"]["source_type"] == "workflow_run"
+
+
+def test_empty_registered_workspace_can_create_first_thread_and_session(
+    client: TestClient, tmp_path: Path
+) -> None:
+    _, role_id = _bootstrap(client)
+    workspace, _ = _service(client).initialize_workspace(tmp_path)
+    body = {"workspace_id": workspace.id}
+    headers = {"Idempotency-Key": "first-thread"}
+    response = client.post("/v1/b2/threads", json=body, headers=headers)
+    assert response.status_code == 201, response.text
+    thread = response.json()
+    assert thread["workspace_ref"] == str(tmp_path)
+    replay = client.post("/v1/b2/threads", json=body, headers=headers)
+    assert replay.json()["id"] == thread["id"]
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    session = client.post("/v1/sessions", json={"role_id": role_id, "thread_id": thread["id"]})
+    assert session.status_code == 201
+    history = client.get(f"/v1/b2/sessions/{session.json()['id']}/history")
+    assert history.json()["thread_id"] == thread["id"]
+    assert client.post("/v1/b2/threads", json={"workspace_id": "missing"}).status_code == 404
+    assert client.post("/v1/b2/threads", json={**body, "workspace_ref": "/"}).status_code == 422
+
+
+def test_gui_run_persists_canonical_history_once_and_survives_reopen(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from operant.domain.messages import ModelResponse, ProviderEvent
+
+    class FixedProvider:
+        calls = 0
+
+        async def stream(self, **kwargs):
+            self.calls += 1
+            yield ProviderEvent(
+                event_type="model.completed",
+                response=ModelResponse(content="17 + 25 = 42", finish_reason="stop"),
+            )
+
+    _, role_id = _bootstrap(client)
+    service = _service(client)
+    provider = FixedProvider()
+    service.provider = provider
+    thread = service.create_thread(ConversationThread(workspace_ref=str(tmp_path)))
+    session = client.post("/v1/sessions", json={"role_id": role_id, "thread_id": thread.id}).json()
+    url = f"/v1/sessions/{session['id']}/runs"
+    request = {"message": "Compute 17 + 25", "workspace": str(tmp_path), "thread_id": thread.id}
+    headers = {"Idempotency-Key": "b22-canonical-run"}
+    response = client.post(url, json=request, headers=headers)
+    assert response.status_code == 200, response.text
+    assert "agent.completed" in response.text, response.text
+    history_url = f"/v1/b2/sessions/{session['id']}/history"
+    first = client.get(history_url).json()
+    texts = [
+        item["payload"].get("text")
+        for item in first["items"]
+        if item["payload"]["type"] in {"user_message", "agent_message"}
+    ]
+    assert texts == ["Compute 17 + 25", "17 + 25 = 42"]
+    client.post(url, json=request, headers=headers)
+    assert provider.calls == 1
+    assert client.get(history_url).json()["items"] == first["items"]
+    page = client.get(history_url, params={"limit": 1}).json()
+    rest = client.get(history_url, params={"after_cursor": page["next_cursor"]}).json()
+    assert page["items"] + rest["items"] == first["items"]
+    # A fresh application over the same SQLite file reads the committed result.
+    with TestClient(create_app(tmp_path / "b2-api.sqlite3")) as reopened:
+        assert reopened.get(history_url).json()["items"] == first["items"]

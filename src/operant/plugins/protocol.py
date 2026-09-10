@@ -14,12 +14,15 @@ import json
 import os
 import platform
 import shutil
+import signal
 import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -149,6 +152,9 @@ class HostBudget(BaseModel):
     max_log_chars: int = Field(default=20_000, ge=0, le=200_000)
     max_calls: int = Field(default=1_000, ge=1, le=100_000)
     max_concurrency: int = Field(default=4, ge=1, le=64)
+    memory_mb: int = Field(default=512, ge=1, le=65536)
+    max_cpu_seconds: float = Field(default=30.0, gt=0, le=3600)
+    max_idle_seconds: float = Field(default=60.0, gt=0, le=3600)
     max_private_index_bytes: int = Field(default=20_000_000, ge=1_024, le=200_000_000)
 
     def intersect_manifest(self, manifest: PluginManifest) -> HostBudget:
@@ -161,6 +167,9 @@ class HostBudget(BaseModel):
             max_log_chars=self.max_log_chars,
             max_calls=self.max_calls,
             max_concurrency=min(self.max_concurrency, manifest.max_concurrency),
+            memory_mb=min(self.memory_mb, manifest.memory_mb),
+            max_cpu_seconds=self.max_cpu_seconds,
+            max_idle_seconds=self.max_idle_seconds,
             max_private_index_bytes=self.max_private_index_bytes,
         )
 
@@ -642,6 +651,7 @@ class RestrictedHostApi:
         resource_revision: Callable[[str], int],
         resource_bump: Callable[[str], int],
         cancel_event: asyncio.Event,
+        validate_active: Callable[[], None] | None = None,
     ) -> None:
         self.context = context
         self._installation_root = Path(installation_root)
@@ -652,6 +662,7 @@ class RestrictedHostApi:
         self._resource_revision = resource_revision
         self._resource_bump = resource_bump
         self._cancel_event = cancel_event
+        self._validate_active = validate_active
         self._logs: list[str] = []
 
     @property
@@ -659,6 +670,8 @@ class RestrictedHostApi:
         return tuple(self._logs)
 
     def check_cancelled(self) -> None:
+        if self._validate_active is not None:
+            self._validate_active()
         if self._cancel_event.is_set():
             raise CancellationError()
         if utc_now() >= self.context.deadline:
@@ -898,6 +911,7 @@ class StdioPluginEngine:
         executable: Path | None = None,
         limits: HostBudget | None = None,
         sandbox_evidence: SandboxEvidence | None = None,
+        failure_callback: Callable[[str], object] | None = None,
     ) -> None:
         if not argv or any(
             not isinstance(item, str) or not item or "\x00" in item for item in argv
@@ -915,6 +929,10 @@ class StdioPluginEngine:
         self.tmp_root = Path(tmp_root)
         self.executable = Path(executable or sys.executable)
         self.limits = limits or HostBudget()
+        self._failure_callback = failure_callback
+        self._resource_error: PluginError | None = None
+        self._watchdog_task: asyncio.Task[None] | None = None
+        self._last_activity = time.monotonic()
         self.process: asyncio.subprocess.Process | None = None
         self._request_id = 0
         self._lock = asyncio.Lock()
@@ -928,6 +946,8 @@ class StdioPluginEngine:
         return self._stderr
 
     async def start(self) -> None:
+        if self._resource_error is not None:
+            raise self._resource_error
         if self.process is not None and self.process.returncode is None:
             return
         self.package_root = self.package_root.resolve(strict=True)
@@ -956,6 +976,7 @@ class StdioPluginEngine:
                 asyncio.create_subprocess_exec(
                     *command,
                     cwd=self.package_root,
+                    start_new_session=True,
                     env=environment,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
@@ -969,6 +990,62 @@ class StdioPluginEngine:
             raise PackageUnavailableError("stdio plugin process could not start") from exc
         assert self.process.stderr is not None
         self._stderr_task = asyncio.create_task(self._drain_stderr(self.process.stderr))
+        self._last_activity = time.monotonic()
+        self._watchdog_task = asyncio.create_task(self._watch_resources())
+
+    async def _watch_resources(self) -> None:
+        process = self.process
+        assert process is not None
+        try:
+            while process.returncode is None:
+                await asyncio.sleep(0.2)
+                if process.returncode is not None:
+                    return
+                probe = await asyncio.create_subprocess_exec(
+                    "/bin/ps",
+                    "-o",
+                    "rss=,time=",
+                    "-p",
+                    str(process.pid),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                try:
+                    output, _ = await asyncio.wait_for(probe.communicate(), 2)
+                except asyncio.TimeoutError:
+                    probe.kill()
+                    await probe.wait()
+                    raise PackageUnavailableError("resource monitor unavailable") from None
+                if process.returncode is not None:
+                    return
+                fields = output.decode("ascii").split()
+                if probe.returncode or len(fields) != 2:
+                    raise PackageUnavailableError("resource monitor unavailable")
+                rss_kb = int(fields[0])
+                cpu = 0.0
+                for part in fields[1].split(":"):
+                    cpu = cpu * 60 + float(part)
+                if rss_kb > self.limits.memory_mb * 1024 or cpu > self.limits.max_cpu_seconds:
+                    raise BudgetExceededError("isolated plugin exceeded RSS or CPU budget")
+                if (
+                    not self._active
+                    and time.monotonic() - self._last_activity > self.limits.max_idle_seconds
+                ):
+                    raise DeadlineExceededError("isolated plugin exceeded idle lifetime")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._resource_error = (
+                exc
+                if isinstance(exc, PluginError)
+                else PackageUnavailableError("resource monitor unavailable")
+            )
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                await process.wait()
+            if self._failure_callback is not None:
+                self._failure_callback(self._resource_error.code)
 
     async def invoke(
         self, operation: str, request: BaseModel, host: RestrictedHostApi
@@ -987,6 +1064,7 @@ class StdioPluginEngine:
         if not request_id:
             raise PluginProtocolError("engine request has no request_id")
         async with self._lock:
+            self._last_activity = time.monotonic()
             self._active[request_id] = host._cancel_event
             self._request_id += 1
             rpc_id = self._request_id
@@ -1003,6 +1081,7 @@ class StdioPluginEngine:
                 raise CancellationError() from exc
             finally:
                 self._active.pop(request_id, None)
+                self._last_activity = time.monotonic()
         if "error" in response:
             raise PluginError("plugin_failed", "stdio plugin returned an error")
         result_value = response.get("result")
@@ -1039,6 +1118,8 @@ class StdioPluginEngine:
                 )
             except asyncio.TimeoutError as exc:
                 raise DeadlineExceededError() from exc
+            if self._resource_error is not None:
+                raise self._resource_error
             if not line:
                 if host._cancel_event.is_set():
                     raise CancellationError()
@@ -1091,17 +1172,23 @@ class StdioPluginEngine:
         self.process = None
 
     async def close(self) -> None:
+        if self._watchdog_task is not None:
+            self._watchdog_task.cancel()
+            await asyncio.gather(self._watchdog_task, return_exceptions=True)
+            self._watchdog_task = None
         process = self.process
         self.process = None
         if process is not None:
             if process.stdin is not None:
                 process.stdin.close()
             if process.returncode is None:
-                process.terminate()
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
                 try:
                     await asyncio.wait_for(process.wait(), 2)
                 except asyncio.TimeoutError:
-                    process.kill()
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
                     await process.wait()
         if self._stderr_task is not None:
             try:

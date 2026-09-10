@@ -451,3 +451,86 @@ async def test_untrusted_stdio_never_falls_back_when_sandbox_is_unavailable(tmp_
         await host.start(installation.installation_id, mode="isolated")
     assert host._engines == {}
     await host.close()
+
+
+@pytest.mark.asyncio
+async def test_inprocess_concurrency_is_admitted_before_plugin_execution(tmp_path: Path) -> None:
+    import asyncio
+
+    from operant.plugins import HostBudget
+
+    package, manifest = _package(tmp_path)
+    registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+    installation = registry.install(manifest, package, certification=_cert(manifest))
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class SlowPlugin:
+        async def handle(self, operation, request, host):
+            entered.set()
+            await release.wait()
+            return CandidateBatch(request_id=request.context.request_id, candidates=())
+
+    host = PluginHost(
+        registry,
+        plugin_factories={manifest.plugin_id: lambda _: SlowPlugin()},
+        budget=HostBudget(max_concurrency=1),
+    )
+    binding = host.bind(installation.installation_id)
+    host.enable(binding.binding_id)
+    await host.start(installation.installation_id, mode="trusted_in_process")
+    lease = host.start_run(binding.binding_id, run_id="run-1", scope=_scope())
+    first = asyncio.create_task(host.invoke(lease, "recall", _recall(lease)))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        with pytest.raises(PluginError) as error:
+            await host.invoke(lease, "recall", _recall(lease, request_id="second"))
+        assert error.value.code == "concurrency_limit"
+    finally:
+        release.set()
+        await first
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_active_host_rejects_forged_scope_lease_and_expired_certification(
+    tmp_path: Path, monkeypatch
+) -> None:
+    package, manifest = _package(tmp_path, entrypoint=True)
+    registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+    certification = _cert(manifest)
+    installation = registry.install(manifest, package, certification=certification)
+    host = PluginHost(registry)
+    binding = host.bind(installation.installation_id)
+    host.enable(binding.binding_id)
+    await host.start(installation.installation_id, mode="trusted_in_process")
+    lease = host.start_run(binding.binding_id, run_id="run-1", scope=_scope())
+    request = _recall(lease)
+    forged_context = request.context.model_copy(update={"scope": _scope("other-run")})
+    with pytest.raises(PluginError, match="stale"):
+        await host.invoke(lease, "recall", request.model_copy(update={"context": forged_context}))
+    forged_lease = lease.model_copy(update={"scope": _scope("other-run")})
+    with pytest.raises(PluginError, match="stale"):
+        await host.invoke(forged_lease, "recall", _recall(forged_lease))
+    active_api = host._host_api(lease, request.context, HostBudget())
+    monkeypatch.setattr("operant.plugins.registry.utc_now", lambda: certification.expires_at)
+    # Keep lease live at the controlled certification deadline, isolating this guard.
+    monkeypatch.setattr(registry, "assert_lease", lambda *_args: None)
+    with pytest.raises(PluginError, match="current certification"):
+        active_api.register_resource(relative_path="state/late.json")
+    with pytest.raises(PluginError, match="current certification"):
+        await host.invoke(lease, "recall", request)
+    assert not (
+        registry.installation_root(installation.installation_id) / "state/late.json"
+    ).exists()
+    await host.close()
+
+
+def test_reloaded_registry_requires_issuer_still_trusted(tmp_path: Path) -> None:
+    package, manifest = _package(tmp_path)
+    registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+    installation = registry.install(manifest, package, certification=_cert(manifest))
+    registry.close()
+    reopened = PluginRegistry(tmp_path / "managed", trusted_issuers=())
+    with pytest.raises(PluginError, match="current certification"):
+        reopened.verify_certification(installation.installation_id, mode="trusted_in_process")
+    reopened.close()

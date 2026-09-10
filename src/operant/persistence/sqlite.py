@@ -9787,9 +9787,10 @@ class SQLiteStore:
             )
         return updated
 
-    def append_event(self, event: Event) -> Event:
+    def append_event(self, event: Event, *, history_item: Item | None = None) -> Event:
         self.get_session(event.session_id)
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
                 INSERT INTO events(
@@ -9808,6 +9809,8 @@ class SQLiteStore:
             if cursor.lastrowid is None:
                 raise RuntimeError("SQLite did not return an event cursor")
             event_cursor = int(cursor.lastrowid)
+            if history_item is not None:
+                self._append_item_in_transaction(connection, history_item)
         return event.model_copy(update={"cursor": event_cursor})
 
     def list_events(
@@ -10191,67 +10194,68 @@ class SQLiteStore:
         return [self._turn_from_row(row) for row in rows]
 
     def append_item(self, item: Item) -> Item:
-        if item.cursor is not None or item.position is not None:
-            raise ValueError("a new item cannot provide a cursor or position")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._assert_active_thread(connection, item.thread_id)
-            turn_row = connection.execute(
-                "SELECT 1 FROM turns WHERE id = ? AND thread_id = ?",
-                (item.turn_id, item.thread_id),
-            ).fetchone()
-            if turn_row is None:
-                raise NotFoundError("turn not found in thread")
-            self._validate_item_reference(connection, item)
-            position = int(
-                connection.execute(
-                    "SELECT COALESCE(MAX(position), 0) + 1 FROM items WHERE thread_id = ?",
-                    (item.thread_id,),
-                ).fetchone()[0]
-            )
-            persisted = Item.model_validate({**item.model_dump(), "position": position})
-            try:
-                body = persisted.model_dump_json()
-                item_columns = {
-                    str(row["name"])
-                    for row in connection.execute('PRAGMA table_info("items")').fetchall()
-                }
-                if "body_hash" in item_columns:
-                    fields = (
-                        "id, thread_id, turn_id, position, item_type, body, body_hash, created_at"
-                    )
-                    values: tuple[Any, ...]
-                    values = (
-                        persisted.id,
-                        persisted.thread_id,
-                        persisted.turn_id,
-                        position,
-                        persisted.item_type.value,
-                        body,
-                        hashlib.sha256(body.encode("utf-8")).hexdigest(),
-                        persisted.created_at.isoformat(),
-                    )
-                else:
-                    fields = "id, thread_id, turn_id, position, item_type, body, created_at"
-                    values = (
-                        persisted.id,
-                        persisted.thread_id,
-                        persisted.turn_id,
-                        position,
-                        persisted.item_type.value,
-                        body,
-                        persisted.created_at.isoformat(),
-                    )
-                placeholders = ", ".join("?" for _ in values)
-                cursor = connection.execute(
-                    f"INSERT INTO items({fields}) VALUES ({placeholders})",
-                    values,
-                ).lastrowid
-            except sqlite3.IntegrityError as exc:
-                raise ConflictError("item identity, position, or reference is invalid") from exc
-            if cursor is None:
-                raise RuntimeError("item insert did not produce a cursor")
-            return Item.model_validate({**persisted.model_dump(), "cursor": int(cursor)})
+            return self._append_item_in_transaction(connection, item)
+
+    def _append_item_in_transaction(self, connection: sqlite3.Connection, item: Item) -> Item:
+        if item.cursor is not None or item.position is not None:
+            raise ValueError("a new item cannot provide a cursor or position")
+        self._assert_active_thread(connection, item.thread_id)
+        turn_row = connection.execute(
+            "SELECT 1 FROM turns WHERE id = ? AND thread_id = ?",
+            (item.turn_id, item.thread_id),
+        ).fetchone()
+        if turn_row is None:
+            raise NotFoundError("turn not found in thread")
+        self._validate_item_reference(connection, item)
+        position = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(position), 0) + 1 FROM items WHERE thread_id = ?",
+                (item.thread_id,),
+            ).fetchone()[0]
+        )
+        persisted = Item.model_validate({**item.model_dump(), "position": position})
+        try:
+            body = persisted.model_dump_json()
+            item_columns = {
+                str(row["name"])
+                for row in connection.execute('PRAGMA table_info("items")').fetchall()
+            }
+            if "body_hash" in item_columns:
+                fields = "id, thread_id, turn_id, position, item_type, body, body_hash, created_at"
+                values: tuple[Any, ...]
+                values = (
+                    persisted.id,
+                    persisted.thread_id,
+                    persisted.turn_id,
+                    position,
+                    persisted.item_type.value,
+                    body,
+                    hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    persisted.created_at.isoformat(),
+                )
+            else:
+                fields = "id, thread_id, turn_id, position, item_type, body, created_at"
+                values = (
+                    persisted.id,
+                    persisted.thread_id,
+                    persisted.turn_id,
+                    position,
+                    persisted.item_type.value,
+                    body,
+                    persisted.created_at.isoformat(),
+                )
+            placeholders = ", ".join("?" for _ in values)
+            cursor = connection.execute(
+                f"INSERT INTO items({fields}) VALUES ({placeholders})",
+                values,
+            ).lastrowid
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("item identity, position, or reference is invalid") from exc
+        if cursor is None:
+            raise RuntimeError("item insert did not produce a cursor")
+        return Item.model_validate({**persisted.model_dump(), "cursor": int(cursor)})
 
     def get_item(self, item_id: str) -> Item:
         with self._connect() as connection:

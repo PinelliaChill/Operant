@@ -62,6 +62,7 @@ import {
 
 export type LiveProjectionPhase = 'idle' | 'connecting' | 'ready' | 'error';
 export type LiveApprovalDecision = 'approve' | 'reject';
+type LiveThreadCreationStatus = 'idle' | 'sending' | 'awaiting_projection' | 'error';
 
 export interface LiveContextValue {
   phase: LiveProjectionPhase;
@@ -87,6 +88,7 @@ export interface LiveContextValue {
   historyLoading: boolean;
   historyError?: LiveError;
   refreshHistory: () => Promise<void>;
+  loadMoreHistory: () => Promise<void>;
   files: LiveWorkspaceFile[];
   filesWorkspaceId: string | null;
   stream: LiveStreamState;
@@ -100,6 +102,9 @@ export interface LiveContextValue {
   deepLinkNotFound: boolean;
   canCreateSession: boolean;
   createSessionUnavailableReason?: string;
+  canCreateThread: boolean;
+  createThreadUnavailableReason?: string;
+  threadCreationStatus: LiveThreadCreationStatus;
   messageQueryAvailable: false;
   cancelCommandAvailable: boolean;
   selectProject: (projectId: string | null) => boolean;
@@ -109,6 +114,8 @@ export interface LiveContextValue {
   refresh: () => Promise<void>;
   reconnect: () => Promise<void>;
   createSession: (input: LiveCreateSessionInput) => Promise<LiveSession | undefined>;
+  /** Create a Core Thread for the selected readable Project/Workspace. */
+  createThread: () => Promise<B2.ConversationThread | undefined>;
   sendMessage: (message: string) => Promise<void>;
   cancelSession: () => Promise<void>;
   decideApproval: (approval: LiveApproval, decision: LiveApprovalDecision) => Promise<void>;
@@ -134,6 +141,14 @@ interface PendingApprovalDecision {
 interface PendingSessionCreation {
   sessionId: string;
   idempotencyKey: string;
+}
+
+interface PendingThreadCreation {
+  projectId: string;
+  workspaceRef: string;
+  threadId: string;
+  idempotencyKey: string;
+  selectedThreadIdAtRequest: string | null;
 }
 
 function initialStream(): LiveStreamState {
@@ -220,6 +235,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [history, setHistory] = useState<B2.B2SessionHistory | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<LiveError | undefined>();
+  const [threadCreationStatus, setThreadCreationStatus] = useState<LiveThreadCreationStatus>('idle');
   const [files, setFiles] = useState<LiveWorkspaceFile[]>([]);
   const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | null>(null);
   const [stream, setStream] = useState<LiveStreamState>(initialStream);
@@ -251,6 +267,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const commandDispatchingRef = useRef(false);
   const approvalDispatchingRef = useRef(false);
   const createSessionDispatchingRef = useRef(false);
+  const createThreadDispatchingRef = useRef(false);
+  const createThreadKeyRef = useRef<string | null>(null);
+  const createThreadInputRef = useRef<string | null>(null);
+  const pendingThreadRef = useRef<PendingThreadCreation | null>(null);
   const cancelDispatchingRef = useRef(false);
   const cancelKeyRef = useRef<string | null>(null);
   const cancelSessionIdRef = useRef<string | null>(null);
@@ -323,6 +343,34 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (requestSequence === historyRequestSequenceRef.current) setHistoryLoading(false);
     }
   }, [b2Adapter, clientMode, phase, threads, markManualReconcile]);
+
+  const historyMoreDispatchingRef = useRef(false);
+  const loadMoreHistory = useCallback(async () => {
+    if (!history || history.next_cursor === null || historyLoading || historyMoreDispatchingRef.current) return;
+    const sessionId = history.session.id;
+    if (!sessionId) return;
+    const sequence = ++historyRequestSequenceRef.current;
+    const cursor = history.next_cursor;
+    historyMoreDispatchingRef.current = true;
+    setHistoryLoading(true);
+    try {
+      const page = await b2Adapter.getSessionHistory(sessionId, cursor);
+      if (sequence !== historyRequestSequenceRef.current || selectedSessionIdRef.current !== sessionId) return;
+      if (page.next_cursor !== null && page.next_cursor <= cursor) throw new Error('历史分页游标未前进。');
+      setHistory((current) => {
+        if (!current || current.session.id !== sessionId) return current;
+        const items = new Map(current.items.map((item) => [item.id, item]));
+        page.items.forEach((item) => items.set(item.id, item));
+        return { ...page, items: [...items.values()] };
+      });
+      setHistoryError(undefined);
+    } catch (error: unknown) {
+      if (sequence === historyRequestSequenceRef.current) setHistoryError(normalizeB2Error(error).detail);
+    } finally {
+      historyMoreDispatchingRef.current = false;
+      if (sequence === historyRequestSequenceRef.current) setHistoryLoading(false);
+    }
+  }, [b2Adapter, history, historyLoading]);
 
   useEffect(() => {
     if (clientMode !== 'live' || phase !== 'ready') {
@@ -482,14 +530,46 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const nextApprovals = approvalPages.flat();
     const nextSessions = adapter.listSessions();
 
+    const currentProject = nextProjects.find((project) => project.id === selectedProjectIdRef.current);
     const requestedThreadId = deepLinkTargetRef.current;
     const requestedThread = requestedThreadId
       ? nextThreads.find((thread) => thread.id === requestedThreadId)
       : undefined;
-    const retainedThread = selectedThreadIdRef.current
+    const retainedThreadCandidate = selectedThreadIdRef.current
       ? nextThreads.find((thread) => thread.id === selectedThreadIdRef.current)
       : undefined;
-    const nextThread = requestedThreadId ? requestedThread : retainedThread || nextThreads[0];
+    // A selected empty Project is an intentional scope. Do not let a refresh
+    // silently replace it with the first Thread from another Project.
+    const retainedThread = retainedThreadCandidate
+      && (!currentProject || currentProject.threadIds.includes(retainedThreadCandidate.id))
+      ? retainedThreadCandidate
+      : undefined;
+    const projectThread = currentProject
+      ? nextThreads.find((thread) => currentProject.threadIds.includes(thread.id))
+      : undefined;
+    const pendingThread = pendingThreadRef.current;
+    const pendingProjection = pendingThread
+      ? nextThreads.find((thread) => (
+        thread.id === pendingThread.threadId
+        && thread.workspaceRef === pendingThread.workspaceRef
+        && nextProjects.some((project) => (
+          project.id === pendingThread.projectId
+          && project.readable
+          && project.workspaceRef === pendingThread.workspaceRef
+          && project.threadIds.includes(thread.id)
+        ))
+      ))
+      : undefined;
+    const canSelectPendingThread = Boolean(
+      pendingProjection
+      && currentProject?.id === pendingThread?.projectId
+      && selectedThreadIdRef.current === pendingThread?.selectedThreadIdAtRequest,
+    );
+    const nextThread = requestedThreadId
+      ? requestedThread
+      : canSelectPendingThread
+        ? pendingProjection
+        : retainedThread || projectThread || (currentProject ? undefined : nextThreads[0]);
     const requestedThreadIdForSelection = nextThread?.id ?? null;
     const selectionLocked = isThreadSelectionLocked(
       selectedThreadIdRef.current,
@@ -522,16 +602,25 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLastError(threadSelectionLockedError());
     }
 
-    const currentProject = nextProjects.find((project) => project.id === selectedProjectIdRef.current);
     const threadProject = nextProjects.find((project) => project.threadIds.includes(nextThreadId ?? ''));
     const nextProjectId = threadProject?.id ?? (unknownDeepLink
       ? null
-      : nextThreadId ? currentProject?.id ?? null : nextProjects[0]?.id ?? null);
+      : currentProject?.id ?? (nextThreadId ? null : nextProjects[0]?.id ?? null));
 
     setProjects(nextProjects);
     setThreads(nextThreads);
     setSessions(nextSessions);
     setApprovals(nextApprovals);
+    if (pendingThread && pendingProjection) {
+      // The B2 response is only considered fully visible after the
+      // authoritative Phase 1E projection contains the same identity and
+      // authorized workspace relation. A late response from another scope
+      // therefore cannot change the active selection.
+      pendingThreadRef.current = null;
+      createThreadKeyRef.current = null;
+      createThreadInputRef.current = null;
+      setThreadCreationStatus('idle');
+    }
     const pendingCancelSessionId = cancelSessionIdRef.current;
     const cancelledThread = pendingCancelSessionId
       ? nextThreads.find((thread) => thread.sessionId === pendingCancelSessionId)
@@ -603,6 +692,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (committed && generation === lifecycleRef.current && connectionStatusRef.current === 'connected') {
         phaseRef.current = 'ready';
         setPhase('ready');
+        await refreshHistory();
       }
     } catch (error: unknown) {
       if (generation !== lifecycleRef.current) return;
@@ -610,7 +700,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setPhase((current) => (current === 'ready' ? current : 'error'));
       applyError(error);
     }
-  }, [applyError, clientMode, loadProjection]);
+  }, [applyError, clientMode, loadProjection, refreshHistory]);
 
   const correctProjection = useCallback(async () => {
     if (clientMode !== 'live' || manualReconcileRef.current) return;
@@ -619,11 +709,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // in-flight stream work.
     const generation = projectionGeneration(lifecycleRef.current, false);
     try {
-      await loadProjection(generation);
+      const committed = await loadProjection(generation);
+      if (committed && generation === lifecycleRef.current) await refreshHistory();
     } catch (error: unknown) {
       if (generation === lifecycleRef.current) applyError(error);
     }
-  }, [applyError, clientMode, loadProjection]);
+  }, [applyError, clientMode, loadProjection, refreshHistory]);
 
   const connectAndRefresh = useCallback(async (): Promise<boolean> => {
     if (clientMode !== 'live') return false;
@@ -926,6 +1017,47 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [clientMode, connectAndRefresh, connectionStatus, replayThenCorrect]);
 
+  const createThread = useCallback(async () => {
+    const project = projects.find((item) => item.id === selectedProjectIdRef.current);
+    if (!project?.readable || clientMode !== 'live' || phase !== 'ready'
+      || connectionStatus !== 'connected' || command.status !== 'idle'
+      || manualReconcileRequired || createThreadDispatchingRef.current
+      || pendingThreadRef.current) return undefined;
+    const generation = lifecycleRef.current;
+    const previousThread = selectedThreadIdRef.current;
+    const fingerprint = project.id;
+    if (createThreadInputRef.current !== fingerprint) {
+      createThreadKeyRef.current = createIdempotencyKey();
+      createThreadInputRef.current = fingerprint;
+    }
+    const key = createThreadKeyRef.current ?? createIdempotencyKey();
+    createThreadKeyRef.current = key;
+    createThreadDispatchingRef.current = true;
+    setThreadCreationStatus('sending');
+    try {
+      const thread = await b2Adapter.createThread({ workspace_id: project.id }, key);
+      if (!thread.id) throw new Error("Core未返回Thread身份。");
+      if (generation !== lifecycleRef.current) return undefined;
+      pendingThreadRef.current = { projectId: project.id, workspaceRef: project.workspaceRef,
+        threadId: thread.id, idempotencyKey: key, selectedThreadIdAtRequest: previousThread };
+      setThreadCreationStatus('awaiting_projection');
+      await refresh();
+      return thread;
+    } catch (error: unknown) {
+      if (generation !== lifecycleRef.current) return undefined;
+      const detail = applyError(error, false);
+      if (!detail.retryable && !errorNeedsManualReconcile(detail)) {
+        createThreadKeyRef.current = null;
+        createThreadInputRef.current = null;
+      }
+      setThreadCreationStatus('error');
+      return undefined;
+    } finally {
+      createThreadDispatchingRef.current = false;
+    }
+  }, [applyError, b2Adapter, clientMode, command.status, connectionStatus,
+    manualReconcileRequired, phase, projects, refresh]);
+
   const createSession = useCallback(async (input: LiveCreateSessionInput) => {
     if (clientMode !== 'live' || phase !== 'ready' || manualReconcileRequired || command.status !== 'idle') return undefined;
     if (stream.status === 'replaying' || stream.status === 'error' || connectionStatus !== 'connected') return undefined;
@@ -1193,6 +1325,13 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setApprovalAction((current) => current.status === 'error' && !manualReconcileRequired ? { status: 'idle' } : current);
   }, [manualReconcileRequired]);
 
+  const canCreateThread = clientMode === 'live' && phase === 'ready'
+    && connectionStatus === 'connected' && command.status === 'idle'
+    && !manualReconcileRequired && threadCreationStatus !== 'sending'
+    && threadCreationStatus !== 'awaiting_projection'
+    && Boolean(projects.find((item) => item.id === selectedProjectId)?.readable);
+  const createThreadUnavailableReason = canCreateThread ? undefined : '请先选择可读工作区，并等待当前操作完成。';
+
   const canCreateSession = clientMode === 'live'
     && phase === 'ready'
     && connectionStatus === 'connected'
@@ -1247,6 +1386,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     historyLoading,
     historyError,
     refreshHistory,
+    loadMoreHistory,
     files,
     filesWorkspaceId,
     stream,
@@ -1258,6 +1398,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     manualReconcileReason,
     deepLinkTargetId,
     deepLinkNotFound,
+    canCreateThread,
+    createThreadUnavailableReason,
+    threadCreationStatus,
+    createThread,
     canCreateSession,
     createSessionUnavailableReason,
     messageQueryAvailable: false,
@@ -1279,6 +1423,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     b2Adapter,
     approvalAction,
     approvals,
+    canCreateThread,
+    createThreadUnavailableReason,
+    threadCreationStatus,
+    createThread,
     canCreateSession,
     cancelCommandAvailable,
     cancelSession,
@@ -1307,6 +1455,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refresh,
     resolveDeepLink,
     refreshHistory,
+    loadMoreHistory,
     selectProject,
     selectSession,
     selectThread,

@@ -221,6 +221,8 @@ def test_b2_operation_surface_is_additive_and_excludes_old_protocol_operations()
         "createRole",
         "listModels",
         "listTasks",
+        "getTask",
+        "createThread",
         "cancelSession",
         "listRoles",
         "negotiateProtocol",

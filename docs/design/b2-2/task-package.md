@@ -48,3 +48,13 @@
 
 - Codex 接受 host 的13项定向测试/真实隔离smoke交接及路径归属；GUI 90项测试/typecheck/build 与 Antigravity a0a4a5d 样式均已交回，样式import已集成。完整门禁/真实GUI/Reviewer仍待完成。
 - 恢复范围必须按客户端规范§16.1审查：已有Session显式新轮、Phase23 Graph安全恢复入口保留；Task统一resume当前明确unsupported，不能将此标记替代恢复验收。
+
+## 集成检查增量
+
+- edd5870 完整基础检查：Ruff/mypy/lock/GUI 90测试/typecheck/build通过；pytest 756 passed/2 failed/1 Docker skip。失败分别为新增getTask未同步surface测试预期、沙箱禁止loopback bind。原始输出见临时gate-logs，最终候选需全门禁重跑；不能把本结果写通过。
+- 真实原生空Workspace走查发现无Thread创建入口，补B2 createThread(workspace_id)及GUI入口，新增幂等/已登记scope定向测试；来源为AC06/07及客户端规范§16.1。
+- MP1.2 资源上限按manifest/Host预算复核中；只有声明没有实际执行约束不能标通过。
+
+- 集成修复：首个Thread创建、分页继续、Role预算保留、Host并发/RSS/CPU/idle与租约scope/issuer/认证时效。Host/API/SDK 31定向测试通过，真实macOS sandbox stdio两次RPC通过。
+- 实际Tauri首次模型调用成功（gpt-5.6-luna/low，read_file，结果42），暴露canonical history未写入；修复正式Session绑定Thread运行的Event+Item同事务记录和GUI终态刷新。新增运行/幂等/分页/SQLite重开回读测试通过，原Context引用只读/压缩28测试通过。真实新代码审批/回读仍在验收。
+- 原host/gui因workspace额度失败，恢复失败后负责人接回修复；原Reviewer无活动句柄，已按原范围启动替代Luna/max独立Reviewer。Antigravity按最新AGENTS条件静默挂起。

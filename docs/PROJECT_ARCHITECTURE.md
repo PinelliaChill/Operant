@@ -69,14 +69,14 @@ RPC或自动重装插件。此版本不改 SQLite v14，不实现 MP-2 记忆引
 `-I -S`，启动前真实检查受控 Home 文件、目录外写入与回环网络拒绝；沙箱不可用则拒绝。
 首版依赖限定为标准库/包内代码，不安装环境任意依赖，不宣称跨平台沙箱或线上CA。
 包、依赖/权限文件指纹、认证撤销与epoch在调用/提交时复核；资源预算、取消、迟到拒绝和未知清理
-状态不因cleanup Hook缺失而绕过。`create_app(plugin_host=...)` 是显式受信任启动注入面，由Core负责
+状态不因cleanup Hook缺失而绕过。stdio 复用进程按并发准入、RPC超时、采样RSS/CPU与空闲寿命执行预算；超限停止独立进程组并标记失败。采样允许短暂超调，认证进程内插件仍是合作式资源边界。当前issuer、scope、存储lease与全局启用状态在Host回调入口复核。`create_app(plugin_host=...)` 是显式受信任启动注入面，由Core负责
 shutdown关闭；普通启动默认无Host/无引擎，插件HTTP管理与默认记忆绑定仍属B2-3。
 
 `api_b2.py` 将已提交 Session/WorkflowRun 投影为保留来源身份、动作与明确Workspace关联的任务。
 精确任务Query不受列表分页影响，跨来源同ID必须消歧。历史来自canonical Item、AgentInstance与
-不可变Session snapshot；未绑定Thread不生成消息，Task不伪装成TeamTask。
+不可变Session snapshot；已绑定当前Session的Thread在正式运行时保存用户/模型消息、工具及生命周期事实，Runtime Event与对应Item同事务提交。每轮固定此前Item cursor，避免当前轮历史重复进入上下文；普通引用Thread保持只读，旧事件不批量迁移。未绑定Thread不生成消息，Task不伪装成TeamTask。
 Additive `b2.v1` 从FastAPI/Pydantic经 `sdk/protocol/generate_b2.py` 生成Schema/digest及Python/TS Client，
-补模型/角色配置、任务/历史与取消；旧五协议和MP-0契约不变。安装环境可用绝对路径
+补模型/角色配置、已登记Workspace首个Thread创建、任务/历史与取消；旧五协议和MP-0契约不变。安装环境可用绝对路径
 `OPERANT_B2_SCHEMA_DIGEST_PATH` 提供digest，不用常量伪造协商。
 
 GUI通过生成Client接入模型/角色配置、Task/Run详情、分页历史和取消；Core Projection与epoch清理

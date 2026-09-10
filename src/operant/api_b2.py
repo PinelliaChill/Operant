@@ -9,14 +9,20 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from operant.application.client_projection import WorkspaceProjectionError
 from operant.application.service import ApplicationService
 from operant.contracts.b2_1 import TaskAction, TaskSource
 from operant.domain.models import AgentInstance, Session
-from operant.domain.threads import Item, LegacySourceType, ThreadLegacyRef
+from operant.domain.threads import ConversationThread, Item, LegacySourceType, ThreadLegacyRef
 from operant.persistence.sqlite import NotFoundError
 from operant.protocol import redact_public_data, redact_public_text
+
+
+class B2CreateThread(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workspace_id: str = Field(min_length=1, max_length=300)
 
 
 class B2Task(BaseModel):
@@ -55,6 +61,26 @@ class B2Cancellation(BaseModel):
 
 def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
     store = service.store
+
+    @app.post(
+        "/v1/b2/threads",
+        operation_id="createB2Thread",
+        response_model=ConversationThread,
+        status_code=201,
+    )
+    def create_thread(body: B2CreateThread) -> ConversationThread:
+        try:
+            workspace = store.get_workspace_initialization_by_id(body.workspace_id)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="workspace not registered") from exc
+        # Recheck current availability through the existing no-follow boundary.
+        try:
+            service.list_workspace_files(body.workspace_id, limit=1)
+        except WorkspaceProjectionError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail="workspace unavailable") from exc
+        return service.create_thread(ConversationThread(workspace_ref=workspace.workspace_ref))
 
     @app.get("/v1/protocol/b2", operation_id="negotiateB2")
     def negotiate() -> dict[str, Any]:

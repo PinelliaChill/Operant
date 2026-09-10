@@ -158,3 +158,69 @@ async def test_isolated_stdio_reuses_process_and_calls_restricted_host_api(tmp_p
     assert result.request_id == "stdio-request"
     assert calls == ["source-1"]
     await host.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["memory", "cpu", "idle"])
+async def test_process_resource_overrun_is_stopped_without_an_rpc(
+    tmp_path: Path, kind: str
+) -> None:
+    """Real resource enforcement; sandbox transport shim is not isolation evidence."""
+    import asyncio
+    import sys
+
+    from operant.plugins import (
+        HostBudget,
+        PluginError,
+        SandboxEvidence,
+        SandboxProbe,
+        StdioPluginEngine,
+    )
+
+    runner = tmp_path / "runner"
+    runner.write_text(
+        "#!/usr/bin/env python3\nimport os,sys\n"
+        "a=sys.argv; i=a.index('-p'); os.execv(a[i+2],a[i+3:])\n"
+    )
+    runner.chmod(0o755)
+    worker = tmp_path / "worker.py"
+    worker.write_text(
+        {
+            "memory": "import time\ndata=bytearray(64*1024*1024)\ntime.sleep(30)\n",
+            "cpu": "while True: pass\n",
+            "idle": "import time\ntime.sleep(30)\n",
+        }[kind]
+    )
+
+    class Probe(SandboxProbe):
+        def check(self, **kwargs):
+            return SandboxEvidence(
+                evidence_ref="unit-resource-probe", profile="ignored", runner=str(runner)
+            )
+
+    engine = StdioPluginEngine(
+        argv=[sys.executable, "-I", "-S", str(worker)],
+        package_root=tmp_path,
+        mode="isolated",
+        sandbox_probe=Probe(),
+        data_root=tmp_path,
+        state_root=tmp_path,
+        logs_root=tmp_path,
+        tmp_root=tmp_path,
+        limits=HostBudget(
+            memory_mb=24,
+            max_cpu_seconds=0.01 if kind == "cpu" else 5,
+            max_idle_seconds=0.1 if kind == "idle" else 5,
+        ),
+    )
+    await engine.start()
+    process = engine.process
+    assert process is not None
+    try:
+        await asyncio.wait_for(process.wait(), 5)
+        assert process.returncode != 0
+        with pytest.raises(PluginError) as error:
+            await engine.start()
+        assert error.value.code == ("deadline_exceeded" if kind == "idle" else "budget_exceeded")
+    finally:
+        await engine.close()

@@ -351,6 +351,7 @@ class PluginHost:
                 executable=Path(sys.executable).resolve(strict=True),
                 limits=limits,
                 sandbox_evidence=sandbox_evidence,
+                failure_callback=lambda code: self.registry.mark_failed(installation_id, code),
             )
             try:
                 await engine.start()
@@ -385,6 +386,13 @@ class PluginHost:
             binding_id, run_id=run_id, scope=scope, ttl_seconds=ttl_seconds
         )
 
+    def _assert_active(self, lease: RunLease, context: RpcContext) -> None:
+        self.registry.assert_lease(lease, context)
+        slot = self._engines.get(lease.installation_id)
+        if slot is None:
+            raise PackageUnavailableError("plugin engine has not been started")
+        self.registry.verify_certification(lease.installation_id, mode=slot.admission.mode)
+
     def _host_api(
         self, lease: RunLease, context: RpcContext, limits: HostBudget
     ) -> RestrictedHostApi:
@@ -415,6 +423,7 @@ class PluginHost:
             resource_revision=self.registry.resource_revision,
             resource_bump=self.registry.bump_resource_revision,
             cancel_event=cancel_event,
+            validate_active=lambda: self._assert_active(lease, context),
         )
 
     @staticmethod
@@ -450,7 +459,7 @@ class PluginHost:
             except Exception as exc:
                 raise PluginProtocolError("plugin request failed schema validation") from exc
         context = self._request_context(request)
-        self.registry.assert_lease(lease, context)
+        self._assert_active(lease, context)
         slot = self._engines.get(lease.installation_id)
         if slot is None:
             raise PackageUnavailableError("plugin engine has not been started")
@@ -466,6 +475,13 @@ class PluginHost:
             raise BudgetExceededError()
         if utc_now() >= context.deadline:
             raise DeadlineExceededError()
+        if context.request_id in self._calls:
+            raise PluginError("revision_conflict", "request is already active")
+        if (
+            sum(call.installation_id == lease.installation_id for call in self._calls.values())
+            >= slot.limits.max_concurrency
+        ):
+            raise PluginError("concurrency_limit", "plugin concurrency budget is exhausted")
         host = self._host_api(lease, context, slot.limits)
         call = self._calls[context.request_id]
         try:
@@ -486,7 +502,7 @@ class PluginHost:
             result = task.result()
             if call.event.is_set():
                 raise CancellationError()
-            self.registry.assert_lease(lease, context)
+            self._assert_active(lease, context)
             result = self._validate_result(operation, request, result)
             response_bytes = len(canonical_json(result.model_dump(mode="json")))
             if response_bytes > slot.limits.max_response_bytes:

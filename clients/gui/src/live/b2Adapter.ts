@@ -10,6 +10,10 @@ export interface B2ClientLike {
   readonly protocolVersion: string;
   readonly schemaDigest: string;
   negotiateProtocol(force?: boolean): Promise<B2.ProtocolNegotiation>;
+  createThread(
+    request: B2.B2CreateThread,
+    options?: B2.CreateThreadOptions,
+  ): Promise<B2.ConversationThread>;
   listModels(): Promise<Array<B2.ModelProfile>>;
   createModel(request: B2.CreateModelProfileRequest, options?: B2.CreateModelOptions): Promise<B2.ModelProfile>;
   updateModel(
@@ -188,6 +192,50 @@ function mapBudget(value: unknown): B2.Budget | undefined {
   return requiredRecord(value, 'RolePreset.budget') as B2.Budget;
 }
 
+function threadStatus(value: unknown, label: string): B2.ThreadStatus | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === 'active' || value === 'completed' || value === 'cancelled' || value === 'archived') {
+    return value;
+  }
+  throw new B2AdapterError({
+    code: 'invalid_b2_projection',
+    message: `Core 返回的 ${label} 无效。`,
+    retryable: false,
+    recovery: 'none',
+    detail: value,
+  });
+}
+
+/** Validate the returned identity without manufacturing a Phase 1E projection. */
+export function mapConversationThread(value: B2.ConversationThread): B2.ConversationThread {
+  const source = requiredRecord(value, 'ConversationThread');
+  const legacyRefs = source.legacy_refs;
+  if (legacyRefs !== undefined && (!Array.isArray(legacyRefs) || legacyRefs.some((ref) => {
+    if (!isRecord(ref)) return true;
+    return (ref.source_type !== 'session' && ref.source_type !== 'workflow_run')
+      || !optionalText(ref.source_id);
+  }))) {
+    throw new B2AdapterError({
+      code: 'invalid_b2_projection',
+      message: 'Core 返回的 ConversationThread.legacy_refs 无效。',
+      retryable: false,
+      recovery: 'none',
+      detail: legacyRefs,
+    });
+  }
+  return {
+    id: requiredText(source.id, 'ConversationThread.id'),
+    cursor: source.cursor === null ? null : optionalFiniteNumber(source.cursor, 'ConversationThread.cursor'),
+    parent_thread_id: source.parent_thread_id === null ? null : optionalText(source.parent_thread_id),
+    workspace_ref: source.workspace_ref === null ? null : optionalText(source.workspace_ref),
+    status: threadStatus(source.status, 'ConversationThread.status'),
+    legacy_refs: legacyRefs as B2.ThreadLegacyRef[] | undefined,
+    created_at: optionalText(source.created_at),
+    updated_at: optionalText(source.updated_at),
+    archived_at: source.archived_at === null ? null : optionalText(source.archived_at),
+  };
+}
+
 export function mapModelProfile(value: B2.ModelProfile): B2.ModelProfile {
   const source = requiredRecord(value, 'ModelProfile');
   return {
@@ -356,6 +404,23 @@ export class B2LiveAdapter {
         });
       }
       return metadata;
+    } catch (error: unknown) {
+      throw normalizeB2Error(error);
+    }
+  }
+
+  async createThread(request: B2.B2CreateThread, idempotencyKey?: string): Promise<B2.ConversationThread> {
+    const workspaceId = request.workspace_id.trim();
+    if (!workspaceId) {
+      throw new B2AdapterError({
+        code: 'workspace_required',
+        message: '创建 Thread 必须绑定已选择的 Workspace。',
+        retryable: false,
+        recovery: 'none',
+      });
+    }
+    try {
+      return mapConversationThread(await this.client.createThread({ workspace_id: workspaceId }, { idempotencyKey }));
     } catch (error: unknown) {
       throw normalizeB2Error(error);
     }

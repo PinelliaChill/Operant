@@ -500,7 +500,11 @@ class PluginRegistry:
 
     def certification_is_current(self, installation: InstallationRecord) -> bool:
         certification = self._certification_for(installation)
-        if certification is None or certification.state != "valid":
+        if (
+            certification is None
+            or certification.state != "valid"
+            or certification.issuer_id not in self._trusted_issuers
+        ):
             return False
         now = utc_now()
         if now < certification.valid_from or now >= certification.expires_at:
@@ -985,7 +989,9 @@ class PluginRegistry:
         binding = self._binding(lease.binding_id)
         installation = self._installation(lease.installation_id)
         if (
-            context.installation_id != lease.installation_id
+            current_lease != lease
+            or context.scope != lease.scope
+            or context.installation_id != lease.installation_id
             or context.dataset_id != lease.dataset_id
             or context.binding_epoch != lease.binding_epoch
             or context.permission_epoch != lease.permission_epoch
@@ -993,6 +999,7 @@ class PluginRegistry:
             or binding.binding_epoch != lease.binding_epoch
             or binding.permission_epoch != lease.permission_epoch
             or not binding.enabled
+            or not binding.global_enabled
             or installation.state != PluginLifecycleState.ENABLED.value
         ):
             raise PluginError(
