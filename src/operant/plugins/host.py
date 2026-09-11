@@ -11,10 +11,9 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import inspect
-import shutil
-import stat
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -33,6 +32,11 @@ from operant.contracts.b2_1 import (
     Scope,
 )
 from operant.domain.models import new_id, utc_now
+from operant.plugins.payload import (
+    allowed_host_operations,
+    authorize_engine_request,
+    authorize_engine_result,
+)
 from operant.plugins.protocol import (
     ENGINE_REQUEST_TYPES,
     ENGINE_RESULT_TYPES,
@@ -43,6 +47,7 @@ from operant.plugins.protocol import (
     HostCallbacks,
     InProcessPluginEngine,
     PackageUnavailableError,
+    PermissionDeniedError,
     PluginError,
     PluginImplementation,
     PluginProtocolError,
@@ -51,6 +56,8 @@ from operant.plugins.protocol import (
     SandboxEvidence,
     SandboxProbe,
     StdioPluginEngine,
+    _remove_empty_managed_directory,
+    _remove_managed_path,
     canonical_json,
     digest_payload,
     path_under,
@@ -81,8 +88,11 @@ class _EngineSlot:
 class _ActiveCall:
     installation_id: str
     request_id: str
+    lease_id: str
+    run_id: str
     event: asyncio.Event
     slot: _EngineSlot
+    task: asyncio.Task[BaseModel] | None = None
 
 
 def _receipt(
@@ -119,6 +129,8 @@ def _receipt(
 class PluginHost:
     """A Core-owned Host with explicit lifecycle and fail-closed admission."""
 
+    _CALL_QUIESCE_TIMEOUT_SECONDS = 1.0
+
     def __init__(
         self,
         registry: PluginRegistry,
@@ -137,7 +149,11 @@ class PluginHost:
         self.sandbox_probe = sandbox_probe or SandboxProbe()
         self._engines: dict[str, _EngineSlot] = {}
         self._calls: dict[str, _ActiveCall] = {}
+        self._cancel_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._cleanup_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._close_tasks: dict[str, asyncio.Task[Any]] = {}
         self._isolation_evidence: dict[str, SandboxEvidence] = {}
+        self._lifecycle_fences: set[str] = set()
         self._closed = False
         # Loading a registry never imports/instantiates a plugin.  Only Host
         # cleanup metadata is read here, and cleanup is explicit via resume.
@@ -158,6 +174,9 @@ class PluginHost:
         )
 
     def enable(self, binding_id: str) -> LifecycleReceipt:
+        installation_id = self.registry.get_binding(binding_id).installation_id
+        if self._closed or installation_id in self._lifecycle_fences:
+            raise RestartRequiredError("plugin lifecycle must finish before enabling again")
         binding = self.registry.enable(binding_id)
         installation = self.registry.get_installation(binding.installation_id)
         return _receipt(
@@ -303,6 +322,8 @@ class PluginHost:
     ) -> HostAdmission:
         if self._closed:
             raise PluginError("package_unavailable", "PluginHost is closed")
+        if installation_id in self._lifecycle_fences:
+            raise RestartRequiredError("plugin lifecycle must finish before restarting")
         installation = self.registry.get_installation(installation_id)
         if (
             installation.state != PluginLifecycleState.ENABLED.value
@@ -382,11 +403,16 @@ class PluginHost:
     ) -> RunLease:
         if self._closed:
             raise PluginError("package_unavailable", "PluginHost is closed")
+        binding = self.registry.get_binding(binding_id)
+        if binding.installation_id in self._lifecycle_fences:
+            raise PluginError("stale_epoch", "plugin lifecycle transition is in progress")
         return self.registry.create_run(
             binding_id, run_id=run_id, scope=scope, ttl_seconds=ttl_seconds
         )
 
     def _assert_active(self, lease: RunLease, context: RpcContext) -> None:
+        if lease.installation_id in self._lifecycle_fences:
+            raise PluginError("stale_epoch", "plugin lifecycle transition is in progress")
         self.registry.assert_lease(lease, context)
         slot = self._engines.get(lease.installation_id)
         if slot is None:
@@ -398,10 +424,13 @@ class PluginHost:
     ) -> RestrictedHostApi:
         installation_root = self.registry.installation_root(lease.installation_id)
         config = self.registry.get_binding(lease.binding_id).config
+        capabilities = self.registry.get_installation(lease.installation_id).manifest.capabilities
         cancel_event = asyncio.Event()
         active = _ActiveCall(
             installation_id=lease.installation_id,
             request_id=context.request_id,
+            lease_id=lease.lease_id,
+            run_id=lease.run_id,
             event=cancel_event,
             slot=self._engines[lease.installation_id],
         )
@@ -425,10 +454,14 @@ class PluginHost:
             resource_bump=self.registry.bump_resource_revision,
             cancel_event=cancel_event,
             validate_active=lambda: self._assert_active(lease, context),
+            allowed_operations=allowed_host_operations(capabilities),
             allowed_model_profiles=frozenset(
                 profile
-                for profile in (config.extraction_model_profile_id, config.rerank_model_profile_id)
-                if profile is not None
+                for capability, profile in (
+                    ("extract", config.extraction_model_profile_id),
+                    ("recall", config.rerank_model_profile_id),
+                )
+                if capability in capabilities and profile is not None
             ),
         )
 
@@ -481,6 +514,8 @@ class PluginHost:
             raise BudgetExceededError()
         if utc_now() >= context.deadline:
             raise DeadlineExceededError()
+        if operation != "lifecycle":
+            authorize_engine_request(operation, request, context, self.callbacks)
         if context.request_id in self._calls:
             raise PluginError("revision_conflict", "request is already active")
         if (
@@ -492,6 +527,7 @@ class PluginHost:
         call = self._calls[context.request_id]
         try:
             task = asyncio.create_task(slot.engine.invoke(operation, request, host))
+            call.task = task
             timeout = min(
                 slot.limits.timeout_seconds,
                 max(0.001, (context.deadline - utc_now()).total_seconds()),
@@ -499,37 +535,188 @@ class PluginHost:
             done, pending = await asyncio.wait({task}, timeout=timeout)
             if pending:
                 call.event.set()
-                await self._cancel_engine(call)
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+                cancel_finished = await self._cancel_engine(call)
+                if not task.done():
+                    task.cancel()
+                    _done, still_pending = await asyncio.wait(
+                        {task}, timeout=self._CALL_QUIESCE_TIMEOUT_SECONDS
+                    )
+                else:
+                    still_pending = set()
+                if not still_pending:
+                    await asyncio.gather(task, return_exceptions=True)
                 if isinstance(slot.engine, InProcessPluginEngine):
                     self.registry.mark_failed(lease.installation_id, "restart_required")
+                if not cancel_finished or still_pending:
+                    # Keep the call in the Host registry until its task really
+                    # finishes.  Its completion callback removes it and
+                    # consumes any late exception.
+                    raise RestartRequiredError(
+                        "in-process plugin call did not quiesce before its deadline"
+                    )
                 raise DeadlineExceededError()
             result = task.result()
             if call.event.is_set():
                 raise CancellationError()
             self._assert_active(lease, context)
             result = self._validate_result(operation, request, result)
+            if operation != "lifecycle":
+                authorize_engine_result(operation, request, result, context, self.callbacks)
             response_bytes = len(canonical_json(result.model_dump(mode="json")))
             if response_bytes > slot.limits.max_response_bytes:
                 raise BudgetExceededError()
             return result
         except PluginError as exc:
-            if call.event.is_set() and exc.code not in {"stale_epoch", "lease_expired"}:
+            if call.event.is_set() and exc.code not in {
+                "stale_epoch",
+                "lease_expired",
+                "restart_required",
+            }:
                 raise CancellationError() from exc
             raise
         except Exception as exc:
             raise PluginError("plugin_failed", "plugin invocation failed") from exc
         finally:
-            self._calls.pop(context.request_id, None)
+            retained_task = call.task
+            if retained_task is None or retained_task.done():
+                self._calls.pop(context.request_id, None)
+            else:
+                retained_task.add_done_callback(
+                    lambda finished: self._retire_call(context.request_id, call, finished)
+                )
 
-    async def _cancel_engine(self, call: _ActiveCall) -> None:
-        from contextlib import suppress
+    def _retire_call(
+        self, request_id: str, call: _ActiveCall, task: asyncio.Task[BaseModel]
+    ) -> None:
+        """Drop a call only after a retained engine task actually finishes."""
 
-        with suppress(Exception):
-            await call.slot.engine.cancel(call.request_id)
+        with suppress(BaseException):
+            task.exception()
+        if self._calls.get(request_id) is call:
+            self._calls.pop(request_id, None)
+
+    async def _cancel_engine(self, call: _ActiveCall) -> bool:
+        cancel_task = self._cancel_tasks.get(call.request_id)
+        if cancel_task is None:
+            cancel_task = asyncio.create_task(call.slot.engine.cancel(call.request_id))
+            self._cancel_tasks[call.request_id] = cancel_task
+        _done, pending = await asyncio.wait(
+            {cancel_task},
+            timeout=self._CALL_QUIESCE_TIMEOUT_SECONDS,
+        )
+        if pending:
+            return False
+        self._cancel_tasks.pop(call.request_id, None)
+        try:
+            cancel_task.result()
+        except BaseException:
+            return False
+        return True
         # Cancellation is fail-closed.  The request is never accepted just
         # because a plugin ignored its cancellation callback.
+
+    async def _quiesce_calls(self, installation_id: str) -> bool:
+        """Request cancellation and wait for plugin code to leave the engine."""
+
+        calls = tuple(
+            call for call in self._calls.values() if call.installation_id == installation_id
+        )
+        if not calls:
+            cancellation_succeeded = True
+            pending_tasks: set[asyncio.Task[Any]] = set()
+        else:
+            for call in calls:
+                call.event.set()
+            cancel_results = await asyncio.gather(
+                *(self._cancel_engine(call) for call in calls),
+                return_exceptions=True,
+            )
+            cancellation_succeeded = all(result is True for result in cancel_results)
+            tasks = tuple(call.task for call in calls)
+            if any(task is None for task in tasks):
+                return False
+            pending_tasks = {task for task in tasks if task is not None and not task.done()}
+        cleanup_task = self._cleanup_tasks.get(installation_id)
+        if cleanup_task is not None:
+            if not cleanup_task.done():
+                return False
+            self._cleanup_tasks.pop(installation_id, None)
+            with suppress(BaseException):
+                cleanup_task.result()
+        if not pending_tasks:
+            return cancellation_succeeded
+        _done, pending = await asyncio.wait(
+            pending_tasks,
+            timeout=self._CALL_QUIESCE_TIMEOUT_SECONDS,
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            _done, pending = await asyncio.wait(
+                pending,
+                timeout=self._CALL_QUIESCE_TIMEOUT_SECONDS,
+            )
+        return cancellation_succeeded and not pending
+
+    async def _run_cleanup_hook(
+        self, installation_id: str, cleanup_hook: Callable[[], Any], timeout_seconds: float
+    ) -> bool:
+        """Run a trusted cleanup hook under a bounded cooperative wait."""
+
+        existing = self._cleanup_tasks.get(installation_id)
+        if existing is not None:
+            if not existing.done():
+                return False
+            self._cleanup_tasks.pop(installation_id, None)
+            with suppress(Exception):
+                existing.result()
+            return True
+
+        async def run_hook() -> None:
+            if inspect.iscoroutinefunction(cleanup_hook):
+                result = cleanup_hook()
+            else:
+                result = await asyncio.to_thread(cleanup_hook)
+            if inspect.isawaitable(result):
+                await result
+
+        task = asyncio.create_task(run_hook())
+        self._cleanup_tasks[installation_id] = task
+        _done, pending = await asyncio.wait({task}, timeout=timeout_seconds)
+        if pending:
+            return False
+        self._cleanup_tasks.pop(installation_id, None)
+        with suppress(Exception):
+            task.result()
+        return True
+
+    async def _close_engine(self, installation_id: str, slot: _EngineSlot) -> bool:
+        """Close an engine under a bounded wait, preserving pending work."""
+
+        existing = self._close_tasks.get(installation_id)
+        if existing is not None:
+            if not existing.done():
+                return False
+            self._close_tasks.pop(installation_id, None)
+            try:
+                existing.result()
+            except Exception:
+                return False
+            return True
+        task = asyncio.create_task(slot.engine.close())
+        self._close_tasks[installation_id] = task
+        _done, pending = await asyncio.wait(
+            {task},
+            timeout=min(slot.limits.timeout_seconds, self._CALL_QUIESCE_TIMEOUT_SECONDS),
+        )
+        if pending:
+            return False
+        self._close_tasks.pop(installation_id, None)
+        try:
+            task.result()
+        except Exception:
+            return False
+        return True
 
     async def invoke_batch(
         self,
@@ -627,6 +814,22 @@ class PluginHost:
                 ),
                 ack="failed",
             )
+        # Fence new invocations before asking existing calls to stop.  This
+        # keeps the lifecycle transition closed while the cooperative
+        # cancellation handshake is in progress.
+        self._lifecycle_fences.add(installation_id)
+        if not await self._quiesce_calls(installation_id):
+            failed_binding = self.registry.begin_disable(binding.binding_id, stop_run_ids=requested)
+            self.registry.complete_disable(failed_binding.binding_id, restart_required=True)
+            current = self.registry.get_installation(installation_id)
+            return _receipt(
+                operation_id=new_id("plugin_stop"),
+                installation_id=installation_id,
+                state="restart_required",
+                binding_epoch=failed_binding.binding_epoch,
+                inventory_revision=current.inventory_revision,
+                ack="failed",
+            )
         for lease in tuple(self.registry.state.runs):
             if (
                 lease.binding_id == binding.binding_id
@@ -635,11 +838,8 @@ class PluginHost:
             ):
                 self.registry.release_run(lease.lease_id, status="cancelled")
         binding = self.registry.begin_disable(binding.binding_id)
-        slot = self._engines.pop(installation_id, None)
-        try:
-            if slot is not None:
-                await slot.engine.close()
-        except Exception:
+        slot = self._engines.get(installation_id)
+        if slot is not None and not await self._close_engine(installation_id, slot):
             self.registry.complete_disable(binding.binding_id, restart_required=True)
             return _receipt(
                 operation_id=new_id("plugin_stop"),
@@ -649,8 +849,10 @@ class PluginHost:
                 inventory_revision=installation.inventory_revision,
                 ack="failed",
             )
+        self._engines.pop(installation_id, None)
         self.registry.complete_disable(binding.binding_id)
         installation = self.registry.get_installation(installation_id)
+        self._lifecycle_fences.discard(installation_id)
         return _receipt(
             operation_id=new_id("plugin_stop"),
             installation_id=installation_id,
@@ -677,9 +879,16 @@ class PluginHost:
         expected_binding_epoch: int | None = None,
     ) -> LifecycleReceipt:
         installation = self.registry.get_installation(installation_id)
+        binding: BindingRecord | None = None
+        cleanup_expected_epoch = expected_binding_epoch
+        requested = set(stop_run_ids)
         if installation.binding_id is not None:
             binding = self.registry.get_binding(installation.binding_id)
-            requested = set(stop_run_ids)
+            if (
+                expected_binding_epoch is not None
+                and expected_binding_epoch != binding.binding_epoch
+            ):
+                raise PluginError("stale_epoch", "uninstall inventory is stale")
             remaining = set(binding.active_run_ids).difference(requested)
             if remaining:
                 return _receipt(
@@ -699,6 +908,32 @@ class PluginHost:
                     ),
                     ack="failed",
                 )
+        self._lifecycle_fences.add(installation_id)
+        if not await self._quiesce_calls(installation_id):
+            failed_binding = (
+                self.registry.begin_disable(binding.binding_id, stop_run_ids=requested)
+                if binding is not None
+                else None
+            )
+            if failed_binding is not None:
+                self.registry.complete_disable(failed_binding.binding_id, restart_required=True)
+            else:
+                self.registry.mark_failed(installation_id, "restart_required")
+            current = self.registry.get_installation(installation_id)
+            binding_epoch = (
+                failed_binding.binding_epoch
+                if failed_binding is not None
+                else current.binding_epoch
+            )
+            return _receipt(
+                operation_id=new_id("plugin_uninstall"),
+                installation_id=installation_id,
+                state="restart_required",
+                binding_epoch=binding_epoch,
+                inventory_revision=current.inventory_revision,
+                ack="failed",
+            )
+        if binding is not None:
             for lease in tuple(self.registry.state.runs):
                 if (
                     lease.binding_id == binding.binding_id
@@ -706,28 +941,51 @@ class PluginHost:
                     and lease.status == "active"
                 ):
                     self.registry.release_run(lease.lease_id, status="cancelled")
+            binding = self.registry.begin_disable(binding.binding_id)
+            cleanup_expected_epoch = binding.binding_epoch
         slot = self._engines.get(installation_id)
         if slot is not None:
             cleanup_hook = getattr(slot.implementation, "cleanup", None)
             if cleanup_hook is not None:
-                try:
-                    result = cleanup_hook()
-                    if inspect.isawaitable(result):
-                        await result
-                except Exception:
-                    # The Host inventory remains authoritative.
-                    pass
-            try:
-                await slot.engine.close()
-            except Exception:
+                cleanup_finished = await self._run_cleanup_hook(
+                    installation_id,
+                    cleanup_hook,
+                    min(slot.limits.timeout_seconds, self._CALL_QUIESCE_TIMEOUT_SECONDS),
+                )
+                if not cleanup_finished:
+                    self.registry.mark_failed(installation_id, "restart_required")
+                    current = self.registry.get_installation(installation_id)
+                    binding_epoch = (
+                        self.registry.get_binding(binding.binding_id).binding_epoch
+                        if binding is not None
+                        else current.binding_epoch
+                    )
+                    return _receipt(
+                        operation_id=new_id("plugin_uninstall"),
+                        installation_id=installation_id,
+                        state="restart_required",
+                        binding_epoch=binding_epoch,
+                        inventory_revision=current.inventory_revision,
+                        ack="failed",
+                    )
+                # Hook failures do not authorize deleting unknown resources;
+                # ``_run_cleanup_hook`` consumes them and the Host inventory
+                # remains authoritative.
+            if not await self._close_engine(installation_id, slot):
                 if installation.binding_id is not None:
                     self.registry.mark_failed(installation_id, "restart_required")
+                current = self.registry.get_installation(installation_id)
+                binding_epoch = (
+                    self.registry.get_binding(binding.binding_id).binding_epoch
+                    if binding is not None
+                    else current.binding_epoch
+                )
                 return _receipt(
                     operation_id=new_id("plugin_uninstall"),
                     installation_id=installation_id,
                     state="restart_required",
-                    binding_epoch=installation.binding_epoch,
-                    inventory_revision=installation.inventory_revision,
+                    binding_epoch=binding_epoch,
+                    inventory_revision=current.inventory_revision,
                     ack="failed",
                 )
             self._engines.pop(installation_id, None)
@@ -735,13 +993,14 @@ class PluginHost:
             installation_id,
             data_policy=data_policy,
             stop_run_ids=stop_run_ids,
-            expected_binding_epoch=expected_binding_epoch,
+            expected_binding_epoch=cleanup_expected_epoch,
         )
         await self._apply_cleanup(plan)
         try:
             completed = self.registry.complete_uninstall(plan.operation_id)
         except PluginError:
             plan = self.registry.cleanup_plan(plan.operation_id)
+            self._lifecycle_fences.discard(installation_id)
             return _receipt(
                 operation_id=plan.operation_id,
                 installation_id=installation_id,
@@ -752,6 +1011,7 @@ class PluginHost:
                 ack="failed",
             )
         self._remove_empty_installation_root(installation_id)
+        self._lifecycle_fences.discard(installation_id)
         return _receipt(
             operation_id=completed.operation_id,
             installation_id=installation_id,
@@ -776,7 +1036,10 @@ class PluginHost:
         ordered = sorted(plan.items, key=depth, reverse=True)
         current = plan
         for item in ordered:
-            if item.outcome != "pending":
+            if item.outcome != "pending" and not (
+                item.outcome == "blocked"
+                and item.reason in {"directory_identity_changed", "retry_required"}
+            ):
                 continue
             stored = resources.get(item.resource_id)
             if stored is None:
@@ -786,41 +1049,34 @@ class PluginHost:
                     item.model_copy(update={"outcome": "deleted", "reason": "exclusive"}),
                 )
                 continue
-            path = path_under(
-                self.registry.installation_root(plan.installation_id), stored.relative_path
-            )
             try:
+                path = path_under(
+                    self.registry.installation_root(plan.installation_id), stored.relative_path
+                )
                 self._remove_owned_path(path, stored.path_kind)
                 current = self.registry.mark_resource_cleanup(
                     current.operation_id,
                     item.resource_id,
                     item.model_copy(update={"outcome": "deleted", "reason": "exclusive"}),
                 )
-            except Exception:
+            except Exception as exc:
+                reason = (
+                    "directory_identity_changed"
+                    if isinstance(exc, PermissionDeniedError)
+                    else "retry_required"
+                )
                 current = self.registry.mark_resource_cleanup(
                     current.operation_id,
                     item.resource_id,
                     item.model_copy(
-                        update={"outcome": "blocked", "reason": "retry_required", "blocker_ids": ()}
+                        update={"outcome": "blocked", "reason": reason, "blocker_ids": ()}
                     ),
                 )
         return current
 
     @staticmethod
     def _remove_owned_path(path: Path, path_kind: str) -> None:
-        if path.is_symlink():
-            raise PermissionError("managed resource path was replaced by a symlink")
-        if not path.exists():
-            return
-        item_stat = path.lstat()
-        if path_kind == "directory":
-            if not stat.S_ISDIR(item_stat.st_mode):
-                raise PermissionError("managed directory resource changed type")
-            shutil.rmtree(path)
-        else:
-            if not stat.S_ISREG(item_stat.st_mode):
-                raise PermissionError("managed file resource changed type")
-            path.unlink()
+        _remove_managed_path(path, directory=path_kind == "directory")
 
     def _remove_empty_installation_root(self, installation_id: str) -> None:
         root = self.registry.installation_root(installation_id)
@@ -828,22 +1084,43 @@ class PluginHost:
             return
         from contextlib import suppress
 
-        with suppress(OSError):
-            root.rmdir()
+        with suppress(OSError, PluginError):
+            _remove_empty_managed_directory(root)
 
     async def resume_cleanup(self) -> tuple[LifecycleReceipt, ...]:
         """Resume Host-owned pending plans without starting plugin code."""
 
         receipts: list[LifecycleReceipt] = []
         for plan in self.registry.pending_cleanup_plans():
-            if plan.state == "blocked":
+            if not any(
+                item.outcome == "pending"
+                or (
+                    item.outcome == "blocked"
+                    and item.reason in {"directory_identity_changed", "retry_required"}
+                )
+                for item in plan.items
+            ):
                 continue
             current = await self._apply_cleanup(plan)
             try:
                 completed = self.registry.complete_uninstall(current.operation_id)
             except PluginError:
+                current = self.registry.cleanup_plan(current.operation_id)
+                receipts.append(
+                    _receipt(
+                        operation_id=current.operation_id,
+                        installation_id=current.installation_id,
+                        state="blocked",
+                        binding_epoch=current.expected_binding_epoch,
+                        inventory_revision=current.inventory_revision,
+                        cleanup=current.items,
+                        ack="failed",
+                    )
+                )
+                self._lifecycle_fences.discard(current.installation_id)
                 continue
             self._remove_empty_installation_root(completed.installation_id)
+            self._lifecycle_fences.discard(completed.installation_id)
             receipts.append(
                 _receipt(
                     operation_id=completed.operation_id,
@@ -857,20 +1134,21 @@ class PluginHost:
         return tuple(receipts)
 
     async def close(self) -> None:
-        if self._closed:
+        if self._closed and not self._engines:
             return
         self._closed = True
+        for installation_id in tuple(self._engines):
+            runs = tuple(
+                lease.run_id
+                for lease in self.registry.state.runs
+                if lease.installation_id == installation_id and lease.status == "active"
+            )
+            await self.stop(installation_id, stop_run_ids=runs)
+        if self._engines:
+            raise RestartRequiredError("Host shutdown retained in-flight plugin code")
         for lease in tuple(self.registry.state.runs):
             if lease.status == "active":
                 self.registry.release_run(lease.lease_id, status="cancelled")
-        for installation_id, slot in tuple(self._engines.items()):
-            try:
-                await slot.engine.close()
-            except Exception:
-                self.registry.mark_failed(installation_id, "restart_required")
-            if slot.module_name is not None:
-                sys.modules.pop(slot.module_name, None)
-        self._engines.clear()
         self._isolation_evidence.clear()
         self.registry.close()
 

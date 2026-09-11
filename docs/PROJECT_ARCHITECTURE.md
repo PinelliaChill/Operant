@@ -75,6 +75,9 @@ shutdown关闭；普通启动默认无Host/无引擎，插件HTTP管理与默认
 Host回调要求Core提供来源/记忆引用授权器，按真实记录核对dataset、scope、revision/digest和可用性；缺少授权器时拒绝。
 Host另行强制来源与当前scope/permission epoch一致、记忆引用属于当前dataset，模型Profile仅来自绑定的提取/重排配置。
 异步回调返回后重查lease及来源授权并验证结果关联。MP-1不隐式授予跨scope来源；尚未接入生产记忆检索/模型回调。
+直接engine入参及返回值也经过同一Core授权边界：来源、记忆引用、Head与Proposal逐项核对，缺少对应授权器拒绝；结果须关联request/event及watermark。
+Manifest能力限制嵌套Host API：recall才可search，extract/recall/maintain可请求授权来源，提取/重排模型分别要求extract/recall能力与对应配置；仅索引通知不授予外部读/搜索/模型访问。
+停止、卸载和Host关闭先阻止新运行，再对在途调用及关闭/清理钩子作有界等待。未收束的可信代码保留task/engine/资源并返回restart_required，禁止同Host重新启用；同步关闭/清理钩子在工作线程执行，不能物理强杀线程。清理使用目录句柄递归删除，不跟随symlink；路径异常形成可续做blocked条目。
 
 `api_b2.py` 将已提交 Session/WorkflowRun 投影为保留来源身份、动作与明确Workspace关联的任务。
 精确任务Query不受列表分页影响，跨来源同ID必须消歧。历史来自canonical Item、AgentInstance与

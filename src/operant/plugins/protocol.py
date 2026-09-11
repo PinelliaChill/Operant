@@ -39,6 +39,8 @@ from operant.contracts.b2_1 import (
     LifecycleRequest,
     LifecycleResult,
     MaintenanceInput,
+    MemoryHead,
+    MemoryProposal,
     MemoryVersionRef,
     ModelProxyRequest,
     ModelProxyResult,
@@ -633,15 +635,87 @@ def _write_managed_file(path: Path, data: bytes) -> None:
             os.close(descriptor)
 
 
-def _delete_managed_file(path: Path) -> None:
+def _remove_managed_directory(descriptor: int) -> None:
+    """Remove a directory tree through a pinned directory descriptor."""
+
+    try:
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                name = entry.name
+                try:
+                    item_stat = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISDIR(item_stat.st_mode):
+                    try:
+                        child = os.open(
+                            name,
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=descriptor,
+                        )
+                    except FileNotFoundError:
+                        continue
+                    try:
+                        _remove_managed_directory(child)
+                    finally:
+                        os.close(child)
+                    try:
+                        os.rmdir(name, dir_fd=descriptor)
+                    except FileNotFoundError:
+                        continue
+                else:
+                    # A symlink is removed as a directory entry; it is never
+                    # followed to its target.
+                    try:
+                        os.unlink(name, dir_fd=descriptor)
+                    except FileNotFoundError:
+                        continue
+    except OSError as exc:
+        raise PermissionDeniedError("managed resource directory changed or is unsafe") from exc
+
+
+def _remove_managed_path(path: Path, *, directory: bool) -> None:
+    """Remove one managed file or directory without following path races."""
+
     try:
         with _managed_parent(path) as (parent, name):
             item_stat = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            if not stat.S_ISREG(item_stat.st_mode):
-                raise PermissionDeniedError("private index path was replaced")
-            os.unlink(name, dir_fd=parent)
+            if directory:
+                if not stat.S_ISDIR(item_stat.st_mode):
+                    raise PermissionDeniedError("managed directory resource changed type")
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parent,
+                )
+                try:
+                    _remove_managed_directory(descriptor)
+                finally:
+                    os.close(descriptor)
+                os.rmdir(name, dir_fd=parent)
+            else:
+                if not stat.S_ISREG(item_stat.st_mode) or item_stat.st_nlink != 1:
+                    raise PermissionDeniedError("managed file resource is not private")
+                os.unlink(name, dir_fd=parent)
     except FileNotFoundError:
         pass
+
+
+def _remove_empty_managed_directory(path: Path) -> None:
+    """Remove a managed directory only when it is already empty."""
+
+    try:
+        with _managed_parent(path) as (parent, name):
+            item_stat = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if not stat.S_ISDIR(item_stat.st_mode):
+                raise PermissionDeniedError("managed installation root changed type")
+            os.rmdir(name, dir_fd=parent)
+    except FileNotFoundError:
+        pass
+
+
+def _delete_managed_file(path: Path) -> None:
+    _remove_managed_path(path, directory=False)
 
 
 @dataclass(frozen=True)
@@ -656,6 +730,8 @@ class HostCallbacks:
 
     authorize_source: Callable[[RpcContext, SourceRef], bool] | None = None
     authorize_memory_ref: Callable[[RpcContext, MemoryVersionRef], bool] | None = None
+    authorize_head: Callable[[RpcContext, MemoryHead], bool] | None = None
+    authorize_proposal: Callable[[RpcContext, MemoryProposal], bool] | None = None
 
     read_source: Callable[[HostReadRequest], HostReadResult | Awaitable[HostReadResult]] | None = (
         None
@@ -719,6 +795,7 @@ class RestrictedHostApi:
         cancel_event: asyncio.Event,
         validate_active: Callable[[], None] | None = None,
         allowed_model_profiles: frozenset[str] = frozenset(),
+        allowed_operations: frozenset[str] = frozenset(),
     ) -> None:
         self.context = context
         self._installation_root = Path(installation_root)
@@ -731,6 +808,7 @@ class RestrictedHostApi:
         self._cancel_event = cancel_event
         self._validate_active = validate_active
         self._allowed_model_profiles = allowed_model_profiles
+        self._allowed_operations = allowed_operations
         self._logs: list[str] = []
 
     @property
@@ -770,6 +848,7 @@ class RestrictedHostApi:
         return self._resource_register(relative_path, category, reconstructible)
 
     async def read_source(self, request: HostReadRequest) -> HostReadResult:
+        self._check_operation("read_source")
         self._check_context(request.context)
         self.check_cancelled()
         self._authorize_source(request.source)
@@ -790,6 +869,7 @@ class RestrictedHostApi:
         return result
 
     async def search(self, request: RecallRequest) -> CandidateBatch:
+        self._check_operation("search")
         self._check_context(request.context)
         self.check_cancelled()
         for ref in request.explicit_refs:
@@ -817,6 +897,7 @@ class RestrictedHostApi:
         return result
 
     async def model(self, request: ModelProxyRequest) -> ModelProxyResult:
+        self._check_operation("model")
         self._check_context(request.context)
         self.check_cancelled()
         if request.model_profile_id not in self._allowed_model_profiles:
@@ -850,6 +931,10 @@ class RestrictedHostApi:
             or authorize(self.context, source) is not True
         ):
             raise PermissionDeniedError("source is not authorized for this Host context")
+
+    def _check_operation(self, operation: str) -> None:
+        if operation not in self._allowed_operations:
+            raise PermissionDeniedError("Host API operation is not granted by plugin capabilities")
 
     def _authorize_memory_ref(self, ref: MemoryVersionRef) -> None:
         authorize = self._callbacks.authorize_memory_ref
@@ -994,7 +1079,9 @@ class InProcessPluginEngine:
     async def close(self) -> None:
         close = getattr(self.implementation, "close", None)
         if close is not None:
-            result = close()
+            result = (
+                close() if inspect.iscoroutinefunction(close) else await asyncio.to_thread(close)
+            )
             if inspect.isawaitable(result):
                 await result
         self.started = False
