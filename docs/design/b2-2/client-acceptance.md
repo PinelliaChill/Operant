@@ -17,8 +17,10 @@
 - 窄屏会话：768宽发现历史/检查器因flex压缩重叠，新增仅Live对话CSS维持正常文档流，实际滚动确认105末尾、输入框、下方检查器独立可达。
 - 断线重连：停止仅本次无运行Core，原生显式“Core连接失败，实时数据未加载”，新建/发送/取消均禁用；恢复相同临时库后自动重连，保持同Thread，首屏历史与加载更多恢复。没有静默切换Mock。
 
-- 窄屏配置：B2表单采用顶层portal和限定modal样式，原生768宽可见完整表单、滚动区域及保存/关闭按钮，Tab焦点进入ModelProfile。GUI修改Role名称为B2-2 verified reader并保存v4；原Session仍用v3快照。预算与工具策略通过正式API回读核对。
+- 窄屏配置：B2表单采用显式portal和限定modal样式，窗口Raise后的原生768宽可见完整表单、滚动区域及保存/关闭按钮，Tab焦点进入ModelProfile。GUI修改Role名称为B2-2 verified reader并保存v4；原Session仍用v3快照。预算与工具策略通过正式API回读核对。
+
+- Reviewer对比度增量：fieldLabel从text-muted改为text-secondary，浅色白底7.63:1、暗色card11.74:1；原生768宽窗口Raise后实际观察标签清晰。此前后台窗口截图曾滞后于AX更新，不能单凭滞后截图确认裁剪或CSP根因。
 
 ## 尚未完成
 
-最终候选完整门禁、恢复边界独立审查；指定Luna/max Reviewer因workspace额度失败，暂无独立通过结论。未覆盖打包dist/签名/公证、Docker隔离或后续MP-2。
+恢复边界及整批独立审查；最终1b0fb4c完整门禁已通过，指定Luna/max Reviewer在User确认额度恢复后继续原任务、随后再次额度失败，暂无完整独立结论。未覆盖打包dist/签名/公证、Docker隔离或后续MP-2。

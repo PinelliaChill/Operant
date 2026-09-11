@@ -1,0 +1,13 @@
+{
+  "mode": "isolated",
+  "certification_id": null,
+  "isolation_evidence_present": true,
+  "actual_rpc_calls": 2,
+  "result": "passed",
+  "source_files_sha256": {
+    "src/operant/plugins/protocol.py": "77ea30b0f2e5a85cef09d5ae5518baecc16a7331d06941d80ad07aab1868546d",
+    "src/operant/plugins/registry.py": "c5398afb9dd9b18052b117088ad6e8127ecf3e91124c99c855e233973c556be1",
+    "src/operant/plugins/host.py": "98cc60e73610ec97c791cc9c6406f213645fba4f0793b6708e9dc136d08b5a8f"
+  },
+  "verification_note": "Real isolation smoke rerun after directory-handle fix; in-process installed-entrypoint test also covered by the 25-test Host regression."
+}

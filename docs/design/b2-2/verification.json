@@ -1,0 +1,131 @@
+{
+  "code_head": "1b0fb4c6452374e9ba1267f672a420099d74f54d",
+  "recorded_at": "2026-09-11T05:28:10.310744+00:00",
+  "checks": [
+    {
+      "check": "ruff-format",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "ruff",
+        "format",
+        "--check",
+        "."
+      ],
+      "exit_code": 0,
+      "seconds": 0.13,
+      "log": "gate-logs-1b0fb4c/ruff-format.log"
+    },
+    {
+      "check": "ruff-check",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "ruff",
+        "check",
+        "."
+      ],
+      "exit_code": 0,
+      "seconds": 0.04,
+      "log": "gate-logs-1b0fb4c/ruff-check.log"
+    },
+    {
+      "check": "mypy",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "mypy",
+        "src"
+      ],
+      "exit_code": 0,
+      "seconds": 0.39,
+      "log": "gate-logs-1b0fb4c/mypy.log"
+    },
+    {
+      "check": "pytest",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "-ra"
+      ],
+      "exit_code": 0,
+      "seconds": 414.49,
+      "log": "gate-logs-1b0fb4c/pytest.log"
+    },
+    {
+      "check": "lock",
+      "command": [
+        "uv",
+        "lock",
+        "--check",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "seconds": 0.02,
+      "log": "gate-logs-1b0fb4c/lock.log"
+    },
+    {
+      "check": "diff",
+      "command": [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.02,
+      "log": "gate-logs-1b0fb4c/diff.log"
+    },
+    {
+      "check": "gui-typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck",
+        "--prefix",
+        "clients/gui"
+      ],
+      "exit_code": 0,
+      "seconds": 3.09,
+      "log": "gate-logs-1b0fb4c/gui-typecheck.log"
+    },
+    {
+      "check": "gui-tests",
+      "command": [
+        "npm",
+        "test",
+        "--prefix",
+        "clients/gui"
+      ],
+      "exit_code": 0,
+      "seconds": 0.51,
+      "log": "gate-logs-1b0fb4c/gui-tests.log"
+    },
+    {
+      "check": "gui-build",
+      "command": [
+        "npm",
+        "run",
+        "build",
+        "--prefix",
+        "clients/gui"
+      ],
+      "exit_code": 0,
+      "seconds": 4.47,
+      "log": "gate-logs-1b0fb4c/gui-build.log"
+    }
+  ],
+  "summary": {
+    "pytest_passed": 772,
+    "pytest_skipped": 1,
+    "skip_reason": "Docker conditions unavailable; not container acceptance",
+    "gui_tests_passed": 91,
+    "independent_review": "incomplete_workspace_credits"
+  }
+}

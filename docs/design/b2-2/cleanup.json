@@ -1,0 +1,12 @@
+{
+  "services_stopped": [
+    "core",
+    "gui"
+  ],
+  "ports_closed": {
+    "18000": true,
+    "3000": true
+  },
+  "scope": "only B2-2 own temporary services; user 8000 untouched",
+  "runtime_data_retained": true
+}

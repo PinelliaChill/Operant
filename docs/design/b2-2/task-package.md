@@ -23,17 +23,17 @@
 
 | ID | 要求与准确来源 | 负责人 | 方法/环境/预算 | 阻断及理由 | 证据 |
 | --- | --- | --- | --- | --- | --- |
-| AC-01 | 安装/Registry/配置/资源；设计 §13.4 MP-1.1 | Codex | 隔离临时目录、定向故障测试；禁用零实例/不自动重装 | 是，MP-1 | 待验 |
-| AC-02 | 进程内/stdio 同一 API，复用/批量/取消/日志资源界限；MP-1.2 | Codex | 两种实际执行模式，有限超时与预算 | 是，Host 完成门 | 待验 |
-| AC-03 | 包/依赖/权限认证及撤销；MP-1.3、计划 §6 | Codex | 篡改/扩大权限/撤销，真实 macOS sandbox 拒绝受控 Home 探针与网络；不可用 fail closed | 是，安全门 | 开工宿主 sandbox-exec 可用；Docker daemon 不可用 |
-| AC-04 | epoch/迟到提交/启动停止失败/重启/Run 依赖；MP-1.4 | Codex | 定向并发和故障注入 | 是，安全与恢复 | 待验 |
-| AC-05 | Host 资源 keep/delete/续做/残留，缺 Hook 可清理；MP-1.5 | Codex | 临时库/目录重启与中断测试 | 是，资源基础 | 待验 |
-| AC-06 | 配置、任务发起/历史/详情/审批取消及恢复入口，受支持项目身份；计划 §4 GUI-L1、治理根客户端规范 §16.1 GUI-L1 与逐模块验收1～5 | Codex | 正式 API/生成 SDK + GUI 行为定向测试 | 是，任务闭环 | 待验 |
-| AC-07 | 无插件真实桌面任务/工具/历史/合法恢复；强依赖记忆 Graph 拒绝；计划 §6、AGENTS 真实模型 | Codex | 先 discover 精确模型，正式 ModelProfile/入口；隔离绝对 workspace，单个调用有限预算/120s，失败按规则停止 | 是，真实链路 | Discovery 已通过：67 个精确 ID，含 gpt-5.6-luna；尚未真实调用 |
-| AC-08 | 宽窄屏/键盘/对比度/错误断线/Action Gateway/实际 Tauri；AGENTS 客户端边界 | Codex | 本机 debug Tauri 与 UI，检查本批新增流程；不覆盖发布签名 | 是，客户端门 | 真实 debug WebView 已打开并连接隔离 Core；Tauri preflight 200/未知origin400，待完整行为验收 |
-| AC-09 | 完整基础门禁；AGENTS 开发与验证 | Codex | ruff format/check、mypy src、pytest、uv lock --check --offline、git diff --check；集成版本一次 | 是，硬门禁 | 待验 |
-| AC-10 | GUI/SDK test/typecheck/build、协议确定性；AGENTS | Codex | 当前 package scripts + SDK 定向测试/生成回读，旧 Schema 不变 | 是，契约门 | 既有依赖可复用，不改锁 |
-| AC-11 | 架构同步、保留范围、独立 Reviewer 与进度；AGENTS/用户请求 | Codex | diff/证据覆盖审查，Luna max，同 Reviewer 增量 | 是，交付门 | 待验 |
+| AC-01 | 安装/Registry/配置/资源；设计 §13.4 MP-1.1 | Codex | 隔离临时目录、定向故障测试；禁用零实例/不自动重装 | 是，MP-1 | 定向安装/绑定/private_index/restart测试通过；最终门禁已通过，见handoff.md |
+| AC-02 | 进程内/stdio 同一 API，复用/批量/取消/日志资源界限；MP-1.2 | Codex | 两种实际执行模式，有限超时与预算 | 是，Host 完成门 | 实际entrypoint进程内与macOS隔离stdio RPC通过；并发/RSS/CPU/idle定向通过 |
+| AC-03 | 包/依赖/权限认证及撤销；MP-1.3、计划 §6 | Codex | 篡改/扩大权限/撤销，真实 macOS sandbox 拒绝受控 Home 探针与网络；不可用 fail closed | 是，安全门 | 真实macOS隔离探针及认证篡改/撤销/过期/issuer测试通过；Docker不算通过 |
+| AC-04 | epoch/迟到提交/启动停止失败/重启/Run 依赖；MP-1.4 | Codex | 定向并发和故障注入 | 是，安全与恢复 | lease/scope/epoch/迟到结果/重启定向通过；最终门禁已通过 |
+| AC-05 | Host 资源 keep/delete/续做/残留，缺 Hook 可清理；MP-1.5 | Codex | 临时库/目录重启与中断测试 | 是，资源基础 | Host inventory无Hook删除、keep保留、清理中断续做定向通过 |
+| AC-06 | 配置、任务发起/历史/详情/审批取消及恢复入口，受支持项目身份；计划 §4 GUI-L1、治理根客户端规范 §16.1 GUI-L1 与逐模块验收1～5 | Codex | 正式 API/生成 SDK + GUI 行为定向测试 | 是，任务闭环 | 正式API/SDK13项；原生Thread/Session/角色/审批/取消/历史闭环见client-acceptance.md |
+| AC-07 | 无插件真实桌面任务/工具/历史/合法恢复；强依赖记忆 Graph 拒绝；计划 §6、AGENTS 真实模型 | Codex | 先 discover 精确模型，正式 ModelProfile/入口；隔离绝对 workspace，单个调用有限预算/120s，失败按规则停止 | 是，真实链路 | 真实gpt-5.6-luna/low、read_file与审批cat结果42；明确新轮继续；强依赖Graph定向拒绝 |
+| AC-08 | 宽窄屏/键盘/对比度/错误断线/Action Gateway/实际 Tauri；AGENTS 客户端边界 | Codex | 本机 debug Tauri 与 UI，检查本批新增流程；不覆盖发布签名 | 是，客户端门 | 真实原生约1200/768宽，分页105条、错误断线/重连、重启回读、表单焦点/保存已观察 |
+| AC-09 | 完整基础门禁；AGENTS 开发与验证 | Codex | ruff format/check、mypy src、pytest、uv lock --check --offline、git diff --check；集成版本一次 | 是，硬门禁 | 1b0fb4c完整门禁已通过：772 passed/1 Docker skip，见verification.json |
+| AC-10 | GUI/SDK test/typecheck/build、协议确定性；AGENTS | Codex | 当前 package scripts + SDK 定向测试/生成回读，旧 Schema 不变 | 是，契约门 | GUI91定向/类型检查通过；最终构建与SDK确定性已随完整门禁通过 |
+| AC-11 | 架构同步、保留范围、独立 Reviewer 与进度；AGENTS/用户请求 | Codex | diff/证据覆盖审查，Luna max，同 Reviewer 增量 | 是，交付门 | 架构/客户端记录已同步；指定Reviewer恢复后再次额度失败，仅P1已修复，无完整结论 |
 
 ## 环境与证据规则
 
@@ -62,3 +62,7 @@
 - 2026-09-11：0dd0d49基础门禁766 passed/1 Docker skip；GUI90/test/typecheck/build通过（随后API/GUI新增修复需最终集成门禁）。真实原生正式ModelProfile gpt-5.6-luna/low：read_file结果42；只读cat审批一次通过，最终42已自动写入并显示历史；实际取消回读agent.cancelled与Task已取消。旧中断审批明确拒绝，不自动重放。
 - 补修复历史整页脱敏破坏schema（多Agent+历史页回归）、只读Query误锁manual_reconcile、取消终态错看Thread、运行实例分页可见性；API/SDK13定向通过。原生768宽任务卡断点冲突已实测修复，键盘焦点可见。
 - 指定替代Reviewer 01a08baa-4872-7473-abb1-7ca6fe91517d已启动后因workspace credits失败，尚无独立结论；原Reviewer 01a08b5d-0c63-7411-a99c-1742707cddd9，保持证据待恢复，不再无条件重试。
+
+- Reviewer增量P1：B2表单标签对比度2.52:1，Codex在4c06ff8改为text-secondary（7.63:1/11.74:1）并完成原生复核；只重跑最终完整门禁，未变化真实链路证据复用。见review-status.md。
+
+- Codex集成追加安全缺陷已复现并修复：path_under后父目录替换可越出managed目录；改逐级dir_fd/no-follow读写删/登记，并在截断前拒绝硬链接、限制读大小。新增6回归，Host25定向和实际macOS隔离两次RPC均通过；最终1b0fb4c完整门禁已覆盖该安全增量。
