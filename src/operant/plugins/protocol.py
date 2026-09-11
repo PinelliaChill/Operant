@@ -845,7 +845,20 @@ class RestrictedHostApi:
         """
 
         self.check_cancelled()
-        return self._resource_register(relative_path, category, reconstructible)
+        self._budget.charge_request(
+            len(
+                canonical_json(
+                    {
+                        "relative_path": relative_path,
+                        "category": category,
+                        "reconstructible": reconstructible,
+                    }
+                )
+            )
+        )
+        resource = self._resource_register(relative_path, category, reconstructible)
+        self._budget.charge_response(len(canonical_json(resource.model_dump(mode="json"))))
+        return resource
 
     async def read_source(self, request: HostReadRequest) -> HostReadResult:
         self._check_operation("read_source")

@@ -522,6 +522,9 @@ async def test_active_host_rejects_forged_scope_lease_and_expired_certification(
     assert not (
         registry.installation_root(installation.installation_id) / "state/late.json"
     ).exists()
+    # This test constructs the internal API without invoking an engine. Release
+    # its synthetic call slot; real invocations retain their actual asyncio task.
+    host._calls.pop(request.context.request_id)
     await host.close()
 
 
