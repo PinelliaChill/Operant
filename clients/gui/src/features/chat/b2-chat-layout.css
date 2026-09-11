@@ -1,0 +1,8 @@
+/* Keep the history and inspector in normal document flow on narrow screens. */
+.live-chat-view[data-client-mode="live"] .live-content-grid {
+  flex: 0 0 auto;
+  grid-auto-rows: max-content;
+}
+.live-chat-view[data-client-mode="live"] .live-message-list {
+  flex-shrink: 0;
+}

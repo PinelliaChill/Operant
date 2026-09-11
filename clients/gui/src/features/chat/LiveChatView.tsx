@@ -1,3 +1,4 @@
+import './b2-chat-layout.css';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {

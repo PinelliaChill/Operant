@@ -80,10 +80,10 @@ Additive `b2.v1` 从FastAPI/Pydantic经 `sdk/protocol/generate_b2.py` 生成Sche
 `OPERANT_B2_SCHEMA_DIGEST_PATH` 提供digest，不用常量伪造协商。
 
 GUI通过生成Client接入模型/角色配置、分页AgentInstance及真实状态、Task/Run详情、分页历史和取消；Core Projection与epoch清理
-防止旧请求覆盖新选择。取消终态从Session Task读取，Thread生命周期不冒充运行状态。历史Query逐字段脱敏保留类型结构；只读历史错误不创建命令结果未知状态。模型ID来自Discovery，secret_ref只存引用名；新Role默认无工具权限，编辑
+防止旧请求覆盖新选择。取消终态从Session Task读取，Thread生命周期不冒充运行状态。AgentInstance/Task投影优先读取已提交的Agent终态事件，避免流关闭中断cleanup后显示过时running行；cleanup状态更新放在不可跳过的finally内。历史Query逐字段脱敏保留类型结构；只读历史错误不创建命令结果未知状态。模型ID来自Discovery，secret_ref只存引用名；新Role默认无工具权限，编辑
 既有Role不改变tool_policy；Role新版本不回写已创建Session快照。取消accepted是请求接收，不能
 标为执行完成。Workflow详情链接既有Graph监控/安全恢复，仍保留未知写入人工核对边界。
-Antigravity的任务行样式来自 `a0a4a5d`。HTTP开发WebView使用同源Vite代理，正式Tauri协议及
+Antigravity的任务行样式来自 `a0a4a5d`，Codex按原生窄屏结果补断点修复；B2配置表单使用Modal显式portal，默认其他调用不变，Live对话历史按正常文档流避免窄屏重叠。HTTP开发WebView使用同源Vite代理，正式Tauri协议及
 `tauri.localhost`保持固定本机Core；`OPERANT_CORE_URL`仅控制开发代理目标。
 
 代码存在不等于本批通过；真实桌面、完整门禁、指定Reviewer与未覆盖项以本批验收记录为准。

@@ -3571,11 +3571,11 @@ class ApplicationService:
                 )
                 lease_watcher.cancel()
                 await asyncio.gather(lease_watcher, return_exceptions=True)
-                try:
-                    await iterator.aclose()
-                finally:
-                    self.store.update_agent_status(agent.id, final_status)
+                await iterator.aclose()
             finally:
+                # Cancellation can interrupt any await above, including cleanup.
+                # Preserve the terminal state before releasing the durable lease.
+                self.store.update_agent_status(agent.id, final_status)
                 if self._cancellations.get(session.id) is cancellation:
                     self._cancellations.pop(session.id, None)
                 self._clear_session_approvals(session.id)

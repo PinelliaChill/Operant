@@ -534,6 +534,11 @@ def test_gui_run_persists_canonical_history_once_and_survives_reopen(
     assert len(multi.json()["items"]) == 2 * len(first["items"])
     assert len(multi.json()["agents"]) == 2
     first = multi.json()
+    from operant.domain.models import AgentStatus
+
+    # Reproduce a client disconnect interrupting cleanup after the terminal event.
+    for agent in first["agents"]:
+        service.store.update_agent_status(agent["id"], AgentStatus.RUNNING)
     agents = client.get("/v1/b2/agents", params={"limit": 1}).json()
     assert len(agents["items"]) == 1
     assert agents["items"][0]["status"] == "completed"

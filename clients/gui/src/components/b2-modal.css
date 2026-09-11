@@ -1,0 +1,6 @@
+.b2-modal-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(28,25,23,.45); }
+.b2-modal-overlay .b2-modal-dialog { width: 100%; max-width: 560px; max-height: 90vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; box-shadow: var(--shadow-lg); background: var(--bg-card); border: 1px solid var(--border-subtle); }
+.b2-modal-heading { padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
+.b2-modal-heading h3 { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.b2-modal-body { padding: 18px; overflow-y: auto; flex: 1; min-height: 0; }
+.b2-modal-footer { padding: 12px 18px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--border-subtle); background: var(--bg-surface); }

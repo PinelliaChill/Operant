@@ -85,6 +85,26 @@ class B2Cancellation(BaseModel):
 def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
     store = service.store
 
+    def projected_agent(body: str) -> AgentInstance:
+        agent = AgentInstance.model_validate_json(body)
+        # A stream disconnect may interrupt cleanup after the durable terminal
+        # event. Prefer that event over a stale running row, without mutating it.
+        with store._connect() as connection:
+            terminal = connection.execute(
+                "SELECT event_type FROM events WHERE agent_id = ? AND event_type IN "
+                "('agent.completed','agent.cancelled','agent.failed','agent.timed_out') "
+                "ORDER BY sequence DESC LIMIT 1",
+                (agent.id,),
+            ).fetchone()
+        if terminal is not None:
+            return AgentInstance.model_validate(
+                {
+                    **agent.model_dump(),
+                    "status": terminal["event_type"].removeprefix("agent."),
+                }
+            )
+        return agent
+
     @app.post(
         "/v1/b2/threads",
         operation_id="createB2Thread",
@@ -154,7 +174,7 @@ def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
                         "ORDER BY created_at DESC, id DESC LIMIT 1",
                         (source_id,),
                     ).fetchall()
-                agents = [AgentInstance.model_validate_json(r["body"]) for r in agent_rows]
+                agents = [projected_agent(r["body"]) for r in agent_rows]
                 status = agents[0].status.value if agents else "created"
                 with store._connect() as connection:
                     revision = int(
@@ -277,7 +297,7 @@ def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
                 (limit + 1, offset),
             ).fetchall()
         result = B2AgentPage(
-            items=[AgentInstance.model_validate_json(row["body"]) for row in rows[:limit]],
+            items=[projected_agent(row["body"]) for row in rows[:limit]],
             next_offset=offset + limit if len(rows) > limit else None,
         )
         return _redact_typed_history(result.model_dump(mode="json"))
@@ -315,7 +335,7 @@ def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
         result = B2SessionHistory(
             session=session,
             thread_id=None if thread is None else thread.id,
-            agents=[AgentInstance.model_validate_json(row["body"]) for row in rows],
+            agents=[projected_agent(row["body"]) for row in rows],
             items=items[:limit],
             next_cursor=items[limit - 1].cursor if len(items) > limit else None,
         )

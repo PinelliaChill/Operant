@@ -367,7 +367,7 @@ export const LiveAgentsView: React.FC = () => {
         </div>
       </div>
 
-      <Modal isOpen={modelModalOpen} onClose={() => setModelModalOpen(false)} title={editingModel ? '编辑 ModelProfile' : '添加 ModelProfile'} footer={(
+      <Modal portal isOpen={modelModalOpen} onClose={() => setModelModalOpen(false)} title={editingModel ? '编辑 ModelProfile' : '添加 ModelProfile'} footer={(
         <><button type="button" className="btn btn-ghost" onClick={() => setModelModalOpen(false)}>取消</button><button type="button" className="btn btn-primary" onClick={() => void saveModel()} disabled={saving || !modelForm.name.trim() || !modelForm.modelId.trim() || !modelForm.baseUrl.trim() || !modelForm.secretRef.trim()}>{saving ? '保存中…' : '保存配置'}</button></>
       )}>
         <div className="b2-config-form">
@@ -381,7 +381,7 @@ export const LiveAgentsView: React.FC = () => {
         </div>
       </Modal>
 
-      <Modal isOpen={roleModalOpen} onClose={() => setRoleModalOpen(false)} title={editingRole ? '编辑 RolePreset' : '新建 RolePreset'} footer={(
+      <Modal portal isOpen={roleModalOpen} onClose={() => setRoleModalOpen(false)} title={editingRole ? '编辑 RolePreset' : '新建 RolePreset'} footer={(
         <><button type="button" className="btn btn-ghost" onClick={() => setRoleModalOpen(false)}>取消</button><button type="button" className="btn btn-primary" onClick={() => void saveRole()} disabled={saving || !roleForm.name.trim() || !roleForm.systemPrompt.trim() || !roleForm.modelProfileId.trim()}>{saving ? '保存中…' : '保存预设'}</button></>
       )}>
         <div className="b2-config-form">
