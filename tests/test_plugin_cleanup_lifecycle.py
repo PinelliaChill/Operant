@@ -110,7 +110,7 @@ def _recall(lease: RunLease, *, request_id: str = "request-1") -> RecallRequest:
         explicit_refs=(),
         knowledge_cutoff="0",
         max_candidates=3,
-        token_budget=100,
+        token_budget=0,  # Empty recall fixture requests no context allocation.
     )
 
 

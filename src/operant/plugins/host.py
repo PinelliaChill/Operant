@@ -28,6 +28,7 @@ from operant.contracts.b2_1 import (
     LifecycleReceipt,
     LifecycleRequest,
     LifecycleResult,
+    RecallRequest,
     RpcContext,
     Scope,
 )
@@ -154,6 +155,8 @@ class PluginHost:
         self._close_tasks: dict[str, asyncio.Task[Any]] = {}
         self._isolation_evidence: dict[str, SandboxEvidence] = {}
         self._lifecycle_fences: set[str] = set()
+        self._transition_locks: dict[str, asyncio.Lock] = {}
+        self._shutdown_lock = asyncio.Lock()
         self._closed = False
         # Loading a registry never imports/instantiates a plugin.  Only Host
         # cleanup metadata is read here, and cleanup is explicit via resume.
@@ -460,6 +463,7 @@ class PluginHost:
             cancel_event=cancel_event,
             validate_active=lambda: self._assert_active(lease, context),
             allowed_operations=allowed_host_operations(capabilities),
+            max_recall_tokens=config.recall_token_budget,
             allowed_model_profiles=frozenset(
                 profile
                 for capability, profile in (
@@ -514,6 +518,14 @@ class PluginHost:
                 raise PluginError(
                     "permission_denied", "plugin operation is not declared by its manifest"
                 )
+            config = self.registry.get_binding(lease.binding_id).config
+            if operation == "maintain" and not config.maintenance_enabled:
+                raise PermissionDeniedError("maintenance is disabled in the binding")
+            if (
+                isinstance(request, RecallRequest)
+                and request.token_budget > config.recall_token_budget
+            ):
+                raise BudgetExceededError("recall exceeds the binding token budget")
         request_bytes = len(canonical_json(request.model_dump(mode="json")))
         if request_bytes > slot.limits.max_request_bytes:
             raise BudgetExceededError()
@@ -789,6 +801,25 @@ class PluginHost:
         *,
         stop_run_ids: Iterable[str] = (),
     ) -> LifecycleReceipt:
+        async with self._transition_locks.setdefault(installation_id, asyncio.Lock()):
+            if self._closed:
+                return self._closed_lifecycle_receipt(installation_id)
+            return await self._stop_installation(installation_id, stop_run_ids=stop_run_ids)
+
+    def _closed_lifecycle_receipt(self, installation_id: str) -> LifecycleReceipt:
+        installation = self.registry.get_installation(installation_id)
+        return _receipt(
+            operation_id=new_id("plugin_closed"),
+            installation_id=installation_id,
+            state="restart_required",
+            binding_epoch=installation.binding_epoch,
+            inventory_revision=installation.inventory_revision,
+            ack="failed",
+        )
+
+    async def _stop_installation(
+        self, installation_id: str, *, stop_run_ids: Iterable[str] = ()
+    ) -> LifecycleReceipt:
         installation = self.registry.get_installation(installation_id)
         if installation.binding_id is None:
             return _receipt(
@@ -876,6 +907,24 @@ class PluginHost:
         return await self.stop(binding.installation_id, stop_run_ids=stop_run_ids)
 
     async def uninstall(
+        self,
+        installation_id: str,
+        *,
+        data_policy: Literal["keep", "delete"],
+        stop_run_ids: Iterable[str] = (),
+        expected_binding_epoch: int | None = None,
+    ) -> LifecycleReceipt:
+        async with self._transition_locks.setdefault(installation_id, asyncio.Lock()):
+            if self._closed:
+                return self._closed_lifecycle_receipt(installation_id)
+            return await self._uninstall_installation(
+                installation_id,
+                data_policy=data_policy,
+                stop_run_ids=stop_run_ids,
+                expected_binding_epoch=expected_binding_epoch,
+            )
+
+    async def _uninstall_installation(
         self,
         installation_id: str,
         *,
@@ -1097,48 +1146,57 @@ class PluginHost:
 
         receipts: list[LifecycleReceipt] = []
         for plan in self.registry.pending_cleanup_plans():
-            if not any(
-                item.outcome == "pending"
-                or (
-                    item.outcome == "blocked"
-                    and item.reason in {"directory_identity_changed", "retry_required"}
-                )
-                for item in plan.items
-            ):
-                continue
-            current = await self._apply_cleanup(plan)
-            try:
-                completed = self.registry.complete_uninstall(current.operation_id)
-            except PluginError:
-                current = self.registry.cleanup_plan(current.operation_id)
+            async with self._transition_locks.setdefault(plan.installation_id, asyncio.Lock()):
+                if self._closed:
+                    receipts.append(self._closed_lifecycle_receipt(plan.installation_id))
+                    continue
+                plan = self.registry.cleanup_plan(plan.operation_id)
+                if not any(
+                    item.outcome == "pending"
+                    or (
+                        item.outcome == "blocked"
+                        and item.reason in {"directory_identity_changed", "retry_required"}
+                    )
+                    for item in plan.items
+                ):
+                    continue
+                current = await self._apply_cleanup(plan)
+                try:
+                    completed = self.registry.complete_uninstall(current.operation_id)
+                except PluginError:
+                    current = self.registry.cleanup_plan(current.operation_id)
+                    receipts.append(
+                        _receipt(
+                            operation_id=current.operation_id,
+                            installation_id=current.installation_id,
+                            state="blocked",
+                            binding_epoch=current.expected_binding_epoch,
+                            inventory_revision=current.inventory_revision,
+                            cleanup=current.items,
+                            ack="failed",
+                        )
+                    )
+                    self._lifecycle_fences.discard(current.installation_id)
+                    continue
+                self._remove_empty_installation_root(completed.installation_id)
+                self._lifecycle_fences.discard(completed.installation_id)
                 receipts.append(
                     _receipt(
-                        operation_id=current.operation_id,
-                        installation_id=current.installation_id,
-                        state="blocked",
-                        binding_epoch=current.expected_binding_epoch,
-                        inventory_revision=current.inventory_revision,
-                        cleanup=current.items,
-                        ack="failed",
+                        operation_id=completed.operation_id,
+                        installation_id=completed.installation_id,
+                        state="uninstalled",
+                        binding_epoch=completed.expected_binding_epoch + 1,
+                        inventory_revision=completed.inventory_revision,
+                        cleanup=completed.items,
                     )
                 )
-                self._lifecycle_fences.discard(current.installation_id)
-                continue
-            self._remove_empty_installation_root(completed.installation_id)
-            self._lifecycle_fences.discard(completed.installation_id)
-            receipts.append(
-                _receipt(
-                    operation_id=completed.operation_id,
-                    installation_id=completed.installation_id,
-                    state="uninstalled",
-                    binding_epoch=completed.expected_binding_epoch + 1,
-                    inventory_revision=completed.inventory_revision,
-                    cleanup=completed.items,
-                )
-            )
         return tuple(receipts)
 
     async def close(self) -> None:
+        async with self._shutdown_lock:
+            await self._close_host()
+
+    async def _close_host(self) -> None:
         if self._closed and not self._engines:
             return
         self._closed = True
@@ -1148,7 +1206,8 @@ class PluginHost:
                 for lease in self.registry.state.runs
                 if lease.installation_id == installation_id and lease.status == "active"
             )
-            await self.stop(installation_id, stop_run_ids=runs)
+            async with self._transition_locks.setdefault(installation_id, asyncio.Lock()):
+                await self._stop_installation(installation_id, stop_run_ids=runs)
         if self._engines:
             raise RestartRequiredError("Host shutdown retained in-flight plugin code")
         for lease in tuple(self.registry.state.runs):

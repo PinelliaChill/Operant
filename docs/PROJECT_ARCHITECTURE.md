@@ -78,6 +78,7 @@ Host另行强制来源与当前scope/permission epoch一致、记忆引用属于
 直接engine入参及返回值也经过同一Core授权边界：来源、记忆引用、Head与Proposal逐项核对，缺少对应授权器拒绝；结果须关联request/event及watermark。
 Manifest能力限制嵌套Host API：recall才可search，extract/recall/maintain可请求授权来源。模型Profile还绑定当前engine操作：extract仅可用提取配置，recall仅可用重排配置；同时声明两能力也不能跨阶段使用Profile。仅索引通知不授予外部读/搜索/模型访问。
 停止、卸载和Host关闭先阻止新运行，再对在途调用及关闭/清理钩子作有界等待。未收束的可信代码保留task/engine/资源并返回restart_required，禁止同Host重新启用；同步关闭/清理钩子在工作线程执行，不能物理强杀线程。清理使用目录句柄递归删除，不跟随symlink；路径异常形成可续做blocked条目。
+同一安装的stop/uninstall/resume_cleanup使用生命周期锁，Host关闭自身也互斥；关闭期间排队的新请求返回明确restart_required回执。绑定配置在入口生效：maintenance_enabled关闭则拒绝maintain，recall及嵌套search不得超过recall_token_budget；默认零预算允许零分配请求，实际召回内容编排/后台调度仍属后续阶段。
 
 `api_b2.py` 将已提交 Session/WorkflowRun 投影为保留来源身份、动作与明确Workspace关联的任务。
 精确任务Query不受列表分页影响，跨来源同ID必须消歧。历史来自canonical Item、AgentInstance与

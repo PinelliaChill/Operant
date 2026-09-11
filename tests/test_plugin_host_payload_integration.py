@@ -67,7 +67,10 @@ async def test_host_invocation_enforces_direct_payload_authorization(
             authorize_head=lambda context, head: True,
         ),
     )
-    binding = host.bind(installation.installation_id)
+    binding = host.bind(
+        installation.installation_id,
+        config=installation.config.model_copy(update={"maintenance_enabled": True}),
+    )
     host.enable(binding.binding_id)
     await host.start(installation.installation_id, mode="trusted_in_process")
     lease = host.start_run(binding.binding_id, run_id="run-1", scope=_scope())
@@ -174,6 +177,7 @@ async def test_host_denies_nested_api_outside_manifest_capability(
             update={
                 "extraction_model_profile_id": "configured",
                 "rerank_model_profile_id": "configured",
+                "maintenance_enabled": True,
             }
         ),
     )

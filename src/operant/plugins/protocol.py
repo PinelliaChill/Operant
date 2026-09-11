@@ -796,6 +796,7 @@ class RestrictedHostApi:
         validate_active: Callable[[], None] | None = None,
         allowed_model_profiles: frozenset[str] = frozenset(),
         allowed_operations: frozenset[str] = frozenset(),
+        max_recall_tokens: int = 0,
     ) -> None:
         self.context = context
         self._installation_root = Path(installation_root)
@@ -809,6 +810,7 @@ class RestrictedHostApi:
         self._validate_active = validate_active
         self._allowed_model_profiles = allowed_model_profiles
         self._allowed_operations = allowed_operations
+        self._max_recall_tokens = max_recall_tokens
         self._logs: list[str] = []
 
     @property
@@ -885,6 +887,8 @@ class RestrictedHostApi:
         self._check_operation("search")
         self._check_context(request.context)
         self.check_cancelled()
+        if request.token_budget > self._max_recall_tokens:
+            raise BudgetExceededError("search exceeds the binding recall token budget")
         for ref in request.explicit_refs:
             self._authorize_memory_ref(ref)
         self._budget.charge_request(len(canonical_json(request.model_dump(mode="json"))))
