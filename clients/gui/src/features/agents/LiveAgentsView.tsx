@@ -45,7 +45,7 @@ const DEFAULT_ROLE_FORM: RoleForm = {
 const fieldLabel: React.CSSProperties = {
   display: 'block',
   marginBottom: 4,
-  color: 'var(--text-muted)',
+  color: 'var(--text-secondary)',
   fontSize: 11,
   fontWeight: 600,
 };
