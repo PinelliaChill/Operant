@@ -215,3 +215,92 @@ async def test_host_denies_nested_api_outside_manifest_capability(
         assert entered == [capability]
     finally:
         await host.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["extract", "recall"])
+@pytest.mark.parametrize("use_other_profile", [False, True])
+async def test_host_pairs_model_profile_with_current_operation(
+    tmp_path: Path, operation: str, use_other_profile: bool
+):
+    from operant.contracts.b2_1 import ModelProxyResult
+
+    package, manifest = _package(tmp_path)
+    registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+    installation = registry.install(manifest, package, certification=_cert(manifest))
+    calls = []
+    selected = (
+        ("rerank" if operation == "extract" else "extraction")
+        if use_other_profile
+        else ("extraction" if operation == "extract" else "rerank")
+    )
+
+    def model(request):
+        calls.append(request.model_profile_id)
+        return ModelProxyResult(
+            request_id=request.context.request_id,
+            output="ok",
+            usage_tokens=1,
+            usage_status="reported",
+        )
+
+    class Plugin:
+        async def handle(self, op, request, api):
+            await api.model(
+                ModelProxyRequest(
+                    context=request.context,
+                    model_profile_id=selected,
+                    input_source_refs=(),
+                    instruction="test",
+                    max_output_tokens=1,
+                )
+            )
+            if op == "extract":
+                return ProposalBatch(
+                    request_id=request.context.request_id, proposals=(), source_watermark="1"
+                )
+            return CandidateBatch(request_id=request.context.request_id, candidates=())
+
+    host = PluginHost(
+        registry,
+        plugin_factories={manifest.plugin_id: lambda _: Plugin()},
+        callbacks=HostCallbacks(model=model, authorize_source=lambda context, ref: ref == source),
+    )
+    binding = host.bind(
+        installation.installation_id,
+        config=installation.config.model_copy(
+            update={
+                "extraction_model_profile_id": "extraction",
+                "rerank_model_profile_id": "rerank",
+            }
+        ),
+    )
+    host.enable(binding.binding_id)
+    await host.start(installation.installation_id, mode="trusted_in_process")
+    lease = host.start_run(binding.binding_id, run_id="run-1", scope=_scope())
+    context = _recall(lease).context
+    source = SourceRef(
+        source_type="item",
+        source_id="source",
+        revision=1,
+        content_digest="d" * 64,
+        scope=context.scope,
+        permission_epoch=context.permission_epoch,
+        availability="available",
+    )
+    request = (
+        SourceBatch(context=context, sources=(source,), source_watermark="1")
+        if operation == "extract"
+        else _recall(lease)
+    )
+    try:
+        if use_other_profile:
+            with pytest.raises(PluginError) as error:
+                await host.invoke(lease, operation, request)
+            assert error.value.code == "permission_denied"
+            assert calls == []
+        else:
+            await host.invoke(lease, operation, request)
+            assert calls == [selected]
+    finally:
+        await host.close()

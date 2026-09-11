@@ -420,7 +420,12 @@ class PluginHost:
         self.registry.verify_certification(lease.installation_id, mode=slot.admission.mode)
 
     def _host_api(
-        self, lease: RunLease, context: RpcContext, limits: HostBudget
+        self,
+        lease: RunLease,
+        context: RpcContext,
+        limits: HostBudget,
+        *,
+        operation: str = "lifecycle",
     ) -> RestrictedHostApi:
         installation_root = self.registry.installation_root(lease.installation_id)
         config = self.registry.get_binding(lease.binding_id).config
@@ -461,7 +466,7 @@ class PluginHost:
                     ("extract", config.extraction_model_profile_id),
                     ("recall", config.rerank_model_profile_id),
                 )
-                if capability in capabilities and profile is not None
+                if capability == operation and capability in capabilities and profile is not None
             ),
         )
 
@@ -523,7 +528,7 @@ class PluginHost:
             >= slot.limits.max_concurrency
         ):
             raise PluginError("concurrency_limit", "plugin concurrency budget is exhausted")
-        host = self._host_api(lease, context, slot.limits)
+        host = self._host_api(lease, context, slot.limits, operation=operation)
         call = self._calls[context.request_id]
         try:
             task = asyncio.create_task(slot.engine.invoke(operation, request, host))

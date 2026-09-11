@@ -125,7 +125,10 @@ async def test_host_denies_callback_authority_forgery(tmp_path: Path, attack: st
     binding = host.bind(
         installation.installation_id,
         config=installation.config.model_copy(
-            update={"extraction_model_profile_id": "allowed-profile"}
+            update={
+                "extraction_model_profile_id": "allowed-profile",
+                "rerank_model_profile_id": "allowed-profile",
+            }
         ),
     )
     host.enable(binding.binding_id)
