@@ -47,6 +47,7 @@ from operant.plugins.protocol import (
     PluginError,
     compute_package_digest,
     copy_package,
+    ensure_managed_resource,
     path_under,
 )
 
@@ -1040,11 +1041,7 @@ class PluginRegistry:
         )
         if existing is not None:
             return existing.resource
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path_kind == "directory":
-            path.mkdir(parents=True, exist_ok=True)
-        else:
-            path.touch(exist_ok=True)
+        ensure_managed_resource(path, directory=path_kind == "directory")
         stored = self._make_resource(
             installation,
             relative_path,

@@ -534,3 +534,89 @@ def test_reloaded_registry_requires_issuer_still_trusted(tmp_path: Path) -> None
     with pytest.raises(PluginError, match="current certification"):
         reopened.verify_certification(installation.installation_id, mode="trusted_in_process")
     reopened.close()
+
+
+@pytest.mark.parametrize("operation", ["read", "write", "delete", "register"])
+def test_managed_resource_rejects_parent_swap_after_path_validation(
+    tmp_path: Path, operation: str
+) -> None:
+    from operant.plugins.protocol import (
+        _delete_managed_file,
+        _read_managed_file,
+        _write_managed_file,
+        ensure_managed_resource,
+        path_under,
+    )
+
+    managed = tmp_path / "managed"
+    parent = managed / "data" / "sub"
+    parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "index"
+    sentinel.write_text("sentinel")
+    checked = path_under(managed, "data/sub/index")
+    parent.rename(managed / "data" / "saved")
+    parent.symlink_to(outside, target_is_directory=True)
+    actions = {
+        "read": lambda: _read_managed_file(checked),
+        "write": lambda: _write_managed_file(checked, b"changed"),
+        "delete": lambda: _delete_managed_file(checked),
+        "register": lambda: ensure_managed_resource(checked),
+    }
+    with pytest.raises(PluginError):
+        actions[operation]()
+    assert sentinel.read_text() == "sentinel"
+
+
+def test_managed_file_rejects_hardlink_before_truncation_and_bounds_reads(tmp_path: Path) -> None:
+    import os
+
+    from operant.plugins.protocol import _read_managed_file, _write_managed_file
+
+    source = tmp_path / "source"
+    source.write_text("unchanged")
+    alias = tmp_path / "alias"
+    os.link(source, alias)
+    with pytest.raises(PluginError):
+        _write_managed_file(alias, b"changed")
+    assert source.read_text() == "unchanged"
+    large = tmp_path / "large"
+    large.write_bytes(b"x" * 100)
+    with pytest.raises(PluginError) as error:
+        _read_managed_file(large, max_bytes=10)
+    assert error.value.code == "budget_exceeded"
+
+
+def test_managed_write_keeps_opened_directory_after_concurrent_rename(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import os
+
+    from operant.plugins.protocol import _write_managed_file, path_under
+
+    managed = tmp_path / "managed"
+    parent = managed / "data" / "sub"
+    parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "index"
+    sentinel.write_text("sentinel")
+    checked = path_under(managed, "data/sub/index")
+    original_open = os.open
+    swapped = False
+
+    def raced_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        if path == "sub" and dir_fd is not None and not swapped:
+            swapped = True
+            parent.rename(managed / "data" / "saved")
+            parent.symlink_to(outside, target_is_directory=True)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", raced_open)
+    _write_managed_file(checked, b"owned")
+    assert swapped
+    assert sentinel.read_text() == "sentinel"
+    assert (managed / "data" / "saved" / "index").read_bytes() == b"owned"

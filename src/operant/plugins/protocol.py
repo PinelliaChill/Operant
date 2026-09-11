@@ -21,8 +21,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -537,54 +537,110 @@ def path_under(root: Path, relative: str) -> Path:
     return current
 
 
-def _read_managed_file(path: Path) -> str:
-    """Read a Host-managed file without following a replaced final symlink."""
-
-    flags = os.O_RDONLY | int(getattr(os, "O_NOFOLLOW", 0))
+@contextmanager
+def _managed_parent(path: Path, *, create: bool = False) -> Iterator[tuple[int, str]]:
+    """Pin every ancestor without following symlinks, including at open time."""
+    path = Path(path)
+    if not path.is_absolute() or ".." in path.parts or len(path.parts) < 2:
+        raise PermissionDeniedError("managed resource path must be absolute")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise PermissionDeniedError("safe managed directory access is unavailable")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(path.anchor, flags)
     try:
-        descriptor = os.open(path, flags)
+        for part in path.parts[1:-1]:
+            try:
+                child = os.open(part, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                with suppress(FileExistsError):
+                    os.mkdir(part, 0o700, dir_fd=descriptor)
+                child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        yield descriptor, path.name
     except FileNotFoundError:
         raise
     except OSError as exc:
-        raise PermissionDeniedError("managed resource cannot be opened safely") from exc
-    try:
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode):
-            raise PermissionDeniedError("managed resource is not a regular file")
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        return b"".join(chunks).decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise PluginProtocolError("private index is not UTF-8") from exc
+        raise PermissionDeniedError("managed resource directory changed or is unsafe") from exc
     finally:
         os.close(descriptor)
+
+
+def ensure_managed_resource(path: Path, *, directory: bool = False) -> None:
+    with _managed_parent(path, create=True) as (parent, name):
+        if directory:
+            with suppress(FileExistsError):
+                os.mkdir(name, 0o700, dir_fd=parent)
+            descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        else:
+            descriptor = os.open(
+                name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=parent
+            )
+        try:
+            opened = os.fstat(descriptor)
+            if not directory and (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1):
+                raise PermissionDeniedError("managed resource must be a private regular file")
+        finally:
+            os.close(descriptor)
+
+
+def _read_managed_file(path: Path, *, max_bytes: int = 1_000_000) -> str:
+    with _managed_parent(path) as (parent, name):
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                raise PermissionDeniedError("managed resource must be a private regular file")
+            if opened.st_size > max_bytes:
+                raise BudgetExceededError("private index read exceeds response budget")
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, min(65536, max_bytes - total + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise BudgetExceededError("private index read exceeds response budget")
+                chunks.append(chunk)
+            return b"".join(chunks).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PluginProtocolError("private index is not UTF-8") from exc
+        finally:
+            os.close(descriptor)
 
 
 def _write_managed_file(path: Path, data: bytes) -> None:
-    """Write a Host-managed file without following a final symlink."""
+    with _managed_parent(path, create=True) as (parent, name):
+        # Check type and hard-link count before truncating any existing inode.
+        descriptor = os.open(
+            name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=parent
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                raise PermissionDeniedError("managed resource must be a private regular file")
+            os.ftruncate(descriptor, 0)
+            view = memoryview(data)
+            while view:
+                written = os.write(descriptor, view)
+                view = view[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | int(getattr(os, "O_NOFOLLOW", 0))
+
+def _delete_managed_file(path: Path) -> None:
     try:
-        descriptor = os.open(path, flags, 0o600)
-    except OSError as exc:
-        raise PermissionDeniedError("managed resource cannot be written safely") from exc
-    try:
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode):
-            raise PermissionDeniedError("managed resource is not a regular file")
-        view = memoryview(data)
-        while view:
-            written = os.write(descriptor, view)
-            view = view[written:]
-        os.fsync(descriptor)
-    except OSError as exc:
-        raise PermissionDeniedError("managed resource write failed") from exc
-    finally:
-        os.close(descriptor)
+        with _managed_parent(path) as (parent, name):
+            item_stat = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if not stat.S_ISREG(item_stat.st_mode):
+                raise PermissionDeniedError("private index path was replaced")
+            os.unlink(name, dir_fd=parent)
+    except FileNotFoundError:
+        pass
 
 
 @dataclass(frozen=True)
@@ -763,7 +819,7 @@ class RestrictedHostApi:
             raise PluginError("revision_conflict", "private index revision is stale")
         if request.operation == "read":
             try:
-                data = _read_managed_file(path)
+                data = _read_managed_file(path, max_bytes=self._budget.limits.max_response_bytes)
             except FileNotFoundError:
                 result = PrivateIndexResult(
                     resource_id=resource.resource_id,
@@ -779,14 +835,7 @@ class RestrictedHostApi:
                     payload=data,
                 )
         elif request.operation == "delete":
-            try:
-                item_stat = path.lstat()
-            except FileNotFoundError:
-                item_stat = None
-            if item_stat is not None:
-                if stat.S_ISLNK(item_stat.st_mode) or not stat.S_ISREG(item_stat.st_mode):
-                    raise PermissionDeniedError("private index path was replaced")
-                path.unlink()
+            _delete_managed_file(path)
             revision = self._resource_bump(resource.resource_id)
             result = PrivateIndexResult(
                 resource_id=resource.resource_id,
@@ -798,7 +847,6 @@ class RestrictedHostApi:
             assert request.payload is not None
             encoded = request.payload.encode("utf-8")
             self._budget.charge_private_index(len(encoded))
-            path.parent.mkdir(parents=True, exist_ok=True)
             _write_managed_file(path, encoded)
             revision = self._resource_bump(resource.resource_id)
             result = PrivateIndexResult(
