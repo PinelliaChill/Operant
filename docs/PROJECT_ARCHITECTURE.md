@@ -79,6 +79,7 @@ Host另行强制来源与当前scope/permission epoch一致、记忆引用属于
 `api_b2.py` 将已提交 Session/WorkflowRun 投影为保留来源身份、动作与明确Workspace关联的任务。
 精确任务Query不受列表分页影响，跨来源同ID必须消歧。历史来自canonical Item、AgentInstance与
 不可变Session snapshot；已绑定当前Session的Thread在正式运行时保存用户/模型消息、工具及生命周期事实，Runtime Event与对应Item同事务提交。每轮固定此前Item cursor，避免当前轮历史重复进入上下文；普通引用Thread保持只读，旧事件不批量迁移。未绑定Thread不生成消息，Task不伪装成TeamTask。
+Agent创建失败时保留无Agent的`session.run_failed`事实并在绑定Thread写入系统Item；Task按该失败与后续新Agent的时间顺序显示失败或新轮状态，不伪造Agent行。
 Additive `b2.v1` 从FastAPI/Pydantic经 `sdk/protocol/generate_b2.py` 生成Schema/digest及Python/TS Client，
 补模型/角色配置、已登记Workspace首个Thread创建、任务/历史与取消；旧五协议和MP-0契约不变。安装环境可用绝对路径
 `OPERANT_B2_SCHEMA_DIGEST_PATH` 提供digest，不用常量伪造协商。
@@ -87,6 +88,7 @@ GUI通过生成Client接入模型/角色配置、分页AgentInstance及真实状
 防止旧请求覆盖新选择。取消终态从Session Task读取，Thread生命周期不冒充运行状态。AgentInstance/Task投影优先读取已提交的Agent终态事件，避免流关闭中断cleanup后显示过时running行；cleanup状态更新放在不可跳过的finally内。历史Query逐字段脱敏保留类型结构；只读历史错误不创建命令结果未知状态。模型ID来自Discovery，secret_ref只存引用名；新Role默认无工具权限，编辑
 既有Role不改变tool_policy；Role新版本不回写已创建Session快照。取消accepted是请求接收，不能
 标为执行完成。Workflow详情链接既有Graph监控/安全恢复，仍保留未知写入人工核对边界。
+会话取消按钮读取B2 Task的服务端动作权限，Agent启动/审批/终态后刷新；已结束或无活动lease时不因Thread仍active而启用。
 Antigravity的任务行样式来自 `a0a4a5d`，Codex按原生窄屏结果补断点修复；B2配置表单使用Modal显式portal，默认其他调用不变，Live对话历史按正常文档流避免窄屏重叠。HTTP开发WebView使用同源Vite代理，正式Tauri协议及
 `tauri.localhost`保持固定本机Core；`OPERANT_CORE_URL`仅控制开发代理目标。
 

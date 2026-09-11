@@ -548,3 +548,70 @@ def test_gui_run_persists_canonical_history_once_and_survives_reopen(
     # A fresh application over the same SQLite file reads the committed result.
     with TestClient(create_app(tmp_path / "b2-api.sqlite3")) as reopened:
         assert reopened.get(history_url).json()["items"] == first["items"]
+
+
+def test_factory_failure_projects_session_terminal_history_and_allows_new_round(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from operant.domain.messages import ModelResponse, ProviderEvent
+
+    class FixedProvider:
+        async def stream(self, **kwargs):
+            yield ProviderEvent(
+                event_type="model.completed",
+                response=ModelResponse(content="recovered", finish_reason="stop"),
+            )
+
+    _, role_id = _bootstrap(client)
+    service = _service(client)
+    service.provider = FixedProvider()
+    thread = service.create_thread(ConversationThread(workspace_ref=str(tmp_path)))
+    session = client.post("/v1/sessions", json={"role_id": role_id, "thread_id": thread.id}).json()
+    run_url = f"/v1/sessions/{session['id']}/runs"
+    history_url = f"/v1/b2/sessions/{session['id']}/history"
+    task_url = f"/v1/b2/tasks/{session['id']}"
+    payload = {"message": "attempt", "workspace": str(tmp_path), "thread_id": thread.id}
+    original = service.factory.create_agent
+
+    def fail(_session_id):
+        raise RuntimeError("controlled factory failure")
+
+    for round_id in range(2):
+        # Cover both an empty Session and a failed new round after a completed Agent.
+        monkeypatch.setattr(service.factory, "create_agent", fail)
+        response = client.post(
+            run_url, json=payload, headers={"Idempotency-Key": f"factory-failure-{round_id}"}
+        )
+        assert response.status_code == 200
+        assert "session.run_failed" in response.text
+        detail = client.get(task_url).json()
+        assert detail["source_status"] == "failed"
+        assert _action(detail, "cancel")["availability"] != "available"
+        listed = client.get("/v1/b2/tasks").json()["items"]
+        assert (
+            next(task for task in listed if task["source"]["source_id"] == session["id"])[
+                "source_status"
+            ]
+            == "failed"
+        )
+        history = client.get(history_url).json()
+        assert len(history["agents"]) == round_id
+        assert history["items"][-1]["payload"] == {
+            "type": "system_event",
+            "event_type": "session.run_failed",
+            "summary": "session.run_failed",
+            "source_ref": session["id"],
+        }
+        client.post(
+            run_url, json=payload, headers={"Idempotency-Key": f"factory-failure-{round_id}"}
+        )
+        assert client.get(history_url).json()["items"] == history["items"]
+        monkeypatch.setattr(service.factory, "create_agent", original)
+        response = client.post(
+            run_url, json=payload, headers={"Idempotency-Key": f"factory-recovery-{round_id}"}
+        )
+        assert "agent.completed" in response.text
+        assert client.get(task_url).json()["source_status"] == "completed"
+
+    with TestClient(create_app(tmp_path / "b2-api.sqlite3")) as reopened:
+        assert reopened.get(history_url).json() == client.get(history_url).json()

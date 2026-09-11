@@ -234,6 +234,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [roles, setRoles] = useState<B2.RolePreset[]>([]);
   const [history, setHistory] = useState<B2.B2SessionHistory | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [sessionTask, setSessionTask] = useState<B2.B2Task | null>(null);
   const [historyError, setHistoryError] = useState<LiveError | undefined>();
   const [threadCreationStatus, setThreadCreationStatus] = useState<LiveThreadCreationStatus>('idle');
   const [files, setFiles] = useState<LiveWorkspaceFile[]>([]);
@@ -316,6 +317,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     historyRequestSequenceRef.current = requestSequence;
     if (!sessionId || clientMode !== 'live' || phase !== 'ready' || connectionStatusRef.current !== 'connected') {
       setHistory(null);
+      setSessionTask(null);
       setHistoryLoading(false);
       setHistoryError(undefined);
       return;
@@ -323,18 +325,23 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setHistoryLoading(true);
     setHistoryError(undefined);
     try {
-      const nextHistory = await b2Adapter.getSessionHistory(sessionId);
+      const [nextHistory, nextTask] = await Promise.all([
+        b2Adapter.getSessionHistory(sessionId),
+        b2Adapter.getTask(sessionId, 'session'),
+      ]);
       const selectedThread = selectedThreadIdRef.current
         ? threads.find((thread) => thread.id === selectedThreadIdRef.current)
         : undefined;
       const stillSelected = selectedSessionIdRef.current === sessionId || selectedThread?.sessionId === sessionId;
       if (requestSequence !== historyRequestSequenceRef.current || !stillSelected) return;
       setHistory(nextHistory);
+      setSessionTask(nextTask);
       setHistoryError(undefined);
     } catch (error: unknown) {
       if (requestSequence !== historyRequestSequenceRef.current) return;
       const detail = normalizeB2Error(error).detail;
       setHistory(null);
+      setSessionTask(null);
       setHistoryError(detail);
       // A failed read has no uncertain command outcome. Show its error locally;
       // do not stop an active run or turn it into a manual-reconcile command.
@@ -375,6 +382,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (clientMode !== 'live' || phase !== 'ready') {
       historyRequestSequenceRef.current += 1;
       setHistory(null);
+      setSessionTask(null);
       setHistoryLoading(false);
       setHistoryError(undefined);
       return;
@@ -821,7 +829,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setStream((current) => ({ ...current, error: terminalError }));
       }
     }
-    if (isApprovalProjectionEvent(event) || frameHasTerminalProjection(event)) void correctProjection();
+    if (event.event_type === 'agent.started' || isApprovalProjectionEvent(event) || frameHasTerminalProjection(event)) void correctProjection();
   }, [correctProjection, markManualReconcile]);
 
   const consumeRunStream = useCallback(async (
@@ -948,6 +956,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setModels([]);
     setRoles([]);
     setHistory(null);
+    setSessionTask(null);
     setHistoryLoading(false);
     setHistoryError(undefined);
     setFiles([]);
@@ -1348,7 +1357,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     && !manualReconcileRequired
     && !cancelCommandInFlight
     && Boolean(selectedThread?.sessionId)
-    && selectedThread?.status === 'active';
+    && sessionTask?.source.source_id === selectedThread?.sessionId
+    && Boolean(sessionTask?.actions.some((action) => action.action === 'cancel' && action.availability === 'available'));
   const createSessionUnavailableReason = manualReconcileRequired
     ? '需要人工核对，不能创建新命令。'
     : command.status === 'awaiting_projection'

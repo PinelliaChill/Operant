@@ -24,3 +24,14 @@
 ## 尚未完成
 
 恢复边界及整批独立审查；最终1b0fb4c完整门禁已通过，指定Luna/max Reviewer在User确认额度恢复后继续原任务、随后再次额度失败，暂无完整独立结论。未覆盖打包dist/签名/公证、Docker隔离或后续MP-2。
+
+## 独立审查后的 Session/取消增量（Codex，2026-09-11）
+
+实际 debug Tauri、原临时 Core18000/SQLite/Workspace；源码指纹与限定历史见 `client-review-increment.json`。
+正式 `uv run --no-sync operant model discover` 成功且包含精确 `gpt-5.6-luna`，仍用原正式 ModelProfile / low / Session 快照与工具预算。
+
+- 临时启动器仅对 `session_8854d653b5524fc0af07ae473a2f681c` 的一次 Factory 调用注入 RuntimeError，属于受控失败验收，不算模型调用。原生明确显示运行失败；历史新增 user_message 和 `session.run_failed`，Task显示已失败，无虚构Agent。
+- 同一Session由原生输入明确新一轮算术请求，真实Agent `agent_eaf36d1858674f47a8455834294258d3` 返回42；历史自动刷新并显示agent.completed，Task恢复已完成。
+- 会话取消入口改为Core Task.actions权限后，已完成状态禁用；再次发起只读cat审批场景，agent.started后按钮启用。审批等待中实际点击取消，Agent `agent_abf919dee4e94a1fb4247f5435688f17` 回读agent.cancelled，Task已取消，按钮禁用。残留审批明确拒绝，没有执行工具。
+- 本次健康及Tauri-Origin预检均200；验收壳可执行文件SHA256与原证据一致。自动审批初次因临时app来源未确认拦截，核对项目构建路径及既有指纹后允许启动，未绕过。
+- 增量完成后关闭独立app及本次Core/Vite；用户8000未触碰。原宽窄屏/焦点/模型工具与审批一次等未变场景复用前述证据。

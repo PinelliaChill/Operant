@@ -176,6 +176,19 @@ def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
                     ).fetchall()
                 agents = [projected_agent(r["body"]) for r in agent_rows]
                 status = agents[0].status.value if agents else "created"
+                # Factory failure is a Session terminal fact without an Agent.
+                # A later Agent belongs to a newer round and supersedes it.
+                with store._connect() as connection:
+                    failure = connection.execute(
+                        "SELECT created_at FROM events WHERE session_id = ? "
+                        "AND event_type = 'session.run_failed' ORDER BY sequence DESC LIMIT 1",
+                        (source_id,),
+                    ).fetchone()
+                if failure is not None and (
+                    not agents
+                    or datetime.fromisoformat(failure["created_at"]) >= agents[0].created_at
+                ):
+                    status = "failed"
                 with store._connect() as connection:
                     revision = int(
                         connection.execute(
