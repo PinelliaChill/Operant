@@ -23,46 +23,27 @@
 
 | ID | 要求与准确来源 | 负责人 | 方法/环境/预算 | 阻断及理由 | 证据 |
 | --- | --- | --- | --- | --- | --- |
-| AC-01 | 安装/Registry/配置/资源；设计 §13.4 MP-1.1 | Codex | 隔离临时目录、定向故障测试；禁用零实例/不自动重装 | 是，MP-1 | 定向安装/绑定/private_index/restart测试通过；最终门禁已通过，见handoff.md |
+| AC-01 | 安装/Registry/配置/资源；设计 §13.4 MP-1.1 | Codex | 隔离临时目录、定向故障测试；禁用零实例/不自动重装 | 是，MP-1 | 定向安装/绑定/private_index/restart测试通过；最终候选门禁状态见verification.json |
 | AC-02 | 进程内/stdio 同一 API，复用/批量/取消/日志资源界限；MP-1.2 | Codex | 两种实际执行模式，有限超时与预算 | 是，Host 完成门 | 实际entrypoint进程内与macOS隔离stdio RPC通过；并发/RSS/CPU/idle定向通过 |
 | AC-03 | 包/依赖/权限认证及撤销；MP-1.3、计划 §6 | Codex | 篡改/扩大权限/撤销，真实 macOS sandbox 拒绝受控 Home 探针与网络；不可用 fail closed | 是，安全门 | 真实macOS隔离探针及认证篡改/撤销/过期/issuer测试通过；Docker不算通过 |
-| AC-04 | epoch/迟到提交/启动停止失败/重启/Run 依赖；MP-1.4 | Codex | 定向并发和故障注入 | 是，安全与恢复 | lease/scope/epoch/迟到结果/重启定向通过；最终门禁已通过 |
+| AC-04 | epoch/迟到提交/启动停止失败/重启/Run 依赖；MP-1.4 | Codex | 定向并发和故障注入 | 是，安全与恢复 | lease/scope/epoch/迟到结果/重启定向通过；最终候选门禁状态见verification.json |
 | AC-05 | Host 资源 keep/delete/续做/残留，缺 Hook 可清理；MP-1.5 | Codex | 临时库/目录重启与中断测试 | 是，资源基础 | Host inventory无Hook删除、keep保留、清理中断续做定向通过 |
-| AC-06 | 配置、任务发起/历史/详情/审批取消及恢复入口，受支持项目身份；计划 §4 GUI-L1、治理根客户端规范 §16.1 GUI-L1 与逐模块验收1～5 | Codex | 正式 API/生成 SDK + GUI 行为定向测试 | 是，任务闭环 | 正式API/SDK13项；原生Thread/Session/角色/审批/取消/历史闭环见client-acceptance.md |
+| AC-06 | 配置、任务发起/历史/详情/审批取消及恢复入口，受支持项目身份；计划 §4 GUI-L1、治理根客户端规范 §16.1 GUI-L1 与逐模块验收1～5 | Codex | 正式 API/生成 SDK + GUI 行为定向测试 | 是，任务闭环 | 正式API/SDK及Factory失败回归；原生Thread/Session/角色/审批/取消/历史闭环见client-acceptance.md |
 | AC-07 | 无插件真实桌面任务/工具/历史/合法恢复；强依赖记忆 Graph 拒绝；计划 §6、AGENTS 真实模型 | Codex | 先 discover 精确模型，正式 ModelProfile/入口；隔离绝对 workspace，单个调用有限预算/120s，失败按规则停止 | 是，真实链路 | 真实gpt-5.6-luna/low、read_file与审批cat结果42；明确新轮继续；强依赖Graph定向拒绝 |
 | AC-08 | 宽窄屏/键盘/对比度/错误断线/Action Gateway/实际 Tauri；AGENTS 客户端边界 | Codex | 本机 debug Tauri 与 UI，检查本批新增流程；不覆盖发布签名 | 是，客户端门 | 真实原生约1200/768宽，分页105条、错误断线/重连、重启回读、表单焦点/保存已观察 |
-| AC-09 | 完整基础门禁；AGENTS 开发与验证 | Codex | ruff format/check、mypy src、pytest、uv lock --check --offline、git diff --check；集成版本一次 | 是，硬门禁 | 1b0fb4c完整门禁已通过：772 passed/1 Docker skip，见verification.json |
+| AC-09 | 完整基础门禁；AGENTS 开发与验证 | Codex | ruff format/check、mypy src、pytest、uv lock --check --offline、git diff --check；集成版本一次 | 是，硬门禁 | 518bb3f完整门禁通过：847 pass/1 Docker skip；见verification.json |
 | AC-10 | GUI/SDK test/typecheck/build、协议确定性；AGENTS | Codex | 当前 package scripts + SDK 定向测试/生成回读，旧 Schema 不变 | 是，契约门 | GUI91定向/类型检查通过；最终构建与SDK确定性已随完整门禁通过 |
-| AC-11 | 架构同步、保留范围、独立 Reviewer 与进度；AGENTS/用户请求 | Codex | diff/证据覆盖审查，Luna max，同 Reviewer 增量 | 是，交付门 | 架构/客户端记录已同步；指定Reviewer恢复后再次额度失败，仅P1已修复，无完整结论 |
+| AC-11 | 架构同步、保留范围、独立 Reviewer 与进度；AGENTS/用户请求 | Codex | diff/证据覆盖审查，Luna max，同 Reviewer 增量 | 是，交付门 | 架构/客户端记录已同步；原Luna/max已通过caa2ba8 Session/B2/GUI切片，Host最后并发/配置增量因Reviewer额度失败待恢复，见review.md |
 
 ## 环境与证据规则
 
-开工发现 Docker daemon 不可用；MP-1 沙箱拟用已实测可启动的 macOS sandbox-exec，不能用普通子进程替代隔离。Python/GUI 既有依赖存在；uv 两处离线缓存缺 h11/cryptography，已复制 B2-1 已安装依赖至本树 .venv 并修正 editable link/脚本路径，确认 import 指向本树。使用 uv run --no-sync，不改锁。Provider Discovery 已通过。Core 使用正式 desktop 启动器隔离在18000/临时库，Vite3000；8000既有用户服务保留。桌面代码/构建输入无改动，复用 B2-1 debug 二进制并通过独立临时.app加载本树Vite；原生窗口与连接已观察。
-执行者只做定向验证；集成后完整门禁一次。代码变更后完整基础门仍需覆盖最终代码；昂贵检查只复核受影响场景。失败一次最小诊断，无条件变化不循环重试。源码、依赖、构建和环境不变才复用明确 HEAD 的证据。
+治理根与实施树分别核对；旧根工作区不改。依赖使用已核对的本树.venv（uv --no-sync），锁/解释器版本不改。Docker不可用的skip不算容器验收；本批实际隔离为macOS sandbox-exec。Core18000/Vite3000与独立debug Tauri仅用本批临时SQLite和绝对Workspace，凭据只在子进程注入，用户8000不触碰。
 
-## 交付
+子任务只做定向检查，源码冻结后完整门禁一次；新增修复须覆盖最终代码。源码/依赖/环境未变的昂贵证据按指纹复用，Reviewer只审增量。运行/资源请求超时不自动重放；未收束可信代码返回restart_required并保留状态。
 
-- Codex 接受 api_tests 两文件归属交回；子 Agent 定向9测试与格式/lint通过，源码缺口已修复。此证据不替代集成基础门禁。
+## 交接与当前候选
 
-当前：工程组件已交回，集成验收中；证据、集成版本、Reviewer、限制于完成后填入 `handoff.md`，总进度仅治理根 `memory/current.md`。
-
-- Codex 接受 host 的13项定向测试/真实隔离smoke交接及路径归属；GUI 90项测试/typecheck/build 与 Antigravity a0a4a5d 样式均已交回，样式import已集成。完整门禁/真实GUI/Reviewer仍待完成。
-- 恢复范围必须按客户端规范§16.1审查：已有Session显式新轮、Phase23 Graph安全恢复入口保留；Task统一resume当前明确unsupported，不能将此标记替代恢复验收。
-
-## 集成检查增量
-
-- edd5870 完整基础检查：Ruff/mypy/lock/GUI 90测试/typecheck/build通过；pytest 756 passed/2 failed/1 Docker skip。失败分别为新增getTask未同步surface测试预期、沙箱禁止loopback bind。原始输出见临时gate-logs，最终候选需全门禁重跑；不能把本结果写通过。
-- 真实原生空Workspace走查发现无Thread创建入口，补B2 createThread(workspace_id)及GUI入口，新增幂等/已登记scope定向测试；来源为AC06/07及客户端规范§16.1。
-- MP1.2 资源上限按manifest/Host预算复核中；只有声明没有实际执行约束不能标通过。
-
-- 集成修复：首个Thread创建、分页继续、Role预算保留、Host并发/RSS/CPU/idle与租约scope/issuer/认证时效。Host/API/SDK 31定向测试通过，真实macOS sandbox stdio两次RPC通过。
-- 实际Tauri首次模型调用成功（gpt-5.6-luna/low，read_file，结果42），暴露canonical history未写入；修复正式Session绑定Thread运行的Event+Item同事务记录和GUI终态刷新。新增运行/幂等/分页/SQLite重开回读测试通过，原Context引用只读/压缩28测试通过。真实新代码审批/回读仍在验收。
-- 原host/gui因workspace额度失败，恢复失败后负责人接回修复；原Reviewer无活动句柄，已按原范围启动替代Luna/max独立Reviewer。Antigravity按最新AGENTS条件静默挂起。
-
-- 2026-09-11：0dd0d49基础门禁766 passed/1 Docker skip；GUI90/test/typecheck/build通过（随后API/GUI新增修复需最终集成门禁）。真实原生正式ModelProfile gpt-5.6-luna/low：read_file结果42；只读cat审批一次通过，最终42已自动写入并显示历史；实际取消回读agent.cancelled与Task已取消。旧中断审批明确拒绝，不自动重放。
-- 补修复历史整页脱敏破坏schema（多Agent+历史页回归）、只读Query误锁manual_reconcile、取消终态错看Thread、运行实例分页可见性；API/SDK13定向通过。原生768宽任务卡断点冲突已实测修复，键盘焦点可见。
-- 指定替代Reviewer 01a08baa-4872-7473-abb1-7ca6fe91517d已启动后因workspace credits失败，尚无独立结论；原Reviewer 01a08b5d-0c63-7411-a99c-1742707cddd9，保持证据待恢复，不再无条件重试。
-
-- Reviewer增量P1：B2表单标签对比度2.52:1，Codex在4c06ff8改为text-secondary（7.63:1/11.74:1）并完成原生复核；只重跑最终完整门禁，未变化真实链路证据复用。见review-status.md。
-
-- Codex集成追加安全缺陷已复现并修复：path_under后父目录替换可越出managed目录；改逐级dir_fd/no-follow读写删/登记，并在截断前拒绝硬链接、限制读大小。新增6回归，Host25定向和实际macOS隔离两次RPC均通过；最终1b0fb4c完整门禁已覆盖该安全增量。
+- Host、GUI、API工程子Agent已交还；Antigravity实名交付a0a4a5d并释放CSS，Codex按真实窄屏结果补修，当前无新视觉工单，条件静默。
+- 审查修复子任务lease_fix与payload_fix已交还；负责人集成并验证生产授权入口、实际隔离、失败历史与取消。代码候选518bb3f；细节见host-review-increment.md、client-review-increment.json、review.md。
+- 当前临时app/Core/Vite均已关闭，见cleanup.json。B2-3未授权。交付结果只写handoff.md和verification.json；总进度在治理根memory/current.md。
+- Task统一resume未提供虚构接口；Session显式新轮和既有Workflow Graph安全恢复入口按客户端规范§16.1验收，不能把禁用按钮当作恢复验收。任务页首个API页与完整列表分页的限制在handoff.md明确。

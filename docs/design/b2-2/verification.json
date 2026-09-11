@@ -1,6 +1,6 @@
 {
-  "code_head": "1b0fb4c6452374e9ba1267f672a420099d74f54d",
-  "recorded_at": "2026-09-11T05:28:10.310744+00:00",
+  "code_head": "518bb3f40a70728d79b743212aee6fec098a941f",
+  "recorded_at": "2026-09-11T13:14:15.856359+00:00",
   "checks": [
     {
       "check": "ruff-format",
@@ -15,7 +15,7 @@
       ],
       "exit_code": 0,
       "seconds": 0.13,
-      "log": "gate-logs-1b0fb4c/ruff-format.log"
+      "log": "gate-logs-518bb3f/ruff-format.log"
     },
     {
       "check": "ruff-check",
@@ -29,7 +29,7 @@
       ],
       "exit_code": 0,
       "seconds": 0.04,
-      "log": "gate-logs-1b0fb4c/ruff-check.log"
+      "log": "gate-logs-518bb3f/ruff-check.log"
     },
     {
       "check": "mypy",
@@ -41,8 +41,8 @@
         "src"
       ],
       "exit_code": 0,
-      "seconds": 0.39,
-      "log": "gate-logs-1b0fb4c/mypy.log"
+      "seconds": 0.73,
+      "log": "gate-logs-518bb3f/mypy.log"
     },
     {
       "check": "pytest",
@@ -54,8 +54,8 @@
         "-ra"
       ],
       "exit_code": 0,
-      "seconds": 414.49,
-      "log": "gate-logs-1b0fb4c/pytest.log"
+      "seconds": 448.67,
+      "log": "gate-logs-518bb3f/pytest.log"
     },
     {
       "check": "lock",
@@ -66,8 +66,8 @@
         "--offline"
       ],
       "exit_code": 0,
-      "seconds": 0.02,
-      "log": "gate-logs-1b0fb4c/lock.log"
+      "seconds": 0.04,
+      "log": "gate-logs-518bb3f/lock.log"
     },
     {
       "check": "diff",
@@ -79,8 +79,8 @@
         "--check"
       ],
       "exit_code": 0,
-      "seconds": 0.02,
-      "log": "gate-logs-1b0fb4c/diff.log"
+      "seconds": 0.04,
+      "log": "gate-logs-518bb3f/diff.log"
     },
     {
       "check": "gui-typecheck",
@@ -92,8 +92,8 @@
         "clients/gui"
       ],
       "exit_code": 0,
-      "seconds": 3.09,
-      "log": "gate-logs-1b0fb4c/gui-typecheck.log"
+      "seconds": 4.05,
+      "log": "gate-logs-518bb3f/gui-typecheck.log"
     },
     {
       "check": "gui-tests",
@@ -104,8 +104,8 @@
         "clients/gui"
       ],
       "exit_code": 0,
-      "seconds": 0.51,
-      "log": "gate-logs-1b0fb4c/gui-tests.log"
+      "seconds": 0.62,
+      "log": "gate-logs-518bb3f/gui-tests.log"
     },
     {
       "check": "gui-build",
@@ -117,15 +117,23 @@
         "clients/gui"
       ],
       "exit_code": 0,
-      "seconds": 4.47,
-      "log": "gate-logs-1b0fb4c/gui-build.log"
+      "seconds": 6.62,
+      "log": "gate-logs-518bb3f/gui-build.log"
     }
   ],
+  "all_passed": true,
   "summary": {
-    "pytest_passed": 772,
+    "pytest_passed": 847,
     "pytest_skipped": 1,
-    "skip_reason": "Docker conditions unavailable; not container acceptance",
-    "gui_tests_passed": 91,
-    "independent_review": "incomplete_workspace_credits"
-  }
+    "pytest_skip_scope": "Docker and OPERANT_DOCKER_TEST_IMAGE unavailable; not container acceptance",
+    "gui_passed": 91
+  },
+  "independent_review": {
+    "status": "pending_workspace_credits",
+    "reviewer_task": "01a08baa-4872-7473-abb1-7ca6fe91517d",
+    "last_failed_turn": "01a0906f-d947-7d51-8682-6b04d3ce191c",
+    "passed_scope": "caa2ba8 Session/B2/GUI and earlier Host increments recorded in review.md",
+    "remaining": "518bb3f lifecycle serialization and config enforcement plus final gate evidence"
+  },
+  "source_evidence_reuse": "client-review-increment.json hashes match current source; final Host mode evidence hashes cover this code"
 }
