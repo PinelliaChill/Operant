@@ -130,7 +130,7 @@ export const LiveApprovalCard: React.FC<{
         拒绝
       </button>
       <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve')} disabled={busy || approval.status !== 'pending'}>
-        {busy ? '提交中…' : '批准一次'}
+        {busy ? '暂不可操作' : '批准一次'}
       </button>
     </div>
   </article>
@@ -501,7 +501,7 @@ export const LiveChatView: React.FC = () => {
             <option value="" disabled={Boolean(selectedThread?.sessionId)}>未绑定 Session</option>
             {sessionOptions.map((option) => (
               <option key={option.id} value={option.id} disabled={option.boundThreadId === null}>
-                {sessionLabel(option)}
+                {history?.session.id === option.id ? `${history.session.role_snapshot?.role_name || option.id} · ${option.id.slice(0, 12)}` : sessionLabel(option)}
               </option>
             ))}
           </select>

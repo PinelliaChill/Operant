@@ -527,6 +527,19 @@ def test_gui_run_persists_canonical_history_once_and_survives_reopen(
     page = client.get(history_url, params={"limit": 1}).json()
     rest = client.get(history_url, params={"after_cursor": page["next_cursor"]}).json()
     assert page["items"] + rest["items"] == first["items"]
+    # Multiple agents plus a populated page must not share a log truncation budget.
+    client.post(url, json=request, headers={"Idempotency-Key": "b22-second-round"})
+    multi = client.get(history_url)
+    assert multi.status_code == 200, multi.text
+    assert len(multi.json()["items"]) == 2 * len(first["items"])
+    assert len(multi.json()["agents"]) == 2
+    first = multi.json()
+    agents = client.get("/v1/b2/agents", params={"limit": 1}).json()
+    assert len(agents["items"]) == 1
+    assert agents["items"][0]["status"] == "completed"
+    next_agents = client.get("/v1/b2/agents", params={"offset": agents["next_offset"]}).json()
+    assert len(next_agents["items"]) == 1
+    assert next_agents["items"][0]["id"] != agents["items"][0]["id"]
     # A fresh application over the same SQLite file reads the committed result.
     with TestClient(create_app(tmp_path / "b2-api.sqlite3")) as reopened:
         assert reopened.get(history_url).json()["items"] == first["items"]

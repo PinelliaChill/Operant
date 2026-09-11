@@ -336,13 +336,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const detail = normalizeB2Error(error).detail;
       setHistory(null);
       setHistoryError(detail);
-      setLastError(detail);
-      setProjectionStale(true);
-      if (errorNeedsManualReconcile(detail)) markManualReconcile(detail.message);
+      // A failed read has no uncertain command outcome. Show its error locally;
+      // do not stop an active run or turn it into a manual-reconcile command.
     } finally {
       if (requestSequence === historyRequestSequenceRef.current) setHistoryLoading(false);
     }
-  }, [b2Adapter, clientMode, phase, threads, markManualReconcile]);
+  }, [b2Adapter, clientMode, phase, threads]);
 
   const historyMoreDispatchingRef = useRef(false);
   const loadMoreHistory = useCallback(async () => {
@@ -622,10 +621,11 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setThreadCreationStatus('idle');
     }
     const pendingCancelSessionId = cancelSessionIdRef.current;
-    const cancelledThread = pendingCancelSessionId
-      ? nextThreads.find((thread) => thread.sessionId === pendingCancelSessionId)
+    const cancelledTask = pendingCancelSessionId
+      ? await b2Adapter.getTask(pendingCancelSessionId, 'session')
       : undefined;
-    if (pendingCancelSessionId && cancelledThread?.status === 'cancelled') {
+    if (!responseIsCurrent()) return false;
+    if (pendingCancelSessionId && cancelledTask?.source_status === 'cancelled') {
       pendingRunRef.current = null;
       cancelKeyRef.current = null;
       cancelSessionIdRef.current = null;
@@ -680,7 +680,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     return true;
-  }, [adapter, setActiveWorkspace]);
+  }, [adapter, b2Adapter, setActiveWorkspace]);
 
   const refresh = useCallback(async () => {
     if (clientMode !== 'live') return;
@@ -1233,8 +1233,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       let cancelled = false;
       if (threadId) {
         try {
-          const projected = await adapter.getThread(threadId);
-          cancelled = projected.status === 'cancelled';
+          const projected = await b2Adapter.getTask(sessionId, 'session');
+          cancelled = projected.source_status === 'cancelled';
         } catch {
           // The authoritative refresh above already reported any transport
           // error. Keep the cancel command pending when no fresh projection is

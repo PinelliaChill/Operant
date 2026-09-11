@@ -79,8 +79,8 @@ Additive `b2.v1` 从FastAPI/Pydantic经 `sdk/protocol/generate_b2.py` 生成Sche
 补模型/角色配置、已登记Workspace首个Thread创建、任务/历史与取消；旧五协议和MP-0契约不变。安装环境可用绝对路径
 `OPERANT_B2_SCHEMA_DIGEST_PATH` 提供digest，不用常量伪造协商。
 
-GUI通过生成Client接入模型/角色配置、Task/Run详情、分页历史和取消；Core Projection与epoch清理
-防止旧请求覆盖新选择。模型ID来自Discovery，secret_ref只存引用名；新Role默认无工具权限，编辑
+GUI通过生成Client接入模型/角色配置、分页AgentInstance及真实状态、Task/Run详情、分页历史和取消；Core Projection与epoch清理
+防止旧请求覆盖新选择。取消终态从Session Task读取，Thread生命周期不冒充运行状态。历史Query逐字段脱敏保留类型结构；只读历史错误不创建命令结果未知状态。模型ID来自Discovery，secret_ref只存引用名；新Role默认无工具权限，编辑
 既有Role不改变tool_policy；Role新版本不回写已创建Session快照。取消accepted是请求接收，不能
 标为执行完成。Workflow详情链接既有Graph监控/安全恢复，仍保留未知写入人工核对边界。
 Antigravity的任务行样式来自 `a0a4a5d`。HTTP开发WebView使用同源Vite代理，正式Tauri协议及

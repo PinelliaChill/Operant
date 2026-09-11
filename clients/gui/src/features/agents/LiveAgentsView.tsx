@@ -98,6 +98,9 @@ export const LiveAgentsView: React.FC = () => {
   const adapter = useMemo(() => new B2LiveAdapter(b2Client), [b2Client]);
   const [models, setModels] = useState<B2.ModelProfile[]>([]);
   const [roles, setRoles] = useState<B2.RolePreset[]>([]);
+  const [instances, setInstances] = useState<B2.AgentInstance[]>([]);
+  const [instanceOffset, setInstanceOffset] = useState(0);
+  const [nextInstanceOffset, setNextInstanceOffset] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<{ code: string; message: string; retryable: boolean; recovery: string } | null>(null);
   const [modelModalOpen, setModelModalOpen] = useState(false);
@@ -118,19 +121,23 @@ export const LiveAgentsView: React.FC = () => {
     setError(null);
     try {
       await adapter.connect();
-      const [nextModels, nextRoles] = await Promise.all([adapter.listModels(), adapter.listRoles()]);
+      const [nextModels, nextRoles, agentPage] = await Promise.all([adapter.listModels(), adapter.listRoles(), adapter.listAgents(instanceOffset)]);
       if (epoch !== loadEpoch.current) return;
       setModels(nextModels);
       setRoles(nextRoles);
+      setInstances(agentPage.items);
+      setNextInstanceOffset(agentPage.next_offset);
     } catch (caught: unknown) {
       if (epoch !== loadEpoch.current) return;
       setModels([]);
       setRoles([]);
+      setInstances([]);
+      setNextInstanceOffset(null);
       setError(normalizeB2Error(caught).detail);
     } finally {
       if (epoch === loadEpoch.current) setLoading(false);
     }
-  }, [adapter]);
+  }, [adapter, instanceOffset]);
 
   useEffect(() => {
     void load();
@@ -274,6 +281,31 @@ export const LiveAgentsView: React.FC = () => {
             <div className="live-panel-loading" role="status"><RefreshCw size={16} className="animate-spin" />正在读取 B2 配置…</div>
           ) : (
             <>
+              <section className="b2-config-section" aria-labelledby="b2-instances-title">
+                <div className="live-section-heading">
+                  <h2 id="b2-instances-title">运行实例</h2>
+                  <span>按创建时间倒序 · Core 当前状态</span>
+                </div>
+                {instances.length === 0 ? <p>暂无运行实例。创建任务并运行后将在这里显示。</p> : (
+                  <div className="b2-config-grid">
+                    {instances.map((agent) => (
+                      <article className="card b2-config-card" key={agent.id}>
+                        <div className="b2-config-card-head"><h3>{agent.role_snapshot.role_name}</h3><StatusBadge status={agent.status || 'created'} label={({ created: '已创建', running: '运行中', completed: '已完成', failed: '已失败', cancelled: '已取消', timed_out: '已超时' } as Record<string, string>)[agent.status || 'created']} size="sm" /></div>
+                        <dl className="b2-config-meta">
+                          <div><dt>Agent</dt><dd>{agent.id}</dd></div>
+                          <div><dt>Session</dt><dd>{agent.session_id}</dd></div>
+                          <div><dt>模型</dt><dd>{agent.role_snapshot.model_id}</dd></div>
+                          <div><dt>角色版本</dt><dd>{agent.role_snapshot.role_version}</dd></div>
+                        </dl>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                <div className="live-empty-actions">
+                  <button type="button" className="btn btn-secondary" disabled={loading || instanceOffset === 0} onClick={() => setInstanceOffset(Math.max(0, instanceOffset - 100))}>上一页</button>
+                  <button type="button" className="btn btn-secondary" disabled={loading || nextInstanceOffset === null} onClick={() => { if (nextInstanceOffset !== null) setInstanceOffset(nextInstanceOffset); }}>下一页</button>
+                </div>
+              </section>
               <section className="b2-config-section" aria-labelledby="b2-models-title">
                 <div className="live-section-heading">
                   <h2 id="b2-models-title"><Database size={16} aria-hidden="true" />ModelProfile</h2>

@@ -58,3 +58,7 @@
 - 集成修复：首个Thread创建、分页继续、Role预算保留、Host并发/RSS/CPU/idle与租约scope/issuer/认证时效。Host/API/SDK 31定向测试通过，真实macOS sandbox stdio两次RPC通过。
 - 实际Tauri首次模型调用成功（gpt-5.6-luna/low，read_file，结果42），暴露canonical history未写入；修复正式Session绑定Thread运行的Event+Item同事务记录和GUI终态刷新。新增运行/幂等/分页/SQLite重开回读测试通过，原Context引用只读/压缩28测试通过。真实新代码审批/回读仍在验收。
 - 原host/gui因workspace额度失败，恢复失败后负责人接回修复；原Reviewer无活动句柄，已按原范围启动替代Luna/max独立Reviewer。Antigravity按最新AGENTS条件静默挂起。
+
+- 2026-09-11：0dd0d49基础门禁766 passed/1 Docker skip；GUI90/test/typecheck/build通过（随后API/GUI新增修复需最终集成门禁）。真实原生正式ModelProfile gpt-5.6-luna/low：read_file结果42；只读cat审批一次通过，最终42已自动写入并显示历史；实际取消回读agent.cancelled与Task已取消。旧中断审批明确拒绝，不自动重放。
+- 补修复历史整页脱敏破坏schema（多Agent+历史页回归）、只读Query误锁manual_reconcile、取消终态错看Thread、运行实例分页可见性；API/SDK13定向通过。原生768宽任务卡断点冲突已实测修复，键盘焦点可见。
+- 指定替代Reviewer 01a08baa-4872-7473-abb1-7ca6fe91517d已启动后因workspace credits失败，尚无独立结论；原Reviewer 01a08b5d-0c63-7411-a99c-1742707cddd9，保持证据待恢复，不再无条件重试。

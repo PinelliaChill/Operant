@@ -33,6 +33,7 @@ export interface B2ClientLike {
     options?: B2.UpdateRoleOptions,
   ): Promise<B2.RolePreset>;
   cancelSession(sessionId: string, options?: B2.CancelSessionOptions): Promise<B2.B2Cancellation>;
+  listAgents(options?: B2.ListAgentsOptions): Promise<B2.B2AgentPage>;
   listTasks(options?: B2.ListTasksOptions): Promise<B2.B2TaskPage>;
   getTask(sourceId: string, options?: B2.GetTaskOptions): Promise<B2.B2Task>;
   getSessionHistory(
@@ -514,6 +515,25 @@ export class B2LiveAdapter {
     } catch (error: unknown) {
       throw normalizeB2Error(error);
     }
+  }
+
+  async listAgents(offset = 0): Promise<B2.B2AgentPage> {
+    try {
+      const page = await this.client.listAgents({ offset, limit: 100 });
+      if (!Array.isArray(page.items)) throw new Error('Core Agent page is invalid');
+      for (const agent of page.items) {
+        requiredText(agent.id, 'AgentInstance.id');
+        requiredText(agent.session_id, 'AgentInstance.session_id');
+        requiredRecord(agent.role_snapshot, 'AgentInstance.role_snapshot');
+        if (!['created', 'running', 'completed', 'failed', 'cancelled', 'timed_out'].includes(agent.status || '')) {
+          throw new Error('Core Agent status is invalid');
+        }
+      }
+      if (page.next_offset !== null && (!Number.isInteger(page.next_offset) || page.next_offset <= offset)) {
+        throw new Error('Core Agent cursor did not advance');
+      }
+      return page;
+    } catch (error: unknown) { throw normalizeB2Error(error); }
   }
 
   async getTask(sourceId: string, sourceType?: B2.GetTaskOptions['sourceType']): Promise<B2.B2Task> {

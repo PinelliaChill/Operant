@@ -217,15 +217,16 @@
 }
 
 /* 10. 窄屏与响应式行堆叠 (移动端 / 分屏视口) */
-@media (max-width: 768px) {
-  .b2-task-row {
+@media (max-width: 1000px) {
+  .b2-task-page .b2-task-row {
     flex-direction: column;
+    flex-wrap: nowrap;
     align-items: stretch;
     gap: 12px;
     padding: 14px;
   }
 
-  .b2-task-identity {
+  .b2-task-page .b2-task-identity {
     max-width: 100%;
     flex-direction: row;
     align-items: baseline;
@@ -239,7 +240,7 @@
     max-width: 65%;
   }
 
-  .b2-task-actions {
+  .b2-task-page .b2-task-actions {
     justify-content: flex-end;
     border-top: 1px dashed var(--border-subtle);
     padding-top: 8px;
@@ -248,6 +249,15 @@
 
   .b2-task-status {
     align-self: flex-start;
+  }
+
+  .b2-task-page .chat-row-main,
+  .b2-task-page .chat-row-meta {
+    width: 100%;
+    min-width: 0;
+    flex: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 
@@ -258,3 +268,7 @@
     transition: none !important;
   }
 }
+
+/* Durable identifiers and timestamps remain readable in both themes. */
+.b2-task-page .b2-task-source-id,
+.b2-task-page .chat-row-meta { color: var(--text-secondary); }

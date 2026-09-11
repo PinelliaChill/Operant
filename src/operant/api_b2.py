@@ -17,7 +17,25 @@ from operant.contracts.b2_1 import TaskAction, TaskSource
 from operant.domain.models import AgentInstance, Session
 from operant.domain.threads import ConversationThread, Item, LegacySourceType, ThreadLegacyRef
 from operant.persistence.sqlite import NotFoundError
-from operant.protocol import redact_public_data, redact_public_text
+from operant.protocol import is_sensitive_key, redact_public_text
+
+
+def _redact_typed_history(value: Any) -> Any:
+    """Preserve a validated projection's shape while redacting dynamic text.
+
+    Collection pagination belongs to the query, never the generic log truncator:
+    truncating nested dictionaries would invalidate Item and Session schemas.
+    """
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if is_sensitive_key(key) else _redact_typed_history(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_typed_history(item) for item in value]
+    if isinstance(value, str):
+        return redact_public_text(value)
+    return value
 
 
 class B2CreateThread(BaseModel):
@@ -40,6 +58,11 @@ class B2Task(BaseModel):
 
 class B2TaskPage(BaseModel):
     items: list[B2Task]
+    next_offset: int | None
+
+
+class B2AgentPage(BaseModel):
+    items: list[AgentInstance]
     next_offset: int | None
 
 
@@ -243,6 +266,22 @@ def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
             )
         return project_tasks(rows)[0]
 
+    @app.get("/v1/b2/agents", operation_id="listB2Agents", response_model=B2AgentPage)
+    def list_agents(
+        offset: int = Query(default=0, ge=0, le=2**31 - 1),
+        limit: int = Query(default=100, ge=1, le=100),
+    ) -> Any:
+        with store._connect() as connection:
+            rows = connection.execute(
+                "SELECT body FROM agents ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                (limit + 1, offset),
+            ).fetchall()
+        result = B2AgentPage(
+            items=[AgentInstance.model_validate_json(row["body"]) for row in rows[:limit]],
+            next_offset=offset + limit if len(rows) > limit else None,
+        )
+        return _redact_typed_history(result.model_dump(mode="json"))
+
     @app.get(
         "/v1/b2/sessions/{session_id}/history",
         operation_id="getB2SessionHistory",
@@ -280,4 +319,4 @@ def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
             items=items[:limit],
             next_cursor=items[limit - 1].cursor if len(items) > limit else None,
         )
-        return redact_public_data(result.model_dump(mode="json"))
+        return _redact_typed_history(result.model_dump(mode="json"))

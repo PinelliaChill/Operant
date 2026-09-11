@@ -151,3 +151,12 @@ test('B2 errors remain typed and transport failures are explicit', () => {
   assert.equal(transport.detail.code, 'transport_unavailable');
   assert.equal(transport.detail.retryable, true);
 });
+
+
+test('Agent page preserves runtime state and refuses a repeated page cursor', async () => {
+  const instance = { id: 'agent-1', session_id: 'session-1', status: 'running', role_snapshot: { role_name: 'Reader' } };
+  const adapter = new B2LiveAdapter(fakeClient({ listAgents: async () => ({ items: [instance], next_offset: null }) }) as never);
+  assert.equal((await adapter.listAgents()).items[0]?.status, 'running');
+  const invalid = new B2LiveAdapter(fakeClient({ listAgents: async () => ({ items: [instance], next_offset: 0 }) }) as never);
+  await assert.rejects(invalid.listAgents(), B2AdapterError);
+});
