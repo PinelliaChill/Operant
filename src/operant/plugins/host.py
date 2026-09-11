@@ -397,6 +397,7 @@ class PluginHost:
         self, lease: RunLease, context: RpcContext, limits: HostBudget
     ) -> RestrictedHostApi:
         installation_root = self.registry.installation_root(lease.installation_id)
+        config = self.registry.get_binding(lease.binding_id).config
         cancel_event = asyncio.Event()
         active = _ActiveCall(
             installation_id=lease.installation_id,
@@ -424,6 +425,11 @@ class PluginHost:
             resource_bump=self.registry.bump_resource_revision,
             cancel_event=cancel_event,
             validate_active=lambda: self._assert_active(lease, context),
+            allowed_model_profiles=frozenset(
+                profile
+                for profile in (config.extraction_model_profile_id, config.rerank_model_profile_id)
+                if profile is not None
+            ),
         )
 
     @staticmethod

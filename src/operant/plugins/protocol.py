@@ -39,6 +39,7 @@ from operant.contracts.b2_1 import (
     LifecycleRequest,
     LifecycleResult,
     MaintenanceInput,
+    MemoryVersionRef,
     ModelProxyRequest,
     ModelProxyResult,
     PluginManifest,
@@ -645,7 +646,16 @@ def _delete_managed_file(path: Path) -> None:
 
 @dataclass(frozen=True)
 class HostCallbacks:
-    """Core-owned callbacks exposed through the narrow Host API."""
+    """Core-owned callbacks exposed through the narrow Host API.
+
+    Authorizers must resolve current Core records/grants using the Host context,
+    including dataset ownership, scope, revision/digest and availability. They
+    must not accept a reference merely because its plugin-supplied fields match.
+    Missing authorizers deny access. These callbacks never cross the plugin RPC.
+    """
+
+    authorize_source: Callable[[RpcContext, SourceRef], bool] | None = None
+    authorize_memory_ref: Callable[[RpcContext, MemoryVersionRef], bool] | None = None
 
     read_source: Callable[[HostReadRequest], HostReadResult | Awaitable[HostReadResult]] | None = (
         None
@@ -708,6 +718,7 @@ class RestrictedHostApi:
         resource_bump: Callable[[str], int],
         cancel_event: asyncio.Event,
         validate_active: Callable[[], None] | None = None,
+        allowed_model_profiles: frozenset[str] = frozenset(),
     ) -> None:
         self.context = context
         self._installation_root = Path(installation_root)
@@ -719,6 +730,7 @@ class RestrictedHostApi:
         self._resource_bump = resource_bump
         self._cancel_event = cancel_event
         self._validate_active = validate_active
+        self._allowed_model_profiles = allowed_model_profiles
         self._logs: list[str] = []
 
     @property
@@ -760,6 +772,7 @@ class RestrictedHostApi:
     async def read_source(self, request: HostReadRequest) -> HostReadResult:
         self._check_context(request.context)
         self.check_cancelled()
+        self._authorize_source(request.source)
         self._budget.charge_request(len(canonical_json(request.model_dump(mode="json"))))
         callback = self._callbacks.read_source
         if callback is None:
@@ -769,12 +782,18 @@ class RestrictedHostApi:
             result = await result
         if not isinstance(result, HostReadResult):
             raise PluginProtocolError("read_source callback returned an invalid result")
+        self.check_cancelled()
+        self._authorize_source(request.source)
+        if result.source != request.source or len(result.text.encode()) > request.max_bytes:
+            raise PluginProtocolError("read_source callback exceeded the authorized request")
         self._budget.charge_response(len(canonical_json(result.model_dump(mode="json"))))
         return result
 
     async def search(self, request: RecallRequest) -> CandidateBatch:
         self._check_context(request.context)
         self.check_cancelled()
+        for ref in request.explicit_refs:
+            self._authorize_memory_ref(ref)
         self._budget.charge_request(len(canonical_json(request.model_dump(mode="json"))))
         callback = self._callbacks.search
         if callback is None:
@@ -784,12 +803,26 @@ class RestrictedHostApi:
             result = await result
         if not isinstance(result, CandidateBatch):
             raise PluginProtocolError("search callback returned an invalid result")
+        self.check_cancelled()
+        if (
+            result.request_id != self.context.request_id
+            or len(result.candidates) > request.max_candidates
+        ):
+            raise PluginProtocolError("search callback exceeded the authorized request")
+        for ref in request.explicit_refs:
+            self._authorize_memory_ref(ref)
+        for candidate in result.candidates:
+            self._authorize_memory_ref(candidate.ref)
         self._budget.charge_response(len(canonical_json(result.model_dump(mode="json"))))
         return result
 
     async def model(self, request: ModelProxyRequest) -> ModelProxyResult:
         self._check_context(request.context)
         self.check_cancelled()
+        if request.model_profile_id not in self._allowed_model_profiles:
+            raise PermissionDeniedError("model profile is not configured for this binding")
+        for source in request.input_source_refs:
+            self._authorize_source(source)
         self._budget.charge_request(len(canonical_json(request.model_dump(mode="json"))))
         callback = self._callbacks.model
         if callback is None:
@@ -799,8 +832,33 @@ class RestrictedHostApi:
             result = await result
         if not isinstance(result, ModelProxyResult):
             raise PluginProtocolError("model callback returned an invalid result")
+        self.check_cancelled()
+        for source in request.input_source_refs:
+            self._authorize_source(source)
+        if result.request_id != self.context.request_id:
+            raise PluginProtocolError("model callback returned another request's result")
         self._budget.charge_response(len(canonical_json(result.model_dump(mode="json"))))
         return result
+
+    def _authorize_source(self, source: SourceRef) -> None:
+        authorize = self._callbacks.authorize_source
+        if (
+            source.scope != self.context.scope
+            or source.permission_epoch != self.context.permission_epoch
+            or source.availability != "available"
+            or authorize is None
+            or authorize(self.context, source) is not True
+        ):
+            raise PermissionDeniedError("source is not authorized for this Host context")
+
+    def _authorize_memory_ref(self, ref: MemoryVersionRef) -> None:
+        authorize = self._callbacks.authorize_memory_ref
+        if (
+            ref.dataset_id != self.context.dataset_id
+            or authorize is None
+            or authorize(self.context, ref) is not True
+        ):
+            raise PermissionDeniedError("memory reference is not authorized for this Host context")
 
     def private_index(self, request: PrivateIndexRequest) -> PrivateIndexResult:
         self._check_context(request.context)

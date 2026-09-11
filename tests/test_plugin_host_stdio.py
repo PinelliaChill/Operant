@@ -109,7 +109,10 @@ async def test_isolated_stdio_reuses_process_and_calls_restricted_host_api(tmp_p
 
     host = PluginHost(
         registry,
-        callbacks=HostCallbacks(read_source=read_source),
+        callbacks=HostCallbacks(
+            read_source=read_source,
+            authorize_source=lambda context, ref: ref == source and context.scope == lease.scope,
+        ),
         sandbox_probe=TestProbe(),
     )
     binding = host.bind(installation.installation_id)

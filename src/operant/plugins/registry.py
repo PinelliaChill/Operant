@@ -964,16 +964,47 @@ class PluginRegistry:
         self, lease_id: str, *, status: Literal["cancelled", "completed", "expired"] = "completed"
     ) -> RunLease:
         lease = self.get_run(lease_id)
+        # A release may be retried from a completion path or a delayed
+        # callback.  Once this lease has reached a terminal state, preserve
+        # that durable result and, in particular, do not touch the binding's
+        # current run slot.
+        if lease.status != "active":
+            return lease
+
         updated = lease.model_copy(update={"status": status})
         binding = self._binding(lease.binding_id)
-        updated_binding = binding.model_copy(
-            update={
-                "active_run_ids": tuple(
-                    item for item in binding.active_run_ids if item != lease.run_id
-                ),
-                "updated_at": utc_now(),
-            }
+        # ``active_run_ids`` contains only run IDs, so use the lease fencing
+        # identity as a CAS guard when removing one.  A late release for an
+        # older lease must not clear the marker owned by a newer lease for the
+        # same run ID.  Taking the highest fencing value also fails closed if
+        # a malformed state ever contains more than one active lease.
+        current_active = max(
+            (
+                item
+                for item in self._state.runs
+                if item.status == "active"
+                and item.binding_id == lease.binding_id
+                and item.run_id == lease.run_id
+            ),
+            key=lambda item: item.lease_fencing,
+            default=None,
         )
+        owns_active_slot = (
+            current_active is not None
+            and current_active.lease_id == lease.lease_id
+            and current_active.lease_fencing == lease.lease_fencing
+        )
+        if owns_active_slot:
+            updated_binding = binding.model_copy(
+                update={
+                    "active_run_ids": tuple(
+                        item for item in binding.active_run_ids if item != lease.run_id
+                    ),
+                    "updated_at": utc_now(),
+                }
+            )
+        else:
+            updated_binding = binding
         self._replace(
             runs=tuple(updated if item.lease_id == lease_id else item for item in self._state.runs),
             bindings=tuple(

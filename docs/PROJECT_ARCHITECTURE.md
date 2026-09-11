@@ -63,6 +63,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 `src/operant/plugins/` 提供显式安装与 Registry、受控认证记录、配置绑定、Run fencing、资源登记及
 keep/delete 清理续做。Registry 使用单写文件锁和原子 JSON journal；重启使旧活动 lease 失效，不重放
 RPC或自动重装插件。此版本不改 SQLite v14，不实现 MP-2 记忆引擎、数据迁移或新召回。
+Run释放按lease身份和fencing清除活动标记，终态释放幂等；迟到旧lease不会解除新Run的停止/卸载屏障。
 
 插件共用 `contracts/b2_1.py` 的 typed Host API。认证进程内方式加载已核对包的 `create_plugin()`；
 它是认证信任边界，不是沙箱。未认证 stdio 使用 macOS sandbox-exec、独立目录及隔离Python参数
@@ -71,6 +72,9 @@ RPC或自动重装插件。此版本不改 SQLite v14，不实现 MP-2 记忆引
 包、依赖/权限文件指纹、认证撤销与epoch在调用/提交时复核；资源预算、取消、迟到拒绝和未知清理
 状态不因cleanup Hook缺失而绕过。stdio 复用进程按并发准入、RPC超时、采样RSS/CPU与空闲寿命执行预算；超限停止独立进程组并标记失败。采样允许短暂超调，认证进程内插件仍是合作式资源边界。当前issuer、scope、存储lease与全局启用状态在Host回调入口复核。`create_app(plugin_host=...)` 是显式受信任启动注入面，由Core负责
 shutdown关闭；普通启动默认无Host/无引擎，插件HTTP管理与默认记忆绑定仍属B2-3。
+Host回调要求Core提供来源/记忆引用授权器，按真实记录核对dataset、scope、revision/digest和可用性；缺少授权器时拒绝。
+Host另行强制来源与当前scope/permission epoch一致、记忆引用属于当前dataset，模型Profile仅来自绑定的提取/重排配置。
+异步回调返回后重查lease及来源授权并验证结果关联。MP-1不隐式授予跨scope来源；尚未接入生产记忆检索/模型回调。
 
 `api_b2.py` 将已提交 Session/WorkflowRun 投影为保留来源身份、动作与明确Workspace关联的任务。
 精确任务Query不受列表分页影响，跨来源同ID必须消歧。历史来自canonical Item、AgentInstance与
