@@ -14,3 +14,5 @@
 - 988fb24：当前extract仅可使用extraction_profile，recall仅rerank_profile；两方向合法/越阶段请求经实际invoke验证。
 - 518bb3f：stop/uninstall/resume_cleanup按installation串行，close自身互斥；关闭期间排队请求得到明确restart_required回执。九种两两并发生命周期组合通过。maintenance_enabled=False拒绝维护，recall/嵌套search预算不得高于配置；六项允许/拒绝回归通过。空召回夹具明确token_budget=0，不虚构上下文分配；非零预算独立验证。
 - 原Luna/max Reviewer最后turn 01a0906f-d947-7d51-8682-6b04d3ce191c再次workspace credits失败。它已关闭先前P1并核到988fb24；最后并发P1和配置约束修复仍须恢复后独立复核，不能视为整批通过。
+
+最终独立复核（2026-09-12）：同一Luna/max Reviewer已完成上述最后生命周期锁/配置增量，独立15项回归通过，全部旧P1关闭；完整本批结论见review.md。此前额度失败为历史，B2-2现已完成。

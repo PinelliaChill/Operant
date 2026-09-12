@@ -57,7 +57,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
-### B2-2 / MP-1 与基础任务接入（2026-09-10，待本批验收）
+### B2-2 / MP-1 与基础任务接入（2026-09-12，已完成本批验收）
 
 本批从 `8851a23` 独立实施，验收范围和当前证据见 [任务包](design/b2-2/task-package.md)。
 `src/operant/plugins/` 提供显式安装与 Registry、受控认证记录、配置绑定、Run fencing、资源登记及
@@ -96,7 +96,7 @@ GUI通过生成Client接入模型/角色配置、分页AgentInstance及真实状
 Antigravity的任务行样式来自 `a0a4a5d`，Codex按原生窄屏结果补断点修复；B2配置表单使用Modal显式portal，默认其他调用不变，Live对话历史按正常文档流避免窄屏重叠。HTTP开发WebView使用同源Vite代理，正式Tauri协议及
 `tauri.localhost`保持固定本机Core；`OPERANT_CORE_URL`仅控制开发代理目标。
 
-代码存在不等于本批通过；真实桌面、完整门禁、指定Reviewer与未覆盖项以本批验收记录为准。
+本批真实桌面、完整门禁和指定Reviewer已通过，代码518bb3f；准确覆盖与未覆盖项见本批交接和验收记录。
 B2-3/MP-2、项目CRUD、后续Graph/Team交互及发布签名不在本次授权范围。
 
 ### B2-1 / MP-0 增量（2026-09-09）

@@ -1,4 +1,4 @@
-# B2-2 交接：工程验收通过，最后独立复核待恢复
+# B2-2 交接：已完成
 
 记录身份：Codex；适用对象：User、原 Codex Reviewer。仅授权 B2-2，未推送、合并或部署；B2-1 不重做，B2-3 未开始。
 
@@ -16,13 +16,13 @@ Core 已接任务、首个 Thread、模型/角色配置、Agent 实例、规范�
 | GUI / SDK | GUI 91 项测试、typecheck/build；正式 SDK surface / 生成确定性和旧协议冻结随完整门禁通过 |
 | 实际 Host | macOS sandbox-exec 探针、两次授权 RPC、关闭通过；认证进程内真实安装入口通过，见 [隔离](host-isolation-smoke.json)、[进程内](host-inprocess-smoke.json) |
 | 实际客户端 | 正式 gpt-5.6-luna/low；工具、审批一次、结果42、历史/分页、取消、断线/重连、宽窄屏/焦点；追加 Factory 受控失败→真实新轮42→审批等待取消，见 [客户端](client-acceptance.md)、[增量](client-review-increment.json) |
-| 独立 Reviewer | 指定 Luna/max 已通过 caa2ba8 Session/B2/GUI，逐项关闭先前 Host P1，核到988fb24；最后并发/配置增量尚未独立通过，见 [原报告](review.md)、[状态](review-status.md) |
+| 独立 Reviewer | 指定 Luna/max 已通过 caa2ba8 Session/B2/GUI，逐项关闭先前 Host P1，核到988fb24；最后并发/配置增量已独立通过；同一 Reviewer 完成本批审查，见 [报告](review.md)、[状态](review-status.md) |
 
-## 唯一待完成门禁
+## 独立复核与停止点
 
-原 Reviewer `01a08baa-4872-7473-abb1-7ca6fe91517d` 的 turn `01a0906f-d947-7d51-8682-6b04d3ce191c` 再次因 workspace credits 耗尽失败。Codex 已修复其最后并发 P1，并强制维护开关/召回预算；9 种并发组合和6项配置回归及最终完整门禁通过，但不能替代独立复核。
+同一 `gpt-5.6-luna/max` Reviewer 于2026-09-12完成最终增量：独立15项生命周期/配置回归通过，关闭最后并发P1，核对最终门禁与源码指纹，没有剩余代码阻断。Reviewer任务 `01a08baa-4872-7473-abb1-7ca6fe91517d`，最终turn `01a0949c-e31b-7810-b2b2-b359c5026cc5`。Fast无工具开关，未声称启用。
 
-额度恢复后继续同一 Reviewer，只读本交接、[Host 增量](host-review-increment.md)、`988fb24..518bb3f` 的相关源码/测试与最终门禁。源码不变时复用既有通过证据，不重跑 B2-1 或全套客户端。Reviewer 无新增阻断后再更新 AC-11 和总进度，停止 B2-2。工具未提供 Fast 开关，未声称启用。
+B2-2全部适用门禁已闭合；停止于本批，B2-3需另行授权。证据复用及本次取舍见[Host增量](host-review-increment.md)与[验收表](task-package.md)，不将本批结论外推到后续记忆/Graph/Team或发布签名。
 
 ## 范围限制
 

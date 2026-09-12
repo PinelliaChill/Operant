@@ -2,6 +2,9 @@
 
 记录身份：Codex；适用对象：User、原Reviewer。本文件记录审查进程和转述，不是Reviewer签署的通过报告。
 
+当前状态（2026-09-12）：**已通过**。User说明重启任务即默认共享额度恢复后，已直接续接同一Luna/max Reviewer。最终turn `01a0949c-e31b-7810-b2b2-b359c5026cc5` 完成518bb3f最后增量，独立15项回归通过，关闭剩余P1并核对全门禁/指纹，见review.md。以下额度失败和中间结论仅保留为历史，不是当前阻塞。
+
+
 - 指定模型：gpt-5.6-luna / max。工具未提供Fast开关，不声称已启用。
 - 原Reviewer任务：01a08b5d-0c63-7411-a99c-1742707cddd9；原恢复失败后按相同范围替代为01a08baa-4872-7473-abb1-7ca6fe91517d，未改模型。
 - User确认额度恢复后，恢复了同一替代Reviewer；turn 01a08ecb-3328-7601-b251-9eb2ee2bac3d实际运行约480秒，再次因“Your workspace is out of credits. Add credits to continue.”失败。由wait_threads当前终态核实，不能将无输出或长等待当失败。

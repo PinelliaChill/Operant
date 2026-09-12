@@ -33,7 +33,7 @@
 | AC-08 | 宽窄屏/键盘/对比度/错误断线/Action Gateway/实际 Tauri；AGENTS 客户端边界 | Codex | 本机 debug Tauri 与 UI，检查本批新增流程；不覆盖发布签名 | 是，客户端门 | 真实原生约1200/768宽，分页105条、错误断线/重连、重启回读、表单焦点/保存已观察 |
 | AC-09 | 完整基础门禁；AGENTS 开发与验证 | Codex | ruff format/check、mypy src、pytest、uv lock --check --offline、git diff --check；集成版本一次 | 是，硬门禁 | 518bb3f完整门禁通过：847 pass/1 Docker skip；见verification.json |
 | AC-10 | GUI/SDK test/typecheck/build、协议确定性；AGENTS | Codex | 当前 package scripts + SDK 定向测试/生成回读，旧 Schema 不变 | 是，契约门 | GUI91定向/类型检查通过；最终构建与SDK确定性已随完整门禁通过 |
-| AC-11 | 架构同步、保留范围、独立 Reviewer 与进度；AGENTS/用户请求 | Codex | diff/证据覆盖审查，Luna max，同 Reviewer 增量 | 是，交付门 | 架构/客户端记录已同步；原Luna/max已通过caa2ba8 Session/B2/GUI切片，Host最后并发/配置增量因Reviewer额度失败待恢复，见review.md |
+| AC-11 | 架构同步、保留范围、独立 Reviewer 与进度；AGENTS/用户请求 | Codex | diff/证据覆盖审查，Luna max，同 Reviewer 增量 | 是，交付门 | 架构/客户端记录已同步；原Luna/max已通过caa2ba8 Session/B2/GUI切片，Host最后并发/配置增量及最终证据已由同一Reviewer复核通过，见review.md |
 
 ## 环境与证据规则
 
@@ -47,3 +47,5 @@
 - 审查修复子任务lease_fix与payload_fix已交还；负责人集成并验证生产授权入口、实际隔离、失败历史与取消。代码候选518bb3f；细节见host-review-increment.md、client-review-increment.json、review.md。
 - 当前临时app/Core/Vite均已关闭，见cleanup.json。B2-3未授权。交付结果只写handoff.md和verification.json；总进度在治理根memory/current.md。
 - Task统一resume未提供虚构接口；Session显式新轮和既有Workflow Graph安全恢复入口按客户端规范§16.1验收，不能把禁用按钮当作恢复验收。任务页首个API页与完整列表分页的限制在handoff.md明确。
+
+完成状态（2026-09-12，Codex）：AC-01～AC-11适用门禁均闭合。代码518bb3f；最终独立复核通过，停止B2-2，不进入B2-3。
