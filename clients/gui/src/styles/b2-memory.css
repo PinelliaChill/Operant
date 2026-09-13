@@ -1,15 +1,15 @@
 /**
- * Operant 2.0 - B2-3 插件生命周期与项目记忆管理视觉样式 (UI-MEM-01)
+ * Operant 2.0 - B2-3 插件生命周期与项目记忆管理视觉样式 (UI-MEM-01 / UI-MEM-02)
  * 负责人：Antigravity
- * 契约类：.b2-memory, .b2-memory-grid, .b2-memory-card, .b2-memory-form,
- *         .b2-memory-actions, .b2-memory-meta, .b2-memory-record,
- *         .b2-memory-warning, .b2-memory-status
- * 约束：严格使用主题 CSS tokens，支持宽屏/768px窄屏，焦点高亮，正文可换行，
- *       WCAG AA 状态对比度，明确区分保留（Keep）与删除（Delete）策略（形态/边框/标识多维区分）。
+ * 契约类：.b2-memory, .b2-memory-tabs, .b2-memory-tab, .b2-memory-grid,
+ *         .b2-memory-card, .b2-memory-form, .b2-memory-actions, .b2-memory-meta,
+ *         .b2-memory-record, .b2-memory-warning, .b2-memory-status
+ * 约束：严格使用主题 CSS tokens，支持宽屏/768px窄屏，焦点高亮，正文与元数据断行，
+ *       WCAG AA 状态对比度；多维区分保留与删除，不注入“彻底清除”等越权文本或装饰 emoji。
  */
 
 /* ==========================================================================
-   1. 根容器与布局 (.b2-memory)
+   1. 根容器与分区导航标签栏 (.b2-memory, .b2-memory-tabs, .b2-memory-tab)
    ========================================================================== */
 
 .b2-memory {
@@ -62,6 +62,71 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 4px;
+}
+
+/* 分区导航标签栏 (UI-MEM-02: 保证可点区域、换行/横滚与键盘焦点) */
+.b2-memory-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  overflow-x: auto;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.b2-memory-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
+  transition:
+    background-color var(--dur-1, 150ms) var(--ease-standard, ease),
+    color var(--dur-1, 150ms) var(--ease-standard, ease),
+    border-color var(--dur-1, 150ms) var(--ease-standard, ease),
+    box-shadow var(--dur-1, 150ms) var(--ease-standard, ease);
+}
+
+.b2-memory-tab:hover:not(:disabled) {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+.b2-memory-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b2-memory-tab.active,
+.b2-memory-tab[aria-selected="true"] {
+  background: var(--bg-card);
+  color: var(--accent-action);
+  border-color: var(--accent-action);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.b2-memory-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 /* ==========================================================================
@@ -145,21 +210,35 @@
   background: var(--bg-surface);
 }
 
+/* 卡片头部与标题 (UI-MEM-02: 避免长 scope 标识挤占标题) */
 .b2-memory-card-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
+.b2-memory-card-header h2,
+.b2-memory-card-header h3,
 .b2-memory-card-title {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
   line-height: 1.35;
   margin: 0;
+  flex: 1 1 180px;
+  min-width: 0;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.b2-memory-card-header .b2-memory-status {
+  flex-shrink: 0;
+  max-width: 100%;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .b2-memory-card-body {
@@ -277,11 +356,6 @@
   gap: 4px;
 }
 
-.b2-memory-form-error::before {
-  content: "⚠";
-  font-weight: bold;
-}
-
 /* ==========================================================================
    5. 动作与操作组 (.b2-memory-actions)
    ========================================================================== */
@@ -337,10 +411,10 @@
 
 /* ==========================================================================
    6. 卸载与确认策略：明确区分保留 (Keep) 与删除 (Delete)
-   （注：不单凭颜色区分，通过形状、边框样式、徽标、文字前缀多维区分）
+   （注：不单凭颜色区分，通过形状、边框样式、粗细多维区分；无装饰 emoji）
    ========================================================================== */
 
-/* 保留数据 (Keep Policy)：圆角胶囊形、实线边框、对勾符号提示、安全温和 */
+/* 保留数据 (Keep Policy)：圆角胶囊形、实线边框、安全温和 */
 .b2-memory-action[data-policy="keep"],
 .b2-memory-policy-btn--keep {
   border-radius: var(--radius-full);
@@ -351,12 +425,6 @@
   padding: 6px 14px;
 }
 
-.b2-memory-action[data-policy="keep"]::before,
-.b2-memory-policy-btn--keep::before {
-  content: "✓ ";
-  font-weight: 700;
-}
-
 .b2-memory-action[data-policy="keep"]:hover:not(:disabled),
 .b2-memory-policy-btn--keep:hover:not(:disabled) {
   background: var(--accent-subtle);
@@ -364,7 +432,7 @@
   color: var(--accent-on-subtle);
 }
 
-/* 删除数据 (Delete Policy)：方形直角、醒目虚线警示边框、警告符号、加粗大写、危险摩擦感 */
+/* 删除数据 (Delete Policy)：方形直角、醒目虚线警示边框、加粗排版、强摩擦感 */
 .b2-memory-action[data-policy="delete"],
 .b2-memory-policy-btn--delete {
   border-radius: var(--radius-xs);
@@ -376,12 +444,6 @@
   padding: 5px 12px;
   text-decoration: underline;
   text-underline-offset: 2px;
-}
-
-.b2-memory-action[data-policy="delete"]::before,
-.b2-memory-policy-btn--delete::before {
-  content: "⚠ ✕ ";
-  font-weight: 800;
 }
 
 .b2-memory-action[data-policy="delete"]:hover:not(:disabled),
@@ -419,11 +481,6 @@
   font-weight: 600;
 }
 
-.b2-memory-policy-badge[data-policy="keep"]::before {
-  content: "✓ [保留]";
-  font-weight: 700;
-}
-
 .b2-memory-policy-badge[data-policy="delete"] {
   border-radius: var(--radius-xs);
   border: 1.5px dashed var(--status-error-border);
@@ -432,23 +489,19 @@
   font-weight: 700;
 }
 
-.b2-memory-policy-badge[data-policy="delete"]::before {
-  content: "✕ [彻底清除]";
-  font-weight: 800;
-}
-
 /* ==========================================================================
-   7. 元数据标识组与属性行 (.b2-memory-meta)
+   7. 元数据标识组与属性行 (.b2-memory-meta) (UI-MEM-02: 断行与宽窄屏支持)
    ========================================================================== */
 
 .b2-memory-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 6px 10px;
   font-size: 12px;
 }
 
+.b2-memory-meta span,
 .b2-memory-meta-item {
   display: inline-flex;
   align-items: center;
@@ -458,7 +511,18 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xs);
   color: var(--text-secondary);
-  line-height: 1.25;
+  line-height: 1.3;
+  max-width: 100%;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+.b2-memory-meta code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .b2-memory-meta-label {
@@ -511,6 +575,7 @@
   justify-content: space-between;
   gap: 8px;
   font-size: 11px;
+  flex-wrap: wrap;
 }
 
 .b2-memory-record-id {
@@ -563,10 +628,6 @@
   gap: 4px;
 }
 
-.b2-memory-proposal-title::before {
-  content: "✦ [提议变更]";
-}
-
 .b2-memory-proposal-content {
   font-size: 12px;
   line-height: 1.45;
@@ -605,15 +666,6 @@
   color: var(--status-warn-text);
 }
 
-.b2-memory-warning::before {
-  content: "⚠";
-  font-size: 15px;
-  line-height: 1;
-  font-weight: bold;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
 /* 严重错误 / 阻塞提示 */
 .b2-memory-warning[data-severity="error"],
 .b2-memory-warning--danger {
@@ -622,20 +674,11 @@
   color: var(--status-error-text);
 }
 
-.b2-memory-warning[data-severity="error"]::before,
-.b2-memory-warning--danger::before {
-  content: "⛔";
-}
-
 /* 信息提示 */
 .b2-memory-warning[data-severity="info"] {
   background: var(--status-info-bg);
   border-color: var(--status-info-border);
   color: var(--status-info-text);
-}
-
-.b2-memory-warning[data-severity="info"]::before {
-  content: "ℹ";
 }
 
 .b2-memory-warning-body {
@@ -658,15 +701,25 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
   padding: 2px 8px;
   font-size: 11px;
   font-weight: 600;
   line-height: 1.25;
   border-radius: var(--radius-full);
   border: 1px solid transparent;
-  text-transform: capitalize;
   white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.b2-memory-status::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  flex-shrink: 0;
 }
 
 /* 状态：正常生效 (Active / Succeeded / Confirmed) */
@@ -679,14 +732,6 @@
   color: var(--status-safe-text);
 }
 
-.b2-memory-status[data-status="active"]::before,
-.b2-memory-status[data-status="enabled"]::before,
-.b2-memory-status[data-status="confirmed"]::before,
-.b2-memory-status[data-status="succeeded"]::before {
-  content: "●";
-  font-size: 8px;
-}
-
 /* 状态：待确认 / 需重启 / 警告 (Proposed / Pending / Restart Required) */
 .b2-memory-status[data-status="proposed"],
 .b2-memory-status[data-status="pending"],
@@ -697,14 +742,6 @@
   color: var(--status-warn-text);
 }
 
-.b2-memory-status[data-status="proposed"]::before,
-.b2-memory-status[data-status="pending"]::before,
-.b2-memory-status[data-status="restart_required"]::before,
-.b2-memory-status[data-status="warning"]::before {
-  content: "▲";
-  font-size: 8px;
-}
-
 /* 状态：异常失败 / 阻塞 (Failed / Error / Blocked) */
 .b2-memory-status[data-status="failed"],
 .b2-memory-status[data-status="error"],
@@ -712,14 +749,6 @@
   background: var(--status-error-bg);
   border-color: var(--status-error-border);
   color: var(--status-error-text);
-}
-
-.b2-memory-status[data-status="failed"]::before,
-.b2-memory-status[data-status="error"]::before,
-.b2-memory-status[data-status="blocked"]::before {
-  content: "✕";
-  font-size: 9px;
-  font-weight: 800;
 }
 
 /* 状态：停用 / 归档 / 卸载 (Deactivated / Disabled / Archived / Uninstalled) */
@@ -736,8 +765,7 @@
 .b2-memory-status[data-status="disabled"]::before,
 .b2-memory-status[data-status="archived"]::before,
 .b2-memory-status[data-status="uninstalled"]::before {
-  content: "○";
-  font-size: 8px;
+  border-radius: 1px;
 }
 
 /* 状态：沙箱隔离 (Isolated) */
@@ -748,8 +776,7 @@
 }
 
 .b2-memory-status[data-status="isolated"]::before {
-  content: "⛨";
-  font-size: 9px;
+  border-radius: 1px;
 }
 
 /* 状态：进程内信任 (Trusted In Process) */
@@ -760,8 +787,7 @@
 }
 
 .b2-memory-status[data-status="trusted_in_process"]::before {
-  content: "⚡";
-  font-size: 9px;
+  border-radius: 1px;
 }
 
 /* ==========================================================================
@@ -779,6 +805,19 @@
     gap: 8px;
   }
 
+  .b2-memory-tabs {
+    gap: 6px;
+    padding: 4px;
+    margin-bottom: 12px;
+  }
+
+  .b2-memory-tab {
+    flex: 1 1 auto;
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
   .b2-memory-grid {
     grid-template-columns: 1fr;
     gap: 12px;
@@ -793,6 +832,11 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
+  }
+
+  .b2-memory-card-header .b2-memory-status {
+    align-self: flex-start;
+    text-align: left;
   }
 
   .b2-memory-card-footer {
@@ -823,9 +867,9 @@
     gap: 4px;
   }
 
+  .b2-memory-meta span,
   .b2-memory-meta-item {
     max-width: 100%;
-    flex-wrap: wrap;
   }
 
   .b2-memory-meta-value {
@@ -845,6 +889,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .b2-memory-card,
+  .b2-memory-tab,
   .b2-memory-action,
   .b2-memory-form-input,
   .b2-memory-form-select,
