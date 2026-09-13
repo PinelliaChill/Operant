@@ -834,6 +834,13 @@
     gap: 6px;
   }
 
+  .b2-memory-card-header h2,
+  .b2-memory-card-header h3,
+  .b2-memory-card-title {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
   .b2-memory-card-header .b2-memory-status {
     align-self: flex-start;
     text-align: left;
