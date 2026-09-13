@@ -204,6 +204,7 @@ Phase56Error = Phase1EError
 
 BetaError = Phase1EError
 B2Error = Phase1EError
+B23Error = Phase1EError
 
 
 class SseProtocolError(Phase1EError):

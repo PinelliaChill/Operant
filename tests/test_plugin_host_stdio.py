@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import shutil
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -10,6 +12,7 @@ import pytest
 from operant.contracts.b2_1 import (
     Certification,
     HostReadResult,
+    LifecycleRequest,
     PluginManifest,
     RpcContext,
     RunScope,
@@ -18,13 +21,42 @@ from operant.contracts.b2_1 import (
 )
 from operant.domain.models import utc_now
 from operant.plugins import (
+    HostBudget,
     HostCallbacks,
+    PluginError,
     PluginHost,
     PluginRegistry,
     SandboxEvidence,
     SandboxProbe,
     compute_package_digest,
 )
+
+
+def _patch_ps(
+    monkeypatch: pytest.MonkeyPatch, *, rss_kb: int = 1024, cpu: str = "00:00:00"
+) -> None:
+    """Keep the resource monitor deterministic on hosts that restrict ``ps``."""
+
+    original = asyncio.create_subprocess_exec
+
+    class ProbeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return f"{rss_kb} {cpu}\n".encode("ascii"), b""
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+        async def wait(self) -> int:
+            return self.returncode
+
+    async def create_subprocess_exec(*args, **kwargs):
+        if args and args[0] == "/bin/ps":
+            return ProbeProcess()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
 
 
 def _stdio_package(tmp_path: Path) -> tuple[Path, PluginManifest, Certification]:
@@ -77,7 +109,10 @@ def _stdio_package(tmp_path: Path) -> tuple[Path, PluginManifest, Certification]
 
 
 @pytest.mark.asyncio
-async def test_isolated_stdio_reuses_process_and_calls_restricted_host_api(tmp_path: Path) -> None:
+async def test_isolated_stdio_reuses_process_and_calls_restricted_host_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_ps(monkeypatch)
     package, manifest, certification = _stdio_package(tmp_path)
     registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
     installation = registry.install(manifest, package, certification=certification)
@@ -164,17 +199,13 @@ async def test_isolated_stdio_reuses_process_and_calls_restricted_host_api(tmp_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["memory", "cpu", "idle"])
+@pytest.mark.parametrize("kind", ["memory", "cpu"])
 async def test_process_resource_overrun_is_stopped_without_an_rpc(
-    tmp_path: Path, kind: str
+    tmp_path: Path, kind: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Real resource enforcement; sandbox transport shim is not isolation evidence."""
-    import asyncio
-    import sys
 
     from operant.plugins import (
-        HostBudget,
-        PluginError,
         SandboxEvidence,
         SandboxProbe,
         StdioPluginEngine,
@@ -201,6 +232,11 @@ async def test_process_resource_overrun_is_stopped_without_an_rpc(
                 evidence_ref="unit-resource-probe", profile="ignored", runner=str(runner)
             )
 
+    _patch_ps(
+        monkeypatch,
+        rss_kb=64 * 1024 if kind == "memory" else 1024,
+        cpu="00:00:01" if kind == "cpu" else "00:00:00",
+    )
     engine = StdioPluginEngine(
         argv=[sys.executable, "-I", "-S", str(worker)],
         package_root=tmp_path,
@@ -224,6 +260,131 @@ async def test_process_resource_overrun_is_stopped_without_an_rpc(
         assert process.returncode != 0
         with pytest.raises(PluginError) as error:
             await engine.start()
-        assert error.value.code == ("deadline_exceeded" if kind == "idle" else "budget_exceeded")
+        assert error.value.code == "budget_exceeded"
     finally:
         await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_isolated_stdio_idle_process_survives_until_explicit_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An idle reusable engine is not a pending request timeout."""
+
+    _patch_ps(monkeypatch)
+    package, manifest, certification = _stdio_package(tmp_path)
+    registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+    installation = registry.install(manifest, package, certification=certification)
+    runner = tmp_path / "sandbox-runner"
+    runner.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "args = sys.argv\n"
+        "index = args.index('-p')\n"
+        "os.execv(args[index + 2], args[index + 3:])\n",
+        encoding="utf-8",
+    )
+    runner.chmod(0o755)
+
+    class Probe(SandboxProbe):
+        def check(self, **kwargs):
+            return SandboxEvidence(
+                evidence_ref="test-sandbox", profile="ignored", runner=str(runner)
+            )
+
+    host = PluginHost(
+        registry,
+        budget=HostBudget(max_idle_seconds=0.05),
+        sandbox_probe=Probe(),
+    )
+    binding = host.bind(installation.installation_id)
+    host.enable(binding.binding_id)
+    await host.start(installation.installation_id, mode="isolated")
+    try:
+        await asyncio.sleep(0.45)
+        engine = host._engines[installation.installation_id].engine
+        assert engine.process is not None
+        assert engine.process.returncode is None
+        assert engine._resource_error is None
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_isolated_stdio_pending_request_obeys_context_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blocked response still expires on the active request deadline."""
+
+    _patch_ps(monkeypatch)
+    package, manifest, certification = _stdio_package(tmp_path)
+    worker = tmp_path / "unresponsive.py"
+    worker.write_text(
+        "import time, sys\nfor _line in sys.stdin:\n    time.sleep(10)\n",
+        encoding="utf-8",
+    )
+    certification = certification.model_copy(update={"allowed_modes": ("isolated",)})
+    registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+    installation = registry.install(manifest, package, certification=certification)
+    runner = tmp_path / "sandbox-runner"
+    runner.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "args = sys.argv\n"
+        "index = args.index('-p')\n"
+        "os.execv(args[index + 2], args[index + 3:])\n",
+        encoding="utf-8",
+    )
+    runner.chmod(0o755)
+
+    class Probe(SandboxProbe):
+        def check(self, **kwargs):
+            return SandboxEvidence(
+                evidence_ref="test-sandbox", profile="ignored", runner=str(runner)
+            )
+
+    host = PluginHost(
+        registry,
+        stdio_commands={installation.installation_id: (sys.executable, "-I", "-S", str(worker))},
+        budget=HostBudget(timeout_seconds=1, max_idle_seconds=5),
+        sandbox_probe=Probe(),
+    )
+    binding = host.bind(installation.installation_id)
+    host.enable(binding.binding_id)
+    await host.start(installation.installation_id, mode="isolated")
+    lease = host.start_run(
+        binding.binding_id,
+        run_id="run-deadline",
+        scope=RunScope(
+            kind="run",
+            project_id="project-1",
+            workspace_id="workspace-1",
+            run_id="run-deadline",
+            writer_id=None,
+        ),
+    )
+    context = RpcContext(
+        sdk_version="operant-memory-sdk.v1",
+        request_id="deadline-request",
+        installation_id=lease.installation_id,
+        dataset_id=lease.dataset_id,
+        scope=lease.scope,
+        deadline=utc_now() + timedelta(seconds=0.08),
+        cancel_token="deadline-cancel",
+        idempotency_key="deadline-idempotency",
+        request_digest="c" * 64,
+        binding_epoch=lease.binding_epoch,
+        permission_epoch=lease.permission_epoch,
+        lease_fencing=lease.lease_fencing,
+    )
+    try:
+        with pytest.raises(PluginError) as error:
+            await host.invoke(
+                lease,
+                "lifecycle",
+                LifecycleRequest(context=context, operation="health", checkpoint_ref=None),
+            )
+        assert error.value.code in {"deadline_exceeded", "cancelled"}
+        assert host._engines[installation.installation_id].engine.process is None
+    finally:
+        await host.close()

@@ -1,0 +1,62 @@
+unformatted: File would be reformatted
+   --> tests/test_b23_session_context.py:176:36
+    |
+175 | ) -> tuple[list[object], str]:
+    -     thread = service.create_thread(
+    -         ConversationThread(workspace_ref=str(workspace.resolve()))
+    -     )
+176 +     thread = service.create_thread(ConversationThread(workspace_ref=str(workspace.resolve())))
+177 |     session = service.create_session(role_id, thread_id=thread.id)
+--------------------------------------------------------------------------------
+205 |     messages = [message for request, _tools in first_requests for message in request]
+    -     serialized_messages = "\n".join(
+    -         message.model_dump_json() for message in messages
+    -     )
+206 +     serialized_messages = "\n".join(message.model_dump_json() for message in messages)
+207 |     assert SKILL_GUIDANCE_MARKER in serialized_messages
+208 |     assert MEMORY_BODY_MARKER not in serialized_messages
+209 |     assert any(
+    -         message.role is MessageRole.USER and message.content == USER_MESSAGE
+    -         for message in messages
+210 +         message.role is MessageRole.USER and message.content == USER_MESSAGE for message in messages
+211 |     )
+212 |     assert any(
+    -         message.role is MessageRole.TOOL
+    -         and TOOL_OUTPUT_MARKER in (message.content or "")
+213 +         message.role is MessageRole.TOOL and TOOL_OUTPUT_MARKER in (message.content or "")
+214 |         for message in messages
+215 |     )
+216 |     assert all(
+    -         {tool.name for tool in tools} == {"read_file"}
+    -         for _messages, tools in first_requests
+217 +         {tool.name for tool in tools} == {"read_file"} for _messages, tools in first_requests
+218 |     )
+--------------------------------------------------------------------------------
+228 |     assert any(
+    -         isinstance(item.payload, UserMessagePayload)
+    -         and item.payload.text == USER_MESSAGE
+229 +         isinstance(item.payload, UserMessagePayload) and item.payload.text == USER_MESSAGE
+230 |         for item in history
+--------------------------------------------------------------------------------
+234 |     assert len(revisions) == len(first_requests)
+    -     for revision, (request_messages, request_tools) in zip(
+    -         revisions, first_requests, strict=True
+    -     ):
+235 +     for revision, (request_messages, request_tools) in zip(revisions, first_requests, strict=True):
+236 |         assert service.get_context_revision(session_id, revision.id) == revision
+--------------------------------------------------------------------------------
+254 |     second_serialized = "\n".join(
+    -         message.model_dump_json()
+    -         for request, _tools in second_requests
+    -         for message in request
+255 +         message.model_dump_json() for request, _tools in second_requests for message in request
+256 |     )
+257 |     assert SKILL_GUIDANCE_MARKER not in second_serialized
+258 |     assert all(
+    -         {tool.name for tool in tools} == {"read_file"}
+    -         for _messages, tools in second_requests
+259 +         {tool.name for tool in tools} == {"read_file"} for _messages, tools in second_requests
+260 |     )
+    |
+
+1 file would be reformatted, 275 files already formatted

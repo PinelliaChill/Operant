@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-05
+> 最后更新：2026-09-12
 >
-> 对应版本：Operant 2.0 Beta/RC 收口（SQLite v14；`phase56.v1` + additive `operant-beta.v1`）
+> 对应版本：B2-3 / MP-2 集成中（SQLite v15；additive `b2-3.v1`，尚未完成 J1 验收）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -57,6 +57,22 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
+### B2-3 / MP-2 记忆与管理集成（2026-09-12，验收进行中）
+
+范围与门禁见 [任务包](design/b2-3/task-package.md)。以下描述当前源码；桌面、真实模型与最终独立审查未全部完成，不能视为交付通过。
+
+`memory_plugins/manager.py` 通过正式 PluginHost 安装目录中的两个独立包。`memory-standard` 使用来源提取与 Host 搜索，`memory-notebook` 使用键值笔记；认证进程内支持独立私有索引，隔离模式与索引重建通过Host受控读取当前发布版本后执行键名精确过滤；配置分别来自包内 Schema。两者共享 MP-0 Host DTO 与包内标准库 SDK，支持认证进程内与未认证隔离 stdio。Core 负责来源授权和唯一发布 head，插件不能自行发布、越过 scope 或把候选当成正式召回。
+
+SQLite v15 增加 dataset-owned `memory_ledger_*` 与 `b23_*`，不改 v1—v14 migration checksum。Ledger 保存不可变版本、Proposal、CAS head、完整请求幂等摘要和来源。显式用户保存记录为 `user_asserted`；修改提议等待确认，旧版本保留。来源保存为当前项目的 canonical Item；旧数据显式迁入时标记 `legacy_unverified`，Core 映射 scope，旧 payload 不得覆盖。
+
+HTTP/CLI 正式启动启用插件记忆模式：旧记忆写入口明确要求升级，旧读入口惰性初始化 Manager 并只代理已启用项目的已发布记录。旧 Workflow 的自动记忆注入与候选生成关闭；自动召回、压缩和索引调度优化属于 MP-3，尚未实现。直接构造 Python Service 的旧兼容模式仅保留历史调用与测试，不代表生产默认策略。
+
+全局关闭先禁止新访问，再收集 Host 停止回执；未收束 Run 或插件返回 blocked/restart_required，不能报告全部完成。项目关闭、切换、归档与卸载同样经过停止屏障。重新开启只恢复显式操作能力，不补扫历史。keep 卸载保留 dataset，允许独立导出、同插件重新安装接回或显式删除。delete 必须先持久化清理计划，经 Host 资源/活动 Run 屏障后，Core 才清除该 dataset 的专属版本、提议、来源副本和结果缓存；保留 dataset tombstone。普通 Ledger delete 不提供物理清理权限，未知/共享/受保护资源保持阻断。历史 Item、Context、Skill、Artifact 和外部导出副本不随 dataset 删除，也不宣称磁盘安全擦除。
+
+`api_b2_3.py` 提供协议协商、管理 Query 与 typed Command。每个命令经过 Action Gateway；自己的幂等 journal 保留完整业务结果，删除数据后旧数据结果明确不可再取。响应保留类型结构并脱敏，超预算显式失败。`generate_b2_3.py` 从同一 Pydantic/FastAPI 源生成 `b2-3.v1` OpenAPI/digest 与 Python/TypeScript Client；CLI `operant memory manage` 使用生成 Client。
+
+GUI 的项目、知识、插件、记忆设置、Skill、保留与审计页消费同一管理投影。项目注册绑定绝对 Workspace，编辑、归档或解除关联不删除源码。设置按作用域与字段保留值/来源实际变化的独立时间，旧记录无法追溯时显示 unknown；Role 使用其不可变版本的创建时间，变更只影响新 Session 快照。解除关联只清除所选记忆插件，不改变归档状态；归档由独立命令负责。Skill 经发现、显式安装、项目启用、停用和卸载，安装副本校验 digest；运行时以单独 guidance 加入正式 Context，不扩大 Tool Policy。Artifact 页调用既有 Pin/归档/宽限期/Trash/恢复与审计，保留受保护引用屏障，不提供清空全部或物理 purge。
+
 ### B2-2 / MP-1 与基础任务接入（2026-09-12，已完成本批验收）
 
 本批从 `8851a23` 独立实施，验收范围和当前证据见 [任务包](design/b2-2/task-package.md)。
@@ -70,7 +86,7 @@ Run释放按lease身份和fencing清除活动标记，终态释放幂等；迟�
 `-I -S`，启动前真实检查受控 Home 文件、目录外写入与回环网络拒绝；沙箱不可用则拒绝。
 受管私有索引的读写删与资源登记逐级持有目录句柄并拒绝符号链接；写入前校验普通文件及单链接，读取按响应预算限量，防止路径校验后中间目录替换与无界读取。首版依赖限定为标准库/包内代码，不安装环境任意依赖，不宣称跨平台沙箱或线上CA。
 包、依赖/权限文件指纹、认证撤销与epoch在调用/提交时复核；资源预算、取消、迟到拒绝和未知清理
-状态不因cleanup Hook缺失而绕过。stdio 复用进程按并发准入、RPC超时、采样RSS/CPU与空闲寿命执行预算；超限停止独立进程组并标记失败。采样允许短暂超调，认证进程内插件仍是合作式资源边界。当前issuer、scope、存储lease与全局启用状态在Host回调入口复核。`create_app(plugin_host=...)` 是显式受信任启动注入面，由Core负责
+状态不因cleanup Hook缺失而绕过。stdio 复用进程按并发准入、RPC超时、采样RSS/CPU执行预算；空闲复用不视为请求超时；超限停止独立进程组并标记失败。采样允许短暂超调，认证进程内插件仍是合作式资源边界。当前issuer、scope、存储lease与全局启用状态在Host回调入口复核。`create_app(plugin_host=...)` 是显式受信任启动注入面，由Core负责
 shutdown关闭；普通启动默认无Host/无引擎，插件HTTP管理与默认记忆绑定仍属B2-3。
 Host回调要求Core提供来源/记忆引用授权器，按真实记录核对dataset、scope、revision/digest和可用性；缺少授权器时拒绝。
 Host另行强制来源与当前scope/permission epoch一致、记忆引用属于当前dataset，模型Profile仅来自绑定的提取/重排配置。
@@ -291,7 +307,7 @@ Core 预检失败明确显示；本批没有成功模型链路或打包发布产
   必须启用 TLS。运行时显式依赖 WebSocket transport；`--desktop` 只允许 loopback，并只为固定 Tauri
   Origin 和生成 Client 所需请求头开启最小 CORS；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1—v14 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1—v15 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -1038,7 +1054,9 @@ Leader 和一个 Writer，不是通用多 Writer 或高可用集群。
 
 ### Memory
 
-`Memory` 分为：
+生产启动以本章前述 B2-3 dataset Ledger 为准。下列 `Memory` 是仍保留的旧版本兼容模型及历史数据结构；自动晋升策略不再用于生产插件记忆模式。
+
+旧 `Memory` 分为：
 
 - `working`：只属于一个 Session；
 - `episodic`：记录一次任务经历，默认是待确认候选；
@@ -1365,7 +1383,9 @@ SQLiteStore 当前创建以下表：
 | `evaluation_runs` | 保存 Run 状态、顺序执行策略和聚合结果 |
 | `evaluation_results` | 保存唯一 Case × Variant × repetition 的 Pending、Interrupted 或已知终态事实 |
 | `evaluation_run_events` | 按 SQLite Cursor 保存 Evaluation 事件和可选 Result 关联 |
-| `memories` | 保存 Memory ID 与当前版本号 |
+| `memory_ledger_*` | dataset 所有权、不可变版本、Proposal/CAS head、幂等与 tombstone |
+| `b23_management` / `b23_commands` / `b23_sources` | 管理状态、命令结果与来源副本 |
+| `memories` | 保留旧 Memory ID 与当前版本号，生产新写入已拒绝 |
 | `memory_versions` | 保存所有不可变 Memory 版本、来源、作用域和状态 |
 | `memory_fts` | FTS5 全文索引，普通检索只连接当前有效版本 |
 | `tool_action_receipts` | 保存副作用 Tool Call 的 scope、幂等键、Action Hash 和安全结果 |
@@ -1472,6 +1492,8 @@ SQLiteStore 当前创建以下表：
     绑定 owner、lease、revision 和失败事实，事件只追加；空数据时才允许隔离 downgrade，并保持
     v1—v13 manifest/checksum 不变。
 
+15. v15：B2-3 dataset Ledger、管理状态、来源与命令 journal；旧迁移原样保留。只有全部新增业务表为空的显式隔离测试库才允许 downgrade。
+
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
 Tool Schema 与 Compaction 在写入时核对实体、scope、Cursor/version 和 canonical/stored hash，回读按
@@ -1534,7 +1556,7 @@ preview 收编、逐步升级、每步 manifest 复验和历史写入全部位�
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
 随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v14/v12/v11/v10/v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+v15/v14/v12/v11/v10/v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
 回滚 v12 要求 MCP receipt/start/sandbox 与 Phase 45 Approval 表全空；
 回滚 v11 要求 Skill/MCP/Scheduler/Queue/Lease/Attempt/Graph Dispatch 表全空，回滚 v10 要求
 Security Action/Capability/Audit/Denial 表全空；
@@ -1592,10 +1614,8 @@ operant workflow trace [--jsonl]
 operant workflow resume [--allow-coder-replay]
 operant workflow cancel
 
-operant memory add
-operant memory search
-operant memory confirm
-operant memory deactivate
+operant memory manage --help
+# 旧 memory add/search/confirm/deactivate 仅作为兼容入口保留；新写入要求使用 B2-3。
 
 operant evaluation suite add --file <absolute-suite-json>
 operant evaluation suite list

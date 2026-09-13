@@ -107,6 +107,7 @@ from operant.domain.threads import (
     Turn,
 )
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
+from operant.memory_plugins.management_schema import schema_contracts as b23_schema_contracts
 
 
 def _sha256_text(value: Any) -> str | None:
@@ -227,6 +228,7 @@ class WorkflowExecutionLease:
 
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
+        15: "2cbbb14eba24b1cecff7bf5345211450860736e0772a8f47831e5540bfd10447",
         1: "9efa030568ef8f28749732f82f0023a548d4ff3af708f86be9f8d3a70037ef18",
         2: "1c1d79405a9f422aca4a84a9bd5e45b1647cb16d0c8b496f906932272fd05e98",
         3: "2ac49a0e18c49ccfbfce434425bb7dd09f39710f190b635d3908af96512d9b34",
@@ -243,6 +245,7 @@ class SQLiteStore:
         14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
+        15: "60236e2909781b35d4bb10436baf8d8e9e6161331d5da40c904485ef2d76a585",
         1: "08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9",
         2: "f560a54b3361b717b8b0118efeb277b9869d66aa4528eb40015cbe571d9a9eef",
         3: "9be47a848c184b5f1ab81540abfc764dcae2a4b054ff4128d3ed153635d5f709",
@@ -594,6 +597,7 @@ class SQLiteStore:
                 self._upgrade_v14,
                 self._downgrade_v14,
             ),
+            build(15, "b23_memory_lifecycle", self._upgrade_v15, self._downgrade_v15),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -867,6 +871,8 @@ class SQLiteStore:
             self._validate_v13_schema_shape(connection)
         elif migration.version == 14:
             self._validate_v14_schema_shape(connection)
+        if migration.version == 15:
+            self._validate_schema_contract(connection, version=15)
         connection.execute(
             """
             INSERT INTO schema_migrations(version, name, checksum, applied_at)
@@ -2103,6 +2109,8 @@ class SQLiteStore:
             tables.update(cls._v13_required_columns())
         if version >= 14:
             tables.update(cls._v14_required_columns())
+        if version >= 15:
+            tables.update(b23_schema_contracts()[0])
         return tables
 
     @staticmethod
@@ -2366,6 +2374,8 @@ class SQLiteStore:
                     "type": column_type,
                     "not_null": not_null,
                 }
+        if version >= 15:
+            contract.update(b23_schema_contracts()[1])
         return contract
 
     @classmethod
@@ -2626,6 +2636,8 @@ class SQLiteStore:
                 store._upgrade_v13(connection)
             if version >= 14:
                 store._upgrade_v14(connection)
+            if version >= 15:
+                store._upgrade_v15(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2822,6 +2834,8 @@ class SQLiteStore:
                     "writer_container_lifecycle_events": ("sequence",),
                 }
             )
+        if version >= 15:
+            contract.update(b23_schema_contracts()[2])
         return contract
 
     @staticmethod
@@ -3027,6 +3041,8 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 15:
+            contract.update(b23_schema_contracts()[3])
         return contract
 
     @staticmethod
@@ -3702,6 +3718,8 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 15:
+            indexes.update(b23_schema_contracts()[4])
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -8616,6 +8634,26 @@ class SQLiteStore:
                 ON merge_runs(status, execution_lease_expires_at);
             """,
         )
+
+    def _downgrade_v15(self, connection: sqlite3.Connection) -> None:
+        tables = b23_schema_contracts()[0]
+        for table in tables:
+            if table == "memory_ledger_meta":
+                continue
+            if connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None:
+                raise MigrationError("refusing to roll back B2-3 tables while they contain data")
+        # Called only through the existing isolated=True rollback gate, and
+        # only when every newly introduced namespace is empty.
+        connection.execute("DROP TRIGGER memory_ledger_versions_immutable_update")
+        connection.execute("DROP TRIGGER memory_ledger_versions_immutable_delete")
+        for table in tables:
+            connection.execute(f"DROP TABLE {table}")
+
+    def _upgrade_v15(self, connection: sqlite3.Connection) -> None:
+        from operant.memory_plugins.ledger import SCHEMA_SQL as ledger_sql
+        from operant.memory_plugins.management_schema import SCHEMA_SQL as management_sql
+
+        self._execute_sql_batch(connection, ledger_sql + management_sql)
 
     def _upgrade_v14(self, connection: sqlite3.Connection) -> None:
         self._execute_sql_batch(

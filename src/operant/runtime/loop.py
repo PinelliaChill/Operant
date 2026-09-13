@@ -124,10 +124,22 @@ class AgentLoop:
         snapshot: RoleSnapshot,
         user_message: str,
         approval_callback: ApprovalCallback | None = None,
+        supplementary_context: str = "",
     ) -> AsyncGenerator[RuntimeEvent, None]:
         run_started = time.monotonic()
         messages = [
             Message(role=MessageRole.SYSTEM, content=snapshot.system_prompt),
+            *(
+                [
+                    Message(
+                        role=MessageRole.USER,
+                        content="用户已安装的技能资料（权限仍由工具策略决定）：\n"
+                        + supplementary_context,
+                    )
+                ]
+                if supplementary_context
+                else []
+            ),
             Message(role=MessageRole.USER, content=user_message),
         ]
         yield RuntimeEvent(

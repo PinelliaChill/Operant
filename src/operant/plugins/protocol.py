@@ -24,6 +24,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -210,7 +211,12 @@ def build_sandbox_profile(
     as literals, so a plugin cannot supply profile syntax.
     """
 
-    read_paths = [package_root.resolve(), Path(sys.prefix).resolve(), Path(executable).resolve()]
+    read_paths = [
+        package_root.resolve(),
+        (package_root.parent / "config").resolve(),
+        Path(sys.prefix).resolve(),
+        Path(executable).resolve(),
+    ]
     # Python on macOS may load framework/runtime files from these locations.
     # Keep these roots limited to system/runtime locations.  In particular do
     # not grant all of /private/var: on macOS it also contains user caches and
@@ -1237,11 +1243,11 @@ class StdioPluginEngine:
                     cpu = cpu * 60 + float(part)
                 if rss_kb > self.limits.memory_mb * 1024 or cpu > self.limits.max_cpu_seconds:
                     raise BudgetExceededError("isolated plugin exceeded RSS or CPU budget")
-                if (
-                    not self._active
-                    and time.monotonic() - self._last_activity > self.limits.max_idle_seconds
-                ):
-                    raise DeadlineExceededError("isolated plugin exceeded idle lifetime")
+                # An admitted stdio engine is intentionally reusable.  An
+                # idle process has no pending request deadline, so it must
+                # not be failed merely because no call arrived during a
+                # watchdog interval.  Explicit Host stop/close owns cleanup;
+                # RSS/CPU limits above still apply to every live process.
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1285,8 +1291,15 @@ class StdioPluginEngine:
                 "params": encoded_request,
             }
             try:
-                await self._write(payload)
+                await self._write(payload, deadline=host.context.deadline)
                 response = await self._read_until_response(rpc_id, host)
+            except DeadlineExceededError:
+                # A transport deadline means the untrusted process may still
+                # be consuming the request.  Tear down that process before
+                # releasing the reusable engine, so a timed-out RPC cannot
+                # leak stale work into the next call.
+                await self._terminate_process()
+                raise
             except asyncio.CancelledError as exc:
                 raise CancellationError() from exc
             finally:
@@ -1304,14 +1317,24 @@ class StdioPluginEngine:
             raise PluginProtocolError("stdio plugin result failed schema validation") from exc
         return _ensure_result(operation, result)
 
-    async def _write(self, payload: Mapping[str, Any]) -> None:
+    def _request_timeout(self, deadline: datetime | None = None) -> float:
+        """Return the remaining transport budget for one pending request."""
+
+        if deadline is None:
+            return self.limits.timeout_seconds
+        remaining = (deadline - utc_now()).total_seconds()
+        if remaining <= 0:
+            raise DeadlineExceededError()
+        return min(self.limits.timeout_seconds, remaining)
+
+    async def _write(self, payload: Mapping[str, Any], *, deadline: datetime | None = None) -> None:
         process = self.process
         if process is None or process.stdin is None:
             raise PackageUnavailableError("stdio plugin stdin is unavailable")
         encoded = encode_rpc(payload, max_bytes=self.limits.max_request_bytes)
         process.stdin.write(encoded)
         try:
-            await asyncio.wait_for(process.stdin.drain(), timeout=self.limits.timeout_seconds)
+            await asyncio.wait_for(process.stdin.drain(), timeout=self._request_timeout(deadline))
         except asyncio.TimeoutError as exc:
             raise DeadlineExceededError() from exc
 
@@ -1324,7 +1347,8 @@ class StdioPluginEngine:
                 raise CancellationError()
             try:
                 line = await asyncio.wait_for(
-                    process.stdout.readline(), self.limits.timeout_seconds
+                    process.stdout.readline(),
+                    self._request_timeout(host.context.deadline),
                 )
             except asyncio.TimeoutError as exc:
                 raise DeadlineExceededError() from exc
@@ -1358,11 +1382,24 @@ class StdioPluginEngine:
                         "id": callback_id,
                         "error": {"code": exc.code, "message": str(exc)},
                     }
-                await self._write(callback_payload)
+                await self._write(callback_payload, deadline=host.context.deadline)
                 continue
             if frame.get("id") != rpc_id:
                 raise PluginProtocolError("stdio response ID does not match request")
             return frame
+
+    async def _terminate_process(self) -> None:
+        """Terminate the current worker without changing request cancellation state."""
+
+        process = self.process
+        self.process = None
+        if process is not None and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), 2)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
 
     async def cancel(self, request_id: str) -> None:
         event = self._active.get(request_id)
@@ -1371,15 +1408,7 @@ class StdioPluginEngine:
         # A blocked stdio read cannot be safely interrupted by an untrusted
         # plugin.  Terminate this process; the next call explicitly respawns it
         # after a fresh admission check.
-        process = self.process
-        if process is not None and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), 2)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-        self.process = None
+        await self._terminate_process()
 
     async def close(self) -> None:
         if self._watchdog_task is not None:

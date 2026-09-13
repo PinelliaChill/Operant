@@ -650,6 +650,14 @@ class PluginRegistry:
             raise PluginError("package_unavailable", "installation_id is already registered")
         dataset = dataset_id or new_id("dataset")
         _validate_id(dataset, "dataset_id")
+        existing_dataset = next((d for d in self._state.datasets if d.dataset_id == dataset), None)
+        if existing_dataset is not None and (
+            existing_dataset.state != "retained"
+            or existing_dataset.owner.principal_id != principal_id
+        ):
+            raise PluginError(
+                "unknown_owner", "dataset is not eligible for explicit reinstallation"
+            )
         principal = _validate_id(principal_id, "principal_id")
         if config is None:
             config = PluginConfig(
@@ -658,7 +666,7 @@ class PluginRegistry:
                 revision=0,
                 extraction_model_profile_id=None,
                 rerank_model_profile_id=None,
-                recall_token_budget=0,
+                recall_token_budget=2000,
                 maintenance_enabled=False,
                 scheduler_definition_id=None,
                 secret_refs={},
@@ -726,7 +734,10 @@ class PluginRegistry:
             update={
                 "installations": (*self._state.installations, record),
                 "resources": tuple(resources),
-                "datasets": (*self._state.datasets, dataset_record),
+                "datasets": (
+                    *tuple(d for d in self._state.datasets if d.dataset_id != dataset),
+                    dataset_record,
+                ),
             }
         )
         self._save()
@@ -743,7 +754,8 @@ class PluginRegistry:
     ) -> StoredResource:
         if category not in self._RESOURCE_CATEGORIES:
             raise PluginError("unsupported", "unsupported Host resource category")
-        locator = f"resource_{installation.installation_id}_{len(self._state.resources)}"
+        path_digest = hashlib.sha256(relative_path.encode()).hexdigest()[:20]
+        locator = f"resource_{installation.installation_id}_{path_digest}"
         resource = Resource(
             resource_id=locator,
             owner=installation.owner,
@@ -1344,6 +1356,27 @@ class PluginRegistry:
             ),
         )
         return completed
+
+    def set_global_enabled(self, binding_id: str, enabled: bool) -> None:
+        binding = self._binding(binding_id)
+        updated = binding.model_copy(update={"global_enabled": enabled, "updated_at": utc_now()})
+        self._replace(
+            bindings=tuple(
+                updated if b.binding_id == binding_id else b for b in self._state.bindings
+            )
+        )
+
+    def configure(self, installation_id: str, config: dict[str, Any]) -> None:
+        installation = self._installation(installation_id)
+        if installation.state != "disabled":
+            raise PluginError("revision_conflict", "configuration requires a disabled installation")
+        target = self.installation_root(installation_id) / "config" / "settings.json"
+        if target.is_symlink() or target.parent.is_symlink():
+            raise PermissionDeniedError("unsafe configuration path")
+        temporary = target.with_suffix(".tmp")
+        with temporary.open("x", encoding="utf-8") as stream:
+            json.dump(config, stream)
+        temporary.replace(target)
 
     def pending_cleanup_plans(self) -> tuple[CleanupPlanRecord, ...]:
         return tuple(item for item in self._state.cleanup_plans if item.state != "completed")

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from operant.memory_plugins.manager import MemoryManager
+
 import asyncio
 import hashlib
 import hmac
@@ -7,7 +12,7 @@ import json
 import os
 import secrets
 import stat
-from collections.abc import AsyncIterator, Collection, Mapping
+from collections.abc import AsyncIterator, Callable, Collection, Mapping
 from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -489,6 +494,10 @@ class _PersistentActionGateway:
 
 
 class ApplicationService:
+    memory_plugin_mode: bool = False
+    memory_manager: MemoryManager | None = None
+    memory_manager_factory: Callable[[], MemoryManager] | None = None
+
     """Use-case layer shared by CLI, API, and workflows."""
 
     def __init__(
@@ -2647,6 +2656,8 @@ class ApplicationService:
         only with explicit confirmation or when the caller opts into the narrow
         provenance-and-verification rule implemented by the domain layer.
         """
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
         if isinstance(memory, RoleSnapshot):
             if snapshot is not None:
@@ -2757,6 +2768,12 @@ class ApplicationService:
         project_scope: str | None = None,
         version: int | None = None,
     ) -> Memory:
+        if self.memory_plugin_mode:
+            if self.memory_manager is None and self.memory_manager_factory is not None:
+                self.memory_manager = self.memory_manager_factory()
+            if self.memory_manager is None:
+                raise PermissionError("memory plugin is not installed or selected")
+            return self.memory_manager.compat_get(memory_id, project_scope, snapshot, version)
         memory = self.store.get_memory(memory_id, version)
         self._authorize_memory(
             snapshot,
@@ -2779,6 +2796,14 @@ class ApplicationService:
         include_candidates: bool = False,
         limit: int = 20,
     ) -> list[Memory]:
+        if self.memory_plugin_mode:
+            if self.memory_manager is None and self.memory_manager_factory is not None:
+                self.memory_manager = self.memory_manager_factory()
+            if self.memory_manager is None:
+                return []
+            return self.memory_manager.compat_query(
+                query, project_scope, snapshot, include_candidates, limit
+            )
         scope = parse_memory_scope(snapshot.memory_scope)
         requested_kinds: tuple[MemoryKind, ...]
         if kinds is None:
@@ -2844,6 +2869,8 @@ class ApplicationService:
         allow_conservative_activation: bool = False,
         **changes: Any,
     ) -> Memory:
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
         current = self.store.get_memory(memory_id)
         self._authorize_memory(
             snapshot,
@@ -2896,6 +2923,8 @@ class ApplicationService:
         project_scope: str | None = None,
     ) -> Memory:
         """Explicitly activate a candidate after a human or trusted caller confirms it."""
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
         current = self.store.get_memory(memory_id)
         self._authorize_memory(
@@ -2919,6 +2948,8 @@ class ApplicationService:
         allow_conservative_activation: bool = False,
     ) -> Memory:
         """Activate a candidate through explicit confirmation or the safe rule."""
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
         current = self.store.get_memory(memory_id)
         self._authorize_memory(
@@ -2945,6 +2976,8 @@ class ApplicationService:
         session_id: str | None = None,
         project_scope: str | None = None,
     ) -> Memory:
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
         current = self.store.get_memory(memory_id)
         self._authorize_memory(
             snapshot,
@@ -3306,6 +3339,17 @@ class ApplicationService:
                 policy=session.role_snapshot.tool_policy,
             )
             normalized_workspace = str(Path(workspace).resolve())
+            if (
+                self.memory_plugin_mode
+                and self.memory_manager is None
+                and self.memory_manager_factory
+            ):
+                self.memory_manager = self.memory_manager_factory()
+            skill_context = (
+                self.memory_manager.begin_skill_run(normalized_workspace, agent.id)
+                if self.memory_manager
+                else ""
+            )
             context_composer = PersistentContextComposer(
                 store=self.store,
                 session=session,
@@ -3411,6 +3455,7 @@ class ApplicationService:
             snapshot=session.role_snapshot,
             user_message=user_message,
             approval_callback=wait_for_approval,
+            supplementary_context=skill_context,
         )
         deadline = asyncio.get_running_loop().time() + session.role_snapshot.budget.timeout_seconds
         final_status = AgentStatus.FAILED
@@ -3577,6 +3622,8 @@ class ApplicationService:
             finally:
                 # Cancellation can interrupt any await above, including cleanup.
                 # Preserve the terminal state before releasing the durable lease.
+                if self.memory_manager is not None:
+                    self.memory_manager.release_skill_run(agent.id)
                 self.store.update_agent_status(agent.id, final_status)
                 if self._cancellations.get(session.id) is cancellation:
                     self._cancellations.pop(session.id, None)

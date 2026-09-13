@@ -1,0 +1,10 @@
+{
+  "existing_matches_regeneration": true,
+  "second_generation_identical": true,
+  "sha256": {
+    "sdk/protocol/schema/operant-b2-3.openapi.json": "15c52785149350eeeef9811cbd357c6c297cab64be211860d3963e5fa4091e5d",
+    "sdk/protocol/schema/operant-b2-3.openapi.sha256": "e8aca90666f8d5ef111aa8f210a06fbe81c23dfc736aee33cfdcd16eb9312dd6",
+    "sdk/python_client/b2_3_generated.py": "c6f644737e6adfe51d568f3c3620b10910532ea7a50dbdec0b0b5e61674ac0a8",
+    "sdk/typescript-client/b2_3.generated.ts": "3e38d7b51de4ebc7f0ddea2a1a8b122027fe1b6ce5925f8bf471ec25358a880f"
+  }
+}

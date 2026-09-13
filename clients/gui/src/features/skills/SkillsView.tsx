@@ -28,10 +28,11 @@ import { useDemo } from '../../demo/DemoContext';
 import type { DemoSkill } from '../../demo/types';
 import { usePhase45 } from '../../live45/Phase45Context';
 import type { LiveSkillCandidate } from '../../live45/phase45Adapter';
+import { LiveManagementView } from '../management/LiveManagementView';
 
 export const SkillsView: React.FC = () => {
   const { clientMode } = useOperant();
-  return clientMode === 'live' ? <LiveSkillsView /> : <DemoSkillsView />;
+  return clientMode === 'live' ? <LiveManagementView initialTab="skills" /> : <DemoSkillsView />;
 };
 
 const DemoSkillsView: React.FC = () => {
@@ -892,7 +893,8 @@ const DemoSkillsView: React.FC = () => {
   );
 };
 
-const LiveSkillsView: React.FC = () => {
+/** Legacy Phase 4/5 discovery surface retained for callers that need candidate scanning. */
+export const LiveSkillsView: React.FC = () => {
   const { connectionStatus } = useOperant();
   const { phase, skills, skillIssues, error, actionLabel, refresh, discoverSkills } = usePhase45();
   const [query, setQuery] = useState('');

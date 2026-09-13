@@ -1,0 +1,1796 @@
+......F..............................................................F.F [  8%]
+........................................................................ [ 16%]
+.s.............F.FF.F................................................... [ 24%]
+..............................................................FFFFF.F... [ 33%]
+..................................FFFFF..FF............................. [ 41%]
+.........................F....F...............FFFFFFFFFFF............... [ 49%]
+........F.....................FF........................................ [ 58%]
+........................................................................ [ 66%]
+.............F.F...................F.................................... [ 74%]
+........................................................................ [ 83%]
+..............FFFF...................................................... [ 91%]
+........................................................................ [ 99%]
+...                                                                      [100%]
+=================================== FAILURES ===================================
+____________ test_registry_crud_default_roles_and_snapshot_override ____________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_registry_crud_default_rol0')
+
+    def test_registry_crud_default_roles_and_snapshot_override(tmp_path: Path) -> None:
+        with TestClient(create_app(tmp_path / "api.sqlite3")) as client:
+            model_payload = {
+                "name": "relay",
+                "model_id": "planner-id",
+                "base_url": "https://relay.example.com/v1",
+                "secret_ref": "OPERANT_TEST_KEY",
+            }
+            model = client.post("/v1/models", json=model_payload)
+            assert model.status_code == 201
+            model_id = model.json()["id"]
+    
+            patched = client.patch(
+                f"/v1/models/{model_id}",
+                json={"name": "relay-updated"},
+            )
+            assert patched.status_code == 200
+            assert patched.json()["name"] == "relay-updated"
+    
+            seeded = client.post(
+                "/v1/roles/seed-defaults",
+                json={
+                    "planner_model_profile_id": model_id,
+                    "coder_model_profile_id": model_id,
+                    "reviewer_model_profile_id": model_id,
+                },
+            )
+            assert seeded.status_code == 200
+            assert len(seeded.json()) == 5
+    
+            session = client.post(
+                "/v1/sessions",
+                json={
+                    "role_id": "role_planner",
+                    "effort": "high",
+                    "budget_overrides": {"timeout_seconds": 17},
+                },
+            )
+            assert session.status_code == 201
+            snapshot = session.json()["role_snapshot"]
+            assert snapshot["role_id"] == "role_planner"
+            assert snapshot["overrides"]["effort_overridden"]
+            assert snapshot["budget"]["timeout_seconds"] == 17
+    
+            updated_role = client.patch(
+                "/v1/roles/role_planner",
+                json={"system_prompt": "A new prompt."},
+            )
+            assert updated_role.status_code == 200
+            assert updated_role.json()["version"] == 2
+    
+            old_session = client.get(f"/v1/sessions/{session.json()['id']}").json()
+            assert old_session["role_snapshot"]["role_version"] == 1
+            assert old_session["role_snapshot"]["system_prompt"] != "A new prompt."
+    
+            coder_session = client.post("/v1/sessions", json={"role_id": "role_coder"}).json()
+            memory = client.post(
+                "/v1/memories",
+                json={
+                    "session_id": coder_session["id"],
+                    "kind": "project",
+                    "content": "Use pytest for calculator verification.",
+                    "project_scope": str(tmp_path),
+                    "source_task": "Task A pytest verification",
+                    "confidence": 0.95,
+                    "confirmed": True,
+                },
+            )
+>           assert memory.status_code == 201
+E           assert 400 == 201
+E            +  where 400 = <Response [400 Bad Request]>.status_code
+
+tests/test_api.py:85: AssertionError
+___________________ test_v14_manifest_is_frozen_and_additive ___________________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v14_manifest_is_frozen_an0')
+
+    def test_v14_manifest_is_frozen_and_additive(tmp_path: Path) -> None:
+        database = tmp_path / "beta.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(target_version=13) == 13
+        v13_manifest = SQLiteStore._migration_manifest(13)
+    
+>       assert store.migrate() == 14
+E       assert 15 == 14
+E        +  where 15 = migrate()
+E        +    where migrate = <operant.persistence.sqlite.SQLiteStore object at 0x11a1b1860>.migrate
+
+tests/test_beta_contract_migration.py:75: AssertionError
+___________________ test_v14_rollback_requires_empty_tables ____________________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v14_rollback_requires_emp0')
+
+    def test_v14_rollback_requires_empty_tables(tmp_path: Path) -> None:
+        empty = SQLiteStore(tmp_path / "empty.sqlite3")
+        empty.initialize()
+>       assert empty.rollback(13, isolated=True) == 13
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_beta_contract_migration.py:163: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/operant/persistence/sqlite.py:466: in rollback
+    return self.migrate(target_version, _isolated_rollback=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/operant/persistence/sqlite.py:449: in migrate
+    self._rollback_migration(connection, migration)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.persistence.sqlite.SQLiteStore object at 0x11a7cf6b0>
+connection = <sqlite3.Connection object at 0x118e1ad40>
+migration = Migration(version=15, name='b23_memory_lifecycle', manifest='{"checks":{"approval_decisions":["approved IN (0, 1)"],"a...t at 0x11a7cf6b0>>, downgrade=None, frozen_checksum='60236e2909781b35d4bb10436baf8d8e9e6161331d5da40c904485ef2d76a585')
+
+    def _rollback_migration(
+        self,
+        connection: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        if migration.downgrade is None:
+>           raise MigrationError(f"schema migration {migration.version} cannot be rolled back")
+E           operant.persistence.sqlite.MigrationError: schema migration 15 cannot be rolled back
+
+src/operant/persistence/sqlite.py:890: MigrationError
+____ test_unversioned_week1_and_full_week1_to_4_databases_upgrade_with_data ____
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_unversioned_week1_and_ful0')
+
+    def test_unversioned_week1_and_full_week1_to_4_databases_upgrade_with_data(
+        tmp_path: Path,
+    ) -> None:
+        week1_path = tmp_path / "week1.sqlite3"
+        profile = ModelProfile(
+            id="model_legacy",
+            name="legacy",
+            model_id="legacy-model",
+            base_url="https://example.invalid/v1",
+            secret_ref="OPERANT_LEGACY_KEY",
+        )
+        with sqlite3.connect(week1_path) as connection:
+            connection.executescript(WEEK1_SCHEMA)
+            connection.execute(
+                "INSERT INTO model_profiles(id, body, created_at) VALUES (?, ?, ?)",
+                (profile.id, profile.model_dump_json(), profile.created_at.isoformat()),
+            )
+    
+        week1 = SQLiteStore(week1_path)
+        assert week1.schema_version() == 0
+        week1.initialize()
+>       assert week1.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11d50b110>.schema_version
+
+tests/test_m0_persistence.py:94: AssertionError
+_ test_migrations_are_atomic_reject_corruption_and_support_explicit_empty_rollback _
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_migrations_are_atomic_rej0')
+
+    def test_migrations_are_atomic_reject_corruption_and_support_explicit_empty_rollback(
+        tmp_path: Path,
+    ) -> None:
+        atomic_path = tmp_path / "atomic.sqlite3"
+        SQLiteStore(atomic_path).migrate(2)
+    
+        class BrokenV3Store(SQLiteStore):
+            def _upgrade_v3(self, connection: sqlite3.Connection) -> None:
+                super()._upgrade_v3(connection)
+                raise RuntimeError("injected migration failure")
+    
+        with pytest.raises(RuntimeError, match="injected migration failure"):
+            BrokenV3Store(atomic_path).migrate()
+        assert SQLiteStore(atomic_path).schema_version() == 2
+        with sqlite3.connect(atomic_path) as connection:
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='command_executions'"
+                ).fetchone()
+                is None
+            )
+    
+        empty_atomic_path = tmp_path / "empty-atomic.sqlite3"
+        with pytest.raises(RuntimeError, match="injected migration failure"):
+            BrokenV3Store(empty_atomic_path).migrate()
+        with sqlite3.connect(empty_atomic_path) as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+        assert tables == set()
+    
+        store = SQLiteStore(tmp_path / "rollback.sqlite3")
+        store.initialize()
+>       assert store.rollback(2, isolated=True) == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_m0_persistence.py:258: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/operant/persistence/sqlite.py:466: in rollback
+    return self.migrate(target_version, _isolated_rollback=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/operant/persistence/sqlite.py:449: in migrate
+    self._rollback_migration(connection, migration)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.persistence.sqlite.SQLiteStore object at 0x12834bf20>
+connection = <sqlite3.Connection object at 0x11b84d4e0>
+migration = Migration(version=15, name='b23_memory_lifecycle', manifest='{"checks":{"approval_decisions":["approved IN (0, 1)"],"a...t at 0x12834bf20>>, downgrade=None, frozen_checksum='60236e2909781b35d4bb10436baf8d8e9e6161331d5da40c904485ef2d76a585')
+
+    def _rollback_migration(
+        self,
+        connection: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        if migration.downgrade is None:
+>           raise MigrationError(f"schema migration {migration.version} cannot be rolled back")
+E           operant.persistence.sqlite.MigrationError: schema migration 15 cannot be rolled back
+
+src/operant/persistence/sqlite.py:890: MigrationError
+____________ test_concurrent_migration_to_same_target_is_repeatable ____________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_concurrent_migration_to_s0')
+
+    def test_concurrent_migration_to_same_target_is_repeatable(tmp_path: Path) -> None:
+        path = tmp_path / "concurrent.sqlite3"
+    
+        def migrate() -> int:
+            return SQLiteStore(path).migrate()
+    
+        with ThreadPoolExecutor(max_workers=2) as executor:
+>           assert list(executor.map(lambda _item: migrate(), range(2))) == [14, 14]
+E           assert [15, 15] == [14, 14]
+E             
+E             At index 0 diff: 15 != 14
+E             Use -v to get more diff
+
+tests/test_m0_persistence.py:301: AssertionError
+_ test_exact_preview_histories_upgrade_but_unknown_or_drifted_preview_is_rejected _
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_exact_preview_histories_u0')
+
+    def test_exact_preview_histories_upgrade_but_unknown_or_drifted_preview_is_rejected(
+        tmp_path: Path,
+    ) -> None:
+        preview_path = tmp_path / "known-preview.sqlite3"
+        preview = SQLiteStore(preview_path)
+        preview.migrate(3)
+        profile = preview.add_model_profile(
+            ModelProfile(
+                id="model_preview_preserved",
+                name="preview-preserved",
+                model_id="preview-preserved",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_PREVIEW_KEY",
+            )
+        )
+        with sqlite3.connect(preview_path) as connection:
+            connection.execute("DROP INDEX idx_evaluation_run_events_run_sequence")
+            connection.execute("DROP TABLE evaluation_run_events")
+            for version, name, checksum in SQLiteStore._THREE_STEP_PREVIEW_HISTORY:
+                connection.execute(
+                    "UPDATE schema_migrations SET name = ?, checksum = ? WHERE version = ?",
+                    (name, checksum, version),
+                )
+    
+        upgraded = SQLiteStore(preview_path)
+        upgraded.initialize()
+>       assert upgraded.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x12862c7d0>.schema_version
+
+tests/test_m0_persistence.py:381: AssertionError
+__________ test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows[1] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v4_upgrade_to_0')
+starting_version = 1
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4])
+    def test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                id=f"model-from-v{starting_version}",
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_LEGACY_TEST_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11bbea4e0>.schema_version
+
+tests/test_phase1a_persistence.py:131: AssertionError
+__________ test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows[2] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v4_upgrade_to_1')
+starting_version = 2
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4])
+    def test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                id=f"model-from-v{starting_version}",
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_LEGACY_TEST_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11c1504b0>.schema_version
+
+tests/test_phase1a_persistence.py:131: AssertionError
+__________ test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows[3] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v4_upgrade_to_2')
+starting_version = 3
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4])
+    def test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                id=f"model-from-v{starting_version}",
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_LEGACY_TEST_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11c123de0>.schema_version
+
+tests/test_phase1a_persistence.py:131: AssertionError
+__________ test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows[4] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v4_upgrade_to_3')
+starting_version = 4
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4])
+    def test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                id=f"model-from-v{starting_version}",
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_LEGACY_TEST_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11c1504b0>.schema_version
+
+tests/test_phase1a_persistence.py:131: AssertionError
+______ test_v5_migration_failure_is_atomic_and_empty_rollback_is_explicit ______
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v5_migration_failure_is_a0')
+
+    def test_v5_migration_failure_is_atomic_and_empty_rollback_is_explicit(
+        tmp_path: Path,
+    ) -> None:
+        database = tmp_path / "atomic.sqlite3"
+        SQLiteStore(database).migrate(4)
+    
+        class BrokenV5Store(SQLiteStore):
+            def _upgrade_v5(self, connection: sqlite3.Connection) -> None:
+                super()._upgrade_v5(connection)
+                connection.execute("CREATE TABLE injected_failure_marker(id TEXT)")
+                raise RuntimeError("injected v5 failure")
+    
+        with pytest.raises(RuntimeError, match="injected v5 failure"):
+            BrokenV5Store(database).migrate()
+        assert SQLiteStore(database).schema_version() == 4
+        with sqlite3.connect(database) as connection:
+            assert (
+                connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'threads'").fetchone()
+                is None
+            )
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'injected_failure_marker'"
+                ).fetchone()
+                is None
+            )
+    
+        empty = SQLiteStore(tmp_path / "empty-rollback.sqlite3")
+        empty.initialize()
+>       assert empty.rollback(4, isolated=True) == 4
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_phase1a_persistence.py:166: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/operant/persistence/sqlite.py:466: in rollback
+    return self.migrate(target_version, _isolated_rollback=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/operant/persistence/sqlite.py:449: in migrate
+    self._rollback_migration(connection, migration)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.persistence.sqlite.SQLiteStore object at 0x11b6f23f0>
+connection = <sqlite3.Connection object at 0x118985030>
+migration = Migration(version=15, name='b23_memory_lifecycle', manifest='{"checks":{"approval_decisions":["approved IN (0, 1)"],"a...t at 0x11b6f23f0>>, downgrade=None, frozen_checksum='60236e2909781b35d4bb10436baf8d8e9e6161331d5da40c904485ef2d76a585')
+
+    def _rollback_migration(
+        self,
+        connection: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        if migration.downgrade is None:
+>           raise MigrationError(f"schema migration {migration.version} cannot be rolled back")
+E           operant.persistence.sqlite.MigrationError: schema migration 15 cannot be rolled back
+
+src/operant/persistence/sqlite.py:890: MigrationError
+_____ test_v4_session_workflow_event_receipt_and_approval_remain_readable ______
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v4_session_workflow_event0')
+
+    def test_v4_session_workflow_event_receipt_and_approval_remain_readable(
+        tmp_path: Path,
+    ) -> None:
+        store = SQLiteStore(tmp_path / "preserve-v4.sqlite3")
+        store.migrate(4)
+        session, agent, receipt, approval = _seed_action_scope(store)
+        event = store.append_event(
+            Event(
+                session_id=session.id,
+                agent_id=agent.id,
+                event_type="legacy.event",
+                payload={"safe": True},
+            )
+        )
+        workflow = store.create_workflow_run(
+            WorkflowRun(
+                task="Preserve the v4 workflow",
+                workspace=str(tmp_path),
+                planner_role_id="role-planner",
+                coder_role_id="role-coder",
+                reviewer_role_id="role-reviewer",
+            )
+        )
+    
+>       assert store.migrate() == 14
+E       assert 15 == 14
+E        +  where 15 = migrate()
+E        +    where migrate = <operant.persistence.sqlite.SQLiteStore object at 0x11bddff70>.migrate
+
+tests/test_phase1a_persistence.py:233: AssertionError
+______________ test_v1_through_v5_upgrade_to_v6_preserves_rows[1] ______________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v5_upgrade_to_0')
+starting_version = 1
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4, 5])
+    def test_v1_through_v5_upgrade_to_v6_preserves_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_PHASE1B_LEGACY_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11a6e7a70>.schema_version
+
+tests/test_phase1b_persistence.py:355: AssertionError
+______________ test_v1_through_v5_upgrade_to_v6_preserves_rows[2] ______________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v5_upgrade_to_1')
+starting_version = 2
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4, 5])
+    def test_v1_through_v5_upgrade_to_v6_preserves_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_PHASE1B_LEGACY_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11ba548c0>.schema_version
+
+tests/test_phase1b_persistence.py:355: AssertionError
+______________ test_v1_through_v5_upgrade_to_v6_preserves_rows[3] ______________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v5_upgrade_to_2')
+starting_version = 3
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4, 5])
+    def test_v1_through_v5_upgrade_to_v6_preserves_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_PHASE1B_LEGACY_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11a6e5040>.schema_version
+
+tests/test_phase1b_persistence.py:355: AssertionError
+______________ test_v1_through_v5_upgrade_to_v6_preserves_rows[4] ______________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v5_upgrade_to_3')
+starting_version = 4
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4, 5])
+    def test_v1_through_v5_upgrade_to_v6_preserves_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_PHASE1B_LEGACY_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11cdfa080>.schema_version
+
+tests/test_phase1b_persistence.py:355: AssertionError
+______________ test_v1_through_v5_upgrade_to_v6_preserves_rows[5] ______________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v5_upgrade_to_4')
+starting_version = 5
+
+    @pytest.mark.parametrize("starting_version", [1, 2, 3, 4, 5])
+    def test_v1_through_v5_upgrade_to_v6_preserves_rows(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        database = tmp_path / f"from-v{starting_version}.sqlite3"
+        store = SQLiteStore(database)
+        assert store.migrate(starting_version) == starting_version
+        profile = store.add_model_profile(
+            ModelProfile(
+                name=f"from-v{starting_version}",
+                model_id="legacy-model",
+                base_url="https://example.invalid/v1",
+                secret_ref="OPERANT_PHASE1B_LEGACY_KEY",
+            )
+        )
+    
+        store.initialize()
+        store.initialize()
+    
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11a6e7340>.schema_version
+
+tests/test_phase1b_persistence.py:355: AssertionError
+___________ test_v6_failure_is_atomic_and_empty_rollback_is_explicit ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v6_failure_is_atomic_and_0')
+
+    def test_v6_failure_is_atomic_and_empty_rollback_is_explicit(tmp_path: Path) -> None:
+        database = tmp_path / "atomic.sqlite3"
+        SQLiteStore(database).migrate(5)
+    
+        class BrokenV6Store(SQLiteStore):
+            def _upgrade_v6(self, connection: sqlite3.Connection) -> None:
+                super()._upgrade_v6(connection)
+                connection.execute("CREATE TABLE injected_phase1b_failure(id TEXT)")
+                raise RuntimeError("injected v6 failure")
+    
+        with pytest.raises(RuntimeError, match="injected v6 failure"):
+            BrokenV6Store(database).migrate()
+        assert SQLiteStore(database).schema_version() == 5
+        with sqlite3.connect(database) as connection:
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'context_revisions'"
+                ).fetchone()
+                is None
+            )
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'injected_phase1b_failure'"
+                ).fetchone()
+                is None
+            )
+    
+        empty = SQLiteStore(tmp_path / "empty.sqlite3")
+        empty.initialize()
+>       assert empty.rollback(5, isolated=True) == 5
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_phase1b_persistence.py:456: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/operant/persistence/sqlite.py:466: in rollback
+    return self.migrate(target_version, _isolated_rollback=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/operant/persistence/sqlite.py:449: in migrate
+    self._rollback_migration(connection, migration)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.persistence.sqlite.SQLiteStore object at 0x11bd98370>
+connection = <sqlite3.Connection object at 0x11b84d120>
+migration = Migration(version=15, name='b23_memory_lifecycle', manifest='{"checks":{"approval_decisions":["approved IN (0, 1)"],"a...t at 0x11bd98370>>, downgrade=None, frozen_checksum='60236e2909781b35d4bb10436baf8d8e9e6161331d5da40c904485ef2d76a585')
+
+    def _rollback_migration(
+        self,
+        connection: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        if migration.downgrade is None:
+>           raise MigrationError(f"schema migration {migration.version} cannot be rolled back")
+E           operant.persistence.sqlite.MigrationError: schema migration 15 cannot be rolled back
+
+src/operant/persistence/sqlite.py:890: MigrationError
+________ test_concurrent_v6_initialization_and_context_request_identity ________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_concurrent_v6_initializat0')
+
+    def test_concurrent_v6_initialization_and_context_request_identity(tmp_path: Path) -> None:
+        database = tmp_path / "concurrent.sqlite3"
+    
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            versions = list(executor.map(lambda _value: SQLiteStore(database).migrate(), range(3)))
+>       assert versions == [14, 14, 14]
+E       assert [15, 15, 15] == [14, 14, 14]
+E         
+E         At index 0 diff: 15 != 14
+E         Use -v to get more diff
+
+tests/test_phase1b_persistence.py:465: AssertionError
+_________________ test_nonempty_phase1b_tables_refuse_rollback _________________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_nonempty_phase1b_tables_r0')
+
+    def test_nonempty_phase1b_tables_refuse_rollback(tmp_path: Path) -> None:
+        store = SQLiteStore(tmp_path / "rollback.sqlite3")
+        store.initialize()
+        _profile, _role, session, agent = _scope(store)
+        store.append_context_revision(_revision(session.id, agent.id))
+    
+>       with pytest.raises(MigrationError, match="Phase 1B"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'Phase 1B'
+E         Actual message: 'schema migration 15 cannot be rolled back'
+
+tests/test_phase1b_persistence.py:1935: AssertionError
+_____ test_v7_migration_failure_is_atomic_and_nonempty_rollback_is_refused _____
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v7_migration_failure_is_a0')
+
+    def test_v7_migration_failure_is_atomic_and_nonempty_rollback_is_refused(
+        tmp_path: Path,
+    ) -> None:
+        database = tmp_path / "v7-atomic.sqlite3"
+        assert SQLiteStore(database).migrate(6) == 6
+    
+        class BrokenV7Store(SQLiteStore):
+            def _upgrade_v7(self, connection: sqlite3.Connection) -> None:
+                super()._upgrade_v7(connection)
+                connection.execute("CREATE TABLE injected_phase1c_failure(id TEXT)")
+                raise RuntimeError("injected v7 failure")
+    
+        with pytest.raises(RuntimeError, match="injected v7 failure"):
+            BrokenV7Store(database).migrate()
+        assert SQLiteStore(database).schema_version() == 6
+        with sqlite3.connect(database) as connection:
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'retention_policies'"
+                ).fetchone()
+                is None
+            )
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'injected_phase1c_failure'"
+                ).fetchone()
+                is None
+            )
+    
+        upgraded = SQLiteStore(database)
+        upgraded.initialize()
+        upgraded.add_cache_observation(
+            CacheObservation(
+                provider="provider",
+                model="model",
+                hit_status=CacheHitStatus.UNKNOWN,
+            )
+        )
+>       with pytest.raises(MigrationError, match="contain data"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'contain data'
+E         Actual message: 'schema migration 15 cannot be rolled back'
+
+tests/test_phase1c_artifact_retention.py:646: AssertionError
+__________ test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[1] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v7_upgrade_to_0')
+starting_version = 1
+
+    @pytest.mark.parametrize("starting_version", range(1, 8))
+    def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        store = SQLiteStore(tmp_path / f"v{starting_version}.sqlite3")
+        assert store.migrate(starting_version) == starting_version
+        store.initialize()
+        store.initialize()
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11cb23250>.schema_version
+
+tests/test_phase1d_persistence.py:137: AssertionError
+__________ test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[2] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v7_upgrade_to_1')
+starting_version = 2
+
+    @pytest.mark.parametrize("starting_version", range(1, 8))
+    def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        store = SQLiteStore(tmp_path / f"v{starting_version}.sqlite3")
+        assert store.migrate(starting_version) == starting_version
+        store.initialize()
+        store.initialize()
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x1193a1bd0>.schema_version
+
+tests/test_phase1d_persistence.py:137: AssertionError
+__________ test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[3] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v7_upgrade_to_2')
+starting_version = 3
+
+    @pytest.mark.parametrize("starting_version", range(1, 8))
+    def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        store = SQLiteStore(tmp_path / f"v{starting_version}.sqlite3")
+        assert store.migrate(starting_version) == starting_version
+        store.initialize()
+        store.initialize()
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11a2b2530>.schema_version
+
+tests/test_phase1d_persistence.py:137: AssertionError
+__________ test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[4] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v7_upgrade_to_3')
+starting_version = 4
+
+    @pytest.mark.parametrize("starting_version", range(1, 8))
+    def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        store = SQLiteStore(tmp_path / f"v{starting_version}.sqlite3")
+        assert store.migrate(starting_version) == starting_version
+        store.initialize()
+        store.initialize()
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x119cd0780>.schema_version
+
+tests/test_phase1d_persistence.py:137: AssertionError
+__________ test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[5] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v7_upgrade_to_4')
+starting_version = 5
+
+    @pytest.mark.parametrize("starting_version", range(1, 8))
+    def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        store = SQLiteStore(tmp_path / f"v{starting_version}.sqlite3")
+        assert store.migrate(starting_version) == starting_version
+        store.initialize()
+        store.initialize()
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11d517070>.schema_version
+
+tests/test_phase1d_persistence.py:137: AssertionError
+__________ test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[6] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v7_upgrade_to_5')
+starting_version = 6
+
+    @pytest.mark.parametrize("starting_version", range(1, 8))
+    def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        store = SQLiteStore(tmp_path / f"v{starting_version}.sqlite3")
+        assert store.migrate(starting_version) == starting_version
+        store.initialize()
+        store.initialize()
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11cb20410>.schema_version
+
+tests/test_phase1d_persistence.py:137: AssertionError
+__________ test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[7] ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v1_through_v7_upgrade_to_6')
+starting_version = 7
+
+    @pytest.mark.parametrize("starting_version", range(1, 8))
+    def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
+        tmp_path: Path,
+        starting_version: int,
+    ) -> None:
+        store = SQLiteStore(tmp_path / f"v{starting_version}.sqlite3")
+        assert store.migrate(starting_version) == starting_version
+        store.initialize()
+        store.initialize()
+>       assert store.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11cfb6170>.schema_version
+
+tests/test_phase1d_persistence.py:137: AssertionError
+_____ test_v8_failure_is_atomic_and_rollback_requires_empty_phase1d_tables _____
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v8_failure_is_atomic_and_0')
+
+    def test_v8_failure_is_atomic_and_rollback_requires_empty_phase1d_tables(
+        tmp_path: Path,
+    ) -> None:
+        database = tmp_path / "atomic.sqlite3"
+        SQLiteStore(database).migrate(7)
+    
+        class BrokenV8Store(SQLiteStore):
+            def _upgrade_v8(self, connection: sqlite3.Connection) -> None:
+                super()._upgrade_v8(connection)
+                connection.execute("CREATE TABLE injected_phase1d_failure(id TEXT)")
+                raise RuntimeError("injected v8 failure")
+    
+        with pytest.raises(RuntimeError, match="injected v8 failure"):
+            BrokenV8Store(database).migrate()
+        assert SQLiteStore(database).schema_version() == 7
+        with sqlite3.connect(database) as connection:
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'context_baselines'"
+                ).fetchone()
+                is None
+            )
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'injected_phase1d_failure'"
+                ).fetchone()
+                is None
+            )
+    
+        empty = SQLiteStore(tmp_path / "empty-rollback.sqlite3")
+        empty.initialize()
+        _v8_objects, v8_ddl = empty._canonical_schema_objects(8)
+        _v7_objects, v7_ddl = empty._canonical_schema_objects(7)
+>       assert empty.rollback(7, isolated=True) == 7
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_phase1d_persistence.py:173: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/operant/persistence/sqlite.py:466: in rollback
+    return self.migrate(target_version, _isolated_rollback=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/operant/persistence/sqlite.py:449: in migrate
+    self._rollback_migration(connection, migration)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.persistence.sqlite.SQLiteStore object at 0x11bdadd60>
+connection = <sqlite3.Connection object at 0x11b84f970>
+migration = Migration(version=15, name='b23_memory_lifecycle', manifest='{"checks":{"approval_decisions":["approved IN (0, 1)"],"a...t at 0x11bdadd60>>, downgrade=None, frozen_checksum='60236e2909781b35d4bb10436baf8d8e9e6161331d5da40c904485ef2d76a585')
+
+    def _rollback_migration(
+        self,
+        connection: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        if migration.downgrade is None:
+>           raise MigrationError(f"schema migration {migration.version} cannot be rolled back")
+E           operant.persistence.sqlite.MigrationError: schema migration 15 cannot be rolled back
+
+src/operant/persistence/sqlite.py:890: MigrationError
+_ test_exact_phase1d_previews_upgrade_both_context_provenance_guards[preview_history0-True] _
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_exact_phase1d_previews_up0')
+preview_history = ((1, 'week1_base', '08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9'), (2, 'week3_week4_features', 'f...4a4a112490'), (6, 'phase1b_context_composer', '5430fb415059679846e3f0c18a3b6c998573a053b81c1b4ce4a67719f6f60f66'), ...)
+strict_context_guard = True
+
+    @pytest.mark.parametrize(
+        ("preview_history", "strict_context_guard"),
+        (
+            (SQLiteStore._PHASE1D_V8_PREVIEW_HISTORY, True),
+            (SQLiteStore._PHASE1D_V8_CONTEXT_GUARD_PREVIEW_HISTORY, False),
+            (SQLiteStore._PHASE1D_V8_RUN_SCOPE_PREVIEW_HISTORY, False),
+        ),
+    )
+    def test_exact_phase1d_previews_upgrade_both_context_provenance_guards(
+        tmp_path: Path,
+        preview_history: tuple[tuple[int, str, str], ...],
+        strict_context_guard: bool,
+    ) -> None:
+        v7 = SQLiteStore(tmp_path / "v7-trigger-source.sqlite3")
+        v7.migrate(7)
+        with v7._connect() as connection:
+            strict_context_sql = connection.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = 'context_revisions_scope_guard'"
+            ).fetchone()["sql"]
+    
+        database = tmp_path / f"preview-{int(strict_context_guard)}.sqlite3"
+        preview = SQLiteStore(database)
+        preview.migrate(target_version=8)
+        with preview._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            preview._replace_phase1d_prompt_compaction_agent_guard(
+                connection,
+                allow_thread_items_cross_agent=False,
+            )
+            if strict_context_guard:
+                connection.execute("DROP TRIGGER context_revisions_scope_guard")
+                connection.execute(strict_context_sql)
+            for trigger in (
+                "review_runs_scope_guard",
+                "review_runs_identity_guard",
+                "btw_sidecar_runs_scope_guard",
+                "btw_sidecar_runs_identity_guard",
+            ):
+                connection.execute(f'DROP TRIGGER "{trigger}"')
+            for version, name, checksum in preview_history:
+                connection.execute(
+                    "UPDATE schema_migrations SET name = ?, checksum = ? WHERE version = ?",
+                    (name, checksum, version),
+                )
+    
+        upgraded = SQLiteStore(database)
+        upgraded.initialize()
+>       assert upgraded.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11e44c370>.schema_version
+
+tests/test_phase1d_persistence.py:265: AssertionError
+_ test_exact_phase1d_previews_upgrade_both_context_provenance_guards[preview_history1-False] _
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_exact_phase1d_previews_up1')
+preview_history = ((1, 'week1_base', '08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9'), (2, 'week3_week4_features', 'f...4a4a112490'), (6, 'phase1b_context_composer', '5430fb415059679846e3f0c18a3b6c998573a053b81c1b4ce4a67719f6f60f66'), ...)
+strict_context_guard = False
+
+    @pytest.mark.parametrize(
+        ("preview_history", "strict_context_guard"),
+        (
+            (SQLiteStore._PHASE1D_V8_PREVIEW_HISTORY, True),
+            (SQLiteStore._PHASE1D_V8_CONTEXT_GUARD_PREVIEW_HISTORY, False),
+            (SQLiteStore._PHASE1D_V8_RUN_SCOPE_PREVIEW_HISTORY, False),
+        ),
+    )
+    def test_exact_phase1d_previews_upgrade_both_context_provenance_guards(
+        tmp_path: Path,
+        preview_history: tuple[tuple[int, str, str], ...],
+        strict_context_guard: bool,
+    ) -> None:
+        v7 = SQLiteStore(tmp_path / "v7-trigger-source.sqlite3")
+        v7.migrate(7)
+        with v7._connect() as connection:
+            strict_context_sql = connection.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = 'context_revisions_scope_guard'"
+            ).fetchone()["sql"]
+    
+        database = tmp_path / f"preview-{int(strict_context_guard)}.sqlite3"
+        preview = SQLiteStore(database)
+        preview.migrate(target_version=8)
+        with preview._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            preview._replace_phase1d_prompt_compaction_agent_guard(
+                connection,
+                allow_thread_items_cross_agent=False,
+            )
+            if strict_context_guard:
+                connection.execute("DROP TRIGGER context_revisions_scope_guard")
+                connection.execute(strict_context_sql)
+            for trigger in (
+                "review_runs_scope_guard",
+                "review_runs_identity_guard",
+                "btw_sidecar_runs_scope_guard",
+                "btw_sidecar_runs_identity_guard",
+            ):
+                connection.execute(f'DROP TRIGGER "{trigger}"')
+            for version, name, checksum in preview_history:
+                connection.execute(
+                    "UPDATE schema_migrations SET name = ?, checksum = ? WHERE version = ?",
+                    (name, checksum, version),
+                )
+    
+        upgraded = SQLiteStore(database)
+        upgraded.initialize()
+>       assert upgraded.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11e1243c0>.schema_version
+
+tests/test_phase1d_persistence.py:265: AssertionError
+_ test_exact_phase1d_previews_upgrade_both_context_provenance_guards[preview_history2-False] _
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_exact_phase1d_previews_up2')
+preview_history = ((1, 'week1_base', '08c9d964cf48e432baa70c5730e09577c8fd3c3da32ded12a1d06eb6d4af82c9'), (2, 'week3_week4_features', 'f...4a4a112490'), (6, 'phase1b_context_composer', '5430fb415059679846e3f0c18a3b6c998573a053b81c1b4ce4a67719f6f60f66'), ...)
+strict_context_guard = False
+
+    @pytest.mark.parametrize(
+        ("preview_history", "strict_context_guard"),
+        (
+            (SQLiteStore._PHASE1D_V8_PREVIEW_HISTORY, True),
+            (SQLiteStore._PHASE1D_V8_CONTEXT_GUARD_PREVIEW_HISTORY, False),
+            (SQLiteStore._PHASE1D_V8_RUN_SCOPE_PREVIEW_HISTORY, False),
+        ),
+    )
+    def test_exact_phase1d_previews_upgrade_both_context_provenance_guards(
+        tmp_path: Path,
+        preview_history: tuple[tuple[int, str, str], ...],
+        strict_context_guard: bool,
+    ) -> None:
+        v7 = SQLiteStore(tmp_path / "v7-trigger-source.sqlite3")
+        v7.migrate(7)
+        with v7._connect() as connection:
+            strict_context_sql = connection.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = 'context_revisions_scope_guard'"
+            ).fetchone()["sql"]
+    
+        database = tmp_path / f"preview-{int(strict_context_guard)}.sqlite3"
+        preview = SQLiteStore(database)
+        preview.migrate(target_version=8)
+        with preview._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            preview._replace_phase1d_prompt_compaction_agent_guard(
+                connection,
+                allow_thread_items_cross_agent=False,
+            )
+            if strict_context_guard:
+                connection.execute("DROP TRIGGER context_revisions_scope_guard")
+                connection.execute(strict_context_sql)
+            for trigger in (
+                "review_runs_scope_guard",
+                "review_runs_identity_guard",
+                "btw_sidecar_runs_scope_guard",
+                "btw_sidecar_runs_identity_guard",
+            ):
+                connection.execute(f'DROP TRIGGER "{trigger}"')
+            for version, name, checksum in preview_history:
+                connection.execute(
+                    "UPDATE schema_migrations SET name = ?, checksum = ? WHERE version = ?",
+                    (name, checksum, version),
+                )
+    
+        upgraded = SQLiteStore(database)
+        upgraded.initialize()
+>       assert upgraded.schema_version() == 14
+E       assert 15 == 14
+E        +  where 15 = schema_version()
+E        +    where schema_version = <operant.persistence.sqlite.SQLiteStore object at 0x11b33cd20>.schema_version
+
+tests/test_phase1d_persistence.py:265: AssertionError
+________________ test_phase1e_core_loopback_urllib_closed_loop _________________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_phase1e_core_loopback_url0')
+
+    def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
+        """Exercise all eight frozen operations against Core over a real socket."""
+    
+        frozen = _schema()
+        schemas = cast(dict[str, Any], frozen["components"]["schemas"])
+        operation_ids = [
+            operation["operationId"]
+            for path in cast(dict[str, Any], frozen["paths"]).values()
+            for operation in cast(dict[str, Any], path).values()
+        ]
+        assert operation_ids == [
+            "negotiateProtocol",
+            "listProjects",
+            "listWorkspaceFiles",
+            "listThreads",
+            "createSession",
+            "runSessionStream",
+            "listPendingApprovals",
+            "submitApproval",
+        ]
+        assert set(OPERATION_DEFINITIONS) == set(operation_ids)
+    
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "README.txt").write_text("local integration fixture\n", encoding="utf-8")
+        (workspace / "nested").mkdir()
+        (workspace / "nested" / "note.txt").write_text("metadata only\n", encoding="utf-8")
+        database = tmp_path / "phase1e-loopback.sqlite3"
+        provider = _DeterministicProvider()
+        app = create_app(database, artifact_root=tmp_path / "artifacts")
+        service = app.state.operant_service
+        service.provider = cast(ModelProvider, provider)
+        profile = service.add_model_profile(
+            ModelProfile(
+                id="phase1e-local-profile",
+                name="Phase 1E local fixture",
+                model_id="phase1e-local-model",
+                base_url="http://127.0.0.1:9",
+                secret_ref="OPERANT_PHASE1E_UNUSED_KEY",
+            )
+        )
+        role = service.create_role(
+            RolePreset(
+                id="phase1e-local-role",
+                name="Phase 1E local role",
+                system_prompt="Use the deterministic local provider.",
+                model_profile_id=profile.id,
+                tool_policy=ToolPolicy(
+                    allowed_tools=("run_command",),
+                    workspace_write=True,
+                    command_execution=True,
+                ),
+                budget=Budget(max_turns=3, timeout_seconds=20),
+            )
+        )
+        initialization, created = service.initialize_workspace(workspace)
+        assert created is True
+>       with _running_uvicorn(app) as base_url:
+             ^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_phase1e_loopback_integration.py:315: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/Users/bigo/.pyenv/versions/3.13.3/lib/python3.13/contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+app = <fastapi.applications.FastAPI object at 0x119d46c10>
+
+    @contextmanager
+    def _running_uvicorn(app: Any) -> Iterator[str]:
+        """Serve the app on an actual loopback socket for urllib transport tests."""
+    
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+>       listener.bind(("127.0.0.1", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_phase1e_loopback_integration.py:102: PermissionError
+_________ test_v8_upgrades_to_v9_and_empty_v9_rolls_back_in_isolation __________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v8_upgrades_to_v9_and_emp0')
+
+    def test_v8_upgrades_to_v9_and_empty_v9_rolls_back_in_isolation(tmp_path) -> None:
+        path = tmp_path / "operant.db"
+        store = SQLiteStore(path)
+        assert store.migrate(target_version=8) == 8
+>       assert store.migrate() == 14
+E       assert 15 == 14
+E        +  where 15 = migrate()
+E        +    where migrate = <operant.persistence.sqlite.SQLiteStore object at 0x11c728460>.migrate
+
+tests/test_phase23_migration.py:34: AssertionError
+______________________ test_v9_refuses_data_loss_rollback ______________________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v9_refuses_data_loss_roll0')
+
+    def test_v9_refuses_data_loss_rollback(tmp_path) -> None:
+        store = SQLiteStore(tmp_path / "operant.db")
+        store.initialize()
+        GraphRuntime(SQLiteGraphRepository(store)).create_run(
+            WorkflowDefinition(
+                workflow_id="migration.graph",
+                name="migration graph",
+                nodes=(NodeSpec(node_id="artifact", node_kind=NodeKind.ARTIFACT),),
+                status=WorkflowDefinitionStatus.PUBLISHED,
+            )
+        )
+>       with pytest.raises(MigrationError, match="contain data"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'contain data'
+E         Actual message: 'schema migration 15 cannot be rolled back'
+
+tests/test_phase23_migration.py:65: AssertionError
+_________ test_concurrent_v11_initialization_is_serial_and_repeatable __________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_concurrent_v11_initializa0')
+
+    def test_concurrent_v11_initialization_is_serial_and_repeatable(tmp_path: Path) -> None:
+        database = tmp_path / "concurrent.sqlite3"
+    
+        def initialize() -> int:
+            store = SQLiteStore(database)
+            store.initialize()
+            return store.schema_version()
+    
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            versions = list(executor.map(lambda _index: initialize(), range(8)))
+    
+>       assert versions == [14] * 8
+E       assert [15, 15, 15, 15, 15, 15, ...] == [14, 14, 14, 14, 14, 14, ...]
+E         
+E         At index 0 diff: 15 != 14
+E         Use -v to get more diff
+
+tests/test_phase45_migration.py:140: AssertionError
+______________ test_v11_rollback_requires_empty_isolated_database ______________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v11_rollback_requires_emp0')
+
+    def test_v11_rollback_requires_empty_isolated_database(tmp_path: Path) -> None:
+        empty_database = tmp_path / "empty-rollback.sqlite3"
+        empty = SQLiteStore(empty_database)
+        assert empty.migrate(11) == 11
+        with pytest.raises(MigrationError, match="explicitly isolated"):
+            empty.rollback(10)
+        assert empty.rollback(10, isolated=True) == 10
+        assert V11_TABLES.isdisjoint(_table_names(empty_database))
+    
+        populated_database = tmp_path / "populated-rollback.sqlite3"
+        populated = SQLiteStore(populated_database)
+        populated.migrate()
+        with sqlite3.connect(populated_database) as connection:
+            connection.execute(
+                """
+                INSERT INTO skill_candidates(
+                    candidate_id, root_ref, relative_directory, name, description,
+                    manifest_sha256, snapshot_json, trust_status, discovered_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "skill:test",
+                    "OPERANT_SKILL_ROOT",
+                    "test",
+                    "test",
+                    "test candidate",
+                    "a" * 64,
+                    "{}",
+                    "untrusted_candidate",
+                    "2026-09-03T00:00:00+00:00",
+                ),
+            )
+>       with pytest.raises(MigrationError, match="Phase 5A tables"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'Phase 5A tables'
+E         Actual message: 'schema migration 15 cannot be rolled back'
+
+tests/test_phase45_migration.py:199: AssertionError
+_______________ test_v13_rollback_requires_empty_phase56_tables ________________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_v13_rollback_requires_emp0')
+
+    def test_v13_rollback_requires_empty_phase56_tables(tmp_path: Path) -> None:
+        empty = SQLiteStore(tmp_path / "empty.sqlite3")
+        empty.initialize()
+>       assert empty.rollback(12, isolated=True) == 12
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_phase56_contract_migration.py:148: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/operant/persistence/sqlite.py:466: in rollback
+    return self.migrate(target_version, _isolated_rollback=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/operant/persistence/sqlite.py:449: in migrate
+    self._rollback_migration(connection, migration)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.persistence.sqlite.SQLiteStore object at 0x12846d900>
+connection = <sqlite3.Connection object at 0x11bb4ec50>
+migration = Migration(version=15, name='b23_memory_lifecycle', manifest='{"checks":{"approval_decisions":["approved IN (0, 1)"],"a...t at 0x12846d900>>, downgrade=None, frozen_checksum='60236e2909781b35d4bb10436baf8d8e9e6161331d5da40c904485ef2d76a585')
+
+    def _rollback_migration(
+        self,
+        connection: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        if migration.downgrade is None:
+>           raise MigrationError(f"schema migration {migration.version} cannot be rolled back")
+E           operant.persistence.sqlite.MigrationError: schema migration 15 cannot be rolled back
+
+src/operant/persistence/sqlite.py:890: MigrationError
+_______ test_isolated_stdio_reuses_process_and_calls_restricted_host_api _______
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_isolated_stdio_reuses_pro0')
+
+    @pytest.mark.asyncio
+    async def test_isolated_stdio_reuses_process_and_calls_restricted_host_api(tmp_path: Path) -> None:
+        package, manifest, certification = _stdio_package(tmp_path)
+        registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+        installation = registry.install(manifest, package, certification=certification)
+        calls: list[str] = []
+    
+        def read_source(request):
+            calls.append(request.source.source_id)
+            return HostReadResult(source=request.source, text="source body", truncated=False)
+    
+        # Unit test transport with a deterministic runner shim.  Platform sandbox
+        # admission itself is covered by SandboxProbe and is exercised separately
+        # on macOS with the real /usr/bin/sandbox-exec binary.
+        runner = tmp_path / "sandbox-runner"
+        runner.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, sys\n"
+            "args = sys.argv\n"
+            "index = args.index('-p')\n"
+            "os.execv(args[index + 2], args[index + 3:])\n",
+            encoding="utf-8",
+        )
+        runner.chmod(0o755)
+    
+        class TestProbe(SandboxProbe):
+            def check(self, **kwargs):
+                return SandboxEvidence(
+                    evidence_ref="test-sandbox", profile="ignored", runner=str(runner)
+                )
+    
+        host = PluginHost(
+            registry,
+            callbacks=HostCallbacks(
+                read_source=read_source,
+                authorize_source=lambda context, ref: ref == source and context.scope == lease.scope,
+            ),
+            sandbox_probe=TestProbe(),
+        )
+        binding = host.bind(installation.installation_id)
+        host.enable(binding.binding_id)
+        admission = await host.start(installation.installation_id, mode="isolated")
+        assert admission.mode == "isolated"
+        lease = host.start_run(
+            binding.binding_id,
+            run_id="run-stdio",
+            scope=RunScope(
+                kind="run",
+                project_id="project-1",
+                workspace_id="workspace-1",
+                run_id="run-stdio",
+                writer_id=None,
+            ),
+        )
+        context = RpcContext(
+            sdk_version="operant-memory-sdk.v1",
+            request_id="stdio-request",
+            installation_id=lease.installation_id,
+            dataset_id=lease.dataset_id,
+            scope=lease.scope,
+            deadline=utc_now() + timedelta(seconds=30),
+            cancel_token="stdio-cancel",
+            idempotency_key="stdio-idempotency",
+            request_digest="c" * 64,
+            binding_epoch=lease.binding_epoch,
+            permission_epoch=lease.permission_epoch,
+            lease_fencing=lease.lease_fencing,
+        )
+        source = SourceRef(
+            source_type="item",
+            source_id="source-1",
+            revision=1,
+            content_digest="d" * 64,
+            scope=lease.scope,
+            permission_epoch=lease.permission_epoch,
+            availability="available",
+        )
+>       result = await host.invoke(
+            lease,
+            "extract",
+            SourceBatch(context=context, sources=(source,), source_watermark="1"),
+        )
+
+tests/test_plugin_host_stdio.py:156: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/operant/plugins/host.py:575: in invoke
+    result = task.result()
+             ^^^^^^^^^^^^^
+src/operant/plugins/protocol.py:1294: in invoke
+    response = await self._read_until_response(rpc_id, host)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.plugins.protocol.StdioPluginEngine object at 0x12980aa50>
+rpc_id = 1
+host = <operant.plugins.protocol.RestrictedHostApi object at 0x11ae0f1d0>
+
+    async def _read_until_response(self, rpc_id: int, host: RestrictedHostApi) -> dict[str, Any]:
+        process = self.process
+        if process is None or process.stdout is None:
+            raise PackageUnavailableError("stdio plugin stdout is unavailable")
+        while True:
+            if host._cancel_event.is_set():
+                raise CancellationError()
+            try:
+                line = await asyncio.wait_for(
+                    process.stdout.readline(), self.limits.timeout_seconds
+                )
+            except asyncio.TimeoutError as exc:
+                raise DeadlineExceededError() from exc
+            if self._resource_error is not None:
+>               raise self._resource_error
+E               operant.plugins.protocol.PackageUnavailableError: resource monitor unavailable
+
+src/operant/plugins/protocol.py:1337: PackageUnavailableError
+_______ test_process_resource_overrun_is_stopped_without_an_rpc[memory] ________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_process_resource_overrun_0')
+kind = 'memory'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kind", ["memory", "cpu", "idle"])
+    async def test_process_resource_overrun_is_stopped_without_an_rpc(
+        tmp_path: Path, kind: str
+    ) -> None:
+        """Real resource enforcement; sandbox transport shim is not isolation evidence."""
+        import asyncio
+        import sys
+    
+        from operant.plugins import (
+            HostBudget,
+            PluginError,
+            SandboxEvidence,
+            SandboxProbe,
+            StdioPluginEngine,
+        )
+    
+        runner = tmp_path / "runner"
+        runner.write_text(
+            "#!/usr/bin/env python3\nimport os,sys\n"
+            "a=sys.argv; i=a.index('-p'); os.execv(a[i+2],a[i+3:])\n"
+        )
+        runner.chmod(0o755)
+        worker = tmp_path / "worker.py"
+        worker.write_text(
+            {
+                "memory": "import time\ndata=bytearray(64*1024*1024)\ntime.sleep(30)\n",
+                "cpu": "while True: pass\n",
+                "idle": "import time\ntime.sleep(30)\n",
+            }[kind]
+        )
+    
+        class Probe(SandboxProbe):
+            def check(self, **kwargs):
+                return SandboxEvidence(
+                    evidence_ref="unit-resource-probe", profile="ignored", runner=str(runner)
+                )
+    
+        engine = StdioPluginEngine(
+            argv=[sys.executable, "-I", "-S", str(worker)],
+            package_root=tmp_path,
+            mode="isolated",
+            sandbox_probe=Probe(),
+            data_root=tmp_path,
+            state_root=tmp_path,
+            logs_root=tmp_path,
+            tmp_root=tmp_path,
+            limits=HostBudget(
+                memory_mb=24,
+                max_cpu_seconds=0.01 if kind == "cpu" else 5,
+                max_idle_seconds=0.1 if kind == "idle" else 5,
+            ),
+        )
+        await engine.start()
+        process = engine.process
+        assert process is not None
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+            assert process.returncode != 0
+            with pytest.raises(PluginError) as error:
+                await engine.start()
+>           assert error.value.code == ("deadline_exceeded" if kind == "idle" else "budget_exceeded")
+E           AssertionError: assert 'package_unavailable' == 'budget_exceeded'
+E             
+E             - budget_exceeded
+E             + package_unavailable
+
+tests/test_plugin_host_stdio.py:227: AssertionError
+_________ test_process_resource_overrun_is_stopped_without_an_rpc[cpu] _________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_process_resource_overrun_1')
+kind = 'cpu'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kind", ["memory", "cpu", "idle"])
+    async def test_process_resource_overrun_is_stopped_without_an_rpc(
+        tmp_path: Path, kind: str
+    ) -> None:
+        """Real resource enforcement; sandbox transport shim is not isolation evidence."""
+        import asyncio
+        import sys
+    
+        from operant.plugins import (
+            HostBudget,
+            PluginError,
+            SandboxEvidence,
+            SandboxProbe,
+            StdioPluginEngine,
+        )
+    
+        runner = tmp_path / "runner"
+        runner.write_text(
+            "#!/usr/bin/env python3\nimport os,sys\n"
+            "a=sys.argv; i=a.index('-p'); os.execv(a[i+2],a[i+3:])\n"
+        )
+        runner.chmod(0o755)
+        worker = tmp_path / "worker.py"
+        worker.write_text(
+            {
+                "memory": "import time\ndata=bytearray(64*1024*1024)\ntime.sleep(30)\n",
+                "cpu": "while True: pass\n",
+                "idle": "import time\ntime.sleep(30)\n",
+            }[kind]
+        )
+    
+        class Probe(SandboxProbe):
+            def check(self, **kwargs):
+                return SandboxEvidence(
+                    evidence_ref="unit-resource-probe", profile="ignored", runner=str(runner)
+                )
+    
+        engine = StdioPluginEngine(
+            argv=[sys.executable, "-I", "-S", str(worker)],
+            package_root=tmp_path,
+            mode="isolated",
+            sandbox_probe=Probe(),
+            data_root=tmp_path,
+            state_root=tmp_path,
+            logs_root=tmp_path,
+            tmp_root=tmp_path,
+            limits=HostBudget(
+                memory_mb=24,
+                max_cpu_seconds=0.01 if kind == "cpu" else 5,
+                max_idle_seconds=0.1 if kind == "idle" else 5,
+            ),
+        )
+        await engine.start()
+        process = engine.process
+        assert process is not None
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+            assert process.returncode != 0
+            with pytest.raises(PluginError) as error:
+                await engine.start()
+>           assert error.value.code == ("deadline_exceeded" if kind == "idle" else "budget_exceeded")
+E           AssertionError: assert 'package_unavailable' == 'budget_exceeded'
+E             
+E             - budget_exceeded
+E             + package_unavailable
+
+tests/test_plugin_host_stdio.py:227: AssertionError
+________ test_process_resource_overrun_is_stopped_without_an_rpc[idle] _________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-166/test_process_resource_overrun_2')
+kind = 'idle'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kind", ["memory", "cpu", "idle"])
+    async def test_process_resource_overrun_is_stopped_without_an_rpc(
+        tmp_path: Path, kind: str
+    ) -> None:
+        """Real resource enforcement; sandbox transport shim is not isolation evidence."""
+        import asyncio
+        import sys
+    
+        from operant.plugins import (
+            HostBudget,
+            PluginError,
+            SandboxEvidence,
+            SandboxProbe,
+            StdioPluginEngine,
+        )
+    
+        runner = tmp_path / "runner"
+        runner.write_text(
+            "#!/usr/bin/env python3\nimport os,sys\n"
+            "a=sys.argv; i=a.index('-p'); os.execv(a[i+2],a[i+3:])\n"
+        )
+        runner.chmod(0o755)
+        worker = tmp_path / "worker.py"
+        worker.write_text(
+            {
+                "memory": "import time\ndata=bytearray(64*1024*1024)\ntime.sleep(30)\n",
+                "cpu": "while True: pass\n",
+                "idle": "import time\ntime.sleep(30)\n",
+            }[kind]
+        )
+    
+        class Probe(SandboxProbe):
+            def check(self, **kwargs):
+                return SandboxEvidence(
+                    evidence_ref="unit-resource-probe", profile="ignored", runner=str(runner)
+                )
+    
+        engine = StdioPluginEngine(
+            argv=[sys.executable, "-I", "-S", str(worker)],
+            package_root=tmp_path,
+            mode="isolated",
+            sandbox_probe=Probe(),
+            data_root=tmp_path,
+            state_root=tmp_path,
+            logs_root=tmp_path,
+            tmp_root=tmp_path,
+            limits=HostBudget(
+                memory_mb=24,
+                max_cpu_seconds=0.01 if kind == "cpu" else 5,
+                max_idle_seconds=0.1 if kind == "idle" else 5,
+            ),
+        )
+        await engine.start()
+        process = engine.process
+        assert process is not None
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+            assert process.returncode != 0
+            with pytest.raises(PluginError) as error:
+                await engine.start()
+>           assert error.value.code == ("deadline_exceeded" if kind == "idle" else "budget_exceeded")
+E           AssertionError: assert 'package_unavailable' == 'deadline_exceeded'
+E             
+E             - deadline_exceeded
+E             + package_unavailable
+
+tests/test_plugin_host_stdio.py:227: AssertionError
+=============================== warnings summary ===============================
+../operant-b2-2/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1
+  /private/tmp/operant-b2-2/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_api.py::test_registry_crud_default_roles_and_snapshot_override
+FAILED tests/test_beta_contract_migration.py::test_v14_manifest_is_frozen_and_additive
+FAILED tests/test_beta_contract_migration.py::test_v14_rollback_requires_empty_tables
+FAILED tests/test_m0_persistence.py::test_unversioned_week1_and_full_week1_to_4_databases_upgrade_with_data
+FAILED tests/test_m0_persistence.py::test_migrations_are_atomic_reject_corruption_and_support_explicit_empty_rollback
+FAILED tests/test_m0_persistence.py::test_concurrent_migration_to_same_target_is_repeatable
+FAILED tests/test_m0_persistence.py::test_exact_preview_histories_upgrade_but_unknown_or_drifted_preview_is_rejected
+FAILED tests/test_phase1a_persistence.py::test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows[1]
+FAILED tests/test_phase1a_persistence.py::test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows[2]
+FAILED tests/test_phase1a_persistence.py::test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows[3]
+FAILED tests/test_phase1a_persistence.py::test_v1_through_v4_upgrade_to_v5_preserves_legacy_rows[4]
+FAILED tests/test_phase1a_persistence.py::test_v5_migration_failure_is_atomic_and_empty_rollback_is_explicit
+FAILED tests/test_phase1a_persistence.py::test_v4_session_workflow_event_receipt_and_approval_remain_readable
+FAILED tests/test_phase1b_persistence.py::test_v1_through_v5_upgrade_to_v6_preserves_rows[1]
+FAILED tests/test_phase1b_persistence.py::test_v1_through_v5_upgrade_to_v6_preserves_rows[2]
+FAILED tests/test_phase1b_persistence.py::test_v1_through_v5_upgrade_to_v6_preserves_rows[3]
+FAILED tests/test_phase1b_persistence.py::test_v1_through_v5_upgrade_to_v6_preserves_rows[4]
+FAILED tests/test_phase1b_persistence.py::test_v1_through_v5_upgrade_to_v6_preserves_rows[5]
+FAILED tests/test_phase1b_persistence.py::test_v6_failure_is_atomic_and_empty_rollback_is_explicit
+FAILED tests/test_phase1b_persistence.py::test_concurrent_v6_initialization_and_context_request_identity
+FAILED tests/test_phase1b_persistence.py::test_nonempty_phase1b_tables_refuse_rollback
+FAILED tests/test_phase1c_artifact_retention.py::test_v7_migration_failure_is_atomic_and_nonempty_rollback_is_refused
+FAILED tests/test_phase1d_persistence.py::test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[1]
+FAILED tests/test_phase1d_persistence.py::test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[2]
+FAILED tests/test_phase1d_persistence.py::test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[3]
+FAILED tests/test_phase1d_persistence.py::test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[4]
+FAILED tests/test_phase1d_persistence.py::test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[5]
+FAILED tests/test_phase1d_persistence.py::test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[6]
+FAILED tests/test_phase1d_persistence.py::test_v1_through_v7_upgrade_to_v8_and_repeat_initialize[7]
+FAILED tests/test_phase1d_persistence.py::test_v8_failure_is_atomic_and_rollback_requires_empty_phase1d_tables
+FAILED tests/test_phase1d_persistence.py::test_exact_phase1d_previews_upgrade_both_context_provenance_guards[preview_history0-True]
+FAILED tests/test_phase1d_persistence.py::test_exact_phase1d_previews_upgrade_both_context_provenance_guards[preview_history1-False]
+FAILED tests/test_phase1d_persistence.py::test_exact_phase1d_previews_upgrade_both_context_provenance_guards[preview_history2-False]
+FAILED tests/test_phase1e_loopback_integration.py::test_phase1e_core_loopback_urllib_closed_loop
+FAILED tests/test_phase23_migration.py::test_v8_upgrades_to_v9_and_empty_v9_rolls_back_in_isolation
+FAILED tests/test_phase23_migration.py::test_v9_refuses_data_loss_rollback - ...
+FAILED tests/test_phase45_migration.py::test_concurrent_v11_initialization_is_serial_and_repeatable
+FAILED tests/test_phase45_migration.py::test_v11_rollback_requires_empty_isolated_database
+FAILED tests/test_phase56_contract_migration.py::test_v13_rollback_requires_empty_phase56_tables
+FAILED tests/test_plugin_host_stdio.py::test_isolated_stdio_reuses_process_and_calls_restricted_host_api
+FAILED tests/test_plugin_host_stdio.py::test_process_resource_overrun_is_stopped_without_an_rpc[memory]
+FAILED tests/test_plugin_host_stdio.py::test_process_resource_overrun_is_stopped_without_an_rpc[cpu]
+FAILED tests/test_plugin_host_stdio.py::test_process_resource_overrun_is_stopped_without_an_rpc[idle]

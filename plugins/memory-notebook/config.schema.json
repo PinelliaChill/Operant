@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:operant:memory-notebook:config.v1",
+  "title": "memory-notebook-config.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "memory-notebook-config.v1"},
+    "match_mode": {"const": "exact"},
+    "case_sensitive": {"type": "boolean"},
+    "separator": {"enum": ["=", ":"]},
+    "max_pairs_per_source": {"type": "integer", "minimum": 1, "maximum": 1000}
+  },
+  "required": ["schema_version", "match_mode", "case_sensitive", "separator", "max_pairs_per_source"]
+}

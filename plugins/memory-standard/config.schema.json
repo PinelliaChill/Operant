@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:operant:memory-standard:config.v1",
+  "title": "memory-standard-config.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "memory-standard-config.v1"},
+    "normalization": {"enum": ["collapsed_whitespace", "preserve_lines"]},
+    "max_source_bytes": {"type": "integer", "minimum": 1, "maximum": 100000},
+    "maintenance_enabled": {"type": "boolean"}
+  },
+  "required": ["schema_version", "normalization", "max_source_bytes", "maintenance_enabled"]
+}

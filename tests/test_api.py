@@ -82,16 +82,10 @@ def test_registry_crud_default_roles_and_snapshot_override(tmp_path: Path) -> No
                 "confirmed": True,
             },
         )
-        assert memory.status_code == 201
-        reused = client.get(
-            "/v1/memories/search",
-            params={
-                "session_id": session.json()["id"],
-                "query": "pytest calculator",
-                "project_scope": str(tmp_path),
-            },
+        assert memory.status_code == 400
+        assert memory.json()["detail"].startswith(
+            "schema_upgrade_required: use B2-3 dataset Proposal/CAS commands"
         )
-        assert [item["id"] for item in reused.json()] == [memory.json()["id"]]
 
         writable_explorer = client.post(
             "/v1/roles",

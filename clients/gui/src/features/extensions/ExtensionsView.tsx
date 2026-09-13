@@ -25,6 +25,7 @@ import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { useDemo } from '../../demo/DemoContext';
+import { useSearchParams } from 'react-router-dom';
 import type { DemoExtension } from '../../demo/types';
 import { usePhase45 } from '../../live45/Phase45Context';
 import {
@@ -35,9 +36,14 @@ import {
 import { buildMcpServerRequest } from '../../live45/mcpForm';
 import { McpSafetyPanels } from './McpSafetyPanels';
 import './live-extensions.css';
+import { LiveManagementView } from '../management/LiveManagementView';
 
 export const ExtensionsView: React.FC = () => {
   const { clientMode } = useOperant();
+  const [searchParams] = useSearchParams();
+  if (clientMode === 'live' && searchParams.get('tab') === 'plugins') {
+    return <LiveManagementView initialTab="plugins" />;
+  }
   return clientMode === 'live' ? <LiveExtensionsView /> : <DemoExtensionsView />;
 };
 

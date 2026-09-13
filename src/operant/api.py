@@ -30,6 +30,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from operant.api_b2 import B2Cancellation, B2Discovery, install_b2_routes
+from operant.api_b2_3 import install_b2_3_routes
 from operant.api_beta import install_beta_container_routes, install_beta_gateway_routes
 from operant.api_phase23 import install_phase23_routes
 from operant.api_phase45 import install_phase45_routes
@@ -1350,6 +1351,7 @@ def create_app(
         physical_delete_authorization=physical_delete_authorization,
     )
     service.initialize()
+    service.memory_plugin_mode = True
     workflow = SequentialCodingWorkflow(service)
     app = FastAPI(
         title="Operant API",
@@ -1361,6 +1363,7 @@ def create_app(
     # Explicit trusted bootstrap owns Host configuration; ordinary startup never
     # installs a plugin, reads its package, or creates an engine implicitly.
     app.state.plugin_host = plugin_host
+    app.state.b23_skill_roots = phase45_skill_roots
     if plugin_host is not None:
         app.router.add_event_handler("shutdown", plugin_host.close)
 
@@ -1371,6 +1374,13 @@ def create_app(
             redact_public_text(str(exc.detail)) if isinstance(exc.detail, str) else "request failed"
         )
         code = f"http_{exc.status_code}"
+        if (
+            isinstance(detail, dict)
+            and isinstance(detail.get("code"), str)
+            and isinstance(detail.get("message"), str)
+        ):
+            code = detail["code"]
+            message = detail["message"]
         recovery = RecoveryAction.NONE
         if exc.status_code == 400 and message.startswith("Last-Event-ID requires"):
             code = "invalid_event_cursor"
@@ -1483,6 +1493,10 @@ def create_app(
             if parsed_last_event_id is not None:
                 return await call_next(request)
 
+        if request.method == "POST" and request.url.path == "/v1/b2-3/commands":
+            # B2-3 owns a durable bounded command journal. Do not persist a
+            # second full dataset snapshot or truncate its typed Query result.
+            return await call_next(request)
         idempotency_key = request.headers.get("Idempotency-Key")
         scope = _command_scope(request.method, request.url.path)
         if scope is None:
@@ -3545,6 +3559,7 @@ def create_app(
         return memory.model_dump(mode="json")
 
     install_b2_routes(app, service)
+    install_b2_3_routes(app, service)
     install_phase23_routes(app, store)
     install_phase45_routes(
         app,

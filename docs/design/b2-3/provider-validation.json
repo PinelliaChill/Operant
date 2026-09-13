@@ -1,0 +1,7 @@
+{
+  "status": 422,
+  "validation": [],
+  "error_codes": {
+    "type": "invalid_model_error"
+  }
+}
