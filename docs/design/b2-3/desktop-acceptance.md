@@ -1,6 +1,6 @@
 # B2-3 J1 原生验收记录
 
-记录身份：Codex；适用对象：所有Agent；2026-09-13。本批J1步骤已完成；最终交付仍需冻结版本的独立复核。
+记录身份：Codex；适用对象：所有Agent；2026-09-13。本批J1步骤与冻结版本独立复核均已完成，见review-closure.md。
 
 ## 环境
 
@@ -49,4 +49,6 @@ Antigravity通过COM-20260912-001实名交付234955e、38e0bfe、ffa4950，仅b2
 
 真实停止临时Core后，原生显示未就绪/禁写；刷新返回明确invalid_error_envelope（Vite无上游），没有Mock回退。原临时create_app驱动未开启desktop CORS，后改用项目既有build_server_config(desktop=True)，只连本批临时库与18000。健康/GUI HTTP200，tauri://localhost预检200且回显Origin；原生手动刷新后管理投影恢复已连接。见desktop-reconnect.json。不涉及真实用户库或产品源码新增放宽规则。
 
-最终GUI102/typecheck/build均通过，Core与SDK未变，复用888pass/1条件Docker skip及协议生成证据。最后等待原Reviewer确认冻结版本、增量与证据覆盖，再形成最终交付。
+最终GUI102/typecheck/build均通过，Core与SDK未变，复用888pass/1条件Docker skip及协议生成证据。冻结4678b40完整门禁已通过，原Reviewer最终确认版本、增量和证据覆盖，见final-gate-summary.json、review-closure.md。
+
+补充完整可恢复路径：通过既有正式API新增独立合成工件，专用policy仅1秒宽限期、allow_physical_delete=false；不改default或系统时间。实际原生schedule→trashed→restore(active)成功，审计事件与托管内容hash保留已读回，见desktop-artifact-trash-restore.json。该25字节工件在两dataset删除验收之后新增，所以删除当时Artifact数量1的证据仍有效；当前临时库为2工件。未携带capability的内容HTTP请求按设计403，未放宽保护或宣称下载成功。

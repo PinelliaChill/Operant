@@ -14,6 +14,12 @@
     "typecheck": 0,
     "build": 0
   },
-  "current_head": "ffa4950f6b2dab5dc7eacf0cd15a99810d8401f6",
-  "passed": true
+  "passed": true,
+  "evidence_capture_head": "ffa4950f6b2dab5dc7eacf0cd15a99810d8401f6",
+  "reviewed_code_head": "4678b406a4ed53b6366a603d7df7e49199e990ae",
+  "head_mapping": "GUI gate captured before final commit; source hashes unchanged through reviewed code HEAD. Later documentation-only commits do not change this code identity.",
+  "final_full_gate": "gates/frozen-4678b40/results.json",
+  "final_full_gate_status": "passed",
+  "final_full_gate_code_head": "4678b406a4ed53b6366a603d7df7e49199e990ae",
+  "full_gate_requirement_satisfied": true
 }

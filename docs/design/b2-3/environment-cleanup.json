@@ -1,0 +1,17 @@
+{
+  "stopped_pids": [
+    90492,
+    6256,
+    6168
+  ],
+  "temporary_ports_closed": {
+    "18000": true,
+    "3000": true
+  },
+  "native_app_quit_confirmed_by_process_inventory": true,
+  "dependency_symlink_removed": "/private/tmp/operant-b2-2/.venv",
+  "dependency_target_preserved": true,
+  "user_port_8000_touched": false,
+  "test_evidence_and_independent_export_preserved": true,
+  "passed": true
+}

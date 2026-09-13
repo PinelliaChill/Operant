@@ -1,0 +1,17 @@
+{
+  "code_head": "4678b406a4ed53b6366a603d7df7e49199e990ae",
+  "full_gate": "gates/frozen-4678b40/results.json",
+  "all_exit_codes_zero": true,
+  "complete": true,
+  "source_unchanged": true,
+  "source_hashes_match_current": true,
+  "backend_result": "888 passed, 1 conditional Docker skip, 1 deprecation warning",
+  "gui_result": "102 passed; typecheck/build passed",
+  "real_evidence_reused": [
+    "model-context-acceptance.json",
+    "desktop-acceptance.md",
+    "native-visual-acceptance.json",
+    "desktop-delete-acceptance.json"
+  ],
+  "post_review_additional_evidence": "desktop-artifact-trash-restore.json, no product source changes"
+}

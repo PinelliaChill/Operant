@@ -57,9 +57,9 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
-### B2-3 / MP-2 记忆与管理集成（2026-09-12，验收进行中）
+### B2-3 / MP-2 记忆与管理集成（2026-09-13，已完成本批验收）
 
-范围与门禁见 [任务包](design/b2-3/task-package.md)。以下描述当前源码；真实 gpt-oss-20b 正式任务/read_file/Context 与原生历史已通过（见本批 model-context-acceptance.json）。J1 生命周期/删除、基础管理、宽窄与错误重连已完成；最终冻结版本独立审查收口前不标记交付通过。
+范围与门禁见 [任务包](design/b2-3/task-package.md)。以下描述当前源码；真实 gpt-oss-20b 正式任务/read_file/Context 与原生历史已通过（见本批 model-context-acceptance.json）。J1 生命周期/删除、基础管理、宽窄与错误重连已完成；冻结代码4678b40的完整门禁及指定Luna/max独立复核通过，见本批handoff.md与review-closure.md。
 
 `memory_plugins/manager.py` 通过正式 PluginHost 安装目录中的两个独立包。`memory-standard` 使用来源提取与 Host 搜索，`memory-notebook` 使用键值笔记；认证进程内支持独立私有索引，隔离模式与索引重建通过Host受控读取当前发布版本后执行键名精确过滤；配置分别来自包内 Schema。两者共享 MP-0 Host DTO 与包内标准库 SDK，支持认证进程内与未认证隔离 stdio。Core 负责来源授权和唯一发布 head，插件不能自行发布、越过 scope 或把候选当成正式召回。
 

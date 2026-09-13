@@ -29,14 +29,17 @@
 | AC-03 | 隔离旧库迁移、legacy_unverified、旧写代理/拒绝、新库拒旧二进制；计划§8.2 | Codex | 合成v14旧库副本迁移读回，数量/历史/所有权核对；不接触用户库 | 是，迁移门 | 合成v14旧库→v15→显式迁移通过；2旧版本/1记录未发布，历史与他项目隔离；实际B2-2旧代码拒绝v15，见migration-acceptance.json |
 | AC-04 | 关闭完整屏障、全局优先、再开无补扫、无插件普通任务；MP-2.4，计划§6 | Codex | 在途/队列/索引/Provider下一请求与普通任务定向及真实验收 | 是，关闭语义 | 在途取消/全局拒绝/blocked回执与确定性正式Session/工具/Skill/Context隔离通过；全局关闭后的真实gpt-oss-20b普通任务/read_file/历史与两次Context隔离通过，见model-context-acceptance.json |
 | AC-05 | keep/delete、Core namespace、专属目录、共享/Run/历史等例外、tombstone、清理续做、保留数据导出/删除/重装；MP-2.5，计划§6 | Codex | 临时数据，故障/重启/缺Hook测试，桌面闭环 | 是，生命周期门 | 定向keep/export/reinstall/delete专属行与tombstone通过；原生keep/导出/重装通过；User明确确认后，两条永久delete原生通过，专属行/41资源删除、tombstone与历史/源/导出保留读回通过，见desktop-delete-acceptance.json |
-| AC-06 | 项目/有效配置与来源/作用域、知识候选搜索修改、插件管理、已有Skill基础管理、Artifact保留；计划§4/5 GUI-L2/L4 | Codex | 正式API+生成Client+GUI行为检查 | 是，管理闭环 | 管理与生成Client已接入；项目创建改名归档解除/知识/Skill安装启用/Artifact pin与审计/保留拒绝已原生验证；Skill停用/卸载与源保留已验；detach保持active后重绑已验；Artifact归档/安排清理/宽限期拒绝/恢复/固定及审计结果原生回读通过；视觉返修经Antigravity实名交付并由Codex完成原生验收 |
+| AC-06 | 项目/有效配置与来源/作用域、知识候选搜索修改、插件管理、已有Skill基础管理、Artifact保留；计划§4/5 GUI-L2/L4 | Codex | 正式API+生成Client+GUI行为检查 | 是，管理闭环 | 管理与生成Client已接入；项目创建改名归档解除/知识/Skill安装启用/Artifact pin与审计/保留拒绝已原生验证；Skill停用/卸载与源保留已验；detach保持active后重绑已验；Artifact归档/安排清理/宽限期拒绝/恢复/固定及审计结果原生回读通过，另专用1秒测试policy下真实Trash→Restore通过；视觉返修经Antigravity实名交付并由Codex完成原生验收 |
 | AC-07 | additive App Protocol/Python与TS生成Client/CLI；MP-2.6，AGENTS协议要求 | Codex | 确定生成、旧协议兼容、现有SDK脚本 | 是，契约门 | 现有产物与双次生成一致；正式Python Client/CLI与原生TS Client通过，见sdk-generation.json、client-smoke.json |
 | AC-08 | J1真实Tauri安装保存查询关闭keep/delete保留管理重装；计划§4/6，AGENTS客户端 | Codex | debug原生壳，宽窄屏/焦点/对比度/错误断线/Action Gateway | 是，联合门 | J1已通过：两插件与生命周期管理/两条delete/445窄屏与宽屏/焦点/对比度/错误断线重连均完成，见desktop-acceptance.md、native-visual-acceptance.json、desktop-reconnect.json |
 | AC-09 | discovery精确模型/正式ModelProfile任务，关闭后普通聊天工具历史；AGENTS模型门 | Codex | 绝对隔离workspace、单调用120s/有限token，失败按协作规则停止 | 是，真实模型门 | 已通过：重新discovery后使用精确ID gpt-oss-20b，正式ModelProfile/Session/read_file/最终42及原生历史通过；全局关闭后Context无记忆/记忆工具/新来源，见discovery-refresh.json、model-smoke-oss.json、model-context-acceptance.json。早期Luna/Gemini失败保留为历史，不再阻断 |
-| AC-10 | 完整基础门禁及GUI/SDK现有脚本；AGENTS开发与验证 | Codex | uv ruff format/check、mypy src、pytest、lock --check --offline、diff --check；GUI test/typecheck/build | 是，硬门禁 | 最新集成888pass/1skip，GUI101测试/typecheck/build及全部基础门禁exit0；source_unchanged=true，见gates/reviewer-final/results.json；随后GUI入口、审计呈现与删除提示增量，GUI102/typecheck/build再验全部0，见gates/gui-final-results.json与gate-reuse.json |
-| AC-11 | 当前架构同步、独立gpt-5.6-luna/max审查、版本证据与进度；User/AGENTS | Codex | 同一Reviewer增量复核；工具无Fast开关，不宣称Fast | 是，交付门 | 当前架构已同步；User已授权源码审查；同一Luna/max确认两轮问题全部关闭，无剩余P1/P2，见review-code-closed.md；Antigravity已交权，J1与真实模型证据齐；等待同一Reviewer最终冻结版本复核 |
+| AC-10 | 完整基础门禁及GUI/SDK现有脚本；AGENTS开发与验证 | Codex | uv ruff format/check、mypy src、pytest、lock --check --offline、diff --check；GUI test/typecheck/build | 是，硬门禁 | 最新集成888pass/1skip，GUI101测试/typecheck/build及全部基础门禁exit0；source_unchanged=true，见gates/frozen-4678b40/results.json；随后GUI入口、审计呈现与删除提示增量，GUI102/typecheck/build再验全部0，见gates/gui-final-results.json与gate-reuse.json |
+| AC-11 | 当前架构同步、独立gpt-5.6-luna/max审查、版本证据与进度；User/AGENTS | Codex | 同一Reviewer增量复核；工具无Fast开关，不宣称Fast | 是，交付门 | 当前架构已同步；User已授权源码审查；同一Luna/max确认两轮问题全部关闭，无剩余P1/P2，见review-code-closed.md；Antigravity已交权，J1与真实模型证据齐；同一Reviewer最终确认唯一P2关闭，无新增P1/P2，286源码哈希匹配，可交付，见review-closure.md |
 
 ## 环境与停止规则
 
 开工先检查Python/依赖、Provider discovery、Tauri及macOS沙箱最小可用性；不替代最终验收。复用B2-2依赖目录，解释器/锁未改；临时Core端口18000/Vite3000先检查占用，用户8000不触碰。运行库只在临时目录；凭据仅注入目标进程，不输出、不复制。
 子Agent按需读取本包+相关入口，定向检查，简短交接；额度中断优先恢复原Agent。源码集成冻结后完整门禁；昂贵检查只重验变化/存疑范围。无条件变化不重复失败外部检查。阻断项通过、同一Reviewer复核及J1证据齐全才标完成；随后更新治理根进度并停止B2-3。
+
+## 收口
+冻结验收代码4678b406a4ed53b6366a603d7df7e49199e990ae；全部AC已通过。同一Reviewer最终闭环见review-closure.md，完整门禁摘要见final-gate-summary.json。本批临时Core/Vite/验收.app已关闭，依赖符号链接移除而目标保留，见environment-cleanup.json。后续文档提交不改变已验源码；B2-3完成后停止，不自动开启B2-4。

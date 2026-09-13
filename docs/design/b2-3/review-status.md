@@ -7,4 +7,4 @@
 - 第二轮 `review-delta.md`：1P1/4P2；负责人处理与定向证据 `review-fixes.md`。
 - 当前代码复核 `review-code-closed.md`：5项全部关闭；P1 inactive ref结论正式撤回（真实恶意插件回归证明Host拒绝），当前审查范围无剩余P1/P2。
 
-本轮独立Reviewer只核对代码与已有定向证据，未重新运行完整测试。最终集成门禁gates/reviewer-final全部通过（888pass/1条件skip），GUI入口增量三个脚本也通过；真实gpt-oss-20b任务/Context/原生历史已通过，J1永久delete、Artifact、视觉与断线重连也已完成，因此不是最终交付验收。全部证据齐后还需同一Reviewer核对冻结版本与证据。
+最终闭环：review-final.md确认4678b40无新增代码P1/P2；唯一P2版本标注由Codex按review-final-resolution.md修正。冻结4678全套门禁888pass/1条件Docker skip、GUI102/类型/构建及全部基础检查通过，Artifact成功Trash/Restore已新增真实证据。原Reviewer在review-closure.md确认唯一P2关闭、无新P1/P2、286源码哈希全部匹配，B2-3/MP-2/J1适用门禁可交付。没有重跑独立测试或宣称Fast。
