@@ -342,7 +342,7 @@
 
 .b2-memory-form-help {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   line-height: 1.35;
 }
 
@@ -529,7 +529,7 @@
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   letter-spacing: 0.03em;
 }
 
@@ -592,7 +592,7 @@
   border-radius: var(--radius-xs);
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .b2-memory-record-content {
@@ -645,7 +645,7 @@
   padding-top: 6px;
   border-top: 1px dashed var(--border-subtle);
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ==========================================================================
@@ -758,7 +758,7 @@
 .b2-memory-status[data-status="uninstalled"] {
   background: var(--bg-subtle);
   border-color: var(--border-subtle);
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .b2-memory-status[data-status="deactivated"]::before,
@@ -904,4 +904,13 @@
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ==========================================================================
+   13. 管理页说明与脚注对比度 (UI-MEM-02: 满足 WCAG AA 4.5:1 对比度，不影响其他页面)
+   ========================================================================== */
+
+.b2-memory .section-footnote,
+.b2-memory ~ .section-footnote {
+  color: var(--text-secondary);
 }
