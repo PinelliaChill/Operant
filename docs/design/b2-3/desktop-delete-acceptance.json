@@ -1,0 +1,96 @@
+{
+  "entry": "real Tauri GUI, user explicit action-time authorization for named temporary datasets; readonly SQLite/filesystem readback",
+  "paths": {
+    "standard": "installed plugin uninstall(delete)",
+    "notebook": "uninstall(keep), then retained dataset delete"
+  },
+  "before_counts": {
+    "dataset_ec9f6f31485c4aa7b7cf89b95771d274": {
+      "memory_ledger_versions": 3,
+      "memory_ledger_heads": 1,
+      "memory_ledger_proposals": 3,
+      "memory_ledger_tombstones": 0,
+      "memory_ledger_idempotency": 0,
+      "memory_ledger_legacy_imports": 0,
+      "b23_sources": 3
+    },
+    "dataset_ede2314ef88f47169f3d016488f104a7": {
+      "memory_ledger_versions": 4,
+      "memory_ledger_heads": 2,
+      "memory_ledger_proposals": 4,
+      "memory_ledger_tombstones": 0,
+      "memory_ledger_idempotency": 0,
+      "memory_ledger_legacy_imports": 0,
+      "b23_sources": 4
+    }
+  },
+  "after_counts": {
+    "dataset_ec9f6f31485c4aa7b7cf89b95771d274": {
+      "memory_ledger_versions": 0,
+      "memory_ledger_heads": 0,
+      "memory_ledger_proposals": 0,
+      "memory_ledger_tombstones": 2,
+      "memory_ledger_idempotency": 0,
+      "memory_ledger_legacy_imports": 0,
+      "b23_sources": 0
+    },
+    "dataset_ede2314ef88f47169f3d016488f104a7": {
+      "memory_ledger_versions": 0,
+      "memory_ledger_heads": 0,
+      "memory_ledger_proposals": 0,
+      "memory_ledger_tombstones": 3,
+      "memory_ledger_idempotency": 0,
+      "memory_ledger_legacy_imports": 0,
+      "b23_sources": 0
+    }
+  },
+  "canonical_counts_before": {
+    "items": 19,
+    "context_revisions": 4,
+    "artifacts": 1
+  },
+  "canonical_counts_after": {
+    "items": 19,
+    "context_revisions": 4,
+    "artifacts": 1
+  },
+  "preserved_file_hashes_unchanged": {
+    "/private/tmp/operant-b2-3-j1/workspace/proof.txt": true,
+    "/Users/bigo/Downloads/dataset_ec9f6f31485c4aa7b7cf89b95771d274-export.json": true,
+    "/private/tmp/operant-b2-3-j1/skill-source/j1-reference/SKILL.md": true
+  },
+  "former_installation_roots_exist": {
+    "/private/tmp/operant-b2-3-j1/memory-plugins/plugin_installation_e0b4a392d8a741f9999a3d0f74f1d296": false,
+    "/private/tmp/operant-b2-3-j1/memory-plugins/plugin_installation_ee887ea3caa94e5797e6063735520ec9": false,
+    "/private/tmp/operant-b2-3-j1/memory-plugins/plugin_installation_c3790c28a07544938ac67e75180e1c81": false,
+    "/private/tmp/operant-b2-3-j1/memory-plugins/plugin_installation_bc764870b9544192ba39f197d05843d5": false,
+    "/private/tmp/operant-b2-3-j1/memory-plugins/plugin_installation_8152ea89a1f84087897e3ac8bd67864a": false,
+    "/private/tmp/operant-b2-3-j1/memory-plugins/skills": true
+  },
+  "native_result": "Both Completed, dataset deleted, 0 records, export disabled",
+  "limits": "Logical deletion of exclusive rows/resources; not disk secure erase; no real user database migration",
+  "registry": {
+    "datasets": [
+      {
+        "dataset_id": "dataset_ec9f6f31485c4aa7b7cf89b95771d274",
+        "state": "deleted",
+        "installation_id": null
+      },
+      {
+        "dataset_id": "dataset_ede2314ef88f47169f3d016488f104a7",
+        "state": "deleted",
+        "installation_id": null
+      }
+    ],
+    "resources_total": 41,
+    "resource_statuses": [
+      "deleted"
+    ],
+    "run_statuses": [
+      "completed"
+    ]
+  },
+  "passed": true,
+  "native_deleted_installation_message": "对应数据集已删除，不能重新接回",
+  "native_history_after_delete": "Existing OSS task remains completed; detail shows canonical read_file, proof.txt content 21 * 2 = 42, final answer42 and agent.completed"
+}

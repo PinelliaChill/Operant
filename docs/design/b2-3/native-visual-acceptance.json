@@ -1,0 +1,83 @@
+{
+  "entry": "CUA real native Tauri AX + screenshot inspection; screenshots observed in task tool history",
+  "app": "/private/tmp/Operant B2-3 Verification.app",
+  "style_commits": [
+    "234955e",
+    "38e0bfe",
+    "ffa4950"
+  ],
+  "observations": [
+    {
+      "size": "1200x768",
+      "theme": "light",
+      "result": "six tabs have clear hit areas and selected state; scope wraps without covering title"
+    },
+    {
+      "size": "768x797",
+      "theme": "light",
+      "result": "bottom navigation appears; tabs and forms reachable; native JPEG dimensions read"
+    },
+    {
+      "size": "445x820",
+      "theme": "light",
+      "result": "single-column cards; long scope wraps; 180px vertical title gap discovered then fixed in 38e0bfe and re-inspected"
+    },
+    {
+      "size": "wide restored",
+      "theme": "dark",
+      "result": "text, metadata, selection and controls legible; light theme restored afterwards"
+    },
+    {
+      "input": "Tab from selected settings tab",
+      "result": "focus moves to Skill tab with visible outline; no accidental activation"
+    },
+    {
+      "operation": "schedule pinned Artifact",
+      "result": "explicit warning with readable text, Core stays connected, active/pinned state preserved"
+    },
+    {
+      "fix": "ffa4950",
+      "result": "Native retention footnotes now darker/readable; removed CSS claim of secure erase; no structural change to accepted narrow layout"
+    }
+  ],
+  "passed": true,
+  "contrast_checks": {
+    "light_metadata": {
+      "foreground": "#57534e",
+      "background": "#e7e5e4",
+      "ratio": 6.08
+    },
+    "light_footnote": {
+      "foreground": "#57534e",
+      "background": "#fafaf9",
+      "ratio": 7.3
+    },
+    "dark_metadata": {
+      "foreground": "#d6d3d1",
+      "background": "#292524",
+      "ratio": 10.18
+    },
+    "dark_footnote": {
+      "foreground": "#d6d3d1",
+      "background": "#1c1917",
+      "ratio": 11.74
+    },
+    "light_warning": {
+      "foreground": "#92400e",
+      "background": "#fffbeb",
+      "ratio": 6.84
+    },
+    "light_focus": {
+      "foreground": "#047857",
+      "background": "#f5f5f4",
+      "ratio": 5.03
+    },
+    "dark_focus": {
+      "foreground": "#34d399",
+      "background": "#1c1917",
+      "ratio": 9.1
+    }
+  },
+  "contrast_scope": "Current B2 management informational text, warning and focus tokens; numeric color checks plus native light/dark inspection, not a whole-application WCAG certification",
+  "style_sha256": "9a1f82a712ec838d4c81d20bd930d2bbcc4963a12bd954a6a27230ae29b9277c"
+}

@@ -1,0 +1,19 @@
+{
+  "full_gate": "gates/reviewer-final/results.json",
+  "full_gate_complete": true,
+  "changed_since_full_gate": [
+    "clients/gui/src/styles/b2-memory.css",
+    "clients/gui/src/features/management/LiveManagementView.tsx",
+    "clients/gui/src/features/extensions/ExtensionsView.tsx"
+  ],
+  "backend_sdk_unchanged": true,
+  "current_gui_gate": "gates/gui-final-results.json",
+  "gui_source_mismatches": [],
+  "gui_scripts": {
+    "test": 0,
+    "typecheck": 0,
+    "build": 0
+  },
+  "current_head": "ffa4950f6b2dab5dc7eacf0cd15a99810d8401f6",
+  "passed": true
+}

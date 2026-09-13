@@ -64,6 +64,87 @@ type ManagedSkillView = B23ManagedSkill & {
 
 type ManagementStateView = B23ManagementState;
 
+type ArtifactAuditFindingView = {
+  finding_type: string;
+  artifact_id: string | null;
+  content_hash: string | null;
+  expected_size_bytes: number | null;
+  observed_size_bytes: number | null;
+  finding_hash: string;
+  repairable: boolean;
+};
+
+type ArtifactAuditReportView = {
+  findings: ArtifactAuditFindingView[];
+  scanned_database_references: number;
+  scanned_blobs: number;
+};
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readRequiredAuditText(source: Record<string, unknown>, key: string): string | undefined {
+  const value = source[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function readNullableAuditText(source: Record<string, unknown>, key: string): string | null | undefined {
+  if (!(key in source)) return undefined;
+  const value = source[key];
+  if (value === null) return null;
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function readNullableAuditNumber(source: Record<string, unknown>, key: string): number | null | undefined {
+  if (!(key in source)) return undefined;
+  const value = source[key];
+  if (value === null) return null;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function parseArtifactAuditExport(value: unknown): ArtifactAuditReportView | undefined {
+  if (!isRecordValue(value)) return undefined;
+  const report = value.artifact_audit;
+  if (!isRecordValue(report)) return undefined;
+  const references = report.scanned_database_references;
+  const blobs = report.scanned_blobs;
+  if (
+    typeof references !== 'number' || !Number.isFinite(references) || references < 0
+    || typeof blobs !== 'number' || !Number.isFinite(blobs) || blobs < 0
+    || !Array.isArray(report.findings)
+  ) return undefined;
+  const findings: ArtifactAuditFindingView[] = [];
+  for (const valueEntry of report.findings) {
+    if (!isRecordValue(valueEntry)) return undefined;
+    const findingType = readRequiredAuditText(valueEntry, 'finding_type');
+    const findingHash = readRequiredAuditText(valueEntry, 'finding_hash');
+    const artifactId = readNullableAuditText(valueEntry, 'artifact_id');
+    const contentHash = readNullableAuditText(valueEntry, 'content_hash');
+    const expectedSize = readNullableAuditNumber(valueEntry, 'expected_size_bytes');
+    const observedSize = readNullableAuditNumber(valueEntry, 'observed_size_bytes');
+    if (
+      !findingType || !findingHash || artifactId === undefined || contentHash === undefined
+      || expectedSize === undefined || observedSize === undefined
+      || typeof valueEntry.repairable !== 'boolean'
+    ) return undefined;
+    findings.push({
+      finding_type: findingType,
+      artifact_id: artifactId,
+      content_hash: contentHash,
+      expected_size_bytes: expectedSize,
+      observed_size_bytes: observedSize,
+      finding_hash: findingHash,
+      repairable: valueEntry.repairable,
+    });
+  }
+  return {
+    findings,
+    scanned_database_references: references,
+    scanned_blobs: blobs,
+  };
+}
+
 function managementArtifacts(state: B23ManagementState): B23ManagedArtifact[] {
   const value = (state as ManagementStateView).artifacts;
   return Array.isArray(value) ? value : [];
@@ -169,6 +250,7 @@ interface ManagementPanelProps {
   execute: ExecuteCommand;
   busy: boolean;
   onTab: (tab: ManagementTab) => void;
+  auditReport?: ArtifactAuditReportView;
 }
 
 const FormError: React.FC<{ message: string; id?: string }> = ({ message, id = 'b2-memory-form-error' }) => (
@@ -588,10 +670,16 @@ const PluginPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) =
         <div className="b2-memory-card-header"><div><h2 id="plugin-installations-title">已安装插件</h2><p>{state.installations.length} 个安装实例；关闭、配置、项目选择和卸载都通过正式命令。</p></div><StatusBadge status="active" label={`${state.installations.length} 个`} size="sm" /></div>
         {state.installations.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Unplug} title="暂无安装实例" description="从上方插件目录选择安装。" /></div> : <div className="b2-memory-grid">{state.installations.map((installation) => {
           const plugin = state.catalog.find((entry) => entry.plugin_id === installation.plugin_id);
+          const relatedDataset = state.datasets.find((dataset) => dataset.dataset_id === installation.dataset_id);
           const lifecycleClosed = installation.state === 'uninstalled' || installation.state === 'uninstalling';
           const canConfigure = installation.state === 'disabled';
           const canToggle = !lifecycleClosed;
-          return <article key={installation.installation_id} className="b2-memory-card" data-state={installation.state}><div className="b2-memory-card-header"><div><h3>{plugin?.name ?? installation.plugin_id}</h3><p><code>{installation.installation_id}</code></p></div><StatusBadge status={statusKind(installation.state)} label={statusLabel(installation.state)} size="sm" /></div><div className="b2-memory-meta"><span>模式：{installation.mode}</span><span>认证：{installation.certification_status}</span><span>dataset <code>{installation.dataset_id}</code></span><span>{state.projects.filter((project) => project.installation_id === installation.installation_id).map((project) => project.name).join('、') || '尚未选择项目'}</span></div>{lifecycleClosed && <p className="b2-memory-warning" role="status">安装副本已卸载；保留数据集仍可从下方重装。</p>}{canToggle && <div className="b2-memory-actions"><ActionButton label={installation.state === 'enabled' || installation.state === 'active' ? '关闭插件' : '启用插件'} onClick={() => void execute({ action: installation.state === 'enabled' || installation.state === 'active' ? 'plugin_disable' : 'plugin_enable', installation_id: installation.installation_id, confirmed: true }, installation.state === 'enabled' || installation.state === 'active' ? '关闭插件' : '启用插件')} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="配置" onClick={() => { setConfigInstallation(installation.installation_id); setConfigText(safeJson(installation.config)); setConfigError(''); }} disabled={busy || !canConfigure} icon={<Settings2 size={13} aria-hidden="true" />} /><ActionButton label="选择项目" onClick={() => setSelectedProject(selectedProject || state.projects.find((project) => !project.archived)?.project_id || '')} disabled={busy || state.projects.length === 0} icon={<Link2 size={13} aria-hidden="true" />} /><ActionButton label={uninstallTarget === installation.installation_id ? '收起卸载选项' : '卸载'} tone="ghost" onClick={() => { if (uninstallTarget === installation.installation_id) setUninstallTarget(null); else void uninstall(installation); }} disabled={busy} icon={<Trash2 size={13} aria-hidden="true" />} /></div>}
+          const lifecycleMessage = relatedDataset?.state === 'deleted'
+            ? '安装副本已卸载；对应数据集已删除，不能重新接回。'
+            : relatedDataset?.state === 'retained'
+              ? '安装副本已卸载；保留数据集仍可从下方重装。'
+              : '安装副本已卸载；数据集状态以服务端返回为准。';
+          return <article key={installation.installation_id} className="b2-memory-card" data-state={installation.state}><div className="b2-memory-card-header"><div><h3>{plugin?.name ?? installation.plugin_id}</h3><p><code>{installation.installation_id}</code></p></div><StatusBadge status={statusKind(installation.state)} label={statusLabel(installation.state)} size="sm" /></div><div className="b2-memory-meta"><span>模式：{installation.mode}</span><span>认证：{installation.certification_status}</span><span>dataset <code>{installation.dataset_id}</code></span><span>{state.projects.filter((project) => project.installation_id === installation.installation_id).map((project) => project.name).join('、') || '尚未选择项目'}</span></div>{lifecycleClosed && <p className="b2-memory-warning" role="status">{lifecycleMessage}</p>}{canToggle && <div className="b2-memory-actions"><ActionButton label={installation.state === 'enabled' || installation.state === 'active' ? '关闭插件' : '启用插件'} onClick={() => void execute({ action: installation.state === 'enabled' || installation.state === 'active' ? 'plugin_disable' : 'plugin_enable', installation_id: installation.installation_id, confirmed: true }, installation.state === 'enabled' || installation.state === 'active' ? '关闭插件' : '启用插件')} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="配置" onClick={() => { setConfigInstallation(installation.installation_id); setConfigText(safeJson(installation.config)); setConfigError(''); }} disabled={busy || !canConfigure} icon={<Settings2 size={13} aria-hidden="true" />} /><ActionButton label="选择项目" onClick={() => setSelectedProject(selectedProject || state.projects.find((project) => !project.archived)?.project_id || '')} disabled={busy || state.projects.length === 0} icon={<Link2 size={13} aria-hidden="true" />} /><ActionButton label={uninstallTarget === installation.installation_id ? '收起卸载选项' : '卸载'} tone="ghost" onClick={() => { if (uninstallTarget === installation.installation_id) setUninstallTarget(null); else void uninstall(installation); }} disabled={busy} icon={<Trash2 size={13} aria-hidden="true" />} /></div>}
             {!lifecycleClosed && selectedProject && <div className="b2-memory-inline-form"><label htmlFor={`binding-project-${installation.installation_id}`}>选择项目</label><ProjectSelect projects={state.projects} value={selectedProject} onChange={setSelectedProject} id={`binding-project-${installation.installation_id}`} /><ActionButton label="确认选择" tone="primary" onClick={() => void selectBinding(installation)} disabled={busy || !selectedProject} icon={<Check size={13} aria-hidden="true" />} /></div>}
             {!lifecycleClosed && configInstallation === installation.installation_id && <div className="b2-memory-form">{configError && <FormError message={configError} id={`config-error-${installation.installation_id}`} />}<label htmlFor={`plugin-config-${installation.installation_id}`}>插件配置 JSON</label><textarea id={`plugin-config-${installation.installation_id}`} className="input" rows={5} value={configText} onChange={(event) => setConfigText(event.target.value)} aria-describedby={configError ? `config-error-${installation.installation_id}` : undefined} /><div className="b2-memory-actions"><ActionButton label="保存配置" tone="primary" onClick={() => void configure(installation)} disabled={busy} icon={<Check size={13} aria-hidden="true" />} /><ActionButton label="取消" tone="ghost" onClick={() => setConfigInstallation(null)} disabled={busy} icon={<X size={13} aria-hidden="true" />} /></div></div>}
             {!lifecycleClosed && uninstallTarget === installation.installation_id && <div className="b2-memory-form b2-memory-warning"><fieldset><legend>卸载数据策略</legend><label className="b2-memory-check b2-memory-policy-btn--keep" data-policy="keep"><input type="radio" name={`data-policy-${installation.installation_id}`} value="keep" checked={dataPolicy === 'keep'} onChange={() => setDataPolicy('keep')} />保留数据集，卸载后继续管理/导出</label><label className="b2-memory-check b2-memory-policy-btn--delete" data-policy="delete"><input type="radio" name={`data-policy-${installation.installation_id}`} value="delete" checked={dataPolicy === 'delete'} onChange={() => setDataPolicy('delete')} />删除数据集及其中记录</label></fieldset><label className="b2-memory-check"><input type="checkbox" checked={uninstallConfirmed} onChange={(event) => setUninstallConfirmed(event.target.checked)} />我确认执行“{dataPolicy === 'keep' ? '保留' : '删除'}”策略</label><ActionButton label="提交卸载" tone="primary" onClick={() => void uninstall(installation)} disabled={busy || !uninstallConfirmed} icon={<Trash2 size={13} aria-hidden="true" />} /></div>}
@@ -619,7 +707,7 @@ const SettingsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
   );
 };
 
-const RetentionPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) => {
+const RetentionPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, auditReport }) => {
   const artifacts = managementArtifacts(state);
   const runArtifactAction = (artifact: B23ManagedArtifact, actionName: B23Action, label: string) => {
     void execute({ action: actionName, artifact_id: artifact.artifact_id, enabled: actionName === 'artifact_pin' ? !artifact.pinned : undefined, confirmed: true }, label);
@@ -643,6 +731,23 @@ const RetentionPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }
           </div>
         </article>)}</div>}
       </section>
+      {auditReport && <section className="b2-memory-card" data-audit-result>
+        <div className="b2-memory-card-header"><div><h2>最近一次审计结果</h2><p>结果来自服务端 Artifact 审计；没有审计返回时不显示此区域。</p></div><Search size={18} aria-hidden="true" /></div>
+        <div className="b2-memory-meta" data-audit-summary>
+          <span>扫描引用：{auditReport.scanned_database_references}</span>
+          <span>扫描内容：{auditReport.scanned_blobs}</span>
+          <span>发现：{auditReport.findings.length}</span>
+        </div>
+        {auditReport.findings.length === 0 ? <p className="b2-memory-status" role="status">未发现异常。</p> : <ul className="b2-memory-record-content" data-audit-findings>
+          {auditReport.findings.map((finding, index) => <li key={`${finding.finding_hash}-${index}`}>
+            <strong>{finding.finding_type}</strong>
+            {finding.artifact_id && <code>Artifact {finding.artifact_id}</code>}
+            {finding.content_hash && <code>内容 {finding.content_hash}</code>}
+            {(finding.expected_size_bytes !== null || finding.observed_size_bytes !== null) && <span>大小：期望 {finding.expected_size_bytes ?? '未知'} B，实际 {finding.observed_size_bytes ?? '未知'} B</span>}
+            {finding.repairable && <span>可修复</span>}
+          </li>)}
+        </ul>}
+      </section>}
       <p className="section-footnote">审计请求和状态变更均由服务端返回结果；未知写结果需要刷新并人工核对。</p>
     </div>
   );
@@ -701,6 +806,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
   const [error, setError] = useState<B23UiError>();
   const [actionLabel, setActionLabel] = useState<string>();
   const [lastResult, setLastResult] = useState<{ status: string; message: string }>();
+  const [auditReport, setAuditReport] = useState<ArtifactAuditReportView>();
   const [unknownWrite, setUnknownWrite] = useState(false);
   const requestEpoch = useRef(0);
 
@@ -715,6 +821,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
     setPhase('loading');
     setError(undefined);
     setLastResult(undefined);
+    setAuditReport(undefined);
     if (!adapter) {
       if (epoch === requestEpoch.current) {
         setError(makeAdapterUnavailableError().detail);
@@ -746,6 +853,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
       setError(undefined);
       setActionLabel(undefined);
       setLastResult(undefined);
+      setAuditReport(undefined);
       setUnknownWrite(false);
     }
   }, [clientMode, refresh]);
@@ -756,6 +864,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
     setActionLabel(label);
     setError(undefined);
     setLastResult(undefined);
+    setAuditReport(undefined);
     setUnknownWrite(false);
     try {
       const result = await adapter.executeManagementCommand(command);
@@ -769,6 +878,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
       setState(nextState);
       setPhase('ready');
       setLastResult({ status: result.status, message: result.message });
+      setAuditReport(command.action === 'artifact_audit' ? parseArtifactAuditExport(result.export_data) : undefined);
       addNotification(result.status === 'blocked' || result.status === 'failed' ? 'warn' : 'info', `${label}：${result.status} · ${result.message}`);
       return result;
     } catch (value: unknown) {
@@ -799,7 +909,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
 
   const currentState = state as B23ManagementState;
   const writesDisabled = Boolean(actionLabel) || phase !== 'ready' || connectionStatus !== 'connected' || unknownWrite;
-  const panelProps: ManagementPanelProps = { state: currentState, execute, busy: writesDisabled, onTab: setTab };
+  const panelProps: ManagementPanelProps = { state: currentState, execute, busy: writesDisabled, onTab: setTab, auditReport };
 
   return (
     <div className="section-view" data-client-mode="live">

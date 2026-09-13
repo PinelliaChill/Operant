@@ -1,6 +1,6 @@
-# B2-3 J1 原生验收记录（进行中）
+# B2-3 J1 原生验收记录
 
-记录身份：Codex；适用对象：所有Agent；2026-09-13。尚未完成J1，不是交付通过声明。
+记录身份：Codex；适用对象：所有Agent；2026-09-13。本批J1步骤已完成；最终交付仍需冻结版本的独立复核。
 
 ## 环境
 
@@ -27,15 +27,26 @@
 - 空闲超时实际来自stdio资源watchdog对无请求空闲寿命的错误失败判定；并非readline在空闲时执行。修复后正常空闲不报请求超时，仍保留RSS/CPU和显式关闭。
 - notebook Head停用状态为inactive，索引此前仅处理revoked/deleted；已补inactive并通过Manager回归。
 
-## 未完成/阻断
+## 2026-09-13 最新原生补验
 
-- 永久delete两条路径（已安装卸载delete、保留dataset删除）、历史/专属资源清理回读：等待本次CUA永久删除确认，只有合成临时dataset，不能操作真实用户库。
-- Project重命名/归档/解除关联完整桌面，Skill启停/卸载与基础任务装载，Artifact宽限期/保护矩阵仍需按范围补证。
-- 宽窄屏/键盘焦点/对比度最终验收：原1200×768截图发现分区标签与scope排版，COM-20260912-001/UI-MEM-02已交Antigravity，尚未收到实名接受。
-- 正式模型Run失败ProviderError；诊断HTTP422 invalid_model_error，目录刷新ConnectError，见model-smoke/provider-validation；不能以discovery旧成功或Mock代替。
-- 最终完整门禁和独立Reviewer增量结论未齐。
+- 当前 Core 已重启加载 c2856f79fd66bd795aca271ea690e4f1558c076b 的修复；实际关键源码指纹见 model-context-acceptance.json。新增的 GUI 记忆插件入口已从 MCP 页面实际点击进入，GUI 三脚本全部通过。
+- 主项目改名完成；修复后的解除关联保持 archived=false、installation_id=null，再绑定最新 notebook 成功。早期“解除关联会归档”的独立项目步骤不作为修复通过证据。源码 proof.txt 仍保留。
+- 设置页实际切换项目关闭、全局关闭、全局关闭时项目请求开启：有效值仍由 global=false 覆盖；插件启用明确返回 memory_disabled 并保持连接。实际变化时间分别为项目 2026-09-13T04:41:56.639189+00:00、全局 2026-09-13T04:42:08.908019+00:00，无关设置不共用新时间；旧不可追溯值显示 unknown。随后重新打开全局，原插件保持停用直到显式重装/启用。
+- Skill j1-reference 已实际按项目停用并卸载托管副本；来源 SKILL.md 保留，见 desktop-skill-uninstall.json。正式 Session 的 Skill guidance/关闭后下一 Session 行为已有 test_b23_session_context.py 确定性测试，不冒充真实模型 Skill 调用。
+- 重新运行正式 discovery（discovery-refresh.json）后，使用精确模型 gpt-oss-20b、正式 ModelProfile/Role/Session/Run，在绝对临时 workspace 读取 proof.txt 并回答42。实际 Task 显示已完成；详情首次受旧投影缓存影响显示“未找到该 Core Thread”，点击“刷新 Core Projection”后 canonical 历史显示 read_file、21 * 2 = 42 与最终答案。该手动刷新限制保留，未静默回退 Mock。
+- 两次真实 Context 的 memory_refs=[]、唯一工具 read_file、无已存记忆正文；全局关闭后没有新插件来源行，见 model-context-acceptance.json。早期 Luna invalid_model_error 与 Gemini ReadTimeout 保留为失败历史；最新真实链路已通过，不再重复模型请求。
+- 最新 notebook 通过 keep 卸载旧包、isolated 正常重装并接回同一两条记录的数据集，安装 Python 文件摘要与当前源码一致。新实例 plugin_installation_ee887ea3caa94e5797e6063735520ec9。
+- 对原 inactive 记录提出“修复验收=INDEX-EXACT”：pending 时精确键查询0；确认后 published/version2/revision3，完整键“修复验收”命中1、部分键“修复”0、值“INDEX-EXACT”0。见 desktop-exact-reinstall.json；未新增第三条记录。
+- 最后完整代码门禁888pass/1条件Docker skip、GUI101/类型/构建通过；原Reviewer两轮代码问题全部关闭。最新GUI入口、审计呈现及删除提示增量再运行102tests/typecheck/build全0。复用未变化Core门禁，不重复完整测试。
 
-2026-09-13补充：迁移查询已修且合成v14演练通过(migration-acceptance.json)。stdio空闲/真实deadline和notebook inactive索引已修；真实isolated notebook重装、新保存、停用后查询0完成。standard重装重新绑定正式查询成功。GUI101测试通过，Root又修预算键脱敏与实际项目名；原一条Host binding静态断言已改为禁止冒充项目名。完整集成门禁已记录exit：Python876pass/1skip，其他通过；GUI旧断言失败随后纠正重跑0，见gates/integrated。此后新增memory_version来源回调用于notebook精确键过滤，正在定向验证，不能冒用之前全套为新代码结论。
-项目主名改为J1 记忆验收项目；两独立项目分别归档/解除关联，keep.txt已读回保留，见project-source-retention.json。Artifact pinned schedule在UI明确拒绝，保持连接。Skill启用已验，停用/卸载尚未提交。
-CUA最近报用户改变窗口，实际从Skill跳回聊天；已询问是否可继续操作验收窗口，尚无明确回复，暂不点击。另已请求永久删除两个合成dataset确认，等待明确回复，不将自动“继续”当作该删除问题答案。模型ID/配置问题也仍未得到答案。
-原Reviewer增量额度失败，不再重复启动相同失败服务；独立初审报告已复制review-initial.md。
+- User明确授权上述两个临时dataset删除后，standard执行已安装卸载delete，notebook先keep再保留dataset delete，两条路径均Completed并显示已删除0记录/导出禁用。专属versions/heads/proposals/idempotency/legacy/source行均0，保留2+3 tombstones；41登记资源均deleted、5安装目录均不存在，Run均completed。canonical Items19/Context4/Artifact1数量不变，proof.txt/Skill来源/独立Downloads导出摘要不变。见desktop-delete-acceptance.json；不是磁盘安全擦除。
+- 删除后安装卡曾错误显示可以重装，已按服务端dataset状态修正并原生读回“对应数据集已删除，不能重新接回”。
+- Artifact合成工件取消固定→归档→安排清理→宽限期未到明确拒绝Trash→恢复active取消安排→重新固定→审计。正式审计扫描引用1、内容1、findings0，保留状态与审计事件已读回。补齐GUI审计返回呈现后，原生显示最近一次审计结果与未发现异常。见desktop-artifact-retention.json；没有加速时钟或物理purge。
+
+## 最终视觉与连接补验
+
+Antigravity通过COM-20260912-001实名交付234955e、38e0bfe、ffa4950，仅b2-memory.css；已交回写权。原生宽屏/768×797与445×820窗口、标签可点/选中/Tab焦点、长scope/单列、浅深主题已检查。纵向flex-basis导致180px空白已返修复验；说明文字由低对比muted改secondary，实际文字色对比最低6.08:1，焦点超过3:1。范围为本批管理界面，不宣称全应用WCAG认证，见native-visual-acceptance.json。
+
+真实停止临时Core后，原生显示未就绪/禁写；刷新返回明确invalid_error_envelope（Vite无上游），没有Mock回退。原临时create_app驱动未开启desktop CORS，后改用项目既有build_server_config(desktop=True)，只连本批临时库与18000。健康/GUI HTTP200，tauri://localhost预检200且回显Origin；原生手动刷新后管理投影恢复已连接。见desktop-reconnect.json。不涉及真实用户库或产品源码新增放宽规则。
+
+最终GUI102/typecheck/build均通过，Core与SDK未变，复用888pass/1条件Docker skip及协议生成证据。最后等待原Reviewer确认冻结版本、增量与证据覆盖，再形成最终交付。

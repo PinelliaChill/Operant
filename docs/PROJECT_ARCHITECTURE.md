@@ -59,7 +59,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ### B2-3 / MP-2 记忆与管理集成（2026-09-12，验收进行中）
 
-范围与门禁见 [任务包](design/b2-3/task-package.md)。以下描述当前源码；桌面、真实模型与最终独立审查未全部完成，不能视为交付通过。
+范围与门禁见 [任务包](design/b2-3/task-package.md)。以下描述当前源码；真实 gpt-oss-20b 正式任务/read_file/Context 与原生历史已通过（见本批 model-context-acceptance.json）。J1 生命周期/删除、基础管理、宽窄与错误重连已完成；最终冻结版本独立审查收口前不标记交付通过。
 
 `memory_plugins/manager.py` 通过正式 PluginHost 安装目录中的两个独立包。`memory-standard` 使用来源提取与 Host 搜索，`memory-notebook` 使用键值笔记；认证进程内支持独立私有索引，隔离模式与索引重建通过Host受控读取当前发布版本后执行键名精确过滤；配置分别来自包内 Schema。两者共享 MP-0 Host DTO 与包内标准库 SDK，支持认证进程内与未认证隔离 stdio。Core 负责来源授权和唯一发布 head，插件不能自行发布、越过 scope 或把候选当成正式召回。
 
@@ -71,7 +71,7 @@ HTTP/CLI 正式启动启用插件记忆模式：旧记忆写入口明确要求�
 
 `api_b2_3.py` 提供协议协商、管理 Query 与 typed Command。每个命令经过 Action Gateway；自己的幂等 journal 保留完整业务结果，删除数据后旧数据结果明确不可再取。响应保留类型结构并脱敏，超预算显式失败。`generate_b2_3.py` 从同一 Pydantic/FastAPI 源生成 `b2-3.v1` OpenAPI/digest 与 Python/TypeScript Client；CLI `operant memory manage` 使用生成 Client。
 
-GUI 的项目、知识、插件、记忆设置、Skill、保留与审计页消费同一管理投影。项目注册绑定绝对 Workspace，编辑、归档或解除关联不删除源码。设置按作用域与字段保留值/来源实际变化的独立时间，旧记录无法追溯时显示 unknown；Role 使用其不可变版本的创建时间，变更只影响新 Session 快照。解除关联只清除所选记忆插件，不改变归档状态；归档由独立命令负责。Skill 经发现、显式安装、项目启用、停用和卸载，安装副本校验 digest；运行时以单独 guidance 加入正式 Context，不扩大 Tool Policy。Artifact 页调用既有 Pin/归档/宽限期/Trash/恢复与审计，保留受保护引用屏障，不提供清空全部或物理 purge。
+GUI 的项目、知识、插件、记忆设置、Skill、保留与审计页消费同一管理投影。项目注册绑定绝对 Workspace，编辑、归档或解除关联不删除源码。设置按作用域与字段保留值/来源实际变化的独立时间，旧记录无法追溯时显示 unknown；Role 使用其不可变版本的创建时间，变更只影响新 Session 快照。解除关联只清除所选记忆插件，不改变归档状态；归档由独立命令负责。Skill 经发现、显式安装、项目启用、停用和卸载，安装副本校验 digest；运行时以单独 guidance 加入正式 Context，不扩大 Tool Policy。Artifact 页调用既有 Pin/归档/宽限期/Trash/恢复与审计，并呈现正式审计扫描数和发现详情，保留受保护引用屏障，不提供清空全部或物理 purge。
 
 ### B2-2 / MP-1 与基础任务接入（2026-09-12，已完成本批验收）
 

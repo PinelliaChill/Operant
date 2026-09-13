@@ -53,4 +53,20 @@ test('B2-3 lifecycle UI only exposes cleanup controls for active cleanup states'
   assert.match(management, /!lifecycleClosed && uninstallTarget === installation\.installation_id/);
   assert.doesNotMatch(management, /已选择项目.*installation\.binding_id/);
   assert.match(management, /blocksB23Management\(detail\) \? 'error' : 'ready'/);
+  assert.match(management, /relatedDataset = state\.datasets\.find/);
+  assert.match(management, /relatedDataset\?\.state === 'deleted'/);
+  assert.match(management, /对应数据集已删除，不能重新接回/);
+  assert.match(management, /relatedDataset\?\.state === 'retained'/);
+  assert.match(management, /保留数据集仍可从下方重装/);
+});
+
+test('B2-3 renders only a guarded server Artifact audit report', async () => {
+  const management = await source('../src/features/management/LiveManagementView.tsx');
+  assert.match(management, /parseArtifactAuditExport/);
+  assert.match(management, /scanned_database_references/);
+  assert.match(management, /scanned_blobs/);
+  assert.match(management, /data-audit-result/);
+  assert.match(management, /data-audit-summary/);
+  assert.match(management, /auditReport\.findings\.length/);
+  assert.match(management, /finding\.finding_type/);
 });

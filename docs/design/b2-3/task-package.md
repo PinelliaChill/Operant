@@ -24,17 +24,17 @@
 
 | ID | 要求与来源 | 负责人 | 方法/环境/预算 | 阻断及原因 | 结果/证据 |
 | --- | --- | --- | --- | --- | --- |
-| AC-01 | 两个独立真实包、Schema/策略不同、共用Host SDK；MP-2.1/3，计划§6 | Codex | 安装与实际RPC，两种Host模式；临时库/目录 | 是，核心范围 | 真实包与两Host模式已调用；标准/笔记原生安装保存查询重装已验；最新精确键在真实macOS沙箱exact1/partial0/value0，见isolated-exact-acceptance.json |
+| AC-01 | 两个独立真实包、Schema/策略不同、共用Host SDK；MP-2.1/3，计划§6 | Codex | 安装与实际RPC，两种Host模式；临时库/目录 | 是，核心范围 | 真实包与两Host模式已调用；标准/笔记原生安装保存查询重装已验；最新精确键在真实macOS沙箱及正常重装后的原生GUI均exact1/partial0/value0，见isolated-exact-acceptance.json、desktop-exact-reinstall.json |
 | AC-02 | 唯一head、候选不覆盖、Proposal/CAS、确认/纠正/停用/来源；MP-2.2/3 | Codex | 并发/迟到/幂等/证据状态定向测试与正式API | 是，数据正确性 | Ledger/Manager定向与原生pending→旧查询→确认通过；见test_memory_ledger.py、test_b23_management.py及desktop-acceptance.md |
 | AC-03 | 隔离旧库迁移、legacy_unverified、旧写代理/拒绝、新库拒旧二进制；计划§8.2 | Codex | 合成v14旧库副本迁移读回，数量/历史/所有权核对；不接触用户库 | 是，迁移门 | 合成v14旧库→v15→显式迁移通过；2旧版本/1记录未发布，历史与他项目隔离；实际B2-2旧代码拒绝v15，见migration-acceptance.json |
-| AC-04 | 关闭完整屏障、全局优先、再开无补扫、无插件普通任务；MP-2.4，计划§6 | Codex | 在途/队列/索引/Provider下一请求与普通任务定向及真实验收 | 是，关闭语义 | 在途取消/全局拒绝/blocked回执与确定性正式Session/工具/Skill/Context隔离通过；真实普通模型任务尚未通过 |
-| AC-05 | keep/delete、Core namespace、专属目录、共享/Run/历史等例外、tombstone、清理续做、保留数据导出/删除/重装；MP-2.5，计划§6 | Codex | 临时数据，故障/重启/缺Hook测试，桌面闭环 | 是，生命周期门 | 定向keep/export/reinstall/delete专属行与tombstone通过；原生keep/导出/重装通过；原生永久delete待本次CUA确认 |
-| AC-06 | 项目/有效配置与来源/作用域、知识候选搜索修改、插件管理、已有Skill基础管理、Artifact保留；计划§4/5 GUI-L2/L4 | Codex | 正式API+生成Client+GUI行为检查 | 是，管理闭环 | 管理与生成Client已接入；项目创建改名归档解除/知识/Skill安装启用/Artifact pin与审计/保留拒绝已原生验证；Skill剩余/视觉返修待补 |
+| AC-04 | 关闭完整屏障、全局优先、再开无补扫、无插件普通任务；MP-2.4，计划§6 | Codex | 在途/队列/索引/Provider下一请求与普通任务定向及真实验收 | 是，关闭语义 | 在途取消/全局拒绝/blocked回执与确定性正式Session/工具/Skill/Context隔离通过；全局关闭后的真实gpt-oss-20b普通任务/read_file/历史与两次Context隔离通过，见model-context-acceptance.json |
+| AC-05 | keep/delete、Core namespace、专属目录、共享/Run/历史等例外、tombstone、清理续做、保留数据导出/删除/重装；MP-2.5，计划§6 | Codex | 临时数据，故障/重启/缺Hook测试，桌面闭环 | 是，生命周期门 | 定向keep/export/reinstall/delete专属行与tombstone通过；原生keep/导出/重装通过；User明确确认后，两条永久delete原生通过，专属行/41资源删除、tombstone与历史/源/导出保留读回通过，见desktop-delete-acceptance.json |
+| AC-06 | 项目/有效配置与来源/作用域、知识候选搜索修改、插件管理、已有Skill基础管理、Artifact保留；计划§4/5 GUI-L2/L4 | Codex | 正式API+生成Client+GUI行为检查 | 是，管理闭环 | 管理与生成Client已接入；项目创建改名归档解除/知识/Skill安装启用/Artifact pin与审计/保留拒绝已原生验证；Skill停用/卸载与源保留已验；detach保持active后重绑已验；Artifact归档/安排清理/宽限期拒绝/恢复/固定及审计结果原生回读通过；视觉返修经Antigravity实名交付并由Codex完成原生验收 |
 | AC-07 | additive App Protocol/Python与TS生成Client/CLI；MP-2.6，AGENTS协议要求 | Codex | 确定生成、旧协议兼容、现有SDK脚本 | 是，契约门 | 现有产物与双次生成一致；正式Python Client/CLI与原生TS Client通过，见sdk-generation.json、client-smoke.json |
-| AC-08 | J1真实Tauri安装保存查询关闭keep/delete保留管理重装；计划§4/6，AGENTS客户端 | Codex | debug原生壳，宽窄屏/焦点/对比度/错误断线/Action Gateway | 是，联合门 | 部分通过，见desktop-acceptance.md；永久delete、最终宽窄焦点与剩余Skill待验，不能标J1完成 |
-| AC-09 | discovery精确模型/正式ModelProfile任务，关闭后普通聊天工具历史；AGENTS模型门 | Codex | 绝对隔离workspace、单调用120s/有限token，失败按协作规则停止 | 是，真实模型门 | 未通过：正式Session/Run ProviderError，HTTP422 invalid_model_error；discovery刷新ConnectError，见model-smoke.json、provider-validation.json |
-| AC-10 | 完整基础门禁及GUI/SDK现有脚本；AGENTS开发与验证 | Codex | uv ruff format/check、mypy src、pytest、lock --check --offline、diff --check；GUI test/typecheck/build | 是，硬门禁 | 最新集成888pass/1skip，GUI101测试/typecheck/build及全部基础门禁exit0；source_unchanged=true，见gates/reviewer-final/results.json |
-| AC-11 | 当前架构同步、独立gpt-5.6-luna/max审查、版本证据与进度；User/AGENTS | Codex | 同一Reviewer增量复核；工具无Fast开关，不宣称Fast | 是，交付门 | 当前架构已同步；User已授权源码审查；同一Luna/max确认两轮问题全部关闭，无剩余P1/P2，见review-code-closed.md；尚需冻结门禁/J1证据确认，UI-MEM-02待接收 |
+| AC-08 | J1真实Tauri安装保存查询关闭keep/delete保留管理重装；计划§4/6，AGENTS客户端 | Codex | debug原生壳，宽窄屏/焦点/对比度/错误断线/Action Gateway | 是，联合门 | J1已通过：两插件与生命周期管理/两条delete/445窄屏与宽屏/焦点/对比度/错误断线重连均完成，见desktop-acceptance.md、native-visual-acceptance.json、desktop-reconnect.json |
+| AC-09 | discovery精确模型/正式ModelProfile任务，关闭后普通聊天工具历史；AGENTS模型门 | Codex | 绝对隔离workspace、单调用120s/有限token，失败按协作规则停止 | 是，真实模型门 | 已通过：重新discovery后使用精确ID gpt-oss-20b，正式ModelProfile/Session/read_file/最终42及原生历史通过；全局关闭后Context无记忆/记忆工具/新来源，见discovery-refresh.json、model-smoke-oss.json、model-context-acceptance.json。早期Luna/Gemini失败保留为历史，不再阻断 |
+| AC-10 | 完整基础门禁及GUI/SDK现有脚本；AGENTS开发与验证 | Codex | uv ruff format/check、mypy src、pytest、lock --check --offline、diff --check；GUI test/typecheck/build | 是，硬门禁 | 最新集成888pass/1skip，GUI101测试/typecheck/build及全部基础门禁exit0；source_unchanged=true，见gates/reviewer-final/results.json；随后GUI入口、审计呈现与删除提示增量，GUI102/typecheck/build再验全部0，见gates/gui-final-results.json与gate-reuse.json |
+| AC-11 | 当前架构同步、独立gpt-5.6-luna/max审查、版本证据与进度；User/AGENTS | Codex | 同一Reviewer增量复核；工具无Fast开关，不宣称Fast | 是，交付门 | 当前架构已同步；User已授权源码审查；同一Luna/max确认两轮问题全部关闭，无剩余P1/P2，见review-code-closed.md；Antigravity已交权，J1与真实模型证据齐；等待同一Reviewer最终冻结版本复核 |
 
 ## 环境与停止规则
 
