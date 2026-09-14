@@ -1,5 +1,14 @@
 # Operant 安全边界
 
+## 报告安全问题
+
+如果发现可能泄露数据、绕过权限或执行未授权操作的问题，请通过仓库的
+[私密漏洞报告](https://github.com/PinelliaChill/Operant/security/advisories/new) 提交。
+附上受影响版本、复现步骤与经过脱敏的证据，不要在公开 Issue 中发布密钥、私人数据或可直接利用的细节。
+如果入口暂时不可用，可以先开一个不含漏洞细节的 Issue，请维护者提供私下沟通方式。
+
+以下是当前实现的详细安全边界。
+
 > 最后更新：2026-09-04
 
 Operant 会把模型输出视为不可信输入。模型只能请求由当前 `RoleSnapshot` 的 Tool Policy
