@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 私密报告安全漏洞
+    url: https://github.com/PinelliaChill/Operant/security/advisories/new
+    about: 涉及权限绕过、密钥或数据泄漏时，请勿公开漏洞细节。
