@@ -61,6 +61,11 @@ jobs:
       - name: 安装锁定依赖
         if: needs.changes.outputs.backend == 'true'
         run: uv sync --frozen --extra dev --python "${{ matrix.python-version }}"
+      - name: TUI定向测试
+        if: needs.changes.outputs.backend == 'true'
+        run: |
+          uv sync --project clients/tui --frozen --python "${{ matrix.python-version }}"
+          uv run --project clients/tui --no-sync python -m unittest discover -s clients/tui/test
       - name: Python检查与测试
         if: needs.changes.outputs.backend == 'true'
         run: |
