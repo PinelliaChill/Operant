@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import subprocess
+import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -738,7 +739,7 @@ def test_isolated_entrypoint_uses_stdlib_bidirectional_rpc(name: str) -> None:
         "params": {"context": context, "sources": [source], "source_watermark": "1"},
     }
     process = subprocess.Popen(
-        ["/private/tmp/operant-b2-2/.venv/bin/python", "-I", "-S", str(package / "plugin.py")],
+        [sys.executable, "-I", "-S", str(package / "plugin.py")],
         cwd=package,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -808,7 +809,7 @@ def test_notebook_isolated_fallback_reads_and_filters_exact_key() -> None:
         "content_digest": hashlib.sha256("验收标记=MAPLE-42".encode()).hexdigest(),
     }
     process = subprocess.Popen(
-        ["/private/tmp/operant-b2-2/.venv/bin/python", "-I", "-S", str(package / "plugin.py")],
+        [sys.executable, "-I", "-S", str(package / "plugin.py")],
         cwd=package,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,

@@ -28,8 +28,6 @@ from operant.domain.threads import (
 from operant.memory_plugins.manager import MemoryManager
 from operant.persistence.sqlite import MigrationError, SQLiteStore
 
-ACCEPTANCE_ROOT = Path("/private/tmp/b23-migration-acceptance")
-
 
 def _workspace(path: Path) -> WorkspaceInitialization:
     path.mkdir(parents=True, exist_ok=True)
@@ -85,9 +83,10 @@ def _seed_memory(
     return [first, second]
 
 
-def _fresh_source_database() -> tuple[SQLiteStore, Path, str, list[Item], list[Memory]]:
-    ACCEPTANCE_ROOT.mkdir(parents=True, exist_ok=True)
-    run_root = ACCEPTANCE_ROOT / f"run-{uuid4().hex}"
+def _fresh_source_database(
+    base_path: Path,
+) -> tuple[SQLiteStore, Path, str, list[Item], list[Memory]]:
+    run_root = base_path / f"run-{uuid4().hex}"
     run_root.mkdir()
     source_db = run_root / "legacy-v14.sqlite3"
     project_workspace = run_root / "project-a-workspace"
@@ -114,10 +113,14 @@ def _fresh_source_database() -> tuple[SQLiteStore, Path, str, list[Item], list[M
 
 
 @pytest.mark.asyncio
-async def test_v14_to_v15_project_memory_migration_is_quarantined_and_scoped() -> None:
+async def test_v14_to_v15_project_memory_migration_is_quarantined_and_scoped(
+    tmp_path: Path,
+) -> None:
     """Migrate only the registered project and preserve Core history."""
 
-    old_store, source_db, project_scope, old_items, project_memories = _fresh_source_database()
+    old_store, source_db, project_scope, old_items, project_memories = _fresh_source_database(
+        tmp_path
+    )
     old_version_rows = len(old_store.list_memory_versions("legacy-project-a"))
     with old_store._connect() as connection:  # noqa: SLF001 - acceptance readback
         old_item_count = int(connection.execute("SELECT count(*) FROM items").fetchone()[0])
