@@ -72,7 +72,7 @@ def test_v14_manifest_is_frozen_and_additive(tmp_path: Path) -> None:
     assert store.migrate(target_version=13) == 13
     v13_manifest = SQLiteStore._migration_manifest(13)
 
-    assert store.migrate() == 14
+    assert store.migrate(target_version=14) == 14
     assert store.schema_version() == 14
     assert SQLiteStore._migration_manifest(13) == v13_manifest
     manifest = SQLiteStore._migration_manifest(14)

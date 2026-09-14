@@ -1,0 +1,12 @@
+unformatted: File would be reformatted
+   --> sdk/protocol/generate_b2_3.py:170:32
+    |
+169 |         if ts_source.count("pathPart(") == 1:
+    -             ts_source = re.sub(r"function pathPart\([^\n]+\n.*?\n}\n", "", ts_source, flags=re.DOTALL)
+170 +             ts_source = re.sub(
+171 +                 r"function pathPart\([^\n]+\n.*?\n}\n", "", ts_source, flags=re.DOTALL
+172 +             )
+173 |         base._write_if_changed(TS_PATH, ts_source)
+    |
+
+1 file would be reformatted, 267 files already formatted

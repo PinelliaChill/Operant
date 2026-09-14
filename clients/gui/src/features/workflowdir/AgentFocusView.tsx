@@ -24,6 +24,8 @@ import {
 import { EmptyState } from '../../components/EmptyState';
 import { useDemo } from '../../demo/DemoContext';
 import type { DemoAgentLogEntry, DemoMessage } from '../../demo/types';
+import { useOperant } from '../../context/ClientContext';
+import { LiveUnavailableView } from '../../live/LiveUnavailableView';
 import { formatChatTimestamp } from '../chat/chatUtils';
 
 const AGENT_STATUS_LABELS: Record<string, string> = {
@@ -75,6 +77,14 @@ const LogEntryItem: React.FC<{ log: DemoAgentLogEntry }> = ({ log }) => {
 };
 
 export const AgentFocusView: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') {
+    return <LiveUnavailableView section="workflow" />;
+  }
+  return <DemoAgentFocusView />;
+};
+
+const DemoAgentFocusView: React.FC = () => {
   const { id = '', sid = '', aid = '' } = useParams<{ id: string; sid: string; aid: string }>();
   const navigate = useNavigate();
   const { getConversation, getAgent, messages, agentLogsOf, sendAgentDM } = useDemo();

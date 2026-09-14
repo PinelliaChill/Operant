@@ -1,0 +1,379 @@
+{
+  "DatasetOwner": [
+    {
+      "kind": "plugin_dataset",
+      "dataset_id": "data-a",
+      "owner_namespace": "dataset:data-a",
+      "principal_id": "user-a"
+    }
+  ],
+  "MemoryEnabled": [
+    {
+      "state": "enabled",
+      "binding_id": "binding-a",
+      "binding_epoch": 4,
+      "installation_id": "install-a",
+      "dataset_id": "data-a",
+      "config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "package_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "certification_id": "cert-a",
+      "index_generation": "index-a",
+      "global_enabled": true
+    }
+  ],
+  "MemoryDisabled": [
+    {
+      "state": "disabled",
+      "binding_id": "binding-a",
+      "binding_epoch": 5,
+      "cause": "global_off"
+    }
+  ],
+  "HostAdmission": [
+    {
+      "host_instance_id": "host-a",
+      "installation_id": "install-a",
+      "mode": "trusted_in_process",
+      "certification_id": "cert-a",
+      "isolation_evidence_ref": null,
+      "eligibility": "eligible",
+      "permission_epoch": 3,
+      "restart_required": false
+    }
+  ],
+  "UninstallRequest": [
+    {
+      "installation_id": "install-a",
+      "data_policy": "keep",
+      "inventory_revision": 2,
+      "expected_binding_epoch": 4,
+      "idempotency_key": "uninstall-a",
+      "stop_run_ids": []
+    },
+    {
+      "installation_id": "install-a",
+      "data_policy": "delete",
+      "inventory_revision": 2,
+      "expected_binding_epoch": 4,
+      "idempotency_key": "uninstall-a",
+      "stop_run_ids": []
+    }
+  ],
+  "LifecycleReceipt": [
+    {
+      "operation_id": "operation-a",
+      "installation_id": "install-a",
+      "state": "blocked",
+      "binding_epoch": 5,
+      "inventory_revision": 2,
+      "cursor": "12",
+      "ack": "host_accepted",
+      "cleanup": [
+        {
+          "resource_id": "resource-0",
+          "outcome": "deleted",
+          "reason": "exclusive",
+          "blocker_ids": []
+        },
+        {
+          "resource_id": "resource-1",
+          "outcome": "retained",
+          "reason": "keep_selected",
+          "blocker_ids": []
+        },
+        {
+          "resource_id": "resource-2",
+          "outcome": "blocked",
+          "reason": "active_run",
+          "blocker_ids": [
+            "run-a"
+          ]
+        }
+      ]
+    }
+  ],
+  "MemoryHead": [
+    {
+      "dataset_id": "data-a",
+      "record_id": "record-a",
+      "published_version": {
+        "dataset_id": "data-a",
+        "record_id": "record-a",
+        "version": 1,
+        "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "revision": 2,
+      "publication_cursor": "9007199254740993",
+      "state": "published",
+      "permission_epoch": 3
+    }
+  ],
+  "MemoryPack": [
+    {
+      "manifest_id": "manifest-a",
+      "manifest_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "scope": {
+        "kind": "workspace",
+        "project_id": "project-a",
+        "workspace_id": "workspace-a"
+      },
+      "run_id": "run-a",
+      "agent_instance_id": "agent-a",
+      "binding": {
+        "state": "enabled",
+        "binding_id": "binding-a",
+        "binding_epoch": 4,
+        "installation_id": "install-a",
+        "dataset_id": "data-a",
+        "config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "package_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "certification_id": "cert-a",
+        "index_generation": "index-a",
+        "global_enabled": true
+      },
+      "knowledge_cutoff": "9007199254740993",
+      "policy_revision": 1,
+      "permission_epoch": 3,
+      "selected": [
+        {
+          "dataset_id": "data-a",
+          "record_id": "record-a",
+          "version": 1,
+          "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "total_token_budget": 2048,
+      "token_count": 20,
+      "selection": "automatic_and_explicit"
+    }
+  ],
+  "RpcContext": [
+    {
+      "sdk_version": "operant-memory-sdk.v1",
+      "request_id": "request-a",
+      "installation_id": "install-a",
+      "dataset_id": "data-a",
+      "scope": {
+        "kind": "workspace",
+        "project_id": "project-a",
+        "workspace_id": "workspace-a"
+      },
+      "deadline": "2026-10-01T00:00:00Z",
+      "cancel_token": "cancel-a",
+      "idempotency_key": "key-a",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "binding_epoch": 4,
+      "permission_epoch": 3,
+      "lease_fencing": 5
+    }
+  ],
+  "ProjectIdentity": [
+    {
+      "project_id": "project-a",
+      "display_name": "合成评测项目",
+      "revision": 1,
+      "workspace_ids": [
+        "workspace-a"
+      ],
+      "sharing": "explicit_grants_only"
+    }
+  ],
+  "WorkspaceIdentity": [
+    {
+      "workspace_id": "workspace-a",
+      "project_id": "project-a",
+      "workspace_ref": "workspace:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "worktree_id": "worktree-a",
+      "association_revision": 1,
+      "association": "explicit_registration"
+    }
+  ],
+  "TaskProjection": [
+    {
+      "source": {
+        "source_type": "session",
+        "source_id": "task-a"
+      },
+      "project_id": "project-a",
+      "workspace_id": "workspace-a",
+      "source_status": "running",
+      "revision": 1,
+      "actions": [
+        {
+          "action": "cancel",
+          "availability": "unsupported",
+          "reason_code": "unsupported",
+          "projection_revision": 1
+        }
+      ]
+    },
+    {
+      "source": {
+        "source_type": "workflow_run",
+        "source_id": "task-a"
+      },
+      "project_id": "project-a",
+      "workspace_id": "workspace-a",
+      "source_status": "running",
+      "revision": 1,
+      "actions": [
+        {
+          "action": "cancel",
+          "availability": "unsupported",
+          "reason_code": "unsupported",
+          "projection_revision": 1
+        }
+      ]
+    },
+    {
+      "source": {
+        "source_type": "team_task",
+        "source_id": "task-a"
+      },
+      "project_id": "project-a",
+      "workspace_id": "workspace-a",
+      "source_status": "running",
+      "revision": 1,
+      "actions": [
+        {
+          "action": "cancel",
+          "availability": "unsupported",
+          "reason_code": "unsupported",
+          "projection_revision": 1
+        }
+      ]
+    }
+  ],
+  "AgentBinding": [
+    {
+      "role_preset_id": "role-a",
+      "role_version": 1,
+      "definition_revision_id": null,
+      "snapshot_id": "snapshot-a",
+      "agent_instance_id": "agent-a",
+      "session_id": "session-a",
+      "run_id": null,
+      "model_profile_id": "profile-a",
+      "provider_id": "provider-a",
+      "provider_model_id": "discovered-model-id",
+      "capability_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "MemoryVersion": [
+    {
+      "ref": {
+        "dataset_id": "data-a",
+        "record_id": "record-a",
+        "version": 1,
+        "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "owner": {
+        "kind": "plugin_dataset",
+        "dataset_id": "data-a",
+        "owner_namespace": "dataset:data-a",
+        "principal_id": "user-a"
+      },
+      "kind": "project",
+      "content_type": "fact",
+      "scope": {
+        "kind": "workspace",
+        "project_id": "project-a",
+        "workspace_id": "workspace-a"
+      },
+      "role_ids": [],
+      "agent_ids": [],
+      "content": "合成事实，仅供离线契约验证。",
+      "sources": [
+        {
+          "source_type": "item",
+          "source_id": "item-a",
+          "revision": 1,
+          "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "scope": {
+            "kind": "workspace",
+            "project_id": "project-a",
+            "workspace_id": "workspace-a"
+          },
+          "permission_epoch": 3,
+          "availability": "available"
+        }
+      ],
+      "evidence": "observed",
+      "sensitivity": "internal",
+      "retention_policy_id": "retention-a",
+      "conditions": {
+        "commit_ref": null,
+        "tree_digest": null,
+        "file_fingerprints": {},
+        "environment_digest": null,
+        "tool_versions": {},
+        "verified_at": null,
+        "valid_from": "2026-09-09T00:00:00Z",
+        "valid_until": null
+      },
+      "recorded_at": "2026-09-09T00:00:00Z"
+    }
+  ],
+  "Dataset": [
+    {
+      "owner": {
+        "kind": "plugin_dataset",
+        "dataset_id": "data-a",
+        "owner_namespace": "dataset:data-a",
+        "principal_id": "user-a"
+      },
+      "installation_id": null,
+      "state": "retained",
+      "revision": 3,
+      "consumers": [],
+      "retention_lock_ids": [],
+      "management_actions": [
+        "inspect",
+        "export",
+        "delete",
+        "rebind"
+      ]
+    }
+  ],
+  "Tombstone": [
+    {
+      "dataset_id": "data-a",
+      "record_id": "record-a",
+      "state": "deleted",
+      "revision": 4,
+      "cursor": "14"
+    }
+  ],
+  "ContractError": [
+    {
+      "code": "unknown_scope",
+      "request_id": "request-a",
+      "retry": "never",
+      "detail_ref": null
+    },
+    {
+      "code": "unknown_owner",
+      "request_id": "request-a",
+      "retry": "never",
+      "detail_ref": null
+    },
+    {
+      "code": "stale_epoch",
+      "request_id": "request-a",
+      "retry": "never",
+      "detail_ref": null
+    },
+    {
+      "code": "cleanup_blocked",
+      "request_id": "request-a",
+      "retry": "never",
+      "detail_ref": null
+    },
+    {
+      "code": "outcome_unknown",
+      "request_id": "request-a",
+      "retry": "never",
+      "detail_ref": null
+    }
+  ]
+}

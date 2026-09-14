@@ -1,0 +1,7 @@
+{
+  "kind": "bounded provider diagnostic, not acceptance",
+  "model_id": "gpt-5.6-luna",
+  "result": "failed",
+  "error_type": "ProviderError",
+  "reason": "provider returned HTTP 422"
+}

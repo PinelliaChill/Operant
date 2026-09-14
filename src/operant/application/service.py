@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from operant.memory_plugins.manager import MemoryManager
+
 import asyncio
 import hashlib
 import hmac
@@ -7,7 +12,7 @@ import json
 import os
 import secrets
 import stat
-from collections.abc import AsyncIterator, Collection, Mapping
+from collections.abc import AsyncIterator, Callable, Collection, Mapping
 from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -116,6 +121,7 @@ from operant.domain.security import (
     SecurityAuditEvent,
 )
 from operant.domain.threads import (
+    AgentMessagePayload,
     Artifact,
     ArtifactAccessLevel,
     ArtifactAuditFinding,
@@ -133,8 +139,11 @@ from operant.domain.threads import (
     RetentionLifecycle,
     RetentionPolicy,
     SteeringPayload,
+    SystemEventPayload,
     ThreadStatus,
+    ToolCallPayload,
     Turn,
+    UserMessagePayload,
 )
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
 from operant.persistence.security import SQLiteSecurityRepository
@@ -485,6 +494,10 @@ class _PersistentActionGateway:
 
 
 class ApplicationService:
+    memory_plugin_mode: bool = False
+    memory_manager: MemoryManager | None = None
+    memory_manager_factory: Callable[[], MemoryManager] | None = None
+
     """Use-case layer shared by CLI, API, and workflows."""
 
     def __init__(
@@ -2643,6 +2656,8 @@ class ApplicationService:
         only with explicit confirmation or when the caller opts into the narrow
         provenance-and-verification rule implemented by the domain layer.
         """
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
         if isinstance(memory, RoleSnapshot):
             if snapshot is not None:
@@ -2753,6 +2768,12 @@ class ApplicationService:
         project_scope: str | None = None,
         version: int | None = None,
     ) -> Memory:
+        if self.memory_plugin_mode:
+            if self.memory_manager is None and self.memory_manager_factory is not None:
+                self.memory_manager = self.memory_manager_factory()
+            if self.memory_manager is None:
+                raise PermissionError("memory plugin is not installed or selected")
+            return self.memory_manager.compat_get(memory_id, project_scope, snapshot, version)
         memory = self.store.get_memory(memory_id, version)
         self._authorize_memory(
             snapshot,
@@ -2775,6 +2796,14 @@ class ApplicationService:
         include_candidates: bool = False,
         limit: int = 20,
     ) -> list[Memory]:
+        if self.memory_plugin_mode:
+            if self.memory_manager is None and self.memory_manager_factory is not None:
+                self.memory_manager = self.memory_manager_factory()
+            if self.memory_manager is None:
+                return []
+            return self.memory_manager.compat_query(
+                query, project_scope, snapshot, include_candidates, limit
+            )
         scope = parse_memory_scope(snapshot.memory_scope)
         requested_kinds: tuple[MemoryKind, ...]
         if kinds is None:
@@ -2840,6 +2869,8 @@ class ApplicationService:
         allow_conservative_activation: bool = False,
         **changes: Any,
     ) -> Memory:
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
         current = self.store.get_memory(memory_id)
         self._authorize_memory(
             snapshot,
@@ -2892,6 +2923,8 @@ class ApplicationService:
         project_scope: str | None = None,
     ) -> Memory:
         """Explicitly activate a candidate after a human or trusted caller confirms it."""
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
         current = self.store.get_memory(memory_id)
         self._authorize_memory(
@@ -2915,6 +2948,8 @@ class ApplicationService:
         allow_conservative_activation: bool = False,
     ) -> Memory:
         """Activate a candidate through explicit confirmation or the safe rule."""
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
         current = self.store.get_memory(memory_id)
         self._authorize_memory(
@@ -2941,6 +2976,8 @@ class ApplicationService:
         session_id: str | None = None,
         project_scope: str | None = None,
     ) -> Memory:
+        if self.memory_plugin_mode:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
         current = self.store.get_memory(memory_id)
         self._authorize_memory(
             snapshot,
@@ -3263,6 +3300,7 @@ class ApplicationService:
                     },
                 )
                 return
+        history_turn: Turn | None = None
         agent = None
         cancellation: asyncio.Event | None = None
         run_lease: SessionRunLease | None = None
@@ -3271,6 +3309,24 @@ class ApplicationService:
             if lease is None:
                 raise ConflictError("session run admission lease is unavailable")
             run_lease = lease
+            bound_history = thread_id is not None and any(
+                ref.source_type.value == "session" and ref.source_id == session.id
+                for ref in self.get_thread(thread_id).legacy_refs
+            )
+            history_cursor = (
+                self._latest_thread_item_cursor(thread_id)
+                if bound_history and thread_id is not None
+                else None
+            )
+            if bound_history and thread_id is not None:
+                history_turn = self.store.create_turn(Turn(thread_id=thread_id))
+                self.append_item(
+                    Item(
+                        thread_id=thread_id,
+                        turn_id=history_turn.id,
+                        payload=UserMessagePayload(text=user_message),
+                    )
+                )
             agent = self.factory.create_agent(session.id)
             lease = self.store.bind_session_run_lease_agent(lease, agent.id)
             run_lease = lease
@@ -3283,6 +3339,17 @@ class ApplicationService:
                 policy=session.role_snapshot.tool_policy,
             )
             normalized_workspace = str(Path(workspace).resolve())
+            if (
+                self.memory_plugin_mode
+                and self.memory_manager is None
+                and self.memory_manager_factory
+            ):
+                self.memory_manager = self.memory_manager_factory()
+            skill_context = (
+                self.memory_manager.begin_skill_run(normalized_workspace, agent.id)
+                if self.memory_manager
+                else ""
+            )
             context_composer = PersistentContextComposer(
                 store=self.store,
                 session=session,
@@ -3290,6 +3357,7 @@ class ApplicationService:
                 workspace=normalized_workspace,
                 thread_id=thread_id,
                 references=tuple(references),
+                thread_item_cursor_end=history_cursor,
                 memory_resolver=lambda memory_id: self.get_memory(
                     memory_id,
                     snapshot=session.role_snapshot,
@@ -3323,6 +3391,7 @@ class ApplicationService:
                             turn=0,
                             payload={"error_type": type(exc).__name__},
                         ),
+                        history_turn=history_turn,
                     )
                     self.store.update_agent_status(agent.id, AgentStatus.FAILED)
                 else:
@@ -3338,6 +3407,7 @@ class ApplicationService:
                             turn=0,
                             payload={"error_type": type(exc).__name__},
                         ),
+                        history_turn=history_turn,
                     )
             finally:
                 if cancellation is not None and self._cancellations.get(session.id) is cancellation:
@@ -3385,6 +3455,7 @@ class ApplicationService:
             snapshot=session.role_snapshot,
             user_message=user_message,
             approval_callback=wait_for_approval,
+            supplementary_context=skill_context,
         )
         deadline = asyncio.get_running_loop().time() + session.role_snapshot.budget.timeout_seconds
         final_status = AgentStatus.FAILED
@@ -3418,7 +3489,9 @@ class ApplicationService:
                         turn=0,
                         payload={"timeout_seconds": (session.role_snapshot.budget.timeout_seconds)},
                     )
-                    timeout_event = self._persist_runtime_event(session.id, agent.id, timeout_event)
+                    timeout_event = self._persist_runtime_event(
+                        session.id, agent.id, timeout_event, history_turn=history_turn
+                    )
                     yield timeout_event
                     final_status = AgentStatus.TIMED_OUT
                     break
@@ -3452,7 +3525,9 @@ class ApplicationService:
                         turn=0,
                         payload={"timeout_seconds": (session.role_snapshot.budget.timeout_seconds)},
                     )
-                    timeout_event = self._persist_runtime_event(session.id, agent.id, timeout_event)
+                    timeout_event = self._persist_runtime_event(
+                        session.id, agent.id, timeout_event, history_turn=history_turn
+                    )
                     yield timeout_event
                     final_status = AgentStatus.TIMED_OUT
                     break
@@ -3465,7 +3540,9 @@ class ApplicationService:
                         turn=0,
                         payload={},
                     )
-                    cancel_event = self._persist_runtime_event(session.id, agent.id, cancel_event)
+                    cancel_event = self._persist_runtime_event(
+                        session.id, agent.id, cancel_event, history_turn=history_turn
+                    )
                     yield cancel_event
                     final_status = AgentStatus.CANCELLED
                     break
@@ -3490,7 +3567,9 @@ class ApplicationService:
                             "detail": str(runtime_event.payload["detail"]),
                         }
 
-                runtime_event = self._persist_runtime_event(session.id, agent.id, runtime_event)
+                runtime_event = self._persist_runtime_event(
+                    session.id, agent.id, runtime_event, history_turn=history_turn
+                )
                 yield runtime_event
                 if runtime_event.event_type == "model.completed":
                     try:
@@ -3513,7 +3592,9 @@ class ApplicationService:
                 turn=0,
                 payload={"reason": "stream_cancelled"},
             )
-            self._persist_runtime_event(session.id, agent.id, cancel_event)
+            self._persist_runtime_event(
+                session.id, agent.id, cancel_event, history_turn=history_turn
+            )
             raise
         except Exception as exc:
             failure_event = RuntimeEvent(
@@ -3521,7 +3602,9 @@ class ApplicationService:
                 turn=0,
                 payload={"error_type": type(exc).__name__},
             )
-            failure_event = self._persist_runtime_event(session.id, agent.id, failure_event)
+            failure_event = self._persist_runtime_event(
+                session.id, agent.id, failure_event, history_turn=history_turn
+            )
             yield failure_event
             final_status = AgentStatus.FAILED
         finally:
@@ -3535,11 +3618,13 @@ class ApplicationService:
                 )
                 lease_watcher.cancel()
                 await asyncio.gather(lease_watcher, return_exceptions=True)
-                try:
-                    await iterator.aclose()
-                finally:
-                    self.store.update_agent_status(agent.id, final_status)
+                await iterator.aclose()
             finally:
+                # Cancellation can interrupt any await above, including cleanup.
+                # Preserve the terminal state before releasing the durable lease.
+                if self.memory_manager is not None:
+                    self.memory_manager.release_skill_run(agent.id)
+                self.store.update_agent_status(agent.id, final_status)
                 if self._cancellations.get(session.id) is cancellation:
                     self._cancellations.pop(session.id, None)
                 self._clear_session_approvals(session.id)
@@ -3615,16 +3700,53 @@ class ApplicationService:
         ]
 
     def _persist_runtime_event(
-        self, session_id: str, agent_id: str | None, event: RuntimeEvent
+        self,
+        session_id: str,
+        agent_id: str | None,
+        event: RuntimeEvent,
+        *,
+        history_turn: Turn | None = None,
     ) -> RuntimeEvent:
         sanitized_event = event.model_copy(update={"payload": redact_public_data(event.payload)})
+        history_item = None
+        if history_turn is not None:
+            payload: ItemPayload | None = None
+            content = sanitized_event.payload.get("content")
+            if (
+                event.event_type == "model.completed"
+                and isinstance(content, str)
+                and content
+                and agent_id is not None
+            ):
+                payload = AgentMessagePayload(text=content, agent_id=agent_id)
+            elif event.event_type == "tool.started":
+                payload = ToolCallPayload(
+                    tool_call_id=str(sanitized_event.payload["tool_call_id"]),
+                    tool_name=str(sanitized_event.payload["name"]),
+                )
+            elif (
+                event.event_type.startswith(("agent.", "tool."))
+                or event.event_type == "session.run_failed"
+            ):
+                payload = SystemEventPayload(
+                    event_type=event.event_type,
+                    summary=event.event_type,
+                    source_ref=agent_id or session_id,
+                )
+            if payload is not None:
+                history_item = Item(
+                    thread_id=history_turn.thread_id,
+                    turn_id=history_turn.id,
+                    payload=payload,
+                )
         persisted = self.store.append_event(
             Event(
                 session_id=session_id,
                 agent_id=agent_id,
                 event_type=sanitized_event.event_type,
                 payload={"turn": sanitized_event.turn, **sanitized_event.payload},
-            )
+            ),
+            history_item=history_item,
         )
         return sanitized_event.model_copy(update={"cursor": persisted.cursor})
 

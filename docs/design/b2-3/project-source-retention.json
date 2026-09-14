@@ -1,0 +1,7 @@
+{
+  "source": "readback after actual Tauri archive and detach",
+  "files": {
+    "detach-workspace": "J1 source file must survive project detach.\n",
+    "detach-only": "J1 detach retains source.\n"
+  }
+}

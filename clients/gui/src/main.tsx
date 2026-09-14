@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { App } from './app/App';
 import './styles/theme.css';
 import './styles/layout.css';
+import './styles/b2-memory.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

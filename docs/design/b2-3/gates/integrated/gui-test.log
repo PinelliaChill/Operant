@@ -1,0 +1,420 @@
+
+> operant-gui@2.0.0 test
+> node --test --experimental-strip-types test/*.test.ts
+
+✔ B2 adapter validates model and role projections without exposing credential values (4.041792ms)
+✔ Discovery preserves only the exact model IDs returned by Core (0.281333ms)
+✔ Task mapping preserves source identity and server action availability (12.592583ms)
+✔ Session history keeps canonical payloads and AgentInstance identities intact (0.208084ms)
+✔ B2 adapter negotiates exact protocol and forwards cancel idempotency key (0.255792ms)
+✔ B2 adapter resolves one task by source identity without scanning a page (0.129625ms)
+✔ B2 errors remain typed and transport failures are explicit (0.164166ms)
+✔ Agent page preserves runtime state and refuses a repeated page cursor (0.176791ms)
+✔ B2-3 mapping keeps project, source/version and candidate proposal fields (2.818375ms)
+✔ B2-3 mapping rejects an incomplete authoritative projection (0.709041ms)
+✔ B2-3 optional lifecycle fields normalize null without manufacturing cleanup errors (0.237208ms)
+✔ B2-3 adapter negotiates the generated protocol before reading management state (0.201042ms)
+✔ B2-3 commands forward one explicit idempotency key and never replay locally (0.127625ms)
+✔ B2-3 transport uncertainty is typed for manual reconciliation (0.152792ms)
+✔ B2-3 business rejection does not block the last good management projection (4.240375ms)
+✔ B2-3 Live entrypoints use the management view while Demo stays separate (25.181625ms)
+✔ B2-3 management UI exposes the required command families and unknown-result guard (17.606917ms)
+✖ B2-3 lifecycle UI only exposes cleanup controls for active cleanup states (5.172959ms)
+✔ live adapter negotiates through the generated client instance (5.7485ms)
+✔ live createSession forwards the exact selected Thread binding (1.085584ms)
+✔ project and thread relationships use exact generated IDs and legacy refs (0.405916ms)
+✔ run stream keeps Promise plus AsyncIterable and lossless replay cursor (0.407667ms)
+✔ SSE error recovery and detail survive generated frame mapping (4.438167ms)
+✔ missing Schema operations and session scopes fail explicitly (0.97475ms)
+✔ approval projection carries its required session scope (0.118625ms)
+✔ live client uses the browser origin for Vite and production proxies (0.8305ms)
+✔ Tauri shell uses only the fixed localhost Core endpoint (0.244834ms)
+✔ an HTTP debug WebView keeps its browser origin even when Tauri internals exist (0.513084ms)
+✔ missing or non-browser origins fail instead of falling back to Core or Mock (0.231792ms)
+✔ resolveLiveRouteSupport permits all standard Live routes (1.052917ms)
+✔ resolveLiveRouteSupport strictly intercepts nested /collab/:wfId/canvas demo routes (0.161334ms)
+✔ resolveLiveRouteSupport strictly intercepts legacy demo-only routes in Live mode (0.126083ms)
+✔ reducer deduplicates by resource scope and committed cursor (1.797792ms)
+✔ cursor reducer keeps an int64 cursor lossless (0.218167ms)
+✔ manual reconcile marker is found in nested projection payloads (0.180208ms)
+✔ manual reconcile SSE error/detail is sticky input and preserved (1.03475ms)
+✔ session projection and approval action keys retain exact scopes (2.366166ms)
+✔ session creation is disabled without an active unbound selected Thread (0.129333ms)
+✔ reload exposes a preexisting projected Session without local details (0.257042ms)
+✔ a projected binding upgrades a cached Session without duplicating its option (0.081583ms)
+✔ an unbound Thread does not borrow a page-local cached Session (0.065542ms)
+✔ an approval remains actionable while its run awaits projection (0.107375ms)
+✔ an approval submission in flight prevents duplicate decisions (0.256584ms)
+✔ approval projection correction keeps the active stream generation (0.334ms)
+✔ approval stays pending until its exact Query projection is gone (0.219708ms)
+✔ projection correction commits only the newest response in its generation (0.064459ms)
+✔ pending run or Session command blocks Thread changes with an explicit state (0.076875ms)
+✔ unbound selected Thread has no approvals from another Session (0.488208ms)
+✔ only deterministic approval failures release the pending lock (0.358166ms)
+✔ normal stream EOF is a retryable failure for the original command key (0.059792ms)
+✔ only terminal SSE releases a pending run and failures stay typed (0.150084ms)
+✔ all known terminal failure events release command state and preserve typed codes (0.087042ms)
+✔ stdio form uses only a server-returned root with relative cwd and digest-pinned image (0.966417ms)
+✔ legacy SSE form emits secret references and no stdio fields (0.143333ms)
+✔ approval component keeps manual decisions keyboard reachable and disconnect-safe (0.391583ms)
+✔ unknown outcome component explicitly forbids automatic replay and exposes receipt lookup (0.064125ms)
+✔ MCP controls stay reachable at wide and narrow widths (0.054209ms)
+✔ Extensions add and mutation controls consume the fail-closed availability state (0.063416ms)
+✔ live settings keeps the remote system route reachable (1.9545ms)
+✔ maps writer state without requiring or exposing lease tokens (0.61075ms)
+✔ Phase 23 adapter accepts generated snake case projections without inventing ids (1.573708ms)
+✔ Phase 23 adapter maps node and team projections (0.229333ms)
+✔ Phase 23 event mapping retains lossless cursor and scope (0.106167ms)
+✔ Skill mapping preserves untrusted status and safe relative paths (0.748167ms)
+✔ MCP mapping retains lifecycle and tool snapshot metadata (0.522167ms)
+✔ MCP receipt and approval errors preserve only actionable control-plane facts (0.445ms)
+✔ Policy mapping retains DENY and remediation evidence (0.131584ms)
+✔ Security audit mapping keeps only the explicit safe projection fields (0.539875ms)
+✔ adapter delegates to the generated Phase45 client (0.177542ms)
+✔ adapter retains a mutation key through response loss and releases after outcome (6.499917ms)
+✔ approved MCP call retries with the original stable mutation key (0.604708ms)
+✔ MCP actions follow lifecycle and fail closed while busy (0.69625ms)
+✔ security audit state keeps only the newest bounded facts (0.233125ms)
+✔ ASK remains pending rather than being presented as allowed (0.061ms)
+✔ refresh failure retains stale roots and fail-closes MCP actions until recovery (0.15575ms)
+✔ live Phase45 refresh failure has no Demo fallback (1.566459ms)
+✔ PWA manifest is installable and starts on the hash-router chat route (4.224417ms)
+✔ service worker never handles Core API, authenticated, or write requests (2.216791ms)
+✔ service worker precaches only anonymous public shell assets for offline reload (0.901708ms)
+✔ runtime events deduplicate within resource scope and keep int64 cursors (1.811334ms)
+✔ runtime event memory is bounded without losing committed cursor (27.939041ms)
+✔ runtime cursors are isolated per resource scope and bounded (24.953042ms)
+✔ disconnect recovery replays before authoritative Query correction (0.147666ms)
+✔ a fulfilled iterator result cannot write after its epoch becomes stale (0.122292ms)
+✔ a rejected iterator result is ignored after its epoch becomes stale (0.067625ms)
+✔ current iterator EOF and rejection remain visible to the active scope (0.27475ms)
+✔ workspace switch clears Graph and Team projections before a pending event resolves (0.079291ms)
+✔ normal EOF is idle only for authoritative terminal graph states (0.056083ms)
+✔ unknown side effects are sticky and never automatically replayed (0.124458ms)
+✔ idempotency registry reuses a key until the logical action is released (1.428709ms)
+✔ idempotency keys remain header-safe when the logical action contains Chinese text (0.105125ms)
+✔ scheduler adapter maps exact Phase 5A schedule fields (0.699542ms)
+✔ scheduler adapter maps queue and dead-letter facts without deriving state (0.12225ms)
+✔ scheduler adapter rejects malformed pages and unknown statuses (0.247209ms)
+✔ scheduler error preserves generated recovery metadata and safely normalizes unknown failures (0.07275ms)
+✔ scheduler adapter delegates every operation to generated Phase45Client methods (0.85425ms)
+✔ response-loss retry can reuse the exact REST idempotency key (0.274958ms)
+✔ generated protocol negotiation failure propagates explicitly without fallback queries (0.095667ms)
+✔ load state preserves a stale projection on refresh failure and clears stale after success (0.673917ms)
+✔ schedule status result replaces the same server id without duplicating it (0.093667ms)
+✔ idempotency registry reuses a key for retries and releases it after known success (0.100125ms)
+ℹ tests 101
+ℹ suites 0
+ℹ pass 100
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 525.623583
+
+✖ failing tests:
+
+test at test/b23-management-ui.test.ts:47:1
+✖ B2-3 lifecycle UI only exposes cleanup controls for active cleanup states (5.172959ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Host binding/. Input:
+  
+  "import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';\n" +
+    'import {\n' +
+    '  AlertTriangle,\n' +
+    '  Archive,\n' +
+    '  Check,\n' +
+    '  Download,\n' +
+    '  ExternalLink,\n' +
+    '  FolderKanban,\n' +
+    '  Link2,\n' +
+    '  Loader2,\n' +
+    '  PackageOpen,\n' +
+    '  PanelLeftOpen,\n' +
+    '  Pencil,\n' +
+    '  Plus,\n' +
+    '  Power,\n' +
+    '  RefreshCw,\n' +
+    '  Search,\n' +
+    '  Settings2,\n' +
+    '  Sparkles,\n' +
+    '  Trash2,\n' +
+    '  Unplug,\n' +
+    '  X,\n' +
+    "} from 'lucide-react';\n" +
+    "import { Link, useOutletContext, useSearchParams } from 'react-router-dom';\n" +
+    "import { EmptyState } from '../../components/EmptyState';\n" +
+    "import { StatusBadge } from '../../components/StatusBadge';\n" +
+    "import { useOperant } from '../../context/ClientContext';\n" +
+    'import {\n' +
+    '  B23AdapterError,\n' +
+    '  B23ManagementAdapter,\n' +
+    '  type B23Action,\n' +
+    '  type B23ManagedArtifact,\n' +
+    '  type B23ManagedDataset,\n' +
+    '  type B23ManagedInstallation,\n' +
+    '  type B23ManagedMemory,\n' +
+    '  type B23ManagedProject,\n' +
+    '  type B23ManagedSkill,\n' +
+    '  type B23ManagementCommand,\n' +
+    '  type B23ManagementResult,\n' +
+    '  type B23ManagementState,\n' +
+    '  type B23UiError,\n' +
+    '  blocksB23Management,\n' +
+    '  normalizeB23Error,\n' +
+    "} from '../../live/b23Adapter';\n" +
+    "import type { RailOutletContext } from '../../app/RailLayout';\n" +
+    '\n' +
+    "export type ManagementTab = 'projects' | 'knowledge' | 'plugins' | 'settings' | 'skills' | 'retention';\n" +
+    '\n' +
+    'const TAB_LABELS: Record<ManagementTab, string> = {\n' +
+    "  projects: '项目',\n" +
+    "  knowledge: '知识',\n" +
+    "  plugins: '插件',\n" +
+    "  settings: '记忆设置',\n" +
+    "  skills: '技能',\n" +
+    "  retention: '保留与审计',\n" +
+    '};\n' +
+    '\n' +
+    "const TABS: ManagementTab[] = ['projects', 'knowledge', 'plugins', 'settings', 'skills', 'retention'];\n" +
+    '\n' +
+    'type ManagedSkillView = B23ManagedSkill & {\n' +
+    '  project_ids?: string[];\n' +
+    '  trust_status?: string;\n' +
+    '};\n' +
+    '\n' +
+    'type ManagementStateView = B23ManagementState;\n' +
+    '\n' +
+    'function managementArtifacts(state: B23ManagementState): B23ManagedArtifact[] {\n' +
+    '  const value = (state as ManagementStateView).artifacts;\n' +
+    '  return Array.isArray(value) ? value : [];\n' +
+    '}\n' +
+    '\n' +
+    'function isManagementTab(value: string | null): value is ManagementTab {\n' +
+    '  return value !== null && TABS.includes(value as ManagementTab);\n' +
+    '}\n' +
+    '\n' +
+    'function queryTab(value: string | null, fallback: ManagementTab): ManagementTab {\n' +
+    "  if (value === 'memory') return 'knowledge';\n" +
+    "  if (value === 'plugin' || value === 'extensions') return 'plugins';\n" +
+    "  if (value === 'skill') return 'skills';\n" +
+    '  return isManagementTab(value) ? value : fallback;\n' +
+    '}\n' +
+    '\n' +
+    'function valueText(value: unknown): string {\n' +
+    "  if (typeof value === 'string') return value;\n" +
+    '  try {\n' +
+    '    return JSON.stringify(value, null, 2) ?? String(value);\n' +
+    '  } catch {\n' +
+    '    return String(value);\n' +
+    '  }\n' +
+    '}\n' +
+    '\n' +
+    'function redactValue(value: unknown, key?: string): unknown {\n' +
+    "  const numericBudget = key && /^(max_output_tokens|max_tokens|token_budget|recall_token_budget)$/.test(key) && typeof value === 'number';\n" +
+    "  if (key && !numericBudget && /(secret|token|password|api[_-]?key|credential)/i.test(key)) return '[已隐藏]';\n" +
+    '  if (Array.isArray(value)) return value.map((item) => redactValue(item));\n' +
+    "  if (typeof value === 'object' && value !== null) {\n" +
+    '    return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [entryKey, redactValue(entryValue, entryKey)]));\n' +
+    '  }\n' +
+    '  return value;\n' +
+    '}\n' +
+    '\n' +
+    'function safeJson(value: unknown): string {\n' +
+    '  return valueText(redactValue(value));\n' +
+    '}\n' +
+    '\n' +
+    'function statusLabel(value: string): string {\n' +
+    '  const labels: Record<string, string> = {\n' +
+    "    active: '已启用',\n" +
+    "    enabled: '已启用',\n" +
+    "    disabled: '已停用',\n" +
+    "    installed: '已安装',\n" +
+    "    closing: '关闭中',\n" +
+    "    uninstalling: '卸载中',\n" +
+    "    failed: '失败',\n" +
+    "    restart_required: '需要重启',\n" +
+    "    retained: '数据已保留',\n" +
+    "    deleted: '已删除',\n" +
+    "    published: '已发布',\n" +
+    "    unpublished: '未发布',\n" +
+    "    inactive: '已停用',\n" +
+    "    revoked: '已撤销',\n" +
+    "    pinned: '已固定',\n" +
+    "    scheduled: '已安排清理',\n" +
+    "    trashed: '已移入回收站',\n" +
+    "    archived_artifact: '已归档',\n" +
+    "    active_artifact: '可用',\n" +
+    "    accepted: '已确认',\n" +
+    "    blocked: '已阻止',\n" +
+    "    partial: '部分完成',\n" +
+    "    archived: '已归档',\n" +
+    "    proposed: '待确认',\n" +
+    "    pending: '待确认',\n" +
+    "    conflict: '发生冲突',\n" +
+    "    rejected: '已拒绝',\n" +
+    "    confirmed: '已确认',\n" +
+    "    deactivated: '已停用',\n" +
+    '  };\n' +
+    '  return labels[value] ?? value;\n' +
+    '}\n' +
+    '\n' +
+    "function statusKind(value: string): 'connected' | 'active' | 'paused' | 'denied' | 'pending' {\n" +
+    "  if (['active', 'enabled', 'installed', 'confirmed', 'accepted', 'published', 'bound', 'valid'].includes(value)) return 'connected';\n" +
+    "  if (['disabled', 'deactivated', 'archived', 'retained', 'deleted', 'inactive', 'revoked', 'uninstalled'].includes(value)) return 'paused';\n" +
+    "  if (['failed', 'blocked', 'conflict', 'rejected', 'error'].includes(value)) return 'denied';\n" +
+    "  return 'pending';\n" +
+    '}\n' +
+    '\n' +
+    'function absolutePath(value: string): boolean {\n' +
+    "  return value.trim().startsWith('/');\n" +
+    '}\n' +
+    '\n' +
+    'function makeAdapterUnavailableError(): B23AdapterError {\n' +
+    '  return new B23AdapterError({\n' +
+    "    code: 'b2_3_client_unavailable',\n" +
+    "    message: 'B2-3 生成 Client 尚未接入，Live 管理页面未提交任何命令。',\n" +
+    '    retryable: false,\n' +
+    "    recovery: 'none',\n" +
+    '    outcomeUnknown: false,\n' +
+    '  });\n' +
+    '}\n' +
+    '\n' +
+    'type ExecuteCommand = (\n' +
+    '  command: B23ManagementCommand,\n' +
+    '  label: string,\n' +
+    ') => Promise<B23ManagementResult | undefined>;\n' +
+    '\n' +
+    'interface ManagementPanelProps {\n' +
+    '  state: B23ManagementState;\n' +
+    '  execute: ExecuteCommand;\n' +
+    '  busy: boolean;\n' +
+    '  onTab: (tab: ManagementTab) => void;\n' +
+    '}\n' +
+    '\n' +
+    "const FormError: React.FC<{ message: string; id?: string }> = ({ message, id = 'b2-memory-form-error' }) => (\n" +
+    '  <div id={id} className="b2-memory-warning live-alert live-alert-error" role="alert" tabIndex={-1}>\n' +
+    '    <AlertTriangle size={15} aria-hidden="true" />\n' +
+    '    <span>{message}</span>\n' +
+    '  </div>\n' +
+    ');\n' +
+    '\n' +
+    'const ActionButton: React.FC<{\n' +
+    '  label: string;\n' +
+    '  icon?: React.ReactNode;\n' +
+    '  onClick: () => void;\n' +
+    '  disabled?: boolean;\n' +
+    "  tone?: 'primary' | 'secondary' | 'ghost';\n" +
+    "  type?: 'button' | 'submit';\n" +
+    "}> = ({ label, icon, onClick, disabled, tone = 'secondary', type = 'button' }) => (\n" +
+    '  <button type={type} className={`btn btn-${tone} btn-sm b2-memory-action`} onClick={onClick} disabled={disabled}>\n' +
+    '    {icon}\n' +
+    '    <span>{label}</span>\n' +
+    '  </button>\n' +
+    ');\n' +
+    '\n' +
+    'const ProjectsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, onTab }) => {\n' +
+    "  const [name, setName] = useState('');\n" +
+    "  const [workspacePath, setWorkspacePath] = useState('');\n" +
+    "  const [formError, setFormError] = useState('');\n" +
+    '  const [editingId, setEditingId] = useState<string | null>(null);\n' +
+    "  const [editingName, setEditingName] = useState('');\n" +
+    '  const [archiveId, setArchiveId] = useState<string | null>(null);\n' +
+    '  const [detachId, setDetachId] = useState<string | null>(null);\n' +
+    '\n' +
+    '  const create = async (event: React.FormEvent<HTMLFormElement>) => {\n' +
+    '    event.preventDefault();\n' +
+    '    const trimmedName = name.trim();\n' +
+    '    const trimmedPath = workspacePath.trim();\n' +
+    '    if (!trimmedName) {\n' +
+    "      setFormError('请填写项目名称。');\n" +
+    '      return;\n' +
+    '    }\n' +
+    '    if (!absolutePath(trimmedPath)) {\n' +
+    "      setFormError('workspace 路径必须是绝对路径，例如 /Users/you/workspace/project。');\n" +
+    '      return;\n' +
+    '    }\n' +
+    "    setFormError('');\n" +
+    "    const result = await execute({ action: 'project_create', name: trimmedName, workspace_path: trimmedPath }, '创建项目');\n" +
+    '    if (result) {\n' +
+    "      setName('');\n" +
+    "      setWorkspacePath('');\n" +
+    '    }\n' +
+    '  };\n' +
+    '\n' +
+    '  const rename = async (project: B23ManagedProject) => {\n' +
+    '    const trimmedName = editingName.trim();\n' +
+    '    if (!trimmedName) {\n' +
+    "      setFormError('项目名称不能为空。');\n" +
+    '      return;\n' +
+    '    }\n' +
+    "    setFormError('');\n" +
+    "    const result = await execute({ action: 'project_update', project_id: project.project_id, name: trimmedName }, '重命名项目');\n" +
+    '    if (result) {\n' +
+    '      setEditingId(null);\n' +
+    "      setEditingName('');\n" +
+    '    }\n' +
+    '  };\n' +
+    '\n' +
+    '  const archive = async (project: B23ManagedProject) => {\n' +
+    '    if (archiveId !== project.project_id) {\n' +
+    '      setArchiveId(project.project_id);\n' +
+    '      return;\n' +
+    '    }\n' +
+    '    setArchiveId(null);\n' +
+    "    await execute({ action: 'project_archive', project_id: project.project_id, confirmed: true }, '归档项目');\n" +
+    '  };\n' +
+    '\n' +
+    '  const detach = async (project: B23ManagedProject) => {\n' +
+    '    if (detachId !== project.project_id) {\n' +
+    '      setDetachId(project.project_id);\n' +
+    '      return;\n' +
+    '    }\n' +
+    '    setDetachId(null);\n' +
+    "    await execute({ action: 'project_detach', project_id: project.project_id, confirmed: true }, '解除项目关联');\n" +
+    '  };\n' +
+    '\n' +
+    '  return (\n' +
+    '    <div className="b2-memory" data-panel="projects">\n' +
+    '      <section className="b2-memory-card">\n' +
+    '        <div className="b2-memory-card-header">\n' +
+    '          <div>\n' +
+    '            <h2>新建项目</h2>\n' +
+    '            <p>项目绑定一个绝对 workspace 目录，后续记忆与插件选择都使用这个项目范围。</p>\n' +
+    '          </div>\n' +
+    '          <FolderKanban size={18} aria-hidden="true" />\n' +
+    '        </div>\n' +
+    '        <form className="b2-memory-form" onSubmit={(event) => void create(event)} noValidate>\n' +
+    '          {formError && <FormError message={formError} id="project-form-error" />}\n' +
+    '          <label htmlFor="b2-project-name">项目名称</label>\n' +
+    `          <input id="b2-project-name" className="input" value={name} onChange={(event) => setName(event.target.value)} aria-describedby={formError ? 'project-form-error' : undefined} required />\n` +
+    '          <label htmlFor="b2-project-workspace">Workspace 绝对路径</label>\n' +
+    `          <input id="b2-project-workspace" className="input" value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder="/Users/you/workspace/project" aria-describedby={formError ? 'project-form-error' : undefined} required />\n` +
+    '          <div className="b2-memory-actions">\n' +
+    '            <ActionButton label="创建项目" tone="primary" icon={<Plus size={14} aria-hidden="true" />} onClick={() => undefined} disabled={busy || !name.trim() || !workspacePath.trim()} type="submit" />\n' +
+    '          </div>\n' +
+    '        </form>\n' +
+    '      </section>\n' +
+    '\n' +
+    '      <section aria-labelledby="b2-project-list-title">\n' +
+    '        <div className="b2-memory-card-header">\n' +
+    '          <div><h2 id="b2-project-list-title">项目列表</h2><p>{state.projects.length} 个项目，ID 和绑定状态来自服务端。</p></div>\n' +
+    '          <StatusBadge status="active" label={`${state.projects.filter((project) => !project.archived).length} 个活跃`} size="sm" />\n' +
+    '        </div>\n' +
+    '        {state.projects.length === 0 ? (\n' +
+    '          <EmptyState icon={FolderKanban} title="暂无项目" description="Live 模式不会用演示项目填充此页面。" />\n' +
+    '        ) : (\n' +
+    '          <div className="b2-memory-grid">\n' +
+    '            {state.projects.map((project) => (\n' +
+    `              <article key={project.project_id} className="b2-memory-card" data-state={project.archived ? 'archived' : 'active'}>\n` +
+    '        <div className="b2-memory-ca'... 44518 more characters
+  
+      at TestContext.<anonymous> (file:///private/tmp/operant-b2-3/clients/gui/test/b23-management-ui.test.ts:54:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'import React, { useCallback, useEffect, useMemo, useRef, useState } from \'react\';\nimport {\n  AlertTriangle,\n  Archive,\n  Check,\n  Download,\n  ExternalLink,\n  FolderKanban,\n  Link2,\n  Loader2,\n  PackageOpen,\n  PanelLeftOpen,\n  Pencil,\n  Plus,\n  Power,\n  RefreshCw,\n  Search,\n  Settings2,\n  Sparkles,\n  Trash2,\n  Unplug,\n  X,\n} from \'lucide-react\';\nimport { Link, useOutletContext, useSearchParams } from \'react-router-dom\';\nimport { EmptyState } from \'../../components/EmptyState\';\nimport { StatusBadge } from \'../../components/StatusBadge\';\nimport { useOperant } from \'../../context/ClientContext\';\nimport {\n  B23AdapterError,\n  B23ManagementAdapter,\n  type B23Action,\n  type B23ManagedArtifact,\n  type B23ManagedDataset,\n  type B23ManagedInstallation,\n  type B23ManagedMemory,\n  type B23ManagedProject,\n  type B23ManagedSkill,\n  type B23ManagementCommand,\n  type B23ManagementResult,\n  type B23ManagementState,\n  type B23UiError,\n  blocksB23Management,\n  normalizeB23Error,\n} from \'../../live/b23Adapter\';\nimport type { RailOutletContext } from \'../../app/RailLayout\';\n\nexport type ManagementTab = \'projects\' | \'knowledge\' | \'plugins\' | \'settings\' | \'skills\' | \'retention\';\n\nconst TAB_LABELS: Record<ManagementTab, string> = {\n  projects: \'项目\',\n  knowledge: \'知识\',\n  plugins: \'插件\',\n  settings: \'记忆设置\',\n  skills: \'技能\',\n  retention: \'保留与审计\',\n};\n\nconst TABS: ManagementTab[] = [\'projects\', \'knowledge\', \'plugins\', \'settings\', \'skills\', \'retention\'];\n\ntype ManagedSkillView = B23ManagedSkill & {\n  project_ids?: string[];\n  trust_status?: string;\n};\n\ntype ManagementStateView = B23ManagementState;\n\nfunction managementArtifacts(state: B23ManagementState): B23ManagedArtifact[] {\n  const value = (state as ManagementStateView).artifacts;\n  return Array.isArray(value) ? value : [];\n}\n\nfunction isManagementTab(value: string | null): value is ManagementTab {\n  return value !== null && TABS.includes(value as ManagementTab);\n}\n\nfunction queryTab(value: string | null, fallback: ManagementTab): ManagementTab {\n  if (value === \'memory\') return \'knowledge\';\n  if (value === \'plugin\' || value === \'extensions\') return \'plugins\';\n  if (value === \'skill\') return \'skills\';\n  return isManagementTab(value) ? value : fallback;\n}\n\nfunction valueText(value: unknown): string {\n  if (typeof value === \'string\') return value;\n  try {\n    return JSON.stringify(value, null, 2) ?? String(value);\n  } catch {\n    return String(value);\n  }\n}\n\nfunction redactValue(value: unknown, key?: string): unknown {\n  const numericBudget = key && /^(max_output_tokens|max_tokens|token_budget|recall_token_budget)$/.test(key) && typeof value === \'number\';\n  if (key && !numericBudget && /(secret|token|password|api[_-]?key|credential)/i.test(key)) return \'[已隐藏]\';\n  if (Array.isArray(value)) return value.map((item) => redactValue(item));\n  if (typeof value === \'object\' && value !== null) {\n    return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [entryKey, redactValue(entryValue, entryKey)]));\n  }\n  return value;\n}\n\nfunction safeJson(value: unknown): string {\n  return valueText(redactValue(value));\n}\n\nfunction statusLabel(value: string): string {\n  const labels: Record<string, string> = {\n    active: \'已启用\',\n    enabled: \'已启用\',\n    disabled: \'已停用\',\n    installed: \'已安装\',\n    closing: \'关闭中\',\n    uninstalling: \'卸载中\',\n    failed: \'失败\',\n    restart_required: \'需要重启\',\n    retained: \'数据已保留\',\n    deleted: \'已删除\',\n    published: \'已发布\',\n    unpublished: \'未发布\',\n    inactive: \'已停用\',\n    revoked: \'已撤销\',\n    pinned: \'已固定\',\n    scheduled: \'已安排清理\',\n    trashed: \'已移入回收站\',\n    archived_artifact: \'已归档\',\n    active_artifact: \'可用\',\n    accepted: \'已确认\',\n    blocked: \'已阻止\',\n    partial: \'部分完成\',\n    archived: \'已归档\',\n    proposed: \'待确认\',\n    pending: \'待确认\',\n    conflict: \'发生冲突\',\n    rejected: \'已拒绝\',\n    confirmed: \'已确认\',\n    deactivated: \'已停用\',\n  };\n  return labels[value] ?? value;\n}\n\nfunction statusKind(value: string): \'connected\' | \'active\' | \'paused\' | \'denied\' | \'pending\' {\n  if ([\'active\', \'enabled\', \'installed\', \'confirmed\', \'accepted\', \'published\', \'bound\', \'valid\'].includes(value)) return \'connected\';\n  if ([\'disabled\', \'deactivated\', \'archived\', \'retained\', \'deleted\', \'inactive\', \'revoked\', \'uninstalled\'].includes(value)) return \'paused\';\n  if ([\'failed\', \'blocked\', \'conflict\', \'rejected\', \'error\'].includes(value)) return \'denied\';\n  return \'pending\';\n}\n\nfunction absolutePath(value: string): boolean {\n  return value.trim().startsWith(\'/\');\n}\n\nfunction makeAdapterUnavailableError(): B23AdapterError {\n  return new B23AdapterError({\n    code: \'b2_3_client_unavailable\',\n    message: \'B2-3 生成 Client 尚未接入，Live 管理页面未提交任何命令。\',\n    retryable: false,\n    recovery: \'none\',\n    outcomeUnknown: false,\n  });\n}\n\ntype ExecuteCommand = (\n  command: B23ManagementCommand,\n  label: string,\n) => Promise<B23ManagementResult | undefined>;\n\ninterface ManagementPanelProps {\n  state: B23ManagementState;\n  execute: ExecuteCommand;\n  busy: boolean;\n  onTab: (tab: ManagementTab) => void;\n}\n\nconst FormError: React.FC<{ message: string; id?: string }> = ({ message, id = \'b2-memory-form-error\' }) => (\n  <div id={id} className="b2-memory-warning live-alert live-alert-error" role="alert" tabIndex={-1}>\n    <AlertTriangle size={15} aria-hidden="true" />\n    <span>{message}</span>\n  </div>\n);\n\nconst ActionButton: React.FC<{\n  label: string;\n  icon?: React.ReactNode;\n  onClick: () => void;\n  disabled?: boolean;\n  tone?: \'primary\' | \'secondary\' | \'ghost\';\n  type?: \'button\' | \'submit\';\n}> = ({ label, icon, onClick, disabled, tone = \'secondary\', type = \'button\' }) => (\n  <button type={type} className={`btn btn-${tone} btn-sm b2-memory-action`} onClick={onClick} disabled={disabled}>\n    {icon}\n    <span>{label}</span>\n  </button>\n);\n\nconst ProjectsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, onTab }) => {\n  const [name, setName] = useState(\'\');\n  const [workspacePath, setWorkspacePath] = useState(\'\');\n  const [formError, setFormError] = useState(\'\');\n  const [editingId, setEditingId] = useState<string | null>(null);\n  const [editingName, setEditingName] = useState(\'\');\n  const [archiveId, setArchiveId] = useState<string | null>(null);\n  const [detachId, setDetachId] = useState<string | null>(null);\n\n  const create = async (event: React.FormEvent<HTMLFormElement>) => {\n    event.preventDefault();\n    const trimmedName = name.trim();\n    const trimmedPath = workspacePath.trim();\n    if (!trimmedName) {\n      setFormError(\'请填写项目名称。\');\n      return;\n    }\n    if (!absolutePath(trimmedPath)) {\n      setFormError(\'workspace 路径必须是绝对路径，例如 /Users/you/workspace/project。\');\n      return;\n    }\n    setFormError(\'\');\n    const result = await execute({ action: \'project_create\', name: trimmedName, workspace_path: trimmedPath }, \'创建项目\');\n    if (result) {\n      setName(\'\');\n      setWorkspacePath(\'\');\n    }\n  };\n\n  const rename = async (project: B23ManagedProject) => {\n    const trimmedName = editingName.trim();\n    if (!trimmedName) {\n      setFormError(\'项目名称不能为空。\');\n      return;\n    }\n    setFormError(\'\');\n    const result = await execute({ action: \'project_update\', project_id: project.project_id, name: trimmedName }, \'重命名项目\');\n    if (result) {\n      setEditingId(null);\n      setEditingName(\'\');\n    }\n  };\n\n  const archive = async (project: B23ManagedProject) => {\n    if (archiveId !== project.project_id) {\n      setArchiveId(project.project_id);\n      return;\n    }\n    setArchiveId(null);\n    await execute({ action: \'project_archive\', project_id: project.project_id, confirmed: true }, \'归档项目\');\n  };\n\n  const detach = async (project: B23ManagedProject) => {\n    if (detachId !== project.project_id) {\n      setDetachId(project.project_id);\n      return;\n    }\n    setDetachId(null);\n    await execute({ action: \'project_detach\', project_id: project.project_id, confirmed: true }, \'解除项目关联\');\n  };\n\n  return (\n    <div className="b2-memory" data-panel="projects">\n      <section className="b2-memory-card">\n        <div className="b2-memory-card-header">\n          <div>\n            <h2>新建项目</h2>\n            <p>项目绑定一个绝对 workspace 目录，后续记忆与插件选择都使用这个项目范围。</p>\n          </div>\n          <FolderKanban size={18} aria-hidden="true" />\n        </div>\n        <form className="b2-memory-form" onSubmit={(event) => void create(event)} noValidate>\n          {formError && <FormError message={formError} id="project-form-error" />}\n          <label htmlFor="b2-project-name">项目名称</label>\n          <input id="b2-project-name" className="input" value={name} onChange={(event) => setName(event.target.value)} aria-describedby={formError ? \'project-form-error\' : undefined} required />\n          <label htmlFor="b2-project-workspace">Workspace 绝对路径</label>\n          <input id="b2-project-workspace" className="input" value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder="/Users/you/workspace/project" aria-describedby={formError ? \'project-form-error\' : undefined} required />\n          <div className="b2-memory-actions">\n            <ActionButton label="创建项目" tone="primary" icon={<Plus size={14} aria-hidden="true" />} onClick={() => undefined} disabled={busy || !name.trim() || !workspacePath.trim()} type="submit" />\n          </div>\n        </form>\n      </section>\n\n      <section aria-labelledby="b2-project-list-title">\n        <div className="b2-memory-card-header">\n          <div><h2 id="b2-project-list-title">项目列表</h2><p>{state.projects.length} 个项目，ID 和绑定状态来自服务端。</p></div>\n          <StatusBadge status="active" label={`${state.projects.filter((project) => !project.archived).length} 个活跃`} size="sm" />\n        </div>\n        {state.projects.length === 0 ? (\n          <EmptyState icon={FolderKanban} title="暂无项目" description="Live 模式不会用演示项目填充此页面。" />\n        ) : (\n          <div className="b2-memory-grid">\n            {state.projects.map((project) => (\n              <article key={project.project_id} className="b2-memory-card" data-state={project.archived ? \'archived\' : \'active\'}>\n        <div className="b2-memory-ca'... 44518 more characters,
+    expected: /Host binding/,
+    operator: 'match',
+    diff: 'simple'
+  }

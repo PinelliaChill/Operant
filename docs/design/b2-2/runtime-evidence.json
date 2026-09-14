@@ -1,0 +1,82 @@
+{
+  "scope": "controlled local B2-2 desktop acceptance; no user workspace run",
+  "health_status": 200,
+  "tauri_preflight_status": 200,
+  "tauri_allowed_origin": "tauri://localhost",
+  "unknown_origin_status": 400,
+  "model_id": "gpt-5.6-luna",
+  "effort": "low",
+  "budget": {
+    "max_turns": 4,
+    "max_consecutive_test_failures": 2,
+    "timeout_seconds": 90,
+    "max_output_tokens": 600,
+    "max_cost_usd": null,
+    "max_tool_calls": 2
+  },
+  "session_id": "session_8854d653b5524fc0af07ae473a2f681c",
+  "thread_id": "thread_b284f3efb9974b969b01a46e3ed0cba9",
+  "agents": [
+    {
+      "id": "agent_d505ceb5b7394b9a833a0f6e93d49efd",
+      "status": "completed"
+    },
+    {
+      "id": "agent_1904d3a0598e4aa89c122167a3e3e780",
+      "status": "cancelled"
+    },
+    {
+      "id": "agent_aacd341fe093488fae7abfbb12b927ef",
+      "status": "completed"
+    },
+    {
+      "id": "agent_ccf48ec0286849c1a2c6357a47221646",
+      "status": "cancelled"
+    }
+  ],
+  "canonical_item_count": 18,
+  "result_42_present": true,
+  "event_types": [
+    "agent.started",
+    "model.completed",
+    "tool.started",
+    "tool.completed",
+    "model.delta",
+    "model.completed",
+    "agent.completed",
+    "agent.started",
+    "model.completed",
+    "tool.started",
+    "tool.approval_required",
+    "agent.cancelled",
+    "agent.started",
+    "model.completed",
+    "tool.started",
+    "tool.approval_required",
+    "tool.approval_decided",
+    "tool.completed",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.completed",
+    "agent.completed",
+    "agent.started",
+    "model.completed",
+    "tool.started",
+    "tool.approval_required",
+    "agent.cancelled"
+  ],
+  "model_calls_observed": 6,
+  "approvals": [],
+  "proof_file_sha256": "854e51b45364bb89bcc9de727fd6a5ed0ecfe7eb6546e79d9e58cedc74f3afe0",
+  "limitations": [
+    "debug WebView with Vite, not signed packaged dist",
+    "historical first run predates canonical history fix",
+    "synthetic pagination fixture is separate and is not model evidence"
+  ]
+}

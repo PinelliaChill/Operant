@@ -1,0 +1,8 @@
+{
+  "skill_id": "skill_7b3e41ca0c9f49c7b72539e635254f71",
+  "state": "uninstalled",
+  "project_ids": [],
+  "source_preserved": true,
+  "installed_copy_exists": false,
+  "entry": "actual Tauri GUI disable project then uninstall; readonly filesystem/DB readback"
+}

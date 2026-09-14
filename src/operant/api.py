@@ -29,6 +29,8 @@ from starlette.background import BackgroundTask
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from operant.api_b2 import B2Cancellation, B2Discovery, install_b2_routes
+from operant.api_b2_3 import install_b2_3_routes
 from operant.api_beta import install_beta_container_routes, install_beta_gateway_routes
 from operant.api_phase23 import install_phase23_routes
 from operant.api_phase45 import install_phase45_routes
@@ -99,6 +101,7 @@ from operant.persistence.sqlite import (
     NotFoundError,
     SQLiteStore,
 )
+from operant.plugins import PluginHost
 from operant.protocol import (
     RecoveryAction,
     canonical_action_hash,
@@ -1313,6 +1316,7 @@ def create_app(
     phase56_merge_adapter: Any | None = None,
     oauth_config: OAuthConfig | None = None,
     oauth_http_client: httpx.AsyncClient | None = None,
+    plugin_host: PluginHost | None = None,
 ) -> FastAPI:
     load_local_env()
     if phase45_skill_roots is None:
@@ -1347,6 +1351,7 @@ def create_app(
         physical_delete_authorization=physical_delete_authorization,
     )
     service.initialize()
+    service.memory_plugin_mode = True
     workflow = SequentialCodingWorkflow(service)
     app = FastAPI(
         title="Operant API",
@@ -1355,6 +1360,12 @@ def create_app(
     )
     app.router.add_event_handler("shutdown", service.close)
     app.state.operant_service = service
+    # Explicit trusted bootstrap owns Host configuration; ordinary startup never
+    # installs a plugin, reads its package, or creates an engine implicitly.
+    app.state.plugin_host = plugin_host
+    app.state.b23_skill_roots = phase45_skill_roots
+    if plugin_host is not None:
+        app.router.add_event_handler("shutdown", plugin_host.close)
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_request: Request, exc: HTTPException) -> JSONResponse:
@@ -1363,6 +1374,13 @@ def create_app(
             redact_public_text(str(exc.detail)) if isinstance(exc.detail, str) else "request failed"
         )
         code = f"http_{exc.status_code}"
+        if (
+            isinstance(detail, dict)
+            and isinstance(detail.get("code"), str)
+            and isinstance(detail.get("message"), str)
+        ):
+            code = detail["code"]
+            message = detail["message"]
         recovery = RecoveryAction.NONE
         if exc.status_code == 400 and message.startswith("Last-Event-ID requires"):
             code = "invalid_event_cursor"
@@ -1475,6 +1493,10 @@ def create_app(
             if parsed_last_event_id is not None:
                 return await call_next(request)
 
+        if request.method == "POST" and request.url.path == "/v1/b2-3/commands":
+            # B2-3 owns a durable bounded command journal. Do not persist a
+            # second full dataset snapshot or truncate its typed Query result.
+            return await call_next(request)
         idempotency_key = request.headers.get("Idempotency-Key")
         scope = _command_scope(request.method, request.url.path)
         if scope is None:
@@ -2267,11 +2289,13 @@ def create_app(
             "item_id": item.id,
         }
 
-    @app.get("/v1/models")
+    @app.get("/v1/models", operation_id="listB2Models", response_model=list[ModelProfile])
     async def list_models() -> list[dict[str, object]]:
         return [profile.model_dump(mode="json") for profile in service.list_model_profiles()]
 
-    @app.post("/v1/models", status_code=201)
+    @app.post(
+        "/v1/models", status_code=201, operation_id="createB2Model", response_model=ModelProfile
+    )
     async def create_model(
         request: CreateModelProfileRequest,
     ) -> dict[str, object]:
@@ -2289,7 +2313,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return profile.model_dump(mode="json")
 
-    @app.patch("/v1/models/{profile_id}")
+    @app.patch("/v1/models/{profile_id}", operation_id="updateB2Model", response_model=ModelProfile)
     async def update_model(
         profile_id: str, request: UpdateModelProfileRequest
     ) -> dict[str, object]:
@@ -2311,7 +2335,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return profile.model_dump(mode="json")
 
-    @app.post("/v1/models/discover")
+    @app.post("/v1/models/discover", operation_id="discoverB2Models", response_model=B2Discovery)
     async def discover_models(
         request: DiscoverModelsRequest,
     ) -> dict[str, list[str]]:
@@ -2333,7 +2357,7 @@ def create_app(
         except ProviderError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    @app.get("/v1/roles")
+    @app.get("/v1/roles", operation_id="listB2Roles", response_model=list[RolePreset])
     async def list_roles(
         include_inactive: bool = False,
     ) -> list[dict[str, object]]:
@@ -2342,7 +2366,7 @@ def create_app(
             for role in service.list_roles(include_inactive=include_inactive)
         ]
 
-    @app.post("/v1/roles", status_code=201)
+    @app.post("/v1/roles", status_code=201, operation_id="createB2Role", response_model=RolePreset)
     async def create_role(
         request: CreateRoleRequest,
     ) -> dict[str, object]:
@@ -2380,7 +2404,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [role.model_dump(mode="json") for role in roles]
 
-    @app.patch("/v1/roles/{role_id}")
+    @app.patch("/v1/roles/{role_id}", operation_id="updateB2Role", response_model=RolePreset)
     async def update_role(role_id: str, request: UpdateRoleRequest) -> dict[str, object]:
         try:
             role = service.update_role(role_id, **request.model_dump(exclude_unset=True))
@@ -3041,7 +3065,11 @@ def create_app(
             ),
         )
 
-    @app.post("/v1/sessions/{session_id}/cancel")
+    @app.post(
+        "/v1/sessions/{session_id}/cancel",
+        operation_id="cancelB2Session",
+        response_model=B2Cancellation,
+    )
     async def cancel_session(session_id: str) -> dict[str, bool]:
         try:
             accepted = service.cancel_session(session_id)
@@ -3530,6 +3558,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return memory.model_dump(mode="json")
 
+    install_b2_routes(app, service)
+    install_b2_3_routes(app, service)
     install_phase23_routes(app, store)
     install_phase45_routes(
         app,

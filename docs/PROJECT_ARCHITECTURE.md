@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-05
+> 最后更新：2026-09-12
 >
-> 对应版本：Operant 2.0 Beta/RC 收口（SQLite v14；`phase56.v1` + additive `operant-beta.v1`）
+> 对应版本：B2-3 / MP-2 集成中（SQLite v15；additive `b2-3.v1`，尚未完成 J1 验收）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -56,6 +56,83 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
     `unsigned_candidate_not_for_release`，不能冒充正式发布物。
 
 ## 2. 当前完成度
+
+### B2-3 / MP-2 记忆与管理集成（2026-09-13，已完成本批验收）
+
+范围与门禁见 [任务包](design/b2-3/task-package.md)。以下描述当前源码；真实 gpt-oss-20b 正式任务/read_file/Context 与原生历史已通过（见本批 model-context-acceptance.json）。J1 生命周期/删除、基础管理、宽窄与错误重连已完成；冻结代码4678b40的完整门禁及指定Luna/max独立复核通过，见本批handoff.md与review-closure.md。
+
+`memory_plugins/manager.py` 通过正式 PluginHost 安装目录中的两个独立包。`memory-standard` 使用来源提取与 Host 搜索，`memory-notebook` 使用键值笔记；认证进程内支持独立私有索引，隔离模式与索引重建通过Host受控读取当前发布版本后执行键名精确过滤；配置分别来自包内 Schema。两者共享 MP-0 Host DTO 与包内标准库 SDK，支持认证进程内与未认证隔离 stdio。Core 负责来源授权和唯一发布 head，插件不能自行发布、越过 scope 或把候选当成正式召回。
+
+SQLite v15 增加 dataset-owned `memory_ledger_*` 与 `b23_*`，不改 v1—v14 migration checksum。Ledger 保存不可变版本、Proposal、CAS head、完整请求幂等摘要和来源。显式用户保存记录为 `user_asserted`；修改提议等待确认，旧版本保留。来源保存为当前项目的 canonical Item；旧数据显式迁入时标记 `legacy_unverified`，Core 映射 scope，旧 payload 不得覆盖。
+
+HTTP/CLI 正式启动启用插件记忆模式：旧记忆写入口明确要求升级，旧读入口惰性初始化 Manager 并只代理已启用项目的已发布记录。旧 Workflow 的自动记忆注入与候选生成关闭；自动召回、压缩和索引调度优化属于 MP-3，尚未实现。直接构造 Python Service 的旧兼容模式仅保留历史调用与测试，不代表生产默认策略。
+
+全局关闭先禁止新访问，再收集 Host 停止回执；未收束 Run 或插件返回 blocked/restart_required，不能报告全部完成。项目关闭、切换、归档与卸载同样经过停止屏障。重新开启只恢复显式操作能力，不补扫历史。keep 卸载保留 dataset，允许独立导出、同插件重新安装接回或显式删除。delete 必须先持久化清理计划，经 Host 资源/活动 Run 屏障后，Core 才清除该 dataset 的专属版本、提议、来源副本和结果缓存；保留 dataset tombstone。普通 Ledger delete 不提供物理清理权限，未知/共享/受保护资源保持阻断。历史 Item、Context、Skill、Artifact 和外部导出副本不随 dataset 删除，也不宣称磁盘安全擦除。
+
+`api_b2_3.py` 提供协议协商、管理 Query 与 typed Command。每个命令经过 Action Gateway；自己的幂等 journal 保留完整业务结果，删除数据后旧数据结果明确不可再取。响应保留类型结构并脱敏，超预算显式失败。`generate_b2_3.py` 从同一 Pydantic/FastAPI 源生成 `b2-3.v1` OpenAPI/digest 与 Python/TypeScript Client；CLI `operant memory manage` 使用生成 Client。
+
+GUI 的项目、知识、插件、记忆设置、Skill、保留与审计页消费同一管理投影。项目注册绑定绝对 Workspace，编辑、归档或解除关联不删除源码。设置按作用域与字段保留值/来源实际变化的独立时间，旧记录无法追溯时显示 unknown；Role 使用其不可变版本的创建时间，变更只影响新 Session 快照。解除关联只清除所选记忆插件，不改变归档状态；归档由独立命令负责。Skill 经发现、显式安装、项目启用、停用和卸载，安装副本校验 digest；运行时以单独 guidance 加入正式 Context，不扩大 Tool Policy。Artifact 页调用既有 Pin/归档/宽限期/Trash/恢复与审计，并呈现正式审计扫描数和发现详情，保留受保护引用屏障，不提供清空全部或物理 purge。
+
+### B2-2 / MP-1 与基础任务接入（2026-09-12，已完成本批验收）
+
+本批从 `8851a23` 独立实施，验收范围和当前证据见 [任务包](design/b2-2/task-package.md)。
+`src/operant/plugins/` 提供显式安装与 Registry、受控认证记录、配置绑定、Run fencing、资源登记及
+keep/delete 清理续做。Registry 使用单写文件锁和原子 JSON journal；重启使旧活动 lease 失效，不重放
+RPC或自动重装插件。此版本不改 SQLite v14，不实现 MP-2 记忆引擎、数据迁移或新召回。
+Run释放按lease身份和fencing清除活动标记，终态释放幂等；迟到旧lease不会解除新Run的停止/卸载屏障。
+
+插件共用 `contracts/b2_1.py` 的 typed Host API。认证进程内方式加载已核对包的 `create_plugin()`；
+它是认证信任边界，不是沙箱。未认证 stdio 使用 macOS sandbox-exec、独立目录及隔离Python参数
+`-I -S`，启动前真实检查受控 Home 文件、目录外写入与回环网络拒绝；沙箱不可用则拒绝。
+受管私有索引的读写删与资源登记逐级持有目录句柄并拒绝符号链接；写入前校验普通文件及单链接，读取按响应预算限量，防止路径校验后中间目录替换与无界读取。首版依赖限定为标准库/包内代码，不安装环境任意依赖，不宣称跨平台沙箱或线上CA。
+包、依赖/权限文件指纹、认证撤销与epoch在调用/提交时复核；资源预算、取消、迟到拒绝和未知清理
+状态不因cleanup Hook缺失而绕过。stdio 复用进程按并发准入、RPC超时、采样RSS/CPU执行预算；空闲复用不视为请求超时；超限停止独立进程组并标记失败。采样允许短暂超调，认证进程内插件仍是合作式资源边界。当前issuer、scope、存储lease与全局启用状态在Host回调入口复核。`create_app(plugin_host=...)` 是显式受信任启动注入面，由Core负责
+shutdown关闭；普通启动默认无Host/无引擎，插件HTTP管理与默认记忆绑定仍属B2-3。
+Host回调要求Core提供来源/记忆引用授权器，按真实记录核对dataset、scope、revision/digest和可用性；缺少授权器时拒绝。
+Host另行强制来源与当前scope/permission epoch一致、记忆引用属于当前dataset，模型Profile仅来自绑定的提取/重排配置。
+异步回调返回后重查lease及来源授权并验证结果关联。MP-1不隐式授予跨scope来源；尚未接入生产记忆检索/模型回调。
+直接engine入参及返回值也经过同一Core授权边界：来源、记忆引用、Head与Proposal逐项核对，缺少对应授权器拒绝；结果须关联request/event及watermark。
+Manifest能力限制嵌套Host API：recall才可search，extract/recall/maintain可请求授权来源。模型Profile还绑定当前engine操作：extract仅可用提取配置，recall仅可用重排配置；同时声明两能力也不能跨阶段使用Profile。仅索引通知不授予外部读/搜索/模型访问。
+停止、卸载和Host关闭先阻止新运行，再对在途调用及关闭/清理钩子作有界等待。未收束的可信代码保留task/engine/资源并返回restart_required，禁止同Host重新启用；同步关闭/清理钩子在工作线程执行，不能物理强杀线程。清理使用目录句柄递归删除，不跟随symlink；路径异常形成可续做blocked条目。
+同一安装的stop/uninstall/resume_cleanup使用生命周期锁，Host关闭自身也互斥；关闭期间排队的新请求返回明确restart_required回执。绑定配置在入口生效：maintenance_enabled关闭则拒绝maintain，recall及嵌套search不得超过recall_token_budget；默认零预算允许零分配请求，实际召回内容编排/后台调度仍属后续阶段。
+
+`api_b2.py` 将已提交 Session/WorkflowRun 投影为保留来源身份、动作与明确Workspace关联的任务。
+精确任务Query不受列表分页影响，跨来源同ID必须消歧。历史来自canonical Item、AgentInstance与
+不可变Session snapshot；已绑定当前Session的Thread在正式运行时保存用户/模型消息、工具及生命周期事实，Runtime Event与对应Item同事务提交。每轮固定此前Item cursor，避免当前轮历史重复进入上下文；普通引用Thread保持只读，旧事件不批量迁移。未绑定Thread不生成消息，Task不伪装成TeamTask。
+Agent创建失败时保留无Agent的`session.run_failed`事实并在绑定Thread写入系统Item；Task按该失败与后续新Agent的时间顺序显示失败或新轮状态，不伪造Agent行。
+Additive `b2.v1` 从FastAPI/Pydantic经 `sdk/protocol/generate_b2.py` 生成Schema/digest及Python/TS Client，
+补模型/角色配置、已登记Workspace首个Thread创建、任务/历史与取消；旧五协议和MP-0契约不变。安装环境可用绝对路径
+`OPERANT_B2_SCHEMA_DIGEST_PATH` 提供digest，不用常量伪造协商。
+
+GUI通过生成Client接入模型/角色配置、分页AgentInstance及真实状态、Task/Run详情、分页历史和取消；Core Projection与epoch清理
+防止旧请求覆盖新选择。取消终态从Session Task读取，Thread生命周期不冒充运行状态。AgentInstance/Task投影优先读取已提交的Agent终态事件，避免流关闭中断cleanup后显示过时running行；cleanup状态更新放在不可跳过的finally内。历史Query逐字段脱敏保留类型结构；只读历史错误不创建命令结果未知状态。模型ID来自Discovery，secret_ref只存引用名；新Role默认无工具权限，编辑
+既有Role不改变tool_policy；Role新版本不回写已创建Session快照。取消accepted是请求接收，不能
+标为执行完成。Workflow详情链接既有Graph监控/安全恢复，仍保留未知写入人工核对边界。
+会话取消按钮读取B2 Task的服务端动作权限，Agent启动/审批/终态后刷新；已结束或无活动lease时不因Thread仍active而启用。
+Antigravity的任务行样式来自 `a0a4a5d`，Codex按原生窄屏结果补断点修复；B2配置表单使用Modal显式portal，默认其他调用不变，Live对话历史按正常文档流避免窄屏重叠。HTTP开发WebView使用同源Vite代理，正式Tauri协议及
+`tauri.localhost`保持固定本机Core；`OPERANT_CORE_URL`仅控制开发代理目标。
+
+本批真实桌面、完整门禁和指定Reviewer已通过，代码518bb3f；准确覆盖与未覆盖项见本批交接和验收记录。
+B2-3/MP-2、项目CRUD、后续Graph/Team交互及发布签名不在本次授权范围。
+
+### B2-1 / MP-0 增量（2026-09-09）
+
+基于 main `ecb0043` 新增离线契约 `src/operant/contracts/b2_1.py`：Project/Workspace、Task 来源、
+Agent 配置与实例、插件数据集/资源/认证、Memory Head/Proposal/CAS、Manifest/Context 使用和 Host RPC。
+`sdk/protocol/generate_b2_1.py` 从同一 Pydantic 源生成两份独立版本的 JSON Schema/digest 与
+Python/TypeScript Client 接口声明；**未注册运行 API、未实现 PluginHost、未执行用户库迁移**。
+当前数据库仍为 SQLite v14；实际 Beta 协商字符串为 `beta.v1`，现有五个协议保持不变。
+
+源码核对、迁移映射、合成 fixture、旧直接策略评测与限制见 [B2-1 契约边界](design/b2-1/contract-boundaries.md)
+和 [源码基线](design/b2-1/source-baseline.md)。新契约 workspace 引用只返回 hash；旧 ProjectProjection
+仍可能返回绝对 workspace_ref，不以新契约声明反推旧实现已完成路径隐藏。
+本批完成状态及验证结果见 [交接](design/b2-1/handoff.md)，不得将契约准备等同于 MP-1 或产品验收。
+GUI-L0 集成 Antigravity `ce2ab66` 的嵌套路由、旧深链和 Demo Hook 隔离，模式切换清空演示选择。
+旧 HttpClient 的合成 Thread/消息/Context/审批/Graph/Workflow/Remote 与伪造 SSE Cursor 路径显式失败；
+已有协商生成 Client 继续承载受支持 Live 功能。真实 Tauri debug WebView 已验证本批隔离、别名、嵌套深链与刷新，见 [原生证据](design/b2-1/tauri-native-evidence.md)。
+Core 预检失败明确显示；本批没有成功模型链路或打包发布产物验收。
+
+
 
 ### 已实现
 
@@ -230,7 +307,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
   必须启用 TLS。运行时显式依赖 WebSocket transport；`--desktop` 只允许 loopback，并只为固定 Tauri
   Origin 和生成 Client 所需请求头开启最小 CORS；
 - WorkflowRun、WorkflowRunEvent、任务状态和阶段检查点的 SQLite 持久化；
-- v1—v14 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
+- v1—v15 单事务 SQLite Migration、逐版本冻结 manifest/checksum、完整 schema integrity 自检、
   真实 Week 1/完整 Week 1—4 数据库识别升级、精确 preview 收编和受限回滚；
 - OpenAI-compatible `/v1/models` 查询和 origin 自动补全；
 - 流式 `chat/completions` 与 Tool Call 分片拼接；
@@ -977,7 +1054,9 @@ Leader 和一个 Writer，不是通用多 Writer 或高可用集群。
 
 ### Memory
 
-`Memory` 分为：
+生产启动以本章前述 B2-3 dataset Ledger 为准。下列 `Memory` 是仍保留的旧版本兼容模型及历史数据结构；自动晋升策略不再用于生产插件记忆模式。
+
+旧 `Memory` 分为：
 
 - `working`：只属于一个 Session；
 - `episodic`：记录一次任务经历，默认是待确认候选；
@@ -1304,7 +1383,9 @@ SQLiteStore 当前创建以下表：
 | `evaluation_runs` | 保存 Run 状态、顺序执行策略和聚合结果 |
 | `evaluation_results` | 保存唯一 Case × Variant × repetition 的 Pending、Interrupted 或已知终态事实 |
 | `evaluation_run_events` | 按 SQLite Cursor 保存 Evaluation 事件和可选 Result 关联 |
-| `memories` | 保存 Memory ID 与当前版本号 |
+| `memory_ledger_*` | dataset 所有权、不可变版本、Proposal/CAS head、幂等与 tombstone |
+| `b23_management` / `b23_commands` / `b23_sources` | 管理状态、命令结果与来源副本 |
+| `memories` | 保留旧 Memory ID 与当前版本号，生产新写入已拒绝 |
 | `memory_versions` | 保存所有不可变 Memory 版本、来源、作用域和状态 |
 | `memory_fts` | FTS5 全文索引，普通检索只连接当前有效版本 |
 | `tool_action_receipts` | 保存副作用 Tool Call 的 scope、幂等键、Action Hash 和安全结果 |
@@ -1411,6 +1492,8 @@ SQLiteStore 当前创建以下表：
     绑定 owner、lease、revision 和失败事实，事件只追加；空数据时才允许隔离 downgrade，并保持
     v1—v13 manifest/checksum 不变。
 
+15. v15：B2-3 dataset Ledger、管理状态、来源与命令 journal；旧迁移原样保留。只有全部新增业务表为空的显式隔离测试库才允许 downgrade。
+
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
 Tool Schema 与 Compaction 在写入时核对实体、scope、Cursor/version 和 canonical/stored hash，回读按
@@ -1473,7 +1556,7 @@ preview 收编、逐步升级、每步 manifest 复验和历史写入全部位�
 checksum 和 schema 形状全部匹配时收编；v3 会把该 preview 精确升级到 Evaluation Event 完整契约，
 随后再升级 v4 execution lease 和 v5 Canonical History/Artifact metadata；未知或漂移的 preview 一律拒绝。
 
-v14/v12/v11/v10/v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
+v15/v14/v12/v11/v10/v9/v8/v7/v6/v5/v4/v3 只提供刻意受限的空数据 downgrade：调用方必须显式执行 `rollback(..., isolated=True)`；
 回滚 v12 要求 MCP receipt/start/sandbox 与 Phase 45 Approval 表全空；
 回滚 v11 要求 Skill/MCP/Scheduler/Queue/Lease/Attempt/Graph Dispatch 表全空，回滚 v10 要求
 Security Action/Capability/Audit/Denial 表全空；
@@ -1531,10 +1614,8 @@ operant workflow trace [--jsonl]
 operant workflow resume [--allow-coder-replay]
 operant workflow cancel
 
-operant memory add
-operant memory search
-operant memory confirm
-operant memory deactivate
+operant memory manage --help
+# 旧 memory add/search/confirm/deactivate 仅作为兼容入口保留；新写入要求使用 B2-3。
 
 operant evaluation suite add --file <absolute-suite-json>
 operant evaluation suite list

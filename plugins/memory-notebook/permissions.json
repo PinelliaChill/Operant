@@ -1,0 +1,1 @@
+{"capabilities":["extract","recall","maintain","on_index_event"],"host_operations":["read_source","search","private_index"]}

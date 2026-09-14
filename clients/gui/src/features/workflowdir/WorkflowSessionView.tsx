@@ -18,12 +18,21 @@ import { useDemo } from '../../demo/DemoContext';
 import type { DemoAgent, DemoMessage } from '../../demo/types';
 import { MessageItem } from '../chat/MessageList';
 import { useOutsideClick } from '../chat/chatUtils';
+import { LiveUnavailableView } from '../../live/LiveUnavailableView';
 
 /** 消息是否"发给我"（只看发给我的过滤口径：audience 含 'user' 或 'all'） */
 const isToMe = (m: DemoMessage): boolean =>
   m.audience === 'all' || m.audience === 'user' || (Array.isArray(m.audience) && m.audience.includes('user'));
 
 export const WorkflowSessionView: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') {
+    return <LiveUnavailableView section="workflow" />;
+  }
+  return <DemoWorkflowSessionView />;
+};
+
+const DemoWorkflowSessionView: React.FC = () => {
   const { id = '', sid = '' } = useParams<{ id: string; sid: string }>();
   const navigate = useNavigate();
   const { addNotification } = useOperant();

@@ -15,6 +15,8 @@ import { EmptyState } from '../../components/EmptyState';
 import { Modal } from '../../components/Modal';
 import { useDemo } from '../../demo/DemoContext';
 import type { DemoAgent } from '../../demo/types';
+import { useOperant } from '../../context/ClientContext';
+import { LiveAgentsView } from './LiveAgentsView';
 
 /** Agent 状态 → 中文标签（online/busy/offline → 在线/忙碌/离线） */
 const AGENT_STATUS_LABELS: Record<DemoAgent['status'], string> = {
@@ -399,6 +401,14 @@ const AgentFormFields: React.FC<{
 );
 
 export const AgentsView: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') {
+    return <LiveAgentsView />;
+  }
+  return <DemoAgentsView />;
+};
+
+const DemoAgentsView: React.FC = () => {
   const { agents, upsertAgent } = useDemo();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = agents.find((a) => a.id === selectedId);

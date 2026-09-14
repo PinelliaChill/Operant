@@ -1,0 +1,94 @@
+{
+  "baseline_head": "ecb00437e9a44a5e79d54e8cf4944fd0d456bf02",
+  "collected": 730,
+  "interrupted_full_prefix_count": 598,
+  "supplemental_range_start_one_based": 576,
+  "supplemental_passed": 155,
+  "latest_contract_benchmark_passed": 20,
+  "loopback_escalated_passed": 1,
+  "aggregate_passed": 729,
+  "skipped": [
+    "tests/test_execution.py::test_docker_runner_integration_when_an_image_is_explicitly_provided"
+  ],
+  "uncovered": [],
+  "failures": [],
+  "single_full_command_completed": true,
+  "notes": [
+    "The interrupted full run collected 729 cases before addition of the cursor boundary test; the final 20-case targeted run includes that test.",
+    "One loopback bind PermissionError was retried outside the network sandbox with a deterministic Provider and passed.",
+    "Docker integration skip is not container acceptance."
+  ],
+  "logs": {
+    "operant-b2-1-pytest.log": "fac08364a51c32e052bffdb9279425d408e0530b4be7af09bfd44d220ddc372b",
+    "operant-b2-1-remaining.log": "e03edcf2f3d72beae7ffa971b56c53e954f0e0a6e3bddd01e7e58090780bb410",
+    "operant-b2-1-nodeids.txt": "342c13e5db5ad34b29bb58f5e53ebc785bf40eb0366821b1669efa8714ae5b3f"
+  },
+  "gui_tests_passed": 82,
+  "sdk_test_groups_passed": 2,
+  "gui_typecheck": "passed",
+  "gui_build": "passed",
+  "ruff_format": "passed",
+  "ruff_check": "passed",
+  "mypy": "passed (92 source files)",
+  "uv_lock_offline": "passed",
+  "tauri_runtime": "verified_native_debug_webview_gui_l0",
+  "review_fix": {
+    "contract_benchmark_passed": 25,
+    "gui_tests_passed": 82,
+    "gui_build": "passed",
+    "ruff_format": "passed",
+    "ruff_check": "passed",
+    "mypy": "passed",
+    "browser_route_integration": "passed; not Tauri",
+    "new_contract_cases": 5,
+    "cases": [
+      "Live #/session redirects to #/chat without .live-unavailable-state",
+      "Live #/remote redirects to #/settings?cat=system without unavailable state, including reopening the deep link",
+      "Live #/collab/wf-b2-review/canvas remains blocked"
+    ],
+    "evaluation_source_head": "1e0cfc749125de98c85fe15001f2bf72811361f8",
+    "evaluation_raw_sha256": "85e895e5b83be582da7cbb788aef2ca16b4bb1cb66fbdbad0fb9e8f459504f25",
+    "code_review": "passed; all code and provenance findings closed",
+    "reviewed_code_head": "1e0cfc749125de98c85fe15001f2bf72811361f8"
+  },
+  "tauri_native": {
+    "evidence": "tauri-native-evidence.md",
+    "source_head": "79d21e8d7b9e0bbb9dcfae7173c81820a65fa855",
+    "binary_sha256": "9cfa47df5c9bebe4d72da6fdf089d5dbd04cf3a51690ca9b8133be6ce103497c",
+    "passed": [
+      "native window from approved binary",
+      "explicit mock display",
+      "mock to live removes demo views and visible selection",
+      "live tasks blocked",
+      "native tasks reload retains live mode and blocked view",
+      "connection failure explicitly shown with disabled actions",
+      "native remote/session alias navigation",
+      "native collab canvas/agents/runs/workflow deep-link walkthrough",
+      "native settings and canvas reload retain live routing"
+    ],
+    "pending": [],
+    "controller": "CUA restored; native App/AX interactions completed 2026-09-10",
+    "permission": "already granted by User; no new permission required for same binary",
+    "supplement_source_head": "6534c2c0ee06e235f297a2c3dd605bd97a3944fe",
+    "limitations": [
+      "debug WebView + Vite, not packaged dist acceptance",
+      "Core preflight 400 explicitly fails; no successful model invocation"
+    ],
+    "review": "passed: same gpt-5.6-luna/max Reviewer, GUI-L0 native debug scope"
+  },
+  "completed_full_run": {
+    "source_head": "79d21e8d7b9e0bbb9dcfae7173c81820a65fa855",
+    "command": "UV_CACHE_DIR=/private/tmp/operant-b2-1-uv-cache uv run --offline pytest -ra",
+    "exit_code": 0,
+    "collected": 735,
+    "passed": 734,
+    "skipped": 1,
+    "duration_seconds": 382.62,
+    "skip_reason": "requires Docker and OPERANT_DOCKER_TEST_IMAGE",
+    "log_path": "/private/tmp/operant-b2-1-final-full-pytest.log",
+    "log_sha256": "08c33e538825d691b6641c019ba381dc2ad87913812e695b93fa470b043fa980",
+    "environment": "local loopback permitted; no real model invocation",
+    "committed_log": "full-pytest.txt"
+  },
+  "batch_status": "B2-1 complete; MP-1 not started"
+}

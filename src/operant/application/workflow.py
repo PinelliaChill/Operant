@@ -1387,6 +1387,9 @@ class SequentialCodingWorkflow:
         session_id: str,
         workspace: str | Path,
     ) -> str:
+        if self.service.memory_plugin_mode:
+            # MP-2 explicit management does not activate the old automatic policy.
+            return ""
         session = self.service.get_session(session_id)
         try:
             memories = self.service.query_memories(
@@ -1408,6 +1411,9 @@ class SequentialCodingWorkflow:
         run: WorkflowRun,
         completed_event: WorkflowEvent,
     ) -> list[WorkflowEvent]:
+        if self.service.memory_plugin_mode:
+            # MP-2 explicit management does not activate the old automatic policy.
+            return []
         raw_subtasks = completed_event.payload.get("subtasks")
         if not isinstance(raw_subtasks, list):
             return []

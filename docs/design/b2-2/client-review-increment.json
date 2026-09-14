@@ -1,0 +1,101 @@
+{
+  "recorded_by": "Codex",
+  "scope": "native debug Tauri; one injected Factory failure, one real model completion, one real approval-wait cancellation",
+  "model_id": "gpt-5.6-luna",
+  "effort": "low",
+  "model_discover_passed": true,
+  "session_id": "session_8854d653b5524fc0af07ae473a2f681c",
+  "final_task_status": "cancelled",
+  "items": [
+    {
+      "cursor": 124,
+      "type": "user_message",
+      "event_type": null,
+      "source_ref": null,
+      "text": "B2-2 controlled factory failure"
+    },
+    {
+      "cursor": 125,
+      "type": "system_event",
+      "event_type": "session.run_failed",
+      "source_ref": "session_8854d653b5524fc0af07ae473a2f681c",
+      "text": null
+    },
+    {
+      "cursor": 126,
+      "type": "user_message",
+      "event_type": null,
+      "source_ref": null,
+      "text": "Compute 17 plus 25. Reply with the number only. Do not use tools."
+    },
+    {
+      "cursor": 127,
+      "type": "system_event",
+      "event_type": "agent.started",
+      "source_ref": "agent_eaf36d1858674f47a8455834294258d3",
+      "text": null
+    },
+    {
+      "cursor": 128,
+      "type": "agent_message",
+      "event_type": null,
+      "source_ref": null,
+      "text": "42"
+    },
+    {
+      "cursor": 129,
+      "type": "system_event",
+      "event_type": "agent.completed",
+      "source_ref": "agent_eaf36d1858674f47a8455834294258d3",
+      "text": null
+    },
+    {
+      "cursor": 130,
+      "type": "user_message",
+      "event_type": null,
+      "source_ref": null,
+      "text": "Use runcommand with argv “cat” “proof.txt” and wait for approval. Do not write files. This run will be cancelled."
+    },
+    {
+      "cursor": 131,
+      "type": "system_event",
+      "event_type": "agent.started",
+      "source_ref": "agent_abf919dee4e94a1fb4247f5435688f17",
+      "text": null
+    },
+    {
+      "cursor": 132,
+      "type": "tool_call",
+      "event_type": null,
+      "source_ref": null,
+      "text": null
+    },
+    {
+      "cursor": 133,
+      "type": "system_event",
+      "event_type": "tool.approval_required",
+      "source_ref": "agent_abf919dee4e94a1fb4247f5435688f17",
+      "text": null
+    },
+    {
+      "cursor": 134,
+      "type": "system_event",
+      "event_type": "agent.cancelled",
+      "source_ref": "agent_abf919dee4e94a1fb4247f5435688f17",
+      "text": null
+    }
+  ],
+  "real_success_agent": "agent_eaf36d1858674f47a8455834294258d3",
+  "cancelled_agent": "agent_abf919dee4e94a1fb4247f5435688f17",
+  "source_files_sha256": {
+    "src/operant/application/service.py": "5381bbda1b25e7be0d763f5bfcb55504b678be97489effcfd28ec63d5e1423f2",
+    "src/operant/api_b2.py": "9b5ca0a7bf1e9eeb4faa5decdbd3c0b2a9797b1dce9c8784244f82e3071f0498",
+    "clients/gui/src/live/LiveContext.tsx": "b20573e5f7b1061db22a020eadd18459681d8366b17721967ece4fdb5e363105"
+  },
+  "observations": [
+    "Native failed Task and session.run_failed history visible",
+    "Explicit subsequent real round returned 42 and Task completed",
+    "Completed cancel button disabled; agent.started enabled it; cancel waited for terminal and disabled it",
+    "Residual cancelled-run approval explicitly rejected; no tool execution"
+  ]
+}

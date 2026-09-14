@@ -1,0 +1,41 @@
+{
+  "entry": "real Tauri GUI, formal TS Client/Core commands; readonly SQLite and package readback",
+  "code_head": "c2856f79fd66bd795aca271ea690e4f1558c076b",
+  "installation_id": "plugin_installation_ee887ea3caa94e5797e6063735520ec9",
+  "dataset_id": "dataset_ede2314ef88f47169f3d016488f104a7",
+  "record_count": 2,
+  "head": {
+    "dataset_id": "dataset_ede2314ef88f47169f3d016488f104a7",
+    "record_id": "memory_00a13a10643b4023ab4b4dbedc9e3221",
+    "published_version": 2,
+    "revision": 3,
+    "state": "published"
+  },
+  "project": {
+    "project_id": "project_e7130c9f1c264382afa5ddfbbbf58ab0",
+    "name": "J1 记忆验收项目",
+    "workspace_id": "workspace_init_d8687bf192584808b40adc1e3d26521c",
+    "archived": false,
+    "memory_enabled": true,
+    "installation_id": "plugin_installation_ee887ea3caa94e5797e6063735520ec9"
+  },
+  "installed_python_matches_source": true,
+  "package_python_hashes": {
+    "manifest.py": "3ba000926f9f9599ee9d7799af08e4dcb29cab1db30e90cf5750e355768db055",
+    "memory_plugin_sdk.py": "5fc517d819736bedc14cc2f44bed934ac22f892085a97195631cd10ec8a766f7",
+    "memory_plugin_dto.py": "63669b1c60260b89e59fad7cef351997287e1d655ab968137f15430629cce4eb",
+    "plugin.py": "700d324701f2c8bc76cf0a514f68959ab1a4e6b532bbfe2eedb5ec5a01cd0770",
+    "memory_plugin_stdio.py": "ae5771667a25158f009be0a9b62074c5c915ccd897ca49b93872081e03e99b29"
+  },
+  "native_steps": {
+    "keep_uninstall_old_instance": "completed",
+    "reinstall_retained_dataset_isolated": "completed",
+    "project_detach_kept_active_then_rebind": "completed",
+    "proposal_id": "proposal_920f737ffc8e2cbe487f3075add9abac",
+    "pending_query_count": 0,
+    "confirmed_exact_key_query_count": 1,
+    "partial_key_query_count": 0,
+    "value_query_count": 0
+  },
+  "passed": true
+}

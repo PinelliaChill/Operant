@@ -27,6 +27,9 @@ const EMPTY_COPY: Record<TaskFilter, { title: string; description: string }> = {
   done: { title: '暂无已完成的任务', description: '勾选任务复选框后会出现在这里。' },
 };
 
+import { useOperant } from '../../context/ClientContext';
+import { LiveTasksView } from './LiveTasksView';
+
 interface TaskGroup {
   id: string;
   title: string;
@@ -34,6 +37,14 @@ interface TaskGroup {
 }
 
 export const TasksView: React.FC = () => {
+  const { clientMode } = useOperant();
+  if (clientMode === 'live') {
+    return <LiveTasksView />;
+  }
+  return <DemoTasksView />;
+};
+
+const DemoTasksView: React.FC = () => {
   const { conversations, tasks, toggleTask } = useDemo();
   const [filter, setFilter] = useState<TaskFilter>('all');
 

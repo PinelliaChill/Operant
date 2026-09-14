@@ -1,0 +1,43 @@
+{
+  "model_id": "gpt-5.6-luna",
+  "effort": "low",
+  "entry": "formal HTTP Session API; native UI readback pending",
+  "workspace": "/private/tmp/operant-b2-3-j1/workspace",
+  "installations": [
+    {
+      "plugin_id": "memory-standard",
+      "state": "uninstalled"
+    }
+  ],
+  "session_id": "session_5b934e41567e46c9848496cbafd7bcaf",
+  "thread_id": "thread_034d98aeb2dd40089efc29740ddaa4cf",
+  "events": [
+    {
+      "event_type": "agent.started",
+      "turn": 0,
+      "cursor": 1,
+      "payload": {
+        "role_id": "role_f384ae6a2a3c4f3fb6cc3f45071633ca",
+        "role_version": 1,
+        "model_profile_id": "model_6a58de8096dc49d39dec4ca1f107dc0f",
+        "model_id": "gpt-5.6-luna",
+        "provider": "openai-compatible",
+        "effort": "low"
+      }
+    },
+    {
+      "event_type": "agent.failed",
+      "turn": 0,
+      "cursor": 2,
+      "payload": {
+        "error_type": "ProviderError"
+      }
+    }
+  ],
+  "passed": false,
+  "source_sha256": {
+    "src/operant/application/service.py": "574a353a2c7b8962f2fcd02356065a553c0cb68706193975130b6064585ff7c2",
+    "src/operant/runtime/loop.py": "01c8726c121387f234e107451ed7e56aedcc0f5bf68eb49d54dcafeaeb1062f8",
+    "src/operant/memory_plugins/manager.py": "b17c10b1d478c92806b154dc35d5b01cda231ee081af0b5c714c3c399d69e550"
+  }
+}

@@ -8,6 +8,7 @@ import {
   Send,
   ShieldAlert,
 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import type { Phase23 } from '@operant/sdk';
 import { useOperant } from '../../context/ClientContext';
 import {
@@ -37,6 +38,8 @@ function message(error: unknown): string {
 
 export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab }) => {
   const { phase23Client, phase56Client, connectionStatus, activeWorkspace, addNotification } = useOperant();
+  const [searchParams] = useSearchParams();
+  const legacyWorkflowRunParam = searchParams.get('legacyWorkflowRunId') || '';
   const keys = useRef(new IdempotencyKeyRegistry());
   const streamEpoch = useRef(0);
   const graphScopeEpoch = useRef(0);
@@ -157,11 +160,11 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
     return graphScopeEpoch.current;
   };
 
-  const resolveLegacyWorkflow = () => {
+  const resolveLegacyWorkflow = (requestedRunId = legacyWorkflowRunId) => {
     const expectedScopeEpoch = invalidateGraphProjection({ clearRunId: true });
     return run(async () => {
-      if (!legacyWorkflowRunId.trim()) throw new Error('请先输入旧 Coding Workflow Run ID。');
-      const linked = await phase23Client.getGraphRunByLegacyWorkflow(legacyWorkflowRunId.trim());
+      if (!requestedRunId.trim()) throw new Error('请先输入旧 Coding Workflow Run ID。');
+      const linked = await phase23Client.getGraphRunByLegacyWorkflow(requestedRunId.trim());
       const linkedNodes = await phase23Client.listNodeRuns(linked.id);
       if (expectedScopeEpoch !== graphScopeEpoch.current) return;
       setGraphRunId(linked.id);
@@ -169,6 +172,14 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
       setNodeRuns(linkedNodes);
     }, () => expectedScopeEpoch === graphScopeEpoch.current);
   };
+
+  const resolvedLegacyParam = useRef('');
+  useEffect(() => {
+    if (activeTab !== 'runs' || !legacyWorkflowRunParam || resolvedLegacyParam.current === legacyWorkflowRunParam) return;
+    resolvedLegacyParam.current = legacyWorkflowRunParam;
+    setLegacyWorkflowRunId(legacyWorkflowRunParam);
+    void resolveLegacyWorkflow(legacyWorkflowRunParam);
+  }, [activeTab, legacyWorkflowRunParam]);
 
   const startGraph = () => {
     const expectedScopeEpoch = invalidateGraphProjection({ clearRunId: true });
@@ -458,7 +469,7 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
               <label>旧 Coding Workflow Run ID<input value={legacyWorkflowRunId} onChange={(event) => setLegacyWorkflowRunId(event.target.value)} /></label>
             </div>
             <div className="live23-actions">
-              <button className="btn btn-secondary" disabled={busy} onClick={resolveLegacyWorkflow}><RefreshCw size={14} aria-hidden="true" />解析旧 Workflow</button>
+              <button className="btn btn-secondary" disabled={busy} onClick={() => void resolveLegacyWorkflow()}><RefreshCw size={14} aria-hidden="true" />解析旧 Workflow</button>
               <button className="btn btn-secondary" disabled={busy} onClick={requestGraphRefresh}><RefreshCw size={14} aria-hidden="true" />刷新投影</button>
               <button className="btn btn-primary" disabled={busy || streamStatus === 'live'} onClick={monitorGraph}><RotateCcw size={14} aria-hidden="true" />{streamStatus === 'disconnected' ? '从 Cursor 重连' : '监控事件'}</button>
               <button className="btn btn-secondary" disabled={streamStatus === 'idle'} onClick={stopStream}><CircleStop size={14} aria-hidden="true" />停止监控</button>

@@ -1,0 +1,15 @@
+{
+  "result": "passed",
+  "mode": "trusted_in_process",
+  "entrypoint": "installed fixture package create_plugin",
+  "plugin_factory_injection": false,
+  "scope": "actual package loading and typed recall, not MP-2 memory acceptance",
+  "source_files_sha256": {
+    "src/operant/plugins/host.py": "dc80bb41606d860fbb7acd05bcc0e628e72b241a49023c31e62a180aacbcc5b4",
+    "src/operant/plugins/protocol.py": "387d0b4eefd6aba856b2ca661081bf8c3d9f13e26a50d597f3edd03ae34501b3",
+    "src/operant/plugins/registry.py": "2bdce1200525b3e0303d3855a984a961294249d8739fcec7323658517f8c46b8",
+    "src/operant/plugins/payload.py": "a52bfdb6306304ca5147dbf95b6e4c0d8d7af3e3d0b19b011265a67ae7dfaf11"
+  },
+  "verification_note": "Rerun on final 518bb3f candidate: actual sandbox-exec two SourceBatch RPCs, and actual certified installed entrypoint typed recall. Temporary known fixtures only; not MP-2 memory or plugin model acceptance.",
+  "code_head": "518bb3f"
+}

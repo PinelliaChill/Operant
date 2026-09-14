@@ -1,0 +1,8 @@
+{
+  "protocol": "b2-3.v1",
+  "python_client_project_count": 1,
+  "cli_exit_code": 0,
+  "cli_projects_match": true,
+  "environment": "reused venv, PYTHONPATH=.:src selects current Core and SDK",
+  "entry": "actual Core18000; generated Python client and console-script operant memory manage list; TS exercised via desktop GUI"
+}

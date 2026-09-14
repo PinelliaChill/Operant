@@ -33,13 +33,43 @@ export function resolveDesktopLiveBaseUrl(isTauri: boolean): string | null {
   return isTauri ? 'http://127.0.0.1:8000' : null;
 }
 
+/**
+ * Resolve the URL for both the Vite development WebView and the packaged
+ * Tauri shell.  A debug WebView may expose Tauri internals while still being
+ * served from an HTTP origin; it must use that origin so Vite can proxy to
+ * the isolated Core selected by OPERANT_CORE_URL.  Only the real tauri://
+ * shell uses the fixed localhost Core endpoint.
+ */
+export function resolveBrowserOrDesktopLiveBaseUrl(
+  browserOrigin: string | undefined,
+  isTauri: boolean,
+): string {
+  if (typeof browserOrigin === 'string' && browserOrigin.trim().length > 0) {
+    try {
+      const parsed = new URL(browserOrigin);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        if (isTauri && parsed.hostname === 'tauri.localhost') {
+          return resolveDesktopLiveBaseUrl(true) as string;
+        }
+        return parsed.origin;
+      }
+    } catch {
+      // Fall through to the explicit non-HTTP shell handling below.
+    }
+  }
+  const desktopBaseUrl = resolveDesktopLiveBaseUrl(isTauri);
+  if (desktopBaseUrl) return desktopBaseUrl;
+  return resolveLiveBaseUrl(browserOrigin);
+}
+
 /** Resolve the origin of the page hosting the GUI. */
 export function currentBrowserOrigin(): string {
   if (typeof window === 'undefined') {
     throw new Error(LIVE_ORIGIN_ERROR);
   }
   const tauriWindow = window as Window & { __TAURI_INTERNALS__?: unknown };
-  const desktopBaseUrl = resolveDesktopLiveBaseUrl(Boolean(tauriWindow.__TAURI_INTERNALS__));
-  if (desktopBaseUrl) return desktopBaseUrl;
-  return resolveLiveBaseUrl(window.location.origin);
+  return resolveBrowserOrDesktopLiveBaseUrl(
+    window.location.origin,
+    Boolean(tauriWindow.__TAURI_INTERNALS__),
+  );
 }
