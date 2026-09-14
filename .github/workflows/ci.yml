@@ -33,7 +33,7 @@ jobs:
   quality:
     needs: changes
     # Always emit the existing required check names, including for documentation.
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -81,7 +81,7 @@ jobs:
   gui:
     name: GUI
     needs: changes
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
