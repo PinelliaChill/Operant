@@ -1,0 +1,60 @@
+{
+  "policy": {
+    "id": "j1-reversible-7d3e362312",
+    "object_type": "artifact",
+    "grace_period_seconds": 1,
+    "allow_physical_delete": false,
+    "created_at": "2026-09-13T06:16:17.397591Z"
+  },
+  "artifact": {
+    "id": "artifact_68c68ae716e042b78ef8a07c7cb50385",
+    "cursor": 2,
+    "content_hash": "b268b7ea1acd40e557a5d578293f9f28ae3985d71160f67d50232ee089140a14",
+    "media_type": "text/plain",
+    "size_bytes": 25,
+    "sensitivity": "normal",
+    "source_refs": [],
+    "retention_policy_ref": "j1-reversible-7d3e362312",
+    "created_at": "2026-09-13T06:16:17.421021Z"
+  },
+  "entry": "fixture via existing formal API; schedule/trash/restore via actual Tauri UI; readonly test-owned SQLite/blob readback",
+  "native_states": [
+    "active",
+    "deletion_scheduled",
+    "trashed",
+    "active"
+  ],
+  "retention_after_restore": {
+    "artifact_id": "artifact_68c68ae716e042b78ef8a07c7cb50385",
+    "policy_ref": "j1-reversible-7d3e362312",
+    "lifecycle": "active",
+    "pinned": 0,
+    "scheduled_deletion_at": null,
+    "trashed_at": null,
+    "deleted_at": null,
+    "updated_at": "2026-09-13T06:16:51.312288+00:00"
+  },
+  "events": [
+    {
+      "event_type": "retention.deletion_scheduled",
+      "outcome": "completed",
+      "created_at": "2026-09-13T06:16:36.955276+00:00"
+    },
+    {
+      "event_type": "retention.trashed",
+      "outcome": "completed",
+      "created_at": "2026-09-13T06:16:45.745460+00:00"
+    },
+    {
+      "event_type": "retention.restored",
+      "outcome": "completed",
+      "created_at": "2026-09-13T06:16:51.315934+00:00"
+    }
+  ],
+  "content_sha256_after_restore": "b268b7ea1acd40e557a5d578293f9f28ae3985d71160f67d50232ee089140a14",
+  "content_preserved": true,
+  "content_api_without_capability": "403, expected capability protection; no HTTP content-read acceptance claimed",
+  "system_clock_unchanged": true,
+  "physical_delete_performed": false,
+  "passed": true
+}

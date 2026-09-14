@@ -1,4 +1,5 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import './b2-chat-layout.css';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
+import type * as B2 from '../../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../../context/ClientContext';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
 import type { LiveApproval, LiveEvent, LiveSessionOption, LiveWorkspaceFile } from '../../live/liveState';
@@ -129,7 +131,7 @@ export const LiveApprovalCard: React.FC<{
         拒绝
       </button>
       <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve')} disabled={busy || approval.status !== 'pending'}>
-        {busy ? '提交中…' : '批准一次'}
+        {busy ? '暂不可操作' : '批准一次'}
       </button>
     </div>
   </article>
@@ -218,6 +220,64 @@ function sessionLabel(option: LiveSessionOption): string {
   return `服务端 Session ${option.id.slice(0, 12)} · 详情未查询`;
 }
 
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_key, nested) => (
+      typeof nested === 'bigint' ? nested.toString() : nested
+    ), 2);
+  } catch {
+    return '[无法显示该 canonical payload]';
+  }
+}
+
+/** Render canonical Item.payload fields without turning them into synthetic messages. */
+export const CanonicalHistoryItem: React.FC<{ item: B2.Item; index: number }> = ({ item, index }) => {
+  const payload = item.payload;
+  const type = payload.type || 'canonical_payload';
+  let body: React.ReactNode;
+  if (payload.type === 'user_message' || payload.type === 'agent_message') {
+    body = <p>{payload.text}</p>;
+  } else if (payload.type === 'tool_call') {
+    body = (
+      <dl className="b2-history-payload">
+        <div><dt>工具</dt><dd>{payload.tool_name}</dd></div>
+        <div><dt>Tool Call</dt><dd>{payload.tool_call_id}</dd></div>
+        {payload.detail_summary && <div><dt>详情</dt><dd>{payload.detail_summary}</dd></div>}
+        {payload.action_hash && <div><dt>Action Hash</dt><dd>{payload.action_hash}</dd></div>}
+      </dl>
+    );
+  } else if (payload.type === 'tool_result_ref') {
+    body = (
+      <dl className="b2-history-payload">
+        <div><dt>结果</dt><dd>{payload.outcome}</dd></div>
+        <div><dt>Artifact</dt><dd>{payload.artifact_id}</dd></div>
+        <div><dt>Tool Call</dt><dd>{payload.tool_call_id}</dd></div>
+        {payload.summary && <div><dt>摘要</dt><dd>{payload.summary}</dd></div>}
+      </dl>
+    );
+  } else if (payload.type === 'artifact_ref') {
+    body = <p>Artifact：{payload.artifact_id}{payload.label ? ` · ${payload.label}` : ''}</p>;
+  } else if (payload.type === 'approval_link') {
+    body = <p>Approval：{payload.approval_id}</p>;
+  } else if (payload.type === 'steering') {
+    body = <p>{payload.text} · mode={payload.mode || 'steer'}</p>;
+  } else if (payload.type === 'system_event') {
+    body = <p>{payload.summary} · event={payload.event_type}{payload.source_ref ? ` · source=${payload.source_ref}` : ''}</p>;
+  } else {
+    body = <pre>{safeJson(payload)}</pre>;
+  }
+  const itemKey = item.id || `${item.thread_id}:${item.turn_id}:${item.position ?? index}`;
+  return (
+    <article className="live-message b2-history-item" data-payload-type={type} key={itemKey}>
+      <div className="live-message-meta">
+        <strong>{type}</strong>
+        <span>{item.cursor === null || item.cursor === undefined ? 'canonical' : `Cursor ${String(item.cursor)}`}</span>
+      </div>
+      {body}
+    </article>
+  );
+};
+
 export const LiveChatView: React.FC = () => {
   const { conversationId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
@@ -234,7 +294,12 @@ export const LiveChatView: React.FC = () => {
     selectedSessionId,
     selectedThread,
     selectedSession,
-    messages,
+    roles,
+    history,
+    historyLoading,
+    historyError,
+    refreshHistory,
+    loadMoreHistory,
     files,
     stream,
     projectionStale,
@@ -244,6 +309,10 @@ export const LiveChatView: React.FC = () => {
     manualReconcileRequired,
     manualReconcileReason,
     deepLinkNotFound,
+    canCreateThread,
+    createThreadUnavailableReason,
+    threadCreationStatus,
+    createThread,
     canCreateSession,
     createSessionUnavailableReason,
     cancelCommandAvailable,
@@ -266,8 +335,14 @@ export const LiveChatView: React.FC = () => {
   const [filePath, setFilePath] = useState('');
   const [filesLoading, setFilesLoading] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [selectedRoleId, setSelectedRoleId] = useState('');
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  useEffect(() => {
+    if (!roles.some((role) => role.id === selectedRoleId && role.status !== 'inactive')) {
+      setSelectedRoleId(roles.find((role) => role.status !== 'inactive')?.id || '');
+    }
+  }, [roles, selectedRoleId]);
   const visibleApprovals = useMemo(
     () => approvalsForSession(approvals, selectedThread?.sessionId ?? null),
     [approvals, selectedThread?.sessionId],
@@ -304,7 +379,7 @@ export const LiveChatView: React.FC = () => {
   };
 
   const handleCreateSession = async () => {
-    const roleId = selectedSession?.role_snapshot.role_id;
+    const roleId = selectedRoleId || selectedSession?.role_snapshot.role_id;
     if (!canCreateSession || !roleId || !selectedThread) return;
     setCreatingSession(true);
     const session = await createSession({ roleId, threadId: selectedThread.id });
@@ -427,12 +502,31 @@ export const LiveChatView: React.FC = () => {
             <option value="" disabled={Boolean(selectedThread?.sessionId)}>未绑定 Session</option>
             {sessionOptions.map((option) => (
               <option key={option.id} value={option.id} disabled={option.boundThreadId === null}>
-                {sessionLabel(option)}
+                {history?.session.id === option.id ? `${history.session.role_snapshot?.role_name || option.id} · ${option.id.slice(0, 12)}` : sessionLabel(option)}
               </option>
             ))}
           </select>
         </label>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedSession?.role_snapshot.role_id || creatingSession} title={createSessionUnavailableReason || '需要一个明确的 roleId'}>
+        <label className="live-select-label">
+          <span>RolePreset</span>
+          <select
+            className="select"
+            value={selectedRoleId}
+            onChange={(event) => setSelectedRoleId(event.target.value)}
+            aria-label="选择 Core RolePreset"
+            disabled={roles.length === 0}
+          >
+            <option value="">未选择 RolePreset</option>
+            {roles.filter((role) => role.status !== 'inactive' && role.id).map((role) => (
+              <option key={role.id} value={role.id}>{role.name} · {role.id}</option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void createThread()}
+          disabled={!canCreateThread} title={createThreadUnavailableReason}>
+          <PlusIcon />{threadCreationStatus === 'sending' ? '创建中…' : '新建会话'}
+        </button>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedRoleId || creatingSession} title={createSessionUnavailableReason || '需要一个明确的 RolePreset'}>
           <PlusIcon />
           {creatingSession ? '创建中…' : '创建 Session'}
         </button>
@@ -456,7 +550,7 @@ export const LiveChatView: React.FC = () => {
                 <button type="button" className="btn btn-primary" onClick={() => void reconnect()}>
                   <RefreshCw size={14} aria-hidden="true" />重连 Core
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedSession?.role_snapshot.role_id || creatingSession}>
+                <button type="button" className="btn btn-secondary" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedRoleId || creatingSession}>
                   创建 Session
                 </button>
               </div>
@@ -515,24 +609,34 @@ export const LiveChatView: React.FC = () => {
             <section className="live-messages-panel" aria-labelledby="live-messages-title">
               <div className="live-panel-heading">
                 <div>
-                  <h2 id="live-messages-title">Thread Messages</h2>
-                  <p>Phase 1E 暂无消息 Query；运行状态来自 Projection / SSE。</p>
+                  <h2 id="live-messages-title">Session History</h2>
+                  <p>B2 返回 canonical Item.payload；运行状态来自 Projection / SSE。</p>
                 </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refreshHistory()} disabled={historyLoading || phase !== 'ready' || !selectedThread.sessionId} aria-label="刷新 Session history">
+                    <RefreshCw size={13} aria-hidden="true" />刷新历史
+                  </button>
                 {selectedThread.sessionId && (
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelSession()} disabled={!cancelCommandAvailable || busy || manualReconcileRequired} title="Phase 1E Schema 未提供 cancel Command">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelSession()} disabled={!cancelCommandAvailable || manualReconcileRequired || phase !== 'ready' || connectionStatus !== 'connected'} title="取消由 Core B2 Command 接收，按钮状态等待服务端 Projection 校正">
                     <Square size={12} aria-hidden="true" />取消 Session
                   </button>
                 )}
+                </div>
               </div>
               <div className="live-message-list" aria-live="polite">
-                {messages.length === 0 ? (
-                  <p className="live-panel-empty">Phase 1E Schema 未提供消息 Query；此处仅显示下方已提交 SSE timeline。</p>
-                ) : messages.map((message) => (
-                  <article className={`live-message live-message-${message.role}`} key={message.id}>
-                    <div className="live-message-meta"><strong>{message.sender.name}</strong><span>{message.role}</span></div>
-                    <p>{message.content}</p>
-                  </article>
-                ))}
+                {historyError && (
+                  <div className="live-alert live-alert-error" role="alert">
+                    <AlertTriangle size={15} aria-hidden="true" />
+                    <span>{historyError.code} · {historyError.message}</span>
+                  </div>
+                )}
+                {historyLoading ? (
+                  <div className="live-panel-loading" role="status"><Loader2 size={15} className="animate-spin" />正在读取 Core canonical history…</div>
+                ) : history?.items.length ? (
+                  history.items.map((item, index) => <CanonicalHistoryItem item={item} index={index} key={item.id || `${item.thread_id}:${item.turn_id}:${item.position ?? index}`} />)
+                ) : (
+                  <p className="live-panel-empty">Core 尚未返回该 Session 的 canonical history。</p>
+                )}
               </div>
               <div className="live-composer">
                 <textarea
@@ -554,7 +658,8 @@ export const LiveChatView: React.FC = () => {
                 </button>
               </div>
               <p className="live-composer-note">发送请求只表示命令已提交；GUI 等待 Core 的 Receipt / Projection，不把网络送达当成完成。断线、回放或错误期间会禁用命令。</p>
-            </section>
+            {history && history.next_cursor !== null && <button type="button" className="btn btn-secondary" disabled={historyLoading} onClick={() => void loadMoreHistory()}>加载更多历史</button>}
+              </section>
 
             <aside className="live-inspector-column" aria-label="Core 实时检查器">
               <div className="live-inspector-actions">

@@ -1,0 +1,5 @@
+{
+  "model_id": "gemini-2.5-flash",
+  "entry": "one bounded minimal diagnostic; not acceptance",
+  "error_type": "ReadTimeout"
+}

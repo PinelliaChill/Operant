@@ -1,0 +1,16 @@
+{
+  "entry": "MemoryManager with real default PluginHost SandboxProbe; no mocked probe",
+  "mode": "isolated",
+  "model_calls": 0,
+  "counts": {
+    "validation-key": 1,
+    "validation": 0,
+    "MAPLE-42": 0
+  },
+  "passed": true,
+  "source_sha256": {
+    "src/operant/memory_plugins/manager.py": "b48d58787482c183f4b7d96a45e2bfaef61806ac69d4a2b3606102a10f0ceaaa",
+    "src/operant/plugins/protocol.py": "fa63cb79de0108fea151263eb3c1f940dd80756968e1303cc50e511c3168827e",
+    "plugins/memory-notebook/plugin.py": "700d324701f2c8bc76cf0a514f68959ab1a4e6b532bbfe2eedb5ec5a01cd0770"
+  }
+}

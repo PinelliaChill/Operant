@@ -1,0 +1,56 @@
+{
+  "model_id": "gemini-2.5-flash",
+  "entry": "formal HTTP ModelProfile/Role/Session/Run; native readback pending",
+  "workspace": "/private/tmp/operant-b2-3-j1/workspace",
+  "max_turns": 4,
+  "max_output_tokens": 600,
+  "max_tool_calls": 3,
+  "timeout_seconds": 120,
+  "memory_global_enabled": false,
+  "installations": [
+    {
+      "plugin_id": "memory-standard",
+      "state": "uninstalled"
+    },
+    {
+      "plugin_id": "memory-standard",
+      "state": "disabled"
+    },
+    {
+      "plugin_id": "memory-notebook",
+      "state": "uninstalled"
+    },
+    {
+      "plugin_id": "memory-notebook",
+      "state": "disabled"
+    }
+  ],
+  "model_profile_id": "model_68018d9de62149009532b1b0b6629963",
+  "role_id": "role_9b9b4e348987417383f60f313c89dcdf",
+  "session_id": "session_fe3560c66db145afb6136b59e8401141",
+  "thread_id": "thread_f26ffbfc1bb640c89cff85b696014015",
+  "events": [
+    {
+      "event_type": "agent.started",
+      "turn": 0,
+      "cursor": 3,
+      "payload": {
+        "role_id": "role_9b9b4e348987417383f60f313c89dcdf",
+        "role_version": 1,
+        "model_profile_id": "model_68018d9de62149009532b1b0b6629963",
+        "model_id": "gemini-2.5-flash",
+        "provider": "openai-compatible",
+        "effort": "low"
+      }
+    },
+    {
+      "event_type": "agent.failed",
+      "turn": 0,
+      "cursor": 4,
+      "payload": {
+        "error_type": "ProviderError"
+      }
+    }
+  ],
+  "passed": false
+}

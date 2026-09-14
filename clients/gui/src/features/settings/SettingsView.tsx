@@ -62,6 +62,7 @@ import { Modal } from '../../components/Modal';
 import { RemoteView } from '../remote/RemoteView';
 import { PolicySettings } from '../approvals/PolicySettings';
 import { formatNumber } from '../../lib/format';
+import { LiveManagementView, type ManagementTab } from '../management/LiveManagementView';
 
 type MainCategory = 'general' | 'models' | 'security' | 'system';
 
@@ -2642,6 +2643,21 @@ const LiveSettingsView: React.FC = () => {
   const tabParam = searchParams.get('tab');
   if (tabParam === 'remote') return <Navigate to="/settings?cat=system" replace />;
 
+  const managementTabs: Record<string, ManagementTab> = {
+    projects: 'projects',
+    knowledge: 'knowledge',
+    memory: 'knowledge',
+    plugins: 'plugins',
+    plugin: 'plugins',
+    skills: 'skills',
+    skill: 'skills',
+    settings: 'settings',
+    retention: 'retention',
+    artifacts: 'retention',
+  };
+  const managementTab = tabParam ? managementTabs[tabParam] : undefined;
+  if (managementTab) return <LiveManagementView initialTab={managementTab} />;
+
   if (searchParams.get('cat') === 'system') {
     return (
       <div className="section-view" data-client-mode="live">
@@ -2656,7 +2672,8 @@ const LiveSettingsView: React.FC = () => {
     );
   }
 
-  return <LiveSecuritySettingsView />;
+  if (searchParams.get('cat') === 'security') return <LiveSecuritySettingsView />;
+  return <LiveManagementView initialTab="settings" />;
 };
 
 export const SettingsView: React.FC = () => {

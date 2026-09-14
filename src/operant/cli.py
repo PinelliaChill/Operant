@@ -62,6 +62,7 @@ def _service() -> ApplicationService:
         OpenAICompatibleProvider(),
     )
     service.initialize()
+    service.memory_plugin_mode = True
     return service
 
 
@@ -864,6 +865,28 @@ def deactivate_memory(
         project_scope=project_scope,
     )
     console.print_json(memory.model_dump_json(indent=2))
+
+
+@memory_app.command("manage", help="通过 B2-3 正式 HTTP Client 管理记忆、插件、数据集和项目。")
+def manage_memory(
+    action: str = typer.Argument("list"),
+    core_url: str = typer.Option("http://127.0.0.1:8000", help="受信任本机 Core 地址。"),
+    arguments: str = typer.Option("{}", help="除 action 外的 JSON 命令字段。"),
+) -> None:
+    from typing import cast
+
+    from operant.contracts.b2_3 import ManagementCommand
+    from sdk.python_client.b2_3_generated import B23Client
+    from sdk.python_client.b2_3_generated import ManagementCommand as CommandDTO
+
+    client = B23Client(base_url=core_url)
+    result: Any
+    if action == "list":
+        result = client.get_management()
+    else:
+        body = ManagementCommand.model_validate({**json.loads(arguments), "action": action})
+        result = client.execute_management_command(cast(CommandDTO, body.model_dump(mode="json")))
+    console.print_json(data=result)
 
 
 if __name__ == "__main__":

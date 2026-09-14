@@ -1,0 +1,16 @@
+{
+  "python": "3.13.3",
+  "gui_dependencies": true,
+  "desktop_control": "native inventory readable; first app selection slow",
+  "ports": {
+    "18000": "free",
+    "3000": "free"
+  },
+  "discovery": {
+    "exit_code": 0,
+    "model_available": true,
+    "models_count": 67,
+    "network_context": "escalated",
+    "error_class": "none"
+  }
+}

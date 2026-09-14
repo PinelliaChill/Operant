@@ -1,0 +1,29 @@
+{
+  "core_health": {
+    "status": 200,
+    "allow_origin": null
+  },
+  "gui": {
+    "status": 200,
+    "allow_origin": null
+  },
+  "tauri_preflight": {
+    "status": 200,
+    "allow_origin": "tauri://localhost"
+  },
+  "launcher": "operant.server.build_server_config(desktop=True), isolated DB and localhost18000",
+  "initial_driver_limitation": "Direct create_app temporary driver did not enable desktop CORS; replaced with existing official desktop launcher without changing product source.",
+  "native_disconnect": {
+    "status": "未就绪",
+    "writes_disabled": true,
+    "message": "Core 连接已断开；管理写操作已禁用。",
+    "refresh_error": "invalid_error_envelope (Vite proxy had no Core upstream)",
+    "mock_fallback": false
+  },
+  "native_reconnect": {
+    "manual_refresh": true,
+    "status": "已连接",
+    "management_controls_enabled": true
+  },
+  "passed": true
+}

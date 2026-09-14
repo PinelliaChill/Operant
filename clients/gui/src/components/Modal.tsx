@@ -1,4 +1,6 @@
+import './b2-modal.css';
 import React, { useId } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useDialogA11y } from './useDialogA11y';
 
@@ -9,6 +11,7 @@ interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   maxWidth?: string | number;
+  portal?: boolean;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -18,14 +21,16 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   footer,
   maxWidth = 560,
+  portal = false,
 }) => {
   const panelRef = useDialogA11y<HTMLDivElement>(isOpen, onClose);
   const titleId = `modal-title-${useId().replace(/:/g, '')}`;
 
   if (!isOpen) return null;
 
-  return (
+  const content = (
     <div
+      className={portal ? "b2-modal-overlay" : undefined}
       style={{
         position: 'fixed',
         inset: 0,
@@ -42,7 +47,7 @@ export const Modal: React.FC<ModalProps> = ({
     >
       <div
         ref={panelRef}
-        className="card"
+        className={portal ? "card b2-modal-dialog" : "card"}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -63,6 +68,7 @@ export const Modal: React.FC<ModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div
+          className={portal ? "b2-modal-heading" : undefined}
           style={{
             padding: '14px 18px',
             display: 'flex',
@@ -83,10 +89,11 @@ export const Modal: React.FC<ModalProps> = ({
           </button>
         </div>
 
-        <div style={{ padding: '18px', overflowY: 'auto', flex: 1 }}>{children}</div>
+        <div className={portal ? "b2-modal-body" : undefined} style={{ padding: '18px', overflowY: 'auto', flex: 1 }}>{children}</div>
 
         {footer && (
           <div
+            className={portal ? "b2-modal-footer" : undefined}
             style={{
               padding: '12px 18px',
               display: 'flex',
@@ -103,4 +110,5 @@ export const Modal: React.FC<ModalProps> = ({
       </div>
     </div>
   );
+  return portal ? createPortal(content, document.body) : content;
 };

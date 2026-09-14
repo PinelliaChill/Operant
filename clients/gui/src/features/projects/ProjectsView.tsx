@@ -23,7 +23,7 @@ import { useDemo } from '../../demo/DemoContext';
 import { formatRelativeDay } from '../../lib/format';
 import type { DemoWorkflowDirectoryItem } from '../../demo/types';
 import { useOperant } from '../../context/ClientContext';
-import { LiveProjectsView } from './LiveProjectsView';
+import { LiveManagementView } from '../management/LiveManagementView';
 
 /** 预置项目标识颜色 */
 const PRESET_COLORS = ['#2563eb', '#ea580c', '#059669', '#7c3aed', '#db2777', '#0891b2'];
@@ -491,7 +491,7 @@ const ProjectDetail: React.FC<{ projectId: string }> = ({ projectId }) => {
 
 export const ProjectsView: React.FC = () => {
   const { clientMode } = useOperant();
-  if (clientMode === 'live') return <LiveProjectsView />;
+  if (clientMode === 'live') return <LiveManagementView initialTab="projects" />;
   return <DemoProjectsView />;
 };
 

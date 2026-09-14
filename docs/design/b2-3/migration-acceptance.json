@@ -1,0 +1,85 @@
+{
+  "schema": "operant.b2-3.migration-acceptance.v1",
+  "recorded_at": "2026-09-13",
+  "worktree": "/private/tmp/operant-b2-3",
+  "source_database": "/private/tmp/b23-migration-acceptance/run-1340a647587d48a2b6da4c5f1004f00d/legacy-v14.sqlite3",
+  "source_kind": "synthetic_v14_only",
+  "user_database_accessed": false,
+  "command": "PYTHONPATH=src /private/tmp/operant-b2-2/.venv/bin/python -m pytest -q tests/test_b23_legacy_acceptance.py -o addopts=''",
+  "seed": {
+    "source_schema_version": 14,
+    "source_memory_records": 2,
+    "source_memory_versions": 4,
+    "project_memory_versions": 2,
+    "other_project_memory_versions": 2,
+    "canonical_items": 2
+  },
+  "verified": {
+    "v14_to_v15_schema_upgrade": {
+      "status": "passed",
+      "schema_version": 15,
+      "applied_versions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ]
+    },
+    "core_history_readback_before_manager_migration": {
+      "status": "passed",
+      "items_retained": 2,
+      "project_memory_versions_retained": 2
+    },
+    "manager_memory_migrate": {
+      "status": "passed",
+      "imported_versions": 2,
+      "dataset_id": "dataset_013839d7437e481da80b580dbc8408a1",
+      "dataset_record_count": 1,
+      "candidate_version_count": 2,
+      "published_count": 0,
+      "legacy_evidence": "legacy_unverified",
+      "owner_namespace": "dataset:dataset_013839d7437e481da80b580dbc8408a1",
+      "scope_filter": "project-a-workspace only"
+    },
+    "legacy_writer_rejection": {
+      "status": "passed",
+      "http_status": 400,
+      "expected_error_prefix": "schema_upgrade_required: use B2-3 dataset Proposal/CAS commands"
+    },
+    "v15_old_schema_downgrade_rejection": {
+      "status": "passed",
+      "expected_error_prefix": "downgrades require rollback"
+    },
+    "actual_b2_2_binary_rejection": {
+      "rejected": true,
+      "error_type": "MigrationError",
+      "message": "database schema version 15 is newer than this build",
+      "exit_code": 0,
+      "source_root": "/private/tmp/operant-b2-2",
+      "source_head": "d257abe9eccd2b4792f73e2ff752c040082c26ca",
+      "database": "/private/tmp/b23-migration-acceptance/run-1340a647587d48a2b6da4c5f1004f00d/old-binary-probe.sqlite3"
+    }
+  },
+  "resolved_issue_observed": {
+    "path": "src/operant/memory_plugins/manager.py",
+    "line": 536,
+    "resolution": "manager now reads memory_versions joined to memories, filters the registered workspace scope, and preserves historical versions"
+  },
+  "test_file": "tests/test_b23_legacy_acceptance.py",
+  "test_result": {
+    "passed": 1,
+    "failed": 0,
+    "warnings": 1
+  }
+}

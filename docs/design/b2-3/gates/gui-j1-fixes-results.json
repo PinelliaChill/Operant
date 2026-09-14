@@ -1,0 +1,10 @@
+{
+  "test": 0,
+  "typecheck": 0,
+  "build": 0,
+  "source_hashes": {
+    "clients/gui/src/features/management/LiveManagementView.tsx": "b10a0a6ff2a065b584e62eb78d6d9ff0f3c11fab54fae6041f4008c03aee191e",
+    "clients/gui/src/features/extensions/ExtensionsView.tsx": "30cba4ec5cec6a07d9b2e4a3fc54a79972239a5cc5fa8bd2970193698f02df27",
+    "clients/gui/test/b23-management-ui.test.ts": "eee468eeb40a66475af1cf44a732336967c522d297b9bbbf5611c510755668df"
+  }
+}

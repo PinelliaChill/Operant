@@ -1,0 +1,143 @@
+{
+  "code_head": "518bb3f40a70728d79b743212aee6fec098a941f",
+  "recorded_at": "2026-09-11T13:14:15.856359+00:00",
+  "checks": [
+    {
+      "check": "ruff-format",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "ruff",
+        "format",
+        "--check",
+        "."
+      ],
+      "exit_code": 0,
+      "seconds": 0.13,
+      "log": "gate-logs-518bb3f/ruff-format.log"
+    },
+    {
+      "check": "ruff-check",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "ruff",
+        "check",
+        "."
+      ],
+      "exit_code": 0,
+      "seconds": 0.04,
+      "log": "gate-logs-518bb3f/ruff-check.log"
+    },
+    {
+      "check": "mypy",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "mypy",
+        "src"
+      ],
+      "exit_code": 0,
+      "seconds": 0.73,
+      "log": "gate-logs-518bb3f/mypy.log"
+    },
+    {
+      "check": "pytest",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "-ra"
+      ],
+      "exit_code": 0,
+      "seconds": 448.67,
+      "log": "gate-logs-518bb3f/pytest.log"
+    },
+    {
+      "check": "lock",
+      "command": [
+        "uv",
+        "lock",
+        "--check",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "seconds": 0.04,
+      "log": "gate-logs-518bb3f/lock.log"
+    },
+    {
+      "check": "diff",
+      "command": [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.04,
+      "log": "gate-logs-518bb3f/diff.log"
+    },
+    {
+      "check": "gui-typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck",
+        "--prefix",
+        "clients/gui"
+      ],
+      "exit_code": 0,
+      "seconds": 4.05,
+      "log": "gate-logs-518bb3f/gui-typecheck.log"
+    },
+    {
+      "check": "gui-tests",
+      "command": [
+        "npm",
+        "test",
+        "--prefix",
+        "clients/gui"
+      ],
+      "exit_code": 0,
+      "seconds": 0.62,
+      "log": "gate-logs-518bb3f/gui-tests.log"
+    },
+    {
+      "check": "gui-build",
+      "command": [
+        "npm",
+        "run",
+        "build",
+        "--prefix",
+        "clients/gui"
+      ],
+      "exit_code": 0,
+      "seconds": 6.62,
+      "log": "gate-logs-518bb3f/gui-build.log"
+    }
+  ],
+  "all_passed": true,
+  "summary": {
+    "pytest_passed": 847,
+    "pytest_skipped": 1,
+    "pytest_skip_scope": "Docker and OPERANT_DOCKER_TEST_IMAGE unavailable; not container acceptance",
+    "gui_passed": 91
+  },
+  "independent_review": {
+    "status": "passed",
+    "reviewer_task": "01a08baa-4872-7473-abb1-7ca6fe91517d",
+    "reviewer_turn": "01a0949c-e31b-7810-b2b2-b359c5026cc5",
+    "model": "gpt-5.6-luna",
+    "reasoning_effort": "max",
+    "fast": "not available in tool",
+    "reviewed_code_head": "518bb3f40a70728d79b743212aee6fec098a941f",
+    "scope": "B2-2; prior passed slices plus final lifecycle/config increment",
+    "report": "review.md"
+  },
+  "source_evidence_reuse": "client-review-increment.json hashes match current source; final Host mode evidence hashes cover this code"
+}

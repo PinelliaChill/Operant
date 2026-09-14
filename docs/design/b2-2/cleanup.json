@@ -1,0 +1,18 @@
+{
+  "services_stopped": [
+    "core",
+    "gui"
+  ],
+  "ports_closed": {
+    "18000": true,
+    "3000": true
+  },
+  "scope": "only B2-2 own temporary services; user 8000 untouched",
+  "runtime_data_retained": true,
+  "review_increment_cleanup": {
+    "core_18000_closed": true,
+    "vite_3000_closed": true,
+    "native_app_process_live": false,
+    "user_8000_untouched": true
+  }
+}

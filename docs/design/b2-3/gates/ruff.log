@@ -1,0 +1,39 @@
+I001 [*] Import block is un-sorted or un-formatted
+  --> src/operant/api_b2_3.py:3:1
+   |
+ 1 |   """B2-3 typed commands and management projection."""
+ 2 |
+ 3 | / from __future__ import annotations
+ 4 | |
+ 5 | | import hashlib
+ 6 | | import json
+ 7 | | from uuid import uuid4
+ 8 | | from pathlib import Path
+ 9 | | from typing import TYPE_CHECKING, Any, cast
+   | |___________________________________________^
+10 |
+11 |   if TYPE_CHECKING:
+   |
+help: Organize imports
+   |
+6  | import json
+   - from uuid import uuid4
+7  | from pathlib import Path
+8  | from typing import TYPE_CHECKING, Any, cast
+9  + from uuid import uuid4
+10 |
+   |
+
+E501 Line too long (118 > 100)
+   --> src/operant/plugins/registry.py:757:101
+    |
+755 |         if category not in self._RESOURCE_CATEGORIES:
+756 |             raise PluginError("unsupported", "unsupported Host resource category")
+757 |         locator = f"resource_{installation.installation_id}_{hashlib.sha256(relative_path.encode()).hexdigest()[:20]}"
+    |                                                                                                     ^^^^^^^^^^^^^^^^^^
+758 |         resource = Resource(
+759 |             resource_id=locator,
+    |
+
+Found 2 errors.
+[*] 1 fixable with the `--fix` option.

@@ -1,0 +1,38 @@
+{
+  "session_id": "session_d7582564bcd14f71a5c6698be14934e7",
+  "thread_id": "thread_56d8ccfb4f634f368f09bed27fe481f9",
+  "model_id": "gpt-oss-20b",
+  "global_enabled": false,
+  "contexts": [
+    {
+      "id": "context_464c3ed5a2a18f80a29851c6b41ab0891d08c379734311eff1fc8e18f2046d57",
+      "model_id": "gpt-oss-20b",
+      "memory_refs": [],
+      "tool_names": [
+        "read_file"
+      ],
+      "contains_stored_memory_body": false
+    },
+    {
+      "id": "context_61fcded52c473d0043c652a66d6474cb13097c3105e24636fee1223a82cbaf55",
+      "model_id": "gpt-oss-20b",
+      "memory_refs": [],
+      "tool_names": [
+        "read_file"
+      ],
+      "contains_stored_memory_body": false
+    }
+  ],
+  "new_plugin_source_rows_after_global_close": 0,
+  "native_ui": "Task completed; refreshed Core Projection then canonical history shows read_file, proof.txt 21 * 2 = 42, and final answer 42",
+  "runtime_source_fingerprint": {
+    "src/operant/application/service.py": "574a353a2c7b8962f2fcd02356065a553c0cb68706193975130b6064585ff7c2",
+    "src/operant/runtime/loop.py": "01c8726c121387f234e107451ed7e56aedcc0f5bf68eb49d54dcafeaeb1062f8",
+    "src/operant/memory_plugins/manager.py": "935e9dc60120f5088f8b742eb5dfa902c180375231641916e611284fb3c32a8f",
+    "src/operant/api.py": "41b22a08a3bc950db6478ffae41fe5c0ffbc09fa9ec970de26bac7de7b26f1ea",
+    "src/operant/api_b2_3.py": "41d45c803eb40c2c388327e64f3ed28745a9ac93b964af917237f7c9fec76a26",
+    "src/operant/plugins/host.py": "dc80bb41606d860fbb7acd05bcc0e628e72b241a49023c31e62a180aacbcc5b4",
+    "src/operant/plugins/registry.py": "a12eef936a9636d58109ca91f76d736cf9c1df3fe890153647d110a04d546a62"
+  },
+  "passed": true
+}
