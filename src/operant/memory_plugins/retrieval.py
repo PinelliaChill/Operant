@@ -639,6 +639,7 @@ def retrieve_memories(
     search: object,
     *,
     policy: RetrievalPolicy | None = None,
+    query_plan: QueryPlan | None = None,
     condition_context: MemoryConditionContext | Mapping[str, Any] | None = None,
     resolve: VersionResolver | None = None,
     version_lookup: VersionResolver | None = None,
@@ -658,11 +659,19 @@ def retrieve_memories(
     """
 
     active_policy = policy or RetrievalPolicy()
-    plan = build_query_plan(
+    # Core can share its bounded FTS plan with ranking within this request.
+    # This reuses query parsing only; every candidate is still checked below.
+    plan = query_plan or build_query_plan(
         request.query,
         max_query_groups=active_policy.max_query_groups,
         max_terms_per_group=active_policy.max_terms_per_group,
     )
+    if query_plan is not None and (
+        query_plan.normalized_query != _normalise_query(request.query)
+        or len(query_plan.groups) > active_policy.max_query_groups
+        or any(len(group) > active_policy.max_terms_per_group for group in query_plan.groups)
+    ):
+        raise ValueError("query plan must match this request and retrieval policy")
     backend = _resolve_search(search)
     role_ids = frozenset(allowed_role_ids)
     agent_ids = frozenset(allowed_agent_ids)

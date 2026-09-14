@@ -4,7 +4,7 @@ owner: Codex
 status: implementing
 scope: B2-4 / MP-3 / GUI-L3 / J2 only
 base_head: 7f8273ab2cfc669ec8c34044c320e436ada2dea1
-code_head: null
+code_head: 57ab2e6
 delivery_head: null
 governance:
   root: /Users/bigo/agentworkspace/codexworkspace/operant
@@ -66,7 +66,7 @@ next_action: complete source recovery, verify current gates, resolve frozen perf
 | AC-02 | 自动/显式Memory Pack与ContextRevision，版本/来源/条件/原因；MP-3.2 | Codex | Schema/Manager/Composer正式入口 | Session/Workflow/Graph统一链 | 是：上下文真实 | 待验 |
 | AC-03 | 常驻/动态/Skill/历史/工具/包装/输出共同预算；精确或保守估算/切模型重算；MP-3.2/3 | Codex | Core预算/工具Schema/关键条件定向检查 | 正式ModelProfile | 是：预算完整 | 待验 |
 | AC-04 | Run截止点冻结、回合/阶段刷新、当前撤销/权限优先、污染摘要清理或停止；MP-3.4 | Codex | 并发/恢复/Provider发送前复核 | 临时库；越权/撤销零泄漏 | 是：安全语义 | 待验 |
-| AC-05 | 同算法直接/进程内/隔离性能；保留集不退化及MP-0固定门；MP-3.5 | Codex | scripts/benchmark及原b2-1/evaluation-baseline.md门 | 相同数据权限模型调用数，冷/热/CPU/RSS/RPC/Token/成本分别记录 | 是：性能门 | 保留集0.9167、零泄漏；Host性能未达门，见performance-metadata-cache.json，继续优化 |
+| AC-05 | 同算法直接/进程内/隔离性能；保留集不退化及MP-0固定门；MP-3.5 | Codex | scripts/benchmark及原b2-1/evaluation-baseline.md门 | 相同数据权限模型调用数，冷/热/CPU/RSS/RPC/Token/成本分别记录 | 是：性能门 | 保留集0.9167、零泄漏；Host性能未达门，见performance-recovered-baseline.json与performance-current-status.json，继续优化 |
 | AC-06 | GUI-L3模板/成员、支持编辑发布运行、群聊/定向消息、任务/工件板、Agent个人页 | Codex | 正式API/生成Client/GUI业务，服务端状态守卫 | 临时项目/Graph/Team；无需手填内部ID | 是：协作闭环 | 待验 |
 | AC-07 | 上下文检查器实际条目版本/来源/条件/Token/原因/移出本次/刷新 | Codex | 正式Projection与GUI交互 | Session真实Provider上下文读回 | 是：可解释 | 待验 |
 | AC-08 | J2单Agent与真实多Agent共用记忆；无插件普通任务/强依赖显式失败 | Codex | 正式discover/ModelProfile/Session/Graph，明确workspace/tool policy | 合成任务；只读工具；受控调用预算，记录精确model ID | 是：联合硬门 | 开发预检单/多Agent已通过，见model-preflight.json与graph-model-preflight.json；最终冻结J2待验 |
@@ -78,3 +78,7 @@ next_action: complete source recovery, verify current gates, resolve frozen perf
 ## 证据与环境
 每份证据记录 evidence_head、相关源码/依赖/Schema/构建摘要、命令/入口/模型/环境与实际结果及限制。正式验收前填充独占资源并暂停相关写入；发现缺陷先结束该段再修复。证据复用遵守治理沟通规则 §5，不把Mock/skip/报告当实测。
 视觉工单：治理根 memory/communication/items/COM-20260913-002.md（UI-COLLAB-03）。
+
+## 当前性能诊断归属（2026-09-14，Codex）
+
+产品源码与公共契约由 Codex 持有。原 signature_allocation 子 Agent 在实施树同级 signature-diagnostic/ 验证 raw-stat 对当前产品扫描器的收益；原 performance 子 Agent 在 native-scan-diagnostic/ 验证单次 C 调用的完整扫描。两者仅写诊断目录，测量前协调，禁止改变门槛或省略权限/完整性检查。收益与变化检测未证明前不接入产品。

@@ -1,0 +1,7 @@
+{
+  "file": "recovery-tests.log",
+  "normalization": "trailing whitespace only; output content otherwise unchanged",
+  "raw_sha256": "319a2cb0e7e3dd73dca26363a49196ff93d7dbd7e79ef3cd0245847fedf70a76",
+  "raw_preserved_at": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/current-recovery-gates-v2/tests.log",
+  "normalized_sha256": "e91efec67d1c9e0700883185804e406879528330ef188e57810ae2fc362bcce2"
+}

@@ -19,7 +19,7 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
 
     def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
         """Exercise all eight frozen operations against Core over a real socket."""
-    
+
         frozen = _schema()
         schemas = cast(dict[str, Any], frozen["components"]["schemas"])
         operation_ids = [
@@ -38,7 +38,7 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
             "submitApproval",
         ]
         assert set(OPERATION_DEFINITIONS) == set(operation_ids)
-    
+
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / "README.txt").write_text("local integration fixture\n", encoding="utf-8")
@@ -77,19 +77,19 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
 >       with _running_uvicorn(app) as base_url:
              ^^^^^^^^^^^^^^^^^^^^^
 
-tests/test_phase1e_loopback_integration.py:315: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_phase1e_loopback_integration.py:315:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 /Users/bigo/.pyenv/versions/3.13.3/lib/python3.13/contextlib.py:141: in __enter__
     return next(self.gen)
            ^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
 app = <fastapi.applications.FastAPI object at 0x1098fbb10>
 
     @contextmanager
     def _running_uvicorn(app: Any) -> Iterator[str]:
         """Serve the app on an actual loopback socket for urllib transport tests."""
-    
+
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 >       listener.bind(("127.0.0.1", 0))

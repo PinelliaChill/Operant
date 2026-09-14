@@ -1,0 +1,1556 @@
+{
+  "schema": "operant.b2_4.memory-performance-report.v1",
+  "implementation": {
+    "source_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery",
+    "head": "57ab2e66aa6475d657baaeae5535eb5a3b8ce31f",
+    "retrieval_policy_version": "mp3.v1",
+    "manager_entrypoint": "MemoryManager.search"
+  },
+  "dataset": {
+    "fixture_path": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery/tests/fixtures/b2_1/memory_baseline.json",
+    "file_sha256": "d4ab1378850a4dbc0691a0cb12f79e3cbb9ec5af225887e849889ad1e3858895",
+    "dataset_id": "b2_1_memory_baseline",
+    "version": 1,
+    "memory_count": 31,
+    "case_count": 42,
+    "split_counts": {
+      "development": 30,
+      "holdout": 12
+    }
+  },
+  "run": {
+    "repetitions": 2,
+    "requested_modes": [
+      "direct",
+      "trusted_in_process",
+      "isolated"
+    ],
+    "modes": [
+      "direct",
+      "trusted_in_process",
+      "isolated"
+    ],
+    "database": "temporary isolated SQLite per mode",
+    "user_database_read": false,
+    "environment_file_read": false,
+    "network": false,
+    "model_calls": 0,
+    "model_usage": "unknown",
+    "python": "3.13.3",
+    "platform": "macOS-15.7.2-arm64-arm-64bit-Mach-O"
+  },
+  "policy": {
+    "version": "mp3.v1",
+    "candidate_limit": 40,
+    "diversity_limit": 3,
+    "max_query_groups": 8,
+    "max_terms_per_group": 12
+  },
+  "old_baseline": {
+    "implementation": {
+      "worktree": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery",
+      "source_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery",
+      "base_head": "ecb00437e9a44a5e79d54e8cf4944fd0d456bf02",
+      "head": "57ab2e66aa6475d657baaeae5535eb5a3b8ce31f"
+    },
+    "quality": {
+      "old_direct_query": {
+        "all": {
+          "case_count": 42,
+          "macro_precision": 0.7143,
+          "macro_recall": 0.7143,
+          "expected_items": 38,
+          "retrieved_items": 24,
+          "relevant_items": 24,
+          "security_violations": []
+        },
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.7,
+          "macro_recall": 0.7,
+          "expected_items": 30,
+          "retrieved_items": 19,
+          "relevant_items": 19,
+          "security_violations": []
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.75,
+          "macro_recall": 0.75,
+          "expected_items": 8,
+          "retrieved_items": 5,
+          "relevant_items": 5,
+          "security_violations": []
+        }
+      },
+      "old_recent_entries": {
+        "all": {
+          "case_count": 42,
+          "macro_precision": 0.0873,
+          "macro_recall": 0.3175,
+          "expected_items": 38,
+          "retrieved_items": 206,
+          "relevant_items": 17,
+          "security_violations": []
+        },
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.0889,
+          "macro_recall": 0.2944,
+          "expected_items": 30,
+          "retrieved_items": 146,
+          "relevant_items": 12,
+          "security_violations": []
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.0833,
+          "macro_recall": 0.375,
+          "expected_items": 8,
+          "retrieved_items": 60,
+          "relevant_items": 5,
+          "security_violations": []
+        }
+      }
+    },
+    "timing": {
+      "old_direct_query": {
+        "bootstrap_ms": 802.5235,
+        "bootstrap_scope": "Service construction, SQLite initialize/migrations, role/session, fixture writes; not process startup",
+        "first_query_ms": 3.2136,
+        "wall_p50_ms": 2.533,
+        "wall_p95_ms": 5.6336,
+        "warm_wall_p50_ms": 2.533,
+        "warm_wall_p95_ms": 5.6336,
+        "warm_cpu_p50_ms": 2.465,
+        "warm_cpu_p95_ms": 2.962,
+        "warm_peak_alloc_p50_kib": 3.7656,
+        "warm_peak_alloc_p95_kib": 7.9277,
+        "rss_high_water_kib": 75296.0,
+        "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
+        "sample_count": 84,
+        "repetitions_per_case": 2
+      },
+      "old_recent_entries": {
+        "bootstrap_ms": 817.8644,
+        "bootstrap_scope": "Service construction, SQLite initialize/migrations, role/session, fixture writes; not process startup",
+        "first_query_ms": 2.8555,
+        "wall_p50_ms": 2.7443,
+        "wall_p95_ms": 3.1325,
+        "warm_wall_p50_ms": 2.7443,
+        "warm_wall_p95_ms": 3.1325,
+        "warm_cpu_p50_ms": 2.411,
+        "warm_cpu_p95_ms": 2.513,
+        "warm_peak_alloc_p50_kib": 22.3945,
+        "warm_peak_alloc_p95_kib": 22.9883,
+        "rss_high_water_kib": 81840.0,
+        "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
+        "sample_count": 84,
+        "repetitions_per_case": 2
+      }
+    },
+    "model_calls": 0,
+    "model_usage": "unknown"
+  },
+  "results": {
+    "direct": {
+      "mode": "direct",
+      "status": "completed",
+      "algorithm": "MemoryManager.search -> b24_fts + frozen_versions -> retrieve_memories",
+      "setup_ms": 85.7372,
+      "metrics": {
+        "sample_count": 84,
+        "first_query_ms": 4.7512,
+        "warm_wall_p50_ms": 2.1763,
+        "warm_wall_p95_ms": 5.9122,
+        "warm_cpu_p50_ms": 1.304,
+        "warm_cpu_p95_ms": 3.711,
+        "warm_peak_alloc_p50_kib": 30.9639,
+        "warm_peak_alloc_p95_kib": 84.793,
+        "parent_rss_high_water_kib": 81840.0,
+        "child_cpu_p50_ms": null,
+        "child_cpu_p95_ms": null,
+        "child_rss_high_water_kib": null,
+        "rss_scope": "parent_process_high_water; child metrics separate when available",
+        "cpu_scope": "parent_process; isolated child metrics separate when available",
+        "allocation_scope": "parent_process_tracemalloc; child allocation unknown"
+      },
+      "quality": {
+        "case_count": 42,
+        "repetitions": 2,
+        "macro_precision": 0.7353,
+        "macro_recall": 0.881,
+        "forbidden_hits": {},
+        "forbidden_hit_count": 0,
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.6628,
+          "macro_recall": 0.8667
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.9167,
+          "macro_recall": 0.9167
+        }
+      },
+      "model_calls": 0,
+      "model_usage": "unknown",
+      "token_usage": "unknown; token_budget=0 and no provider call",
+      "cost_usd": "unknown",
+      "rpc": {
+        "frames": 0,
+        "bytes": 0,
+        "nested_host_api_calls": 0,
+        "measurement": "no Host transport"
+      },
+      "phase_timing": {
+        "manager_search": {
+          "calls": 84,
+          "total_ms": 229.675,
+          "average_ms": 2.7342
+        },
+        "host_invoke": {
+          "calls": 0,
+          "total_ms": 0.0
+        },
+        "host_minus_manager_ms": 0.0,
+        "registry_assert_lease": {
+          "calls": 0,
+          "total_ms": 0.0
+        },
+        "registry_verify_package": {
+          "calls": 0,
+          "total_ms": 0.0
+        },
+        "registry_verify_certification": {
+          "calls": 0,
+          "total_ms": 0.0
+        },
+        "interpretation": "direct reference executes the production MemoryManager.search entrypoint"
+      },
+      "returned_ids": [
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        [],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        []
+      ]
+    },
+    "trusted_in_process": {
+      "mode": "trusted_in_process",
+      "status": "completed",
+      "algorithm": "PluginHost -> memory-standard -> Host.search -> MemoryManager.search -> b24_fts",
+      "admission": {
+        "mode": "trusted_in_process",
+        "certification_id": "cert.b24.benchmark.trusted_in_process",
+        "isolation_evidence_ref": null
+      },
+      "setup_ms": 130.9408,
+      "host_startup": {
+        "spawn_ms": 6.2037,
+        "health_handshake_ms": 5.5523,
+        "total_ms": 11.756,
+        "response": {
+          "request_id": "plugin_request_d8d62d74b7c9495c93c311939f608ebf",
+          "sdk_version": "operant-memory-sdk.v1",
+          "state": "ready",
+          "checkpoint_ref": null
+        },
+        "rpc": {
+          "frames": 0,
+          "bytes": 0
+        }
+      },
+      "metrics": {
+        "sample_count": 84,
+        "first_query_ms": 8.9713,
+        "warm_wall_p50_ms": 6.2552,
+        "warm_wall_p95_ms": 10.54,
+        "warm_cpu_p50_ms": 4.526,
+        "warm_cpu_p95_ms": 6.532,
+        "warm_peak_alloc_p50_kib": 44.9736,
+        "warm_peak_alloc_p95_kib": 99.1113,
+        "parent_rss_high_water_kib": 81840.0,
+        "child_cpu_p50_ms": null,
+        "child_cpu_p95_ms": null,
+        "child_rss_high_water_kib": null,
+        "rss_scope": "parent_process_high_water; child metrics separate when available",
+        "cpu_scope": "parent_process; isolated child metrics separate when available",
+        "allocation_scope": "parent_process_tracemalloc; child allocation unknown"
+      },
+      "phase_timing": {
+        "manager_search": {
+          "calls": 84,
+          "total_ms": 242.2393,
+          "average_ms": 2.8838
+        },
+        "host_invoke": {
+          "calls": 84,
+          "total_ms": 579.2431
+        },
+        "registry_assert_lease": {
+          "calls": 588,
+          "total_ms": 4.2908
+        },
+        "registry_verify_package": {
+          "calls": 588,
+          "total_ms": 208.9953
+        },
+        "registry_verify_certification": {
+          "calls": 588,
+          "total_ms": 229.2187
+        },
+        "host_minus_manager_ms": 337.0038,
+        "interpretation": "registry package digest work is included in verify_package; host_minus_manager also includes typed validation, callbacks, and transport"
+      },
+      "quality": {
+        "case_count": 42,
+        "repetitions": 2,
+        "macro_precision": 0.7353,
+        "macro_recall": 0.881,
+        "forbidden_hits": {},
+        "forbidden_hit_count": 0,
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.6628,
+          "macro_recall": 0.8667
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.9167,
+          "macro_recall": 0.9167
+        }
+      },
+      "model_calls": 0,
+      "model_usage": "unknown",
+      "token_usage": "unknown; token_budget=0 and no provider call",
+      "cost_usd": "unknown",
+      "rpc": {
+        "frames": 0,
+        "bytes": 0,
+        "outgoing_frames": 0,
+        "outgoing_bytes": 0,
+        "incoming_frames": 0,
+        "incoming_bytes": 0,
+        "callback_request_frames": 0,
+        "callback_request_bytes": 0,
+        "nested_host_api_calls": 84,
+        "measurement": "in-process calls are not RPC frames"
+      },
+      "returned_ids": [
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        [],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        []
+      ]
+    },
+    "isolated": {
+      "mode": "isolated",
+      "status": "completed",
+      "algorithm": "PluginHost -> memory-standard -> Host.search -> MemoryManager.search -> b24_fts",
+      "admission": {
+        "mode": "isolated",
+        "certification_id": null,
+        "isolation_evidence_ref": "sandbox-exec:08305a086c97c9fe42b1c2491ea4705b03cc5c41e16914025eba2254434ad0fb"
+      },
+      "setup_ms": 255.2414,
+      "host_startup": {
+        "spawn_ms": 34.8502,
+        "health_handshake_ms": 103.7588,
+        "total_ms": 138.6089,
+        "response": {
+          "request_id": "plugin_request_567994c8995c420281cb54449e732061",
+          "sdk_version": "operant-memory-sdk.v1",
+          "state": "ready",
+          "checkpoint_ref": null
+        },
+        "rpc": {
+          "frames": 2,
+          "bytes": 885
+        }
+      },
+      "metrics": {
+        "sample_count": 84,
+        "first_query_ms": 9.2053,
+        "warm_wall_p50_ms": 6.4986,
+        "warm_wall_p95_ms": 10.5966,
+        "warm_cpu_p50_ms": 5.014,
+        "warm_cpu_p95_ms": 7.816,
+        "warm_peak_alloc_p50_kib": 48.3398,
+        "warm_peak_alloc_p95_kib": 102.2803,
+        "parent_rss_high_water_kib": 81840.0,
+        "child_cpu_p50_ms": 0.0,
+        "child_cpu_p95_ms": 0.0,
+        "child_rss_high_water_kib": 21808.0,
+        "rss_scope": "parent_process_high_water; child metrics separate when available",
+        "cpu_scope": "parent_process; isolated child metrics separate when available",
+        "allocation_scope": "parent_process_tracemalloc; child allocation unknown"
+      },
+      "phase_timing": {
+        "manager_search": {
+          "calls": 84,
+          "total_ms": 256.8161,
+          "average_ms": 3.0573
+        },
+        "host_invoke": {
+          "calls": 84,
+          "total_ms": 600.0815
+        },
+        "registry_assert_lease": {
+          "calls": 336,
+          "total_ms": 5.9969
+        },
+        "registry_verify_package": {
+          "calls": 336,
+          "total_ms": 127.3085
+        },
+        "registry_verify_certification": {
+          "calls": 336,
+          "total_ms": 140.6287
+        },
+        "host_minus_manager_ms": 343.2654,
+        "interpretation": "registry package digest work is included in verify_package; host_minus_manager also includes typed validation, callbacks, and transport"
+      },
+      "quality": {
+        "case_count": 42,
+        "repetitions": 2,
+        "macro_precision": 0.7353,
+        "macro_recall": 0.881,
+        "forbidden_hits": {},
+        "forbidden_hit_count": 0,
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.6628,
+          "macro_recall": 0.8667
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.9167,
+          "macro_recall": 0.9167
+        }
+      },
+      "model_calls": 0,
+      "model_usage": "unknown",
+      "token_usage": "unknown; token_budget=0 and no provider call",
+      "cost_usd": "unknown",
+      "rpc": {
+        "frames": 336,
+        "bytes": 190130,
+        "outgoing_frames": 168,
+        "outgoing_bytes": 94855,
+        "incoming_frames": 84,
+        "incoming_bytes": 35714,
+        "callback_request_frames": 84,
+        "callback_request_bytes": 59561,
+        "nested_host_api_calls": 84,
+        "measurement": "actual stdio JSON-RPC frames; callback request bytes reconstructed from typed payload"
+      },
+      "returned_ids": [
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        [],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        []
+      ]
+    }
+  },
+  "gates": {
+    "status": "not_passed",
+    "frozen_task_gates": {
+      "warm_wall_p95_max_regression_ratio": 1.25,
+      "first_query_wall_max_regression_ratio": 1.5,
+      "warm_cpu_p95_max_regression_ratio": 1.25,
+      "warm_peak_alloc_p95_max_regression_ratio": 1.5,
+      "absolute_wall_slack_ms": 2.0,
+      "absolute_peak_alloc_slack_kib": 256.0
+    },
+    "frozen_host_gates": {
+      "future_host_in_process": {
+        "warm_wall_p95_max_regression_ratio": 1.25,
+        "bootstrap_wall_max_regression_ratio": 1.5,
+        "first_query_wall_max_regression_ratio": 1.5,
+        "warm_cpu_p95_max_regression_ratio": 1.25,
+        "warm_peak_alloc_p95_max_regression_ratio": 1.5
+      },
+      "future_host_isolated": {
+        "warm_wall_p95_max_regression_ratio": 2.0,
+        "bootstrap_wall_max_regression_ratio": 3.0,
+        "first_query_wall_max_regression_ratio": 3.0,
+        "warm_cpu_p95_max_regression_ratio": 2.0,
+        "warm_peak_alloc_p95_max_regression_ratio": 2.0
+      }
+    },
+    "direct": {
+      "passed": false,
+      "checks": {
+        "holdout_recall_not_below_old_direct": true,
+        "forbidden_hits_zero": true,
+        "warm_wall_p95": {
+          "actual": 5.9122,
+          "reference": 5.6336,
+          "ratio": 1.0495,
+          "ratio_limit": 1.25,
+          "slack": 2.0,
+          "unit": "ms",
+          "allowed_actual": 9.042,
+          "passed": true,
+          "status": "completed"
+        },
+        "first_query_wall": {
+          "actual": 4.7512,
+          "reference": 3.2136,
+          "ratio": 1.4785,
+          "ratio_limit": 1.5,
+          "slack": 2.0,
+          "unit": "ms",
+          "allowed_actual": 6.8204,
+          "passed": true,
+          "status": "completed"
+        },
+        "warm_cpu_p95": {
+          "actual": 3.711,
+          "reference": 2.962,
+          "ratio": 1.2529,
+          "ratio_limit": 1.25,
+          "slack": 0.0,
+          "unit": "ms",
+          "allowed_actual": 3.7025,
+          "passed": false,
+          "status": "completed"
+        },
+        "warm_peak_alloc_p95": {
+          "actual": 84.793,
+          "reference": 7.9277,
+          "ratio": 10.6958,
+          "ratio_limit": 1.5,
+          "slack": 256.0,
+          "unit": "KiB",
+          "allowed_actual": 267.8915,
+          "passed": true,
+          "status": "completed"
+        }
+      }
+    },
+    "host": {
+      "trusted_in_process": {
+        "reference": "new_direct",
+        "checks": {
+          "holdout_recall_not_below_old_direct": true,
+          "forbidden_hits_zero": true,
+          "bootstrap_wall": {
+            "actual": 130.9408,
+            "reference": 85.7372,
+            "ratio": 1.5272,
+            "ratio_limit": 1.5,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 128.6058,
+            "passed": false,
+            "status": "completed"
+          },
+          "warm_wall_p95": {
+            "actual": 10.54,
+            "reference": 5.9122,
+            "ratio": 1.7828,
+            "ratio_limit": 1.25,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 7.3902,
+            "passed": false,
+            "status": "completed"
+          },
+          "first_query_wall": {
+            "actual": 8.9713,
+            "reference": 4.7512,
+            "ratio": 1.8882,
+            "ratio_limit": 1.5,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 7.1268,
+            "passed": false,
+            "status": "completed"
+          },
+          "warm_cpu_p95": {
+            "actual": 6.532,
+            "reference": 3.711,
+            "ratio": 1.7602,
+            "ratio_limit": 1.25,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 4.6387,
+            "passed": false,
+            "status": "completed"
+          },
+          "warm_peak_alloc_p95": {
+            "actual": 99.1113,
+            "reference": 84.793,
+            "ratio": 1.1689,
+            "ratio_limit": 1.5,
+            "slack": 0.0,
+            "unit": "KiB",
+            "allowed_actual": 127.1895,
+            "passed": true,
+            "status": "completed"
+          }
+        },
+        "passed": false
+      },
+      "isolated": {
+        "reference": "new_direct",
+        "checks": {
+          "holdout_recall_not_below_old_direct": true,
+          "forbidden_hits_zero": true,
+          "bootstrap_wall": {
+            "actual": 255.2414,
+            "reference": 85.7372,
+            "ratio": 2.977,
+            "ratio_limit": 3.0,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 257.2116,
+            "passed": true,
+            "status": "completed"
+          },
+          "warm_wall_p95": {
+            "actual": 10.5966,
+            "reference": 5.9122,
+            "ratio": 1.7923,
+            "ratio_limit": 2.0,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 11.8244,
+            "passed": true,
+            "status": "completed"
+          },
+          "first_query_wall": {
+            "actual": 9.2053,
+            "reference": 4.7512,
+            "ratio": 1.9375,
+            "ratio_limit": 3.0,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 14.2536,
+            "passed": true,
+            "status": "completed"
+          },
+          "warm_cpu_p95": {
+            "actual": 7.816,
+            "reference": 3.711,
+            "ratio": 2.1062,
+            "ratio_limit": 2.0,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 7.422,
+            "passed": false,
+            "status": "completed"
+          },
+          "warm_peak_alloc_p95": {
+            "actual": 102.2803,
+            "reference": 84.793,
+            "ratio": 1.2062,
+            "ratio_limit": 2.0,
+            "slack": 0.0,
+            "unit": "KiB",
+            "allowed_actual": 169.586,
+            "passed": true,
+            "status": "completed"
+          }
+        },
+        "passed": false
+      }
+    },
+    "quality_reference": {
+      "old_direct_holdout_recall": 0.75,
+      "new_direct_holdout_recall": 0.9167
+    }
+  },
+  "limitations": [
+    "The fixed fixture is synthetic and cannot establish production semantic quality.",
+    "The run makes zero model calls; provider usage and end-to-end task cost are unknown.",
+    "Direct and Host parent CPU/RSS/allocation scopes differ from isolated child metrics.",
+    "Isolated callback request bytes are reconstructed from typed payloads; other stdio frames are counted at transport boundaries.",
+    "direct gate failed: warm_cpu_p95 actual=3.711 ms allowed=3.7025 ms",
+    "trusted_in_process Host gate failed: bootstrap_wall, warm_wall_p95, first_query_wall, warm_cpu_p95",
+    "isolated Host gate failed: warm_cpu_p95"
+  ]
+}

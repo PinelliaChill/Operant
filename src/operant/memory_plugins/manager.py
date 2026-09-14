@@ -1135,6 +1135,7 @@ class MemoryManager:
                     request,
                     search,
                     policy=policy,
+                    query_plan=plan,
                     resolve=lambda ref: next((v for v in values if v.ref == ref), None),
                     cutoff_resolver=lambda version: cursors.get(version.ref),
                     visibility=run.validate,

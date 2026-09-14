@@ -1,0 +1,17 @@
+{
+  "record_identity": "Codex",
+  "status": "not_passed",
+  "source_head": "57ab2e6",
+  "product_hashes": {
+    "src/operant/plugins/registry.py": "0c3ee3d712b3b47789767c3dc46202ef230d06b33470a5bcf8dddce31010daa8",
+    "scripts/benchmark_b24_memory.py": "b945341b786f8ffff33c881260be4d58af2b3c463f4d35bed7ffb1e392d22e3e",
+    "tests/fixtures/b2_1/memory_baseline.json": "d4ab1378850a4dbc0691a0cb12f79e3cbb9ec5af225887e849889ad1e3858895"
+  },
+  "report_sha256": "1f4370b9f35441d4d0c27827ec4800bf4660b4b684263a793fe72da0e674898b",
+  "gate_status": "not_passed",
+  "quality": {
+    "old_direct_holdout_recall": 0.75,
+    "new_direct_holdout_recall": 0.9167
+  },
+  "remaining": "CPU/latency gates; preserve all per-boundary package,lease,certification and permissions checks"
+}

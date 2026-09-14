@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -18,11 +19,10 @@ os.environ["OPERANT_DB_PATH"] = str(
     Path(tempfile.mkdtemp(prefix="operant-b24-discovery-")).resolve() / "core.sqlite3"
 )
 os.environ["PYTHONPATH"] = str(root / "src")
-os.environ["UV_CACHE_DIR"] = "/private/tmp/operant-uv-cache"
-result = {"source_root": str(root), "entry": "uv run --no-sync operant model discover"}
+result = {"source_root": str(root), "entry": "python -m operant.cli model discover"}
 try:
     p = subprocess.run(
-        ["uv", "run", "--no-sync", "operant", "model", "discover"],
+        [sys.executable, "-m", "operant.cli", "model", "discover"],
         cwd=root,
         env=os.environ,
         capture_output=True,
