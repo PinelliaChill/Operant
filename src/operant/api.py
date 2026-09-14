@@ -1493,9 +1493,12 @@ def create_app(
             if parsed_last_event_id is not None:
                 return await call_next(request)
 
-        if request.method == "POST" and request.url.path == "/v1/b2-3/commands":
-            # B2-3 owns a durable bounded command journal. Do not persist a
-            # second full dataset snapshot or truncate its typed Query result.
+        if request.method == "POST" and request.url.path in {
+            "/v1/b2-3/commands",
+            "/v1/b2-4/commands",
+        }:
+            # These routes own durable bounded command journals. Do not persist
+            # a second snapshot or truncate their typed projection results.
             return await call_next(request)
         idempotency_key = request.headers.get("Idempotency-Key")
         scope = _command_scope(request.method, request.url.path)
@@ -3569,6 +3572,9 @@ def create_app(
         policy_engine=phase45_policy_engine,
         approval_reviewer=phase45_approval_reviewer,
     )
+    from operant.api_b2_4 import install_b2_4_routes
+
+    install_b2_4_routes(app, service)
     local_authorizer = phase56_local_authorizer or (
         lambda request: (
             request.client is not None and request.client.host in {"127.0.0.1", "::1", "testclient"}

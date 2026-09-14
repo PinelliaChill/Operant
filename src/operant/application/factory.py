@@ -29,5 +29,7 @@ class AgentFactory:
             thread_id=thread_id,
         )
 
-    def create_agent(self, session_id: str) -> AgentInstance:
-        return self.store.create_agent(session_id)
+    def create_agent(
+        self, session_id: str, *, budget_overrides: dict[str, Any] | None = None
+    ) -> AgentInstance:
+        return self.store.create_agent(session_id, budget_overrides=budget_overrides)

@@ -1,0 +1,78 @@
+{
+  "schema": "operant.b2_4.performance-increment-evidence.v1",
+  "decision": "retain_bounded_signature_reuse",
+  "scope": {
+    "source": "src/operant/plugins/registry.py",
+    "tests": "tests/test_plugin_host.py",
+    "change": "Reuse the immutable package signature tuple when every scanned entry still matches; materialize the prior prefix only after the first difference.",
+    "security_checks_preserved": true,
+    "inventory_limit": 8192,
+    "digest_miss_rescans": true
+  },
+  "comparison": {
+    "command": "PYTHONPATH=src UV_CACHE_DIR=/private/tmp/operant-uv-cache uv run --no-sync python scripts/benchmark_b24_memory.py --mode direct --mode trusted_in_process --repetitions 2 --output REPORT",
+    "script_sha256": "b945341b786f8ffff33c881260be4d58af2b3c463f4d35bed7ffb1e392d22e3e",
+    "fixture_sha256": "d4ab1378850a4dbc0691a0cb12f79e3cbb9ec5af225887e849889ad1e3858895",
+    "sample_count_per_mode": 84,
+    "before": {
+      "registry_sha256": "3c9042b948036772c85016793d608a34ff905ef716fcaf40e9910681d18c3bd3",
+      "test_sha256": "c6da804815b4281c41c1919546418b0056c6a83feccb3a0fa4daa8ebb4f0dcd3",
+      "report_sha256": "02a6d56df87f7ff2ed22f0d895ac72b6f1edf07572020718e8c8590700ab6afa",
+      "metrics": {
+        "direct": {
+          "warm_wall_p95_ms": 3.9397,
+          "warm_cpu_p95_ms": 3.418,
+          "warm_peak_alloc_p50_kib": 31.001,
+          "warm_peak_alloc_p95_kib": 84.5459
+        },
+        "trusted_in_process": {
+          "first_query_ms": 7.6039,
+          "warm_wall_p95_ms": 8.208,
+          "warm_cpu_p95_ms": 7.572,
+          "warm_peak_alloc_p50_kib": 54.5146,
+          "warm_peak_alloc_p95_kib": 109.7598,
+          "registry_verify_package_ms": 161.0936
+        }
+      }
+    },
+    "after": {
+      "registry_sha256": "0c3ee3d712b3b47789767c3dc46202ef230d06b33470a5bcf8dddce31010daa8",
+      "test_sha256": "75c73a136dc533f84b7382420b42a8f2592b644c72f14666d31db48dd3d599b4",
+      "report_sha256": "bef8c0d6d7aea4f46fb6e7cea7d2006e4627e232b6a2ff7fa7c830af17242c57",
+      "metrics": {
+        "direct": {
+          "warm_wall_p95_ms": 4.0198,
+          "warm_cpu_p95_ms": 3.445,
+          "warm_peak_alloc_p50_kib": 30.958,
+          "warm_peak_alloc_p95_kib": 84.6924
+        },
+        "trusted_in_process": {
+          "first_query_ms": 7.9995,
+          "warm_wall_p95_ms": 8.0973,
+          "warm_cpu_p95_ms": 7.341,
+          "warm_peak_alloc_p50_kib": 45.0254,
+          "warm_peak_alloc_p95_kib": 99.4326,
+          "registry_verify_package_ms": 166.8574
+        }
+      }
+    },
+    "observed_change": {
+      "trusted_warm_peak_alloc_p50_percent": -17.4,
+      "trusted_warm_peak_alloc_p95_percent": -9.4,
+      "trusted_registry_verify_package_percent": 3.6,
+      "overall_fixed_gate_before": "not_passed",
+      "overall_fixed_gate_after": "not_passed"
+    }
+  },
+  "isolated": {
+    "status": "unavailable",
+    "reason": "sandbox probe could not create controlled sentinels",
+    "report_sha256": "9d1ef28f547ddcda55ba773acc9d1540d3b2b9f7e2d3a38a13d1c9f35c701018"
+  },
+  "limitations": [
+    "The fixture and run make zero model calls and use temporary isolated SQLite databases.",
+    "The fixed performance descriptor gate remains not_passed; thresholds and fixtures were unchanged.",
+    "Wall and CPU measurements include normal run noise; the retained result is specifically the repeated trusted tracemalloc allocation reduction.",
+    "Isolated mode was attempted as a real run and was unavailable; no isolated pass is claimed."
+  ]
+}

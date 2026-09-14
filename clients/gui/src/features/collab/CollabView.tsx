@@ -72,7 +72,7 @@ const LiveCollabView: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <div style={{ minWidth: 0 }}>
               <h1 className="section-title">协作工作台</h1>
-              <p className="section-sub">实时 Graph 工作流与 Team 协作运行监控（Phase 2/3）</p>
+              <p className="section-sub">编排工作流，查看团队任务与运行进度</p>
             </div>
           </div>
         </div>

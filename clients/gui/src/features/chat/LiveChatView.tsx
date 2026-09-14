@@ -1,3 +1,4 @@
+import { B24ContextInspector } from "./B24ContextInspector";
 import './b2-chat-layout.css';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
@@ -623,6 +624,7 @@ export const LiveChatView: React.FC = () => {
                 )}
                 </div>
               </div>
+              {selectedThread.sessionId && <B24ContextInspector sessionId={selectedThread.sessionId} busy={busy} />}
               <div className="live-message-list" aria-live="polite">
                 {historyError && (
                   <div className="live-alert live-alert-error" role="alert">

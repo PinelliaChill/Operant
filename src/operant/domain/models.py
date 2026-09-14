@@ -99,6 +99,14 @@ class Budget(BaseModel):
     max_cost_usd: float | None = Field(default=None, gt=0)
     max_tool_calls: int | None = Field(default=None, ge=0)
 
+    def narrowed(self, **overrides: Any) -> Budget:
+        selected = Budget.model_validate({**self.model_dump(), **overrides})
+        for key, previous in self.model_dump().items():
+            current = getattr(selected, key)
+            if previous is not None and (current is None or current > previous):
+                raise ValueError(f"Agent budget cannot increase {key}")
+        return selected
+
 
 class EffortMapping(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)

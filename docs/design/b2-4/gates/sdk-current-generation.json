@@ -1,0 +1,12 @@
+{
+  "exit_code": 0,
+  "deterministic": true,
+  "files": {
+    "sdk/protocol/schema/operant-b2-4.openapi.json": "4796667d50e50b441b4f72ec1205eee02e8f6209793b66484dff82d9822b91d2",
+    "sdk/protocol/schema/operant-b2-4.openapi.sha256": "1f8b9fb7af2e0f72bbe9e7f4473c785b6750384f50fdb10fad4129906e11283c",
+    "sdk/typescript-client/b2_4.generated.ts": "8feb1935afc59c2acdd3d89d628373a6033b6655cf12aa30e182216ca0e353ba",
+    "sdk/python_client/b2_4_generated.py": "29e8db5b51580b1001cf22eefabf16378ad1bde487a4fbaf224e7873a7bd0308"
+  },
+  "schema_digest": "698bd5780bbc68e4c163115884bb2de8e6cd0940bb2bcc795285ba53dbee0695",
+  "delta": "Idempotency-Key minLength 1 now matches actual Header validation; public body types unchanged."
+}

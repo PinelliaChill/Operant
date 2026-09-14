@@ -5,6 +5,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -33,6 +34,7 @@ from operant.domain.team import (
     MessageAudience,
     MessageEnvelope,
     MessageKind,
+    MessageVisibility,
     RosterEntry,
     RosterMemberStatus,
     TaskBoardUpdate,
@@ -276,12 +278,59 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Workflow Definition not found") from exc
         try:
+            if definition.required_plugins or any(
+                "memory" in capability for capability in definition.required_capabilities
+            ):
+                service = app.state.operant_service
+                manager = service.memory_manager
+                if manager is None and service.memory_manager_factory is not None:
+                    manager = service.memory_manager_factory()
+                workspace = (
+                    str(Path(body.workspace_or_target).resolve())
+                    if body.workspace_or_target
+                    else None
+                )
+                project = (
+                    next(
+                        (
+                            p
+                            for p in manager._state["projects"]
+                            if manager.store.get_workspace_initialization_by_id(
+                                p["workspace_id"]
+                            ).workspace_ref
+                            == workspace
+                        ),
+                        None,
+                    )
+                    if manager
+                    else None
+                )
+                if manager is None or project is None:
+                    raise GraphStateError("required memory plugin is unavailable")
+                try:
+                    installed = manager._installation(project)
+                    if any(
+                        plugin != installed.manifest.plugin_id
+                        for plugin in definition.required_plugins
+                    ):
+                        raise GraphStateError("required memory plugin is unavailable")
+                except Exception as exc:
+                    raise GraphStateError("required memory plugin is unavailable") from exc
             run = graph_runtime.create_run(
                 definition,
                 input=body.input,
                 workspace_or_target=body.workspace_or_target,
             )
+            if definition.default_policy.get("b24_executor"):
+                try:
+                    app.state.b24_graph_executor.prepare(run.id)
+                    app.state.b24_freeze_graph_memory(run.id)
+                except Exception as exc:
+                    graph_runtime.fail_run(run.id)
+                    raise GraphStateError(str(exc)) from exc
             graph_runtime.start_run(run.id)
+            if definition.default_policy.get("b24_executor"):
+                app.state.b24_schedule_graph(run.id)
         except (GraphConflictError, GraphStateError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _receipt(request, "graph_run", run.id, recovery="replay_events")
@@ -377,11 +426,27 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
                 detail="unknown side effects cannot be replayed through this command",
             )
         try:
+            current = graph_repository.get_run(run_id)
+            if current.status is not GraphRunStatus.INTERRUPTED:
+                raise GraphStateError("only an interrupted Graph Run can be resumed")
+            definition = graph_repository.get_definition(
+                current.workflow_definition_id, current.workflow_definition_version
+            )
+            if definition.default_policy.get("b24_executor"):
+                app.state.b24_graph_executor.validate_resume(run_id)
             run = graph_runtime.recover(run_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Graph Run not found") from exc
-        except (GraphConflictError, GraphStateError) as exc:
+        except (GraphConflictError, GraphStateError, ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        definition = graph_repository.get_definition(
+            run.workflow_definition_id, run.workflow_definition_version
+        )
+        if (
+            definition.default_policy.get("b24_executor")
+            and run.status is not GraphRunStatus.MANUAL_RECONCILE_REQUIRED
+        ):
+            app.state.b24_schedule_graph(run_id)
         recovery = (
             "manual_reconcile"
             if run.status is GraphRunStatus.MANUAL_RECONCILE_REQUIRED
@@ -392,7 +457,11 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
     @app.post("/v1/graph/runs/{run_id}/cancel", status_code=202)
     async def cancel_graph_run(run_id: str, request: Request) -> dict[str, Any]:
         try:
-            run = graph_runtime.cancel_run(run_id)
+            run = (
+                app.state.b24_graph_executor.cancel(run_id)
+                if hasattr(app.state, "b24_graph_executor")
+                else graph_runtime.cancel_run(run_id)
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Graph Run not found") from exc
         except (GraphConflictError, GraphStateError) as exc:
@@ -710,6 +779,9 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
             media_type=artifact_record.media_type,
             publisher_id=body.publisher_id,
             recipient_ids=body.recipient_ids,
+            visibility=(
+                MessageVisibility.RECIPIENTS if body.recipient_ids else MessageVisibility.TEAM
+            ),
             source_message_id=body.source_message_id,
             revision=1 if existing is None else existing.revision + 1,
         )

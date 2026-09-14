@@ -31,7 +31,7 @@ def test_v8_upgrades_to_v9_and_empty_v9_rolls_back_in_isolation(tmp_path) -> Non
     path = tmp_path / "operant.db"
     store = SQLiteStore(path)
     assert store.migrate(target_version=8) == 8
-    assert store.migrate() == 15
+    assert store.migrate() == 16
     with sqlite3.connect(path) as connection:
         tables = {
             row[0]
@@ -64,7 +64,7 @@ def test_v9_refuses_data_loss_rollback(tmp_path) -> None:
     )
     with pytest.raises(MigrationError, match="contain data"):
         store.rollback(8, isolated=True)
-    assert store.schema_version() == 15
+    assert store.schema_version() == 16
 
 
 def test_v9_schema_drift_is_detected_before_runtime_use(tmp_path) -> None:

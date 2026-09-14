@@ -468,21 +468,31 @@ def compute_package_digest(
                 opened = os.fstat(descriptor)
                 if not stat.S_ISREG(opened.st_mode) or opened.st_dev != item_stat.st_dev:
                     raise PackageUnavailableError("plugin package changed while being read")
-                chunks: list[bytes] = []
+                if opened.st_ino != item_stat.st_ino or opened.st_size > max_bytes - total:
+                    raise PackageUnavailableError("plugin package changed while being read")
+                digest.update(relative.encode("utf-8"))
+                digest.update(b"\0")
+                digest.update(str(opened.st_size).encode("ascii"))
+                digest.update(b"\0")
+                read_size = 0
                 while True:
-                    chunk = os.read(descriptor, 1024 * 1024)
+                    chunk = os.read(descriptor, min(65_536, opened.st_size - read_size + 1))
                     if not chunk:
                         break
-                    chunks.append(chunk)
-                data = b"".join(chunks)
+                    read_size += len(chunk)
+                    if read_size > opened.st_size:
+                        raise PackageUnavailableError("plugin package changed while being read")
+                    digest.update(chunk)
+                finished = os.fstat(descriptor)
+                if read_size != opened.st_size or (
+                    finished.st_size,
+                    finished.st_mtime_ns,
+                    finished.st_ctime_ns,
+                ) != (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns):
+                    raise PackageUnavailableError("plugin package changed while being read")
             finally:
                 os.close(descriptor)
-            total += len(data)
-            digest.update(relative.encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(str(len(data)).encode("ascii"))
-            digest.update(b"\0")
-            digest.update(data)
+            total += read_size
     except OSError as exc:
         raise PackageUnavailableError() from exc
     return digest.hexdigest()
@@ -1205,9 +1215,27 @@ class StdioPluginEngine:
             self.process = None
             raise PackageUnavailableError("stdio plugin process could not start") from exc
         assert self.process.stderr is not None
+        self._bound_pipe_reads(self.process)
         self._stderr_task = asyncio.create_task(self._drain_stderr(self.process.stderr))
         self._last_activity = time.monotonic()
         self._watchdog_task = asyncio.create_task(self._watch_resources())
+
+    @staticmethod
+    def _bound_pipe_reads(process: asyncio.subprocess.Process) -> None:
+        # CPython's Unix pipe transport allocates a 256 KiB read buffer even for
+        # tiny RPC frames. Bound individual reads, keeping StreamReader's frame
+        # limit and complete-message validation unchanged. Other event loops
+        # retain their own transport behavior when this tuning is unavailable.
+        transport = getattr(process, "_transport", None)
+        get_pipe = getattr(transport, "get_pipe_transport", None)
+        if get_pipe is None:
+            return
+        for descriptor in (1, 2):
+            pipe = get_pipe(descriptor)
+            size = getattr(pipe, "max_size", None)
+            if isinstance(size, int) and size > 16384:
+                with suppress(AttributeError, TypeError):
+                    pipe.max_size = 16384
 
     async def _watch_resources(self) -> None:
         process = self.process
@@ -1226,6 +1254,7 @@ class StdioPluginEngine:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
+                self._bound_pipe_reads(probe)
                 try:
                     output, _ = await asyncio.wait_for(probe.communicate(), 2)
                 except asyncio.TimeoutError:

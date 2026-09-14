@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-12
+> 最后更新：2026-09-14
 >
-> 对应版本：B2-3 / MP-2 集成中（SQLite v15；additive `b2-3.v1`，尚未完成 J1 验收）
+> 对应版本：B2-4 / MP-3 开发集成中（SQLite v16；additive `b2-4.v1`；未完成本批交付门禁）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -56,6 +56,29 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
     `unsigned_candidate_not_for_release`，不能冒充正式发布物。
 
 ## 2. 当前完成度
+
+### B2-4 / MP-3 开发集成（未完成验收）
+
+唯一状态与验收入口为 [B2-4任务包](design/b2-4/task-package.md)。B2-3的已完成事实保留；下述是当前源码，不能替代最终J2、性能门及独立审查。
+
+SQLite v16 在原v15之上增加发布事件历史、trigram FTS索引、Run Manifest和Context Memory使用附表，保留v1—15的冻结校验值。旧库导入时只将当前head作为迁移截止点可知事实，不推断更早发布历史。Memory Ledger每次发布/停用由同事务trigger保存序号；Run按截止点选版本，但当前停用、删除、撤销与权限仍阻断。
+
+`memory_plugins/retrieval.py`将任务拆成有限中文短词、标识符和普通词组；`MemoryManager.search`批量合并FTS/短词候选后按scope、role、agent、sensitivity、条件、来源和历史发布状态复核。候选去重后再排序并限制同来源占比。`recall.py`通过实际PluginHost调用安装的引擎，自动召回和显式引用合成同一Memory Pack；Session、Coding Workflow及本批Graph Agent经同一正式Session入口调用。Manifest事务合并各Session所用版本并保留较新的显式刷新，每次发送重新核对该Session已有历史权限；外部新增知识不进入既有Run；安全回合结束后可显式刷新或移出后续请求。撤销污染无法可靠剥离时拒绝继续旧上下文，需干净Baseline；不改写已经发送的历史。
+
+Context Composer将普通记忆作为明确不可信证据加入实际Provider消息，记录包版本/来源/条件/原因；Memory使用附表与ContextRevision在同一事务保存并核对正文一致性，冻结旧Context协议保持原结构。新的`b2-4.v1`检查器Query返回最近50个typed扩展记录；共享Graph清单的控制在Graph终态执行，运行中拒绝刷新。总预算包括技能、历史、工具Schema和包装/输出预留；`token_counting.py`仅在模型ID精确匹配且有完整Provider wrapper时报告精确，否则明确保守UTF8估算，模型切换重新计数。
+
+`api_b2_4.py`补充实际模板/Team/Role目录、从角色创建版本化编排及自动Roster绑定，新增命令走Action Gateway与持久幂等journal。GUI使用生成B24Client，协作页提供模板/成员选择、编辑发布运行、定向/群聊、任务/工件板与Agent信息；会话检查器显示实际Context/Memory Pack并控制后续选择。`BoundedGraphExecutor`首期驱动明确标记的Agent节点图，绑定真实Session/Thread/Agent与NodeAttempt，支持独立节点并行及依赖输入；其他节点在此驱动入口明确拒绝，不宣称通用Graph全节点执行。运行合计预算和节点预算分别约束，Team终态写入服务端投影。无记忆插件时普通任务可运行，声明强依赖的Graph启动拒绝。
+
+Graph 重试保留原 Session/Thread，分配新的 Agent 并收窄剩余预算；旧 Roster 留作历史，新 Roster 与任务板受让人在同一事务更新。每次 Provider 请求重新读取该成员可见的消息、任务与工件，折叠工具结果按 tool_call_id 匹配；已终止成员不能接收新消息。工件发布的非空 recipient_ids 对应 recipients 可见性，空列表对应 Team 可见性。
+
+B2-4 命令使用自己的持久幂等 journal，避开通用投影条目数裁切；当前结果以 b24-public-result.v1 包络保存已脱敏的类型化投影，旧 journal 在重放时脱敏。空 Idempotency-Key 拒绝，重放返回同一公开结果及重放响应头。
+
+Host继续检查当前租约、epoch、认证、包身份与来源授权；包digest缓存按完整目录inventory及device/inode/size/mtime/ctime/mode/nlink变化失效，正文变化重新流式hash。认证状态每次复核，校验过的不可变metadata按包digest复用，不扩大权限。保留目录逐项身份核验，未采用跳过检查的性能捷径。
+
+本批已有 gpt-5.6-luna 正式 Session/Graph 单、双 Agent 记忆与只读工具调用的历史验收记录。原临时实施树和环境缺失后，源码已恢复到持久隔离工作树；恢复清单中的 172 个 Core/SDK/工件增量文件及 GUI 主入口产物与原版本哈希一致。历史数据和截图尚须按证据索引核对，不把恢复过程当作新的真实模型验收。恢复树已通过记忆相关27项、Graph/API/工件31项、GUI106项/typecheck/build和SDK确定生成；完整基础门禁正在复核。
+
+性能历史报告保留集召回率0.9167高于旧基线0.75、禁用样例零泄漏，但Host性能门尚未满足；工件可见性增量的独立审查尚待最终裁决。B2-4、MP-3及基础记忆插件里程碑仍未完成。当前没有推送、合并、部署或迁移用户库。
+
 
 ### B2-3 / MP-2 记忆与管理集成（2026-09-13，已完成本批验收）
 
