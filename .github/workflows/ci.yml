@@ -67,8 +67,8 @@ jobs:
           uv run --no-sync ruff format --check .
           uv run --no-sync ruff check .
           uv run --no-sync mypy src
+          uv lock --check --offline --python "${{ matrix.python-version }}"
           uv run --no-sync pytest
-          uv lock --check --offline
       - name: 无后端改动
         if: needs.changes.outputs.backend != 'true'
         run: echo "No backend changes; required check completed without product tests."
