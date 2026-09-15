@@ -1,6 +1,6 @@
 {
   "record_identity": "Codex",
-  "status": "not_passed",
+  "status": "stopped_by_user; original performance failures retained",
   "product_native_integration": false,
   "finding": "tracemalloc is inside wall/CPU samples; split measurement required; fixed gates unchanged",
   "evidence": [
@@ -52,7 +52,7 @@
       }
     }
   ],
-  "decision": "Keep diagnostic candidates out of product. Anchored full verification also failed fixed same-run gates. Further work requires a new measured hypothesis; no unchanged rerun or threshold waiver.",
+  "decision": "2026-09-15 User 在了解性能收益、代价与未过门事实后指示「那么，不要追求这么一点点优化了、」。本批停止微小性能优化，进程内 Host 未达 MP-0 原比例门保留为接受的已知限制；原阈值和失败报告不改写，不扩展到安全/功能门禁或后续批次。",
   "bulk_attribute_followup": {
     "source": "Codex original signature_allocation agent, local Apple SDK attr.h / vnode.h and man pages",
     "result": "not_equivalent_as_drop_in",
@@ -220,7 +220,7 @@
     "product_integrated": false,
     "source_unchanged": true
   },
-  "next_candidate": "Scoped native openat only, C diagnostic underway; measurement refactor reviewed and 18 tests passed. No product native integration or performance acceptance.",
+  "next_candidate": null,
   "native_allocation_candidate": {
     "report": "../../../../native-allocation-root01/report.json",
     "sha256": "5b21a9a6a434bee28bd816e7552272a70cd734056f74c1103e44ad7b9fb537ea",

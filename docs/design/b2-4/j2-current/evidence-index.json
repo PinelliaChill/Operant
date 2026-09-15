@@ -3,8 +3,8 @@
   "single_source_freeze": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-01/freeze.json",
   "multi_source_freeze": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-02/freeze.json",
   "native_build": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/native-build-recovered.json",
-  "native_scope": "readback and context exclude/refresh; Graph directory defect ended segment",
-  "pending": "new directory contract/client integration and final GUI acceptance; Host performance",
+  "native_scope": "Completed by native03/native04/native06; original interrupted segment evidence retained",
+  "pending": null,
   "files": {
     "multi.json": "045bec5aa582030641f16e1b482e56747364ee05c475514f81938ebadb8ec957",
     "native-context-controls.json": "4ae66cf2b4e388bfbf9f4d7117d177e80c6b3a6e47a693242979a59338da5e9b",
@@ -38,5 +38,6 @@
     "result": "native06-result.json",
     "freeze": "native06-freeze.json",
     "scope": "second-page Graph→Team restore plus Enter no duplicate POST, start disabled for terminal/bound Graph"
-  }
+  },
+  "completion": "B2-4 functional J2 complete; performance exception is outside J2 and recorded in ../performance-scope-decision.md"
 }
