@@ -2,9 +2,6 @@ name: Release candidate evidence
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: read
@@ -29,7 +26,7 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync mypy src
       - run: uv run --no-sync pytest
-      - run: uv lock --check --offline
+      - run: uv lock --check --offline --python "${{ matrix.python-version }}"
       - run: git diff --check
       - run: uv run --no-sync python scripts/benchmark_auth.py
 
@@ -93,7 +90,7 @@ jobs:
           version: "0.12.0"
           enable-cache: false
       - name: Validate locked dependency graph
-        run: uv lock --check --offline
+        run: uv lock --check --offline --python "3.12"
       - name: Build Python distributions
         run: uv build --no-sources
       - name: Generate and verify checksums and SPDX SBOM

@@ -1,0 +1,25 @@
+name: 问题反馈
+description: 报告可以复现的错误
+body:
+  - type: markdown
+    attributes:
+      value: 请先搜索已有 Issue。不要上传 API Key、数据库、私人对话或完整运行目录；安全漏洞请走私密报告入口。
+  - type: input
+    id: version
+    attributes:
+      label: 版本与环境
+      description: 提交号或版本、操作系统、使用的客户端
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 做了什么？预期结果和实际结果分别是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 补充信息（可选）
+      description: 已脱敏的错误信息、截图或最小示例
