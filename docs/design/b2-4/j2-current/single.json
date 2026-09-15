@@ -1,0 +1,51 @@
+{
+  "phase": "frozen_current_source_J2_single",
+  "provider_errors": [],
+  "model_id": "gpt-5.6-luna",
+  "workspace": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-01/single",
+  "database": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-01/single/core.sqlite3",
+  "session_id": "session_b69a3c4986df4be2aa43e379ba7e17b1",
+  "thread_id": "thread_2103b11cd5bb4dfaa94b973d45b83225",
+  "entry": "ApplicationService.run_session",
+  "tool_policy": [
+    "read_file"
+  ],
+  "output_budget": 2048,
+  "events": [
+    "agent.started",
+    "model.completed",
+    "tool.started",
+    "tool.completed",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.delta",
+    "model.completed",
+    "agent.completed"
+  ],
+  "failures": [],
+  "answer": "测试代号：RIVER_42  \n算式结果：6 × 7 = 42",
+  "context_revision_ids": [
+    "context_fc934e5b855f327f37e1fab7b14af85e8010ff967a671bb5684ffd96b5e7e4e5",
+    "context_9c64a1a027eb2488394a32ffe99a2bbef51a26ee94c8bee0a21c60776bfd3b9a"
+  ],
+  "memory_sent": true,
+  "completed": true,
+  "tool_called": true
+}

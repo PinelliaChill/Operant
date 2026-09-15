@@ -416,7 +416,7 @@ class PluginHost:
     def _assert_active(self, lease: RunLease, context: RpcContext) -> None:
         if lease.installation_id in self._lifecycle_fences:
             raise PluginError("stale_epoch", "plugin lifecycle transition is in progress")
-        self.registry.assert_lease(lease, context)
+        self.registry.assert_lease(lease, context, verify_package=False)
         slot = self._engines.get(lease.installation_id)
         if slot is None:
             raise PackageUnavailableError("plugin engine has not been started")

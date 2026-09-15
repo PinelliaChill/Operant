@@ -211,7 +211,7 @@ def test_v14_upgrade_history_and_schema_fence(tmp_path):
     store.migrate(14)
     before = store.list_applied_migrations()
     store.initialize()
-    assert store.schema_version() == 15
+    assert store.schema_version() == 16
     assert store.list_applied_migrations()[:14] == before
     with store._connect() as c:
         assert c.execute("SELECT count(*) FROM memory_ledger_heads").fetchone()[0] == 0

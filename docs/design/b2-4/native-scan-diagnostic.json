@@ -1,0 +1,346 @@
+{
+  "record_identity": "Codex",
+  "status": "stopped_by_user; original performance failures retained",
+  "product_native_integration": false,
+  "finding": "tracemalloc is inside wall/CPU samples; split measurement required; fixed gates unchanged",
+  "evidence": [
+    {
+      "path": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/native-scan-diagnostic/benchmark-host-static-objects.json",
+      "sha256": "eb2cb7bc2cd17f1c0f64d5a4891059ac3460a5b0c58a6ec3dfb8fd85e66f1070",
+      "diagnostic": {
+        "backend": "C full inventory plus same outer managed-root and existing-path validation;per-thread buffer",
+        "product_files_changed": false,
+        "native_initialization": "lazy inside first Host setup",
+        "limitations": [
+          "Diagnostic monkeypatch only, not production packaging or final acceptance"
+        ]
+      },
+      "cpu_p95_ms": {
+        "direct": 3.194,
+        "trusted_in_process": 5.224,
+        "isolated": 6.407
+      }
+    },
+    {
+      "path": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/timing-without-tracer-product.json",
+      "sha256": "fd32982550b91ace2f88da72c3ab55fe681c4423d1ec85ae56d82b24d5d02590",
+      "diagnostic": {
+        "backend": "product",
+        "tracemalloc": false,
+        "acceptance": false,
+        "product_changed": false
+      },
+      "cpu_p95_ms": {
+        "direct": 2.074,
+        "trusted_in_process": 2.912,
+        "isolated": 3.869
+      }
+    },
+    {
+      "path": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/timing-without-tracer-native.json",
+      "sha256": "19ff18aa16ec9c2dffb094412fe1e435ab3ad13b0cc97a36fdb126c83bc81e8e",
+      "diagnostic": {
+        "backend": "native",
+        "tracemalloc": false,
+        "acceptance": false,
+        "product_changed": false
+      },
+      "cpu_p95_ms": {
+        "direct": 2.049,
+        "trusted_in_process": 2.955,
+        "isolated": 3.585
+      }
+    }
+  ],
+  "decision": "2026-09-15 User 在了解性能收益、代价与未过门事实后指示「那么，不要追求这么一点点优化了、」。本批停止微小性能优化，进程内 Host 未达 MP-0 原比例门保留为接受的已知限制；原阈值和失败报告不改写，不扩展到安全/功能门禁或后续批次。",
+  "bulk_attribute_followup": {
+    "source": "Codex original signature_allocation agent, local Apple SDK attr.h / vnode.h and man pages",
+    "result": "not_equivalent_as_drop_in",
+    "reason": "Directory link count excludes historical dot links and directory logical size is not promised to equal stat size. Need stat fallback for directory signature; retain all root and directory identity checks.",
+    "decision": "Stop bulk replacement candidate; no product or benchmark changes."
+  },
+  "hybrid_followup": {
+    "field_parity": "9 inherited semantic tests plus resource fork/hardlink/unicode/rewrite/dir parity passed",
+    "bulk_files": 9,
+    "field_fallbacks": 0,
+    "report": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/native-bulk-root-readback/host-report.json",
+    "sha256": "97267155ac82667222431a22d9b529a638ab1c47fb3b09d4409c7a8a3b831669",
+    "status": "not_passed",
+    "passed_modes": [
+      "direct",
+      "isolated"
+    ],
+    "trusted_failed": [
+      "bootstrap_wall",
+      "warm_wall_p95",
+      "warm_cpu_p95"
+    ],
+    "product_integrated": false
+  },
+  "latest_combined_diagnostic": {
+    "path": "../../../../host-combined-diagnostic/report.json",
+    "product_integrated": false,
+    "change": "native full inventory + metadata reuse + compact-size diagnostic without in-sample double serialization",
+    "trusted_failed": {
+      "warm_wall_p95_ms": 4.8193,
+      "allowed_wall_ms": 4.688,
+      "warm_cpu_p95_ms": 3.021,
+      "allowed_cpu_ms": 2.8487
+    },
+    "isolated_passed": true,
+    "limits": [
+      "Compact JSON byte-size equivalence only verified for fixture; not a generic safe budget replacement.",
+      "Diagnostic native extension packaging and broad platform equivalence not delivered.",
+      "No product performance gate passes inferred."
+    ]
+  },
+  "opened_stat_reuse": {
+    "directory": "../../../../native-scan-call-reuse-root01",
+    "source_sha256": "7526785cb5398c8bc51fcf1627f5de2406f03e3182edfe804ea632552c32af2f",
+    "semantics": "9existingtests plusUnicode/hardlink/ctime/nested/resource-fork passed",
+    "product_integrated": false,
+    "same_run_result": "not_passed",
+    "trusted_failures": {
+      "bootstrap_wall_ms": [
+        520.0253,
+        111.0993
+      ],
+      "warm_wall_p95_ms": [
+        5.6316,
+        5.1233
+      ],
+      "first_query_wall_ms": [
+        6.9878,
+        4.6647
+      ],
+      "cpu_p95_ms": [
+        3.961,
+        2.84
+      ]
+    },
+    "isolated_passed": true,
+    "next_candidate": "single-call fd-relative managed path walk; not cross-request cache"
+  },
+  "anchored_walk": {
+    "directory": "../../../../native-anchored-root01",
+    "source_sha256": "cb229034aa0052a7c03b9c34746de6857514d853bf6ea7aa50e41581e2f042db",
+    "report_sha256": "62d45907f13a87fc2eb1ce43811fdeca753686648ca22c4ac5ee13560eb4f4f4",
+    "semantics": "9 inherited tests, extra stat parity cases and managed-root/path replacement, symlink, permission and FD leak checks passed",
+    "product_integrated": false,
+    "same_run_result": "not_passed",
+    "trusted_failures": {
+      "warm_wall_p95_ms": [
+        6.066,
+        4.6821
+      ],
+      "warm_cpu_p95_ms": [
+        3.325,
+        2.8262
+      ]
+    },
+    "isolated_failures": {
+      "warm_cpu_p95_ms": [
+        4.577,
+        4.522
+      ]
+    },
+    "note": "Raw report implementation description inherited from opened-stat diagnostic; source hash identifies anchored C candidate. No cross-request FD cache."
+  },
+  "single_request_anchor_probe": {
+    "report": "../../../../request-anchor-diagnostic/scan_probe.json",
+    "report_sha256": "b8c19b9644aeb2803956f5093d23387f9145f47eb422097cfb05b89be03bb078",
+    "acceptance": false,
+    "comparison": "100 alternating pairs; seven complete signatures per sample; synthetic package",
+    "median_cpu_ms": {
+      "current": 0.3375,
+      "anchor": 0.366
+    },
+    "median_wall_ms": {
+      "current": 0.4371,
+      "anchor": 0.4845
+    },
+    "decision": "Stop candidate: stricter fresh path/FD and permission checks erased any benefit; no product integration",
+    "review": "Original Codex performance agent independently identified current-permission and closed-FD generation requirements; no implementation accepted"
+  },
+  "current_profile": {
+    "directory": "../../../../host-profile-current",
+    "scope": "84 trusted product requests under cProfile; diagnostic only, not gate timing",
+    "calls": {
+      "full_package_verifications": 588,
+      "posix_open": 588
+    },
+    "cumulative_seconds": {
+      "package_signature": 0.089,
+      "verify_certification": 0.116,
+      "manager_search_shared_work": 0.183
+    },
+    "finding": "Fresh directory opens and complete inventory dominate Host overhead; JSON/Pydantic cost is small. Do not infer profiler timings as formal CPU/wall gate values."
+  },
+  "python_static_reuse": {
+    "report": "../../../../python-static-reuse-root01/report.json",
+    "sha256": "730ecb5ad8ffea5d54f721614447572147ac69372742010f40759f7218ace145",
+    "status": "not_passed",
+    "failures": {
+      "trusted_in_process": {
+        "warm_wall_p95": {
+          "actual": 4.7069,
+          "allowed": 4.3499,
+          "unit": "ms"
+        },
+        "warm_cpu_p95": {
+          "actual": 2.973,
+          "allowed": 2.7925,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_integrated": false,
+    "source_unchanged": true
+  },
+  "minimal_native_combination": {
+    "report": "../../../../python-native-minimal-root01/report.json",
+    "sha256": "15f63f1808be6e24773a545207bda6ad1f3c55921fbd13776a037f761a2702bb",
+    "status": "not_passed",
+    "failures": {
+      "trusted_in_process": {
+        "warm_wall_p95": {
+          "actual": 4.3924,
+          "allowed": 4.359,
+          "unit": "ms"
+        },
+        "warm_cpu_p95": {
+          "actual": 2.702,
+          "allowed": 2.6362,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_integrated": false,
+    "source_unchanged": true
+  },
+  "next_candidate": null,
+  "native_allocation_candidate": {
+    "report": "../../../../native-allocation-root01/report.json",
+    "sha256": "5b21a9a6a434bee28bd816e7552272a70cd734056f74c1103e44ad7b9fb537ea",
+    "source_sha256": "b65eb0c692224cc3491dc28dad9c615036581244ec51fd3806ef19cfdaf5f8c4",
+    "product_integrated": false,
+    "source_unchanged": true,
+    "status": "not_passed",
+    "trusted_failures": {
+      "warm_wall_p95": {
+        "actual": 4.5063,
+        "allowed": 4.2931,
+        "unit": "ms"
+      },
+      "warm_cpu_p95": {
+        "actual": 2.715,
+        "allowed": 2.6887,
+        "unit": "ms"
+      }
+    },
+    "isolated_passed": true,
+    "safety_readback": "Root caught directory-success allocation leak; agent fixed both success paths. 9 semantic tests, extra parity, four byte comparisons and 201 nested scans (4422 allocations/frees, zero live) passed. Diagnostic allocator counters disabled in measured library."
+  },
+  "ffi_static_arguments": {
+    "report": "../../../../native-ffi-reuse-diagnostic/result.json",
+    "acceptance": false,
+    "median_7_scans_cpu_ms": [
+      0.212,
+      0.201
+    ],
+    "median_7_scans_wall_ms": [
+      0.3037085,
+      0.2915205
+    ],
+    "scope": "200 alternating pairs; reuses scalar/pointer argument objects and lexical path bytes only"
+  },
+  "clean_sampling_product": {
+    "report": "../../../../clean-sampling-product01/report.json",
+    "sha256": "535b777b11e1573011b71f145360b24edf847f4f04e61ed92df056711269ecf8",
+    "status": "not_passed",
+    "host_passed": {
+      "trusted_in_process": false,
+      "isolated": true
+    },
+    "failures": {
+      "trusted_in_process": {
+        "bootstrap_wall": {
+          "actual": 108.1208,
+          "allowed": 103.691,
+          "unit": "ms"
+        },
+        "warm_wall_p95": {
+          "actual": 5.3865,
+          "allowed": 4.5889,
+          "unit": "ms"
+        },
+        "first_query_wall": {
+          "actual": 4.3635,
+          "allowed": 4.1118,
+          "unit": "ms"
+        },
+        "warm_cpu_p95": {
+          "actual": 2.861,
+          "allowed": 2.7675,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_native_integration": false
+  },
+  "clean_sampling_native": {
+    "report": "../../../../clean-sampling-native01/report.json",
+    "sha256": "a34b9688b89e705932c9186fddc90412261175f3eb613346991162f0469750b7",
+    "status": "not_passed",
+    "host_passed": {
+      "trusted_in_process": false,
+      "isolated": true
+    },
+    "failures": {
+      "trusted_in_process": {
+        "warm_wall_p95": {
+          "actual": 5.0735,
+          "allowed": 4.9589,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_native_integration": false
+  },
+  "unrestricted_product": {
+    "report": "../../../../clean-sampling-product02-unrestricted/report.json",
+    "sha256": "366a7f19db1cd1363716d171a553029132800bb41be8114fff4aec04bf91718f",
+    "status": "not_passed",
+    "host_passed": {
+      "trusted_in_process": false,
+      "isolated": true
+    },
+    "failures": {
+      "trusted_in_process": {
+        "warm_wall_p95": {
+          "actual": 5.6387,
+          "allowed": 4.7181,
+          "unit": "ms"
+        },
+        "warm_cpu_p95": {
+          "actual": 3.222,
+          "allowed": 2.5975,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_native_integration": false
+  },
+  "fd_permission_findings": {
+    "uid": 501,
+    "posix_and_acl": "held descriptor correctly denies READ/SEARCH tightening",
+    "mac_control": "bulk-fd-permission-root03: held FD bulk/readdir allowed, fresh open and openat both denied EPERM under same deny profile",
+    "decision": "Reject direct held-FD scanning. Only evaluate scoped openat that creates a fresh read FD at every original boundary and keeps all current path/identity/inventory checks.",
+    "root_probe": "../../../../bulk-fd-permission-root03/bulk-fd-permission-report.json"
+  }
+}

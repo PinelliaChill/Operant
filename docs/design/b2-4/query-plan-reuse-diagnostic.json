@@ -1,0 +1,28 @@
+{
+  "record_identity": "Codex",
+  "before_diagnostic": {
+    "queries": 84,
+    "plan_calls": 168,
+    "plan_cpu_total_ms": 9.416,
+    "manager_total_ms": 176.7813
+  },
+  "change": "reuse one bounded query plan within the same MemoryManager search and ranking request",
+  "scope": "query parsing only; all per-candidate scope,role,agent,sensitivity,cutoff,condition,visibility checks still run",
+  "cross_request_cache": false,
+  "validation": "27 retrieval/runtime/benchmark regression tests passed",
+  "performance_gain": {
+    "comparison": "query-plan-reuse-comparison.json",
+    "design": "A/B/A,210queries each",
+    "identical_returned_ids": true,
+    "cpu_p95_ms": [
+      3.642,
+      3.537,
+      3.979
+    ],
+    "interpretation": "both baseline runs slower than reuse; measured parsing optimization only, not complete performance gate"
+  },
+  "source_hashes": {
+    "src/operant/memory_plugins/manager.py": "21152d4e074a29be46970ad1db2d9c00dd3ee536e7b4a72f031e5601c32abaff",
+    "src/operant/memory_plugins/retrieval.py": "2e2069344bed60a3e4f92ed7af154eaa87cec592ffea6c21cd0b22f4efafb539"
+  }
+}

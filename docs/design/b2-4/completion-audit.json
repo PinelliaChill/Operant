@@ -1,0 +1,48 @@
+{
+  "recorded_by": "Codex",
+  "scope": "B2-4 only; completion with explicit performance exception",
+  "implementation_checkpoint": "3420057f2f9e29d71561743063d682bebbbaa523",
+  "runtime_checkpoint": "75de71c",
+  "runtime_unchanged": true,
+  "full_gate_source_count": 311,
+  "full_gate_changed_paths": [
+    "tests/test_b24_benchmark.py",
+    "scripts/benchmark_b24_memory.py"
+  ],
+  "changed_paths_covered_by": "gates/observation-split-results.json:18 passed",
+  "evidence_files": {
+    "review-current-closure.md": "6a829433ff9ea18cc61f42718cc36d99f239942e369d050d03668a38b9d8b45a",
+    "measurement-implementation-review.md": "d9141eec5004687b2c5501fc467518b5daa19afdef4ecee33c4dd2f349e3280a",
+    "gates/current-04-results.json": "dbc886b670889a1737e33af9de7fd85d76995da69f39ab62513b898dc7e8952f",
+    "gates/observation-split-results.json": "978ee1a1e970a74e1e28e72f5e86a1bad74cd0a9152509bfff20437abb0d3515",
+    "j2-current/single.json": "4a3f86a9222a90b86688c978d322deee8ef88e1a1c34915761df9b2e770b942c",
+    "j2-current/multi.json": "045bec5aa582030641f16e1b482e56747364ee05c475514f81938ebadb8ec957",
+    "j2-current/native-context-controls.json": "4ae66cf2b4e388bfbf9f4d7117d177e80c6b3a6e47a693242979a59338da5e9b",
+    "j2-current/native03-native-readback.json": "3455df70e0adcd899d45d357c14606791d0b0256acc3eb5fc2aa2ee9672744a7",
+    "j2-current/native04-result.json": "408a5600df048551bed2723c4f273c944e56006dba3e026311d368a794f563f7",
+    "j2-current/native06-result.json": "f6a303a34b24ad5f6330646b7cbfc1e94582650855a646066e9a804be594f70b",
+    "j2-current/nextsend-real.json": "67af5fe7da7f790952bd96fbf6000f31c82389ad83e38bb7ef170464fe7b0744",
+    "directory-pagination-validation.json": "496fe410663e47de007371b8128c215a3fa15e401882ae40ba1ce5b755db4f3c",
+    "performance-scope-decision.md": "27fcc6bb1ac77f7dfca5eb65b268548eb7ab872b9d7cb5dbda7f1fe7fb6a3324",
+    "j2-current/evidence-index.json": "58fc6ef6c0166a11a9a0c18c9ff1ed65f5d4a6c81252c0c9d09b09af9a9287b0"
+  },
+  "acceptance": {
+    "AC-01": "passed; retained evidence verified",
+    "AC-02": "passed; retained evidence verified",
+    "AC-03": "passed; retained evidence verified",
+    "AC-04": "passed; retained evidence verified",
+    "AC-05": "accepted_performance_exception; quality/security remain passed",
+    "AC-06": "passed; retained evidence verified",
+    "AC-07": "passed; retained evidence verified",
+    "AC-08": "passed; retained evidence verified",
+    "AC-09": "passed; retained evidence verified",
+    "AC-10": "passed; retained evidence verified",
+    "AC-11": "passed; retained evidence verified",
+    "AC-12": "passed; retained evidence verified"
+  },
+  "no_new_model_or_performance_run": true,
+  "diagnostic_native_integration": false,
+  "publication": "not pushed, merged or deployed; no user database migration",
+  "cleanup": "cleanup.json: dedicated four-rule file removed",
+  "review_format_note": "Trailing whitespace and final blank line normalized before push; review wording unchanged."
+}

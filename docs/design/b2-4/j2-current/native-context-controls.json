@@ -1,0 +1,61 @@
+{
+  "record_identity": "Codex",
+  "native_app": "Operant B2-4 Verification",
+  "core_source": "j2-current-02/source",
+  "database": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-02/multi/core.sqlite3",
+  "observed_UI": [
+    "Core 已连接",
+    "member 0 canonical history read_file and CEDAR_29/42",
+    "context request2 gpt-5.6-luna input4998/29139 memory1452/2000 version1 task_relevance",
+    "source revision/scope/conditions expandable",
+    "exclude and refresh both acknowledged subsequent-only; historical memory remained visible"
+  ],
+  "manifest_after_exclude": {
+    "revision": 2,
+    "excluded": [
+      "memory_b6d9577ef3f24796af62f0bc79ef3f49"
+    ]
+  },
+  "manifest_after_refresh": {
+    "cutoff": "1",
+    "revision": 3,
+    "excluded": [
+      "memory_b6d9577ef3f24796af62f0bc79ef3f49"
+    ],
+    "used_refs": [
+      {
+        "dataset_id": "dataset_332252a92eee4dea923e1b1ce08e1d61",
+        "record_id": "memory_b6d9577ef3f24796af62f0bc79ef3f49",
+        "version": 1,
+        "content_digest": "9608c3e9a793613839e26f75385074827073af0a0e0a7bc0e9352a5cc53012c6"
+      }
+    ],
+    "binding_id": "plugin_binding_befcd9d8358e4720aac4a252b96e18b3",
+    "binding_epoch": 1,
+    "used_by_session": {
+      "session_745064275d824e699921a2934404d521": [
+        {
+          "dataset_id": "dataset_332252a92eee4dea923e1b1ce08e1d61",
+          "record_id": "memory_b6d9577ef3f24796af62f0bc79ef3f49",
+          "version": 1,
+          "content_digest": "9608c3e9a793613839e26f75385074827073af0a0e0a7bc0e9352a5cc53012c6"
+        }
+      ],
+      "session_b58eeb2722cb40bb9d1235dd1f0266e3": [
+        {
+          "dataset_id": "dataset_332252a92eee4dea923e1b1ce08e1d61",
+          "record_id": "memory_b6d9577ef3f24796af62f0bc79ef3f49",
+          "version": 1,
+          "content_digest": "9608c3e9a793613839e26f75385074827073af0a0e0a7bc0e9352a5cc53012c6"
+        }
+      ]
+    }
+  },
+  "context_messages_sha256": {
+    "context_6b0bf1612c100f63916cced288390b7f690b475d92303f451552c2b7ca9b8e80": "97cad5bc512ce10faf9d2775de9b49028bb9a406c94ed3bdec60c3c748bdf04b",
+    "context_64ea5ff3d1026aea3cadeed2885fe9e5fb437d394e60d9d72a3807ddb79cd6a0": "96b4f09aaf13c20ab44b9097d0a782c847df8fd322e2c947fdc2081d36569c92",
+    "context_a3878114a0494a653820d59cd78028f317d33a268da2b73226548c491d7259ea": "86c7c35226a137427275cbf12df3728edbc58720c769ee34635b4b29b04708f9",
+    "context_7f6146d8a62e4765163901d8b7b1d1d5bee28cdcdb59cc096a838120fab0c5da": "4f82d950c105beaa1b60c8de9ea2f3dcaa56d504c25424379473e560ac805e75"
+  },
+  "limitation": "No subsequent Provider request after controls in this UI segment; historical Context retained, backend runtime control tests cover next-send semantics"
+}

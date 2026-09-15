@@ -17,6 +17,7 @@ from operant.domain.team import (
     TeamArtifact,
     TeamDefinition,
     TeamRun,
+    TeamRunStatus,
     TeamTask,
 )
 
@@ -79,6 +80,8 @@ class TeamRepository(Protocol):
 
     def put_team_run(self, run: TeamRun) -> TeamRun: ...
 
+    def finish_team_run(self, team_run_id: str, status: TeamRunStatus) -> TeamRun: ...
+
     def put_team_run_with_roster(
         self, run: TeamRun, entries: tuple[RosterEntry, ...]
     ) -> TeamRun: ...
@@ -86,6 +89,8 @@ class TeamRepository(Protocol):
     def get_team_run(self, team_run_id: str) -> TeamRun | None: ...
 
     def put_roster_entry(self, entry: RosterEntry) -> RosterEntry: ...
+
+    def replace_roster_agent(self, old: RosterEntry, new: RosterEntry) -> RosterEntry: ...
 
     def list_roster(self, team_run_id: str) -> tuple[RosterEntry, ...]: ...
 

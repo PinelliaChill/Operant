@@ -1,0 +1,25 @@
+{
+  "recorded_by": "Codex",
+  "scope": "measurement harness only; production Core/GUI unchanged",
+  "tests": {
+    "command": "python -m pytest tests/test_b24_benchmark.py -q -rA",
+    "passed": 18,
+    "skipped": 0,
+    "exit_code": 0
+  },
+  "checks": {
+    "ruff_format": true,
+    "ruff_check": true
+  },
+  "source_sha256": {
+    "scripts/benchmark_b24_memory.py": "c123391e900b8edb3d2690ec80a4bb33a1397bbe546f8fb959c70b267374f4dd",
+    "tests/test_b24_benchmark.py": "df1077711b8a6d6b8f161495ddb78d938d6969c2f4769226effa76089c7dcf44"
+  },
+  "independent_review": "measurement-implementation-review.md",
+  "post_review_nonblocking_fixes": [
+    "include POLICY fields in direct/Host configuration comparison",
+    "permanent clean timing/allocation tests cover real trusted and isolated paths"
+  ],
+  "history": "Old failed measurements retained without subtraction or retroactive pass",
+  "current_performance": "Current Python product still fails fixed Host gate; all native candidates remain diagnostic only"
+}

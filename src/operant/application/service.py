@@ -3254,6 +3254,10 @@ class ApplicationService:
         thread_id: str | None = None,
         references: Collection[ReferenceRequest] = (),
         _admission_granted: bool = False,
+        memory_enabled: bool = True,
+        memory_run_id: str | None = None,
+        _agent_instance_id: str | None = None,
+        _collaboration_context: Callable[[], str] | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         session = self.get_session(session_id)
         if not _admission_granted:
@@ -3304,6 +3308,16 @@ class ApplicationService:
         agent = None
         cancellation: asyncio.Event | None = None
         run_lease: SessionRunLease | None = None
+
+        def release_plugin_runs() -> None:
+            if self.memory_manager is None or agent is None:
+                return
+            self.memory_manager.release_skill_run(agent.id)
+            for request_id, recall_run in list(self.memory_manager._recall_runs.items()):
+                if recall_run.agent_id == agent.id:
+                    self.memory_manager.registry.release_run(recall_run.lease.lease_id)
+                    self.memory_manager._recall_runs.pop(request_id, None)
+
         try:
             lease = self._session_run_leases.get(session.id)
             if lease is None:
@@ -3327,7 +3341,20 @@ class ApplicationService:
                         payload=UserMessagePayload(text=user_message),
                     )
                 )
-            agent = self.factory.create_agent(session.id)
+            if _agent_instance_id is None:
+                agent = self.factory.create_agent(session.id)
+            else:
+                agent = self.store.get_agent(_agent_instance_id)
+                if agent.session_id != session.id or agent.status is not AgentStatus.CREATED:
+                    raise ConflictError(
+                        "prepared Agent does not belong to an unstarted Session run"
+                    )
+                if agent.role_snapshot.model_dump(
+                    exclude={"budget"}
+                ) != session.role_snapshot.model_dump(exclude={"budget"}):
+                    raise ConflictError("prepared Agent changed the pinned Session identity")
+                session.role_snapshot.budget.narrowed(**agent.role_snapshot.budget.model_dump())
+                session = session.model_copy(update={"role_snapshot": agent.role_snapshot})
             lease = self.store.bind_session_run_lease_agent(lease, agent.id)
             run_lease = lease
             self._session_run_leases[session.id] = lease
@@ -3350,7 +3377,24 @@ class ApplicationService:
                 if self.memory_manager
                 else ""
             )
+            memory_run = None
+            if self.memory_manager is not None and self.memory_plugin_mode and memory_enabled:
+                from operant.memory_plugins.recall import begin_memory_run
+
+                memory_run = await begin_memory_run(
+                    self.memory_manager,
+                    session_id=session.id,
+                    agent_id=agent.id,
+                    run_id=memory_run_id or workflow_run_id or session.id,
+                    workspace=normalized_workspace,
+                    snapshot=session.role_snapshot,
+                    query=user_message,
+                    references=tuple(references),
+                )
             context_composer = PersistentContextComposer(
+                collaboration_context=_collaboration_context,
+                memory_run=memory_run,
+                count_provider_tokens=self.memory_plugin_mode,
                 store=self.store,
                 session=session,
                 agent_id=agent.id,
@@ -3410,6 +3454,7 @@ class ApplicationService:
                         history_turn=history_turn,
                     )
             finally:
+                release_plugin_runs()
                 if cancellation is not None and self._cancellations.get(session.id) is cancellation:
                     self._cancellations.pop(session.id, None)
                 self.release_session_run(session.id, run_lease)
@@ -3418,6 +3463,7 @@ class ApplicationService:
                 return
             raise
         except BaseException:
+            release_plugin_runs()
             if cancellation is not None and self._cancellations.get(session.id) is cancellation:
                 self._cancellations.pop(session.id, None)
             self.release_session_run(session.id, run_lease)
@@ -3622,8 +3668,7 @@ class ApplicationService:
             finally:
                 # Cancellation can interrupt any await above, including cleanup.
                 # Preserve the terminal state before releasing the durable lease.
-                if self.memory_manager is not None:
-                    self.memory_manager.release_skill_run(agent.id)
+                release_plugin_runs()
                 self.store.update_agent_status(agent.id, final_status)
                 if self._cancellations.get(session.id) is cancellation:
                     self._cancellations.pop(session.id, None)

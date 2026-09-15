@@ -1,0 +1,66 @@
+{
+  "record_identity": "Codex",
+  "source_unchanged": true,
+  "members": [
+    {
+      "agent_id": "agent_a5742cf674c74ce2866c8f79499f1798",
+      "answer": "B24 联合测试代号：CEDAR_29  \n算式结果：6 × 7 = 42",
+      "tool_completed_count": 1,
+      "tool_event_payloads": [
+        {
+          "turn": 1,
+          "tool_call_id": "call_ubuBXgL6lRZlV9ppBbfdo0m6",
+          "name": "read_file",
+          "result": "{\"path\": \"probe.txt\", \"content\": \"The independent check is 6 times 7.\\n\", \"truncated\": false}",
+          "is_error": false,
+          "duration_ms": 12
+        }
+      ],
+      "context_rows": [
+        [
+          "gpt-5.6-luna",
+          4598,
+          29081
+        ],
+        [
+          "gpt-5.6-luna",
+          4998,
+          29139
+        ]
+      ],
+      "memory_sidecars": 2
+    },
+    {
+      "agent_id": "agent_c761e2cd1c3d46e2b624bf21859817c7",
+      "answer": "B24 联合测试代号：**CEDAR_29**  \n算式结果：**6 × 7 = 42**",
+      "tool_completed_count": 1,
+      "tool_event_payloads": [
+        {
+          "turn": 1,
+          "tool_call_id": "call_LNApyW6rSREtrbRPngXB7clm",
+          "name": "read_file",
+          "result": "{\"path\": \"probe.txt\", \"content\": \"The independent check is 6 times 7.\\n\", \"truncated\": false}",
+          "is_error": false,
+          "duration_ms": 13
+        }
+      ],
+      "context_rows": [
+        [
+          "gpt-5.6-luna",
+          3718,
+          29081
+        ],
+        [
+          "gpt-5.6-luna",
+          4118,
+          29126
+        ]
+      ],
+      "memory_sidecars": 2
+    }
+  ],
+  "private_isolation": true,
+  "output_tokens": 228,
+  "budget": 4096,
+  "source_report": "multi.json"
+}

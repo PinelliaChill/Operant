@@ -1560,3 +1560,38 @@ def test_context_revision_api_omits_tool_result_stub_summary(
         assert fetched.status_code == 200
         assert fetched.json() == evidence
         assert ordinary_secret not in fetched.text
+
+
+@pytest.mark.asyncio
+async def test_live_collaboration_evidence_survives_large_tool_result_folding(tmp_path: Path):
+    (tmp_path / "large.txt").write_text("large tool body " * 1400)
+    provider = CapturingProvider(
+        (
+            ModelResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="large-read", name="read_file", arguments_json='{"path":"large.txt"}'
+                    ),
+                ),
+                finish_reason="tool_calls",
+            ),
+            ModelResponse(content="done", finish_reason="stop"),
+        )
+    )
+    service, session = _service(tmp_path, provider, context_window=8000, tools=("read_file",))
+    calls = 0
+
+    def current_evidence():
+        nonlocal calls
+        calls += 1
+        return f"Untrusted collaboration evidence: CURRENT_BOARD_{calls}"
+
+    events = await _run(service, session, tmp_path, _collaboration_context=current_evidence)
+    assert any(event.event_type == "agent.completed" for event in events)
+    assert len(provider.received_messages) == 2
+    latest = provider.received_messages[-1]
+    assert any("CURRENT_BOARD_2" in (message.content or "") for message in latest)
+    assert not any("CURRENT_BOARD_1" in (message.content or "") for message in latest)
+    revisions = service.store.list_context_revisions(session.id)
+    assert revisions[-1].tool_result_stubs
+    assert revisions[-1].messages == latest

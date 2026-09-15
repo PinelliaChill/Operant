@@ -1,0 +1,53 @@
+{
+  "schema": "operant.b2_4.performance-increment-evidence.v1",
+  "decision": "withdraw_typed_json_conversion_candidate",
+  "candidate": {
+    "scope": "trusted_in_process only",
+    "intended_change": "Reuse typed request/result serialization across the trusted Host boundary.",
+    "implemented": false,
+    "reason": "The measurable conversion work is outside the authorized host.py boundary and is too small to address the failing Host gates."
+  },
+  "source_scope": {
+    "host": "src/operant/plugins/host.py",
+    "tests": "tests/test_plugin_host.py",
+    "host_sha256": "fdcaee688f10c50965a27df3e68afc3be0c99b22985dbda053ce0bf4b689523f",
+    "tests_sha256": "75c73a136dc533f84b7382420b42a8f2592b644c72f14666d31db48dd3d599b4"
+  },
+  "profile": {
+    "path": "/private/tmp/b24-host-diagnostic.pstats",
+    "sha256": "f3324f813c82831653d4ae250a80e3948195a68271766425d6e6b8015c2ac6ee",
+    "note": "Existing one-repetition diagnostic profile; profiler timing is not a gate result.",
+    "total_calls": 2456253,
+    "primitive_calls": 2406589,
+    "elapsed_s": 3.474,
+    "observed_calls": {
+      "host_invoke": 86,
+      "host_invoke_cumtime_s": 0.113,
+      "assert_active": 299,
+      "assert_active_cumtime_s": 0.190,
+      "verify_package": 301,
+      "verify_package_cumtime_s": 0.151,
+      "verify_certification": 300,
+      "verify_certification_cumtime_s": 0.184,
+      "trusted_plugin_model_dump_cumtime_s": 0.000295046,
+      "trusted_plugin_request_validate_cumtime_s": 0.000681290,
+      "trusted_plugin_result_dump_cumtime_s": 0.000128627,
+      "trusted_host_model_dump_cumtime_s": 0.000551293
+    }
+  },
+  "fixed_descriptor": {
+    "path": "docs/design/b2-4/performance-descriptor-inventory.json",
+    "sha256": "6bc14b7d37caf735c379104b6d7d2612fc8d0225cd12427becb8a23940f7cc80",
+    "trusted_host_minus_manager_ms_total": 315.2212,
+    "trusted_sample_count": 84,
+    "trusted_warm_wall_p95_ms": 8.8036,
+    "trusted_warm_cpu_p95_ms": 8.042,
+    "trusted_host_gate": "not_passed"
+  },
+  "conclusion": {
+    "estimated_typed_conversion_time_ms_per_trusted_invocation": 0.05,
+    "primary_hotspot": "Repeated active lease, certification, and package checks; seven checks per trusted invocation in the fixed run.",
+    "safe_action": "No source patch was applied. Keep all active/lease/certification/package checkpoints, byte/structure budgets, and reference authorization unchanged.",
+    "gate_outlook": "Typed conversion reuse alone cannot close the approximately 3.75 ms average trusted Host overhead; a future candidate would require an explicitly authorized boundary redesign or optimization outside this task."
+  }
+}

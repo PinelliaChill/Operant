@@ -44,6 +44,13 @@ from operant.domain.memory import Memory, MemoryStatus
 from operant.domain.models import utc_now
 from operant.domain.threads import ConversationThread, Item, Turn, UserMessagePayload
 from operant.memory_plugins.ledger import MemoryLedger
+from operant.memory_plugins.recall import MemoryRun
+from operant.memory_plugins.retrieval import (
+    MAXIMUM_RECALL_SENSITIVITY,
+    RetrievalPolicy,
+    build_query_plan,
+    retrieve_memories,
+)
 from operant.plugins.host import PluginHost
 from operant.plugins.protocol import HostCallbacks, PluginError
 from operant.plugins.registry import PluginRegistry
@@ -81,6 +88,7 @@ class MemoryManager:
             authorize_proposal=self.authorize_proposal,
         )
         self._lock = asyncio.Lock()
+        self._recall_runs: dict[str, MemoryRun] = {}
         self._pending_refs: dict[str, MemoryVersionRef] = {}
         self._active_skill_runs: dict[str, set[str]] = {}
         self._owns_host = host is None
@@ -728,6 +736,8 @@ class MemoryManager:
                 "memory_ledger_idempotency",
                 "memory_ledger_heads",
                 "b23_sources",
+                "b24_publications",
+                "b24_manifests",
             ):
                 c.execute(f"DELETE FROM {table} WHERE dataset_id=?", (dataset_id,))
             self.ledger._disable_purge(c)
@@ -987,6 +997,13 @@ class MemoryManager:
         return HostReadResult(source=request.source, text=text, truncated=False)
 
     def authorize_ref(self, context: RpcContext, ref: MemoryVersionRef) -> bool:
+        run = self._recall_runs.get(context.request_id)
+        if run is not None:
+            try:
+                version = self.ledger.get_version(ref.dataset_id, ref.record_id, ref.version)
+                return version.ref == ref and run.validate(version)
+            except Exception:
+                return False
         if ref.dataset_id != context.dataset_id:
             return False
         try:
@@ -1032,6 +1049,101 @@ class MemoryManager:
             return False
 
     def search(self, request: RecallRequest) -> CandidateBatch:
+        run = self._recall_runs.get(request.context.request_id)
+        if run is not None:
+            policy = RetrievalPolicy()
+            plan = build_query_plan(
+                request.query,
+                max_query_groups=policy.max_query_groups,
+                max_terms_per_group=policy.max_terms_per_group,
+            )
+            long_terms = [term for term in plan.queries if len(term) >= 3]
+            short_terms = [term.casefold() for term in plan.queries if len(term) < 3]
+            parts = []
+            parameters: list[Any] = []
+            if long_terms:
+                parts.append("SELECT record_id FROM b24_fts WHERE b24_fts MATCH ? AND dataset_id=?")
+                parameters.extend(
+                    (
+                        " OR ".join('"' + term.replace('"', '""') + '"' for term in long_terms),
+                        request.context.dataset_id,
+                    )
+                )
+            if short_terms:
+                parts.append(
+                    "SELECT record_id FROM b24_fts WHERE dataset_id=? AND ("
+                    + " OR ".join("instr(lower(content),?)>0" for _ in short_terms)
+                    + ")"
+                )
+                parameters.extend((request.context.dataset_id, *short_terms))
+            for ref in request.explicit_refs:
+                parts.append(
+                    "SELECT record_id FROM memory_ledger_heads WHERE dataset_id=? AND record_id=?"
+                )
+                parameters.extend((ref.dataset_id, ref.record_id))
+            if not parts:
+                return CandidateBatch(request_id=request.context.request_id, candidates=())
+            sql = (
+                "WITH matches AS ("
+                + " UNION ".join(parts)
+                + ") "
+                + """
+                SELECT DISTINCT v.body,p.cursor FROM matches m
+                JOIN b24_publications p ON p.record_id=m.record_id AND p.dataset_id=?
+                JOIN memory_ledger_versions v ON v.dataset_id=p.dataset_id
+                  AND v.record_id=p.record_id AND v.version=p.version
+                JOIN memory_ledger_heads h ON h.dataset_id=p.dataset_id AND h.record_id=p.record_id
+                WHERE p.cursor=(SELECT MAX(q.cursor) FROM b24_publications q
+                  WHERE q.dataset_id=p.dataset_id AND q.record_id=p.record_id AND q.cursor<=?)
+                  AND p.state='published' AND h.state='published'
+                  AND json(json_extract(v.body,'$.scope'))=json(?)
+                  AND NOT EXISTS(SELECT 1 FROM b24_publications x WHERE x.dataset_id=p.dataset_id
+                    AND x.record_id=p.record_id AND x.cursor>p.cursor
+                    AND x.state IN ('inactive','revoked','deleted'))
+                LIMIT 1000
+            """
+            )
+            parameters.extend(
+                (
+                    request.context.dataset_id,
+                    int(request.knowledge_cutoff),
+                    request.context.scope.model_dump_json(),
+                )
+            )
+            with self.store._connect() as connection:
+                rows = connection.execute(sql, parameters).fetchall()
+            values = [MemoryVersion.model_validate_json(row["body"]) for row in rows]
+            cursors = {
+                value.ref: int(row["cursor"]) for value, row in zip(values, rows, strict=True)
+            }
+
+            def search(
+                dataset_id: str, text: str | None = None, *, scope: Any = None, limit: int = 40
+            ) -> list[MemoryVersion]:
+                term = (text or "").casefold()
+                return [
+                    value
+                    for value in values
+                    if value.ref.dataset_id == dataset_id
+                    and value.scope == scope
+                    and term in value.content.casefold()
+                ][:limit]
+
+            return CandidateBatch(
+                request_id=request.context.request_id,
+                candidates=retrieve_memories(
+                    request,
+                    search,
+                    policy=policy,
+                    query_plan=plan,
+                    resolve=lambda ref: next((v for v in values if v.ref == ref), None),
+                    cutoff_resolver=lambda version: cursors.get(version.ref),
+                    visibility=run.validate,
+                    allowed_role_ids=(run.snapshot.role_id, run.snapshot.role_name),
+                    allowed_agent_ids=(run.agent_id,),
+                    maximum_sensitivity=MAXIMUM_RECALL_SENSITIVITY,
+                ),
+            )
         versions = self.ledger.query(
             request.context.dataset_id,
             request.query,

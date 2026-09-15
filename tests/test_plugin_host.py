@@ -514,7 +514,7 @@ async def test_active_host_rejects_forged_scope_lease_and_expired_certification(
     active_api = host._host_api(lease, request.context, HostBudget())
     monkeypatch.setattr("operant.plugins.registry.utc_now", lambda: certification.expires_at)
     # Keep lease live at the controlled certification deadline, isolating this guard.
-    monkeypatch.setattr(registry, "assert_lease", lambda *_args: None)
+    monkeypatch.setattr(registry, "assert_lease", lambda *_args, **_kwargs: None)
     with pytest.raises(PluginError, match="current certification"):
         active_api.register_resource(relative_path="state/late.json")
     with pytest.raises(PluginError, match="current certification"):
@@ -623,3 +623,46 @@ def test_managed_write_keeps_opened_directory_after_concurrent_rename(
     assert swapped
     assert sentinel.read_text() == "sentinel"
     assert (managed / "data" / "saved" / "index").read_bytes() == b"owned"
+
+
+def test_package_digest_cache_rechecks_same_size_restored_time_and_links(tmp_path: Path):
+    import os
+
+    package, manifest = _package(tmp_path, entrypoint=True)
+    registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+    installation = registry.install(manifest, package, certification=_cert(manifest))
+    target = registry.package_path(installation.installation_id) / "plugin.py"
+    original = target.read_bytes()
+    before = target.stat()
+    assert registry.verify_package(installation.installation_id) == manifest.package_digest
+    assert registry.verify_package(installation.installation_id) == manifest.package_digest
+    target.write_bytes(original.replace(b"PackagePlugin", b"ChangedPlugin"))
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+    with pytest.raises(PluginError, match="digest changed"):
+        registry.verify_package(installation.installation_id)
+    target.write_bytes(original)
+    registry.verify_package(installation.installation_id)
+    replacement = target.with_suffix(".other")
+    target.rename(replacement)
+    target.symlink_to(replacement)
+    with pytest.raises(PluginError, match="unsafe path"):
+        registry.verify_package(installation.installation_id)
+
+
+def test_package_signature_reuses_unchanged_tuple_and_rebuilds_after_first_difference(
+    tmp_path: Path,
+) -> None:
+    package, _manifest = _package(tmp_path, entrypoint=True)
+
+    initial = PluginRegistry._package_signature(package)
+    assert PluginRegistry._package_signature(package, previous=initial) is initial
+
+    target = package / "plugin.py"
+    target.write_text(target.read_text(encoding="utf-8").replace("PackagePlugin", "ChangedPlugin"))
+    updated = PluginRegistry._package_signature(package, previous=initial)
+
+    assert updated is not initial
+    assert updated[0] is initial[0]
+    assert updated[1] is initial[1]
+    assert updated[2] is initial[2]
+    assert PluginRegistry._package_signature(package, previous=updated) is updated

@@ -347,23 +347,46 @@ def _resource_cpu_ms(usage: resource.struct_rusage) -> float:
     return (usage.ru_utime + usage.ru_stime) * 1000.0
 
 
-def _measure(call: Callable[[], list[Memory]]) -> Sample:
-    tracemalloc.start()
-    before_alloc, _ = tracemalloc.get_traced_memory()
+def _measure_timing(call: Callable[[], list[Memory]]) -> Sample:
+    """Measure a formal call with tracemalloc disabled."""
+
+    if tracemalloc.is_tracing():
+        raise RuntimeError("formal timing pass requires tracemalloc to be disabled")
     before_cpu = _resource_cpu_ms(resource.getrusage(resource.RUSAGE_SELF))
     started = time.perf_counter_ns()
     values = call()
     elapsed_ns = time.perf_counter_ns() - started
-    after_alloc, peak_alloc = tracemalloc.get_traced_memory()
     after_cpu = _resource_cpu_ms(resource.getrusage(resource.RUSAGE_SELF))
-    tracemalloc.stop()
-    del after_alloc
     return Sample(
         returned_ids=tuple(memory.id for memory in values),
         wall_ms=elapsed_ns / 1_000_000.0,
         cpu_ms=max(0.0, after_cpu - before_cpu),
+        peak_alloc_kib=0.0,
+    )
+
+
+def _measure_allocation(call: Callable[[], list[Memory]]) -> Sample:
+    """Run one allocation-only pass; wall/CPU are deliberately excluded."""
+
+    tracemalloc.start()
+    before_alloc, _ = tracemalloc.get_traced_memory()
+    try:
+        values = call()
+        _, peak_alloc = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return Sample(
+        returned_ids=tuple(memory.id for memory in values),
+        wall_ms=0.0,
+        cpu_ms=0.0,
         peak_alloc_kib=max(0.0, peak_alloc - before_alloc) / 1024.0,
     )
+
+
+def _measure(call: Callable[[], list[Memory]]) -> Sample:
+    """Backward-compatible alias for the formal timing pass."""
+
+    return _measure_timing(call)
 
 
 def _percentile(values: Iterable[float], fraction: float) -> float:
@@ -429,6 +452,48 @@ def _quality_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _run_strategy_pass(
+    strategy: str,
+    fixture: Fixture,
+    *,
+    repetitions: int,
+    db_path: Path,
+    allocation: bool,
+) -> dict[str, Any]:
+    service: ApplicationService | None = None
+    session_id = ""
+    snapshot: RoleSnapshot | None = None
+    bootstrap_started = time.perf_counter_ns()
+    if strategy != STRATEGY_NO_MEMORY:
+        service, session_id, snapshot = _build_service(db_path, fixture)
+    bootstrap_ms = (time.perf_counter_ns() - bootstrap_started) / 1_000_000.0
+    samples: list[Sample] = []
+    measure = _measure_allocation if allocation else _measure_timing
+    try:
+        for case in fixture.cases:
+            for _ in range(repetitions):
+                samples.append(
+                    measure(
+                        lambda case=case: _invoke_strategy(
+                            strategy,
+                            service,
+                            session_id=session_id,
+                            snapshot=snapshot,
+                            case=case,
+                        )
+                    )
+                )
+    finally:
+        if service is not None:
+            service.close()
+    return {
+        "samples": samples,
+        "bootstrap_ms": bootstrap_ms,
+        "call_count": len(samples),
+        "rss_high_water_kib": _rss_high_water_kib(),
+    }
+
+
 def _run_strategy(
     strategy: str,
     fixture: Fixture,
@@ -438,85 +503,99 @@ def _run_strategy(
 ) -> dict[str, Any]:
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown baseline strategy: {strategy}")
-    service: ApplicationService | None = None
-    session_id = ""
-    snapshot: RoleSnapshot | None = None
-    bootstrap_started = time.perf_counter_ns()
-    if strategy != STRATEGY_NO_MEMORY:
-        db_path = temp_root / f"{strategy}.sqlite3"
-        service, session_id, snapshot = _build_service(db_path, fixture)
-    bootstrap_ms = (time.perf_counter_ns() - bootstrap_started) / 1_000_000.0
-    samples: list[Sample] = []
+    timing_pass = _run_strategy_pass(
+        strategy,
+        fixture,
+        repetitions=repetitions,
+        db_path=temp_root / f"{strategy}-timing.sqlite3",
+        allocation=False,
+    )
+    allocation_pass = _run_strategy_pass(
+        strategy,
+        fixture,
+        repetitions=repetitions,
+        db_path=temp_root / f"{strategy}-allocation.sqlite3",
+        allocation=True,
+    )
+    timing_samples = timing_pass["samples"]
+    allocation_samples = allocation_pass["samples"]
+    if len(timing_samples) != len(allocation_samples):
+        raise RuntimeError("timing and allocation passes returned different sample counts")
+    returned_ids_match = all(
+        timing.returned_ids == allocation.returned_ids
+        for timing, allocation in zip(timing_samples, allocation_samples, strict=True)
+    )
+    if not returned_ids_match:
+        raise RuntimeError("timing and allocation passes returned different result IDs")
+    samples = [
+        Sample(
+            returned_ids=timing.returned_ids,
+            wall_ms=timing.wall_ms,
+            cpu_ms=timing.cpu_ms,
+            peak_alloc_kib=allocation.peak_alloc_kib,
+        )
+        for timing, allocation in zip(timing_samples, allocation_samples, strict=True)
+    ]
     case_records: list[dict[str, Any]] = []
-    try:
-        for case in fixture.cases:
-            case_samples: list[Sample] = []
-            for _ in range(repetitions):
-                sample = _measure(
-                    lambda case=case: _invoke_strategy(
-                        strategy,
-                        service,
-                        session_id=session_id,
-                        snapshot=snapshot,
-                        case=case,
-                    )
-                )
-                samples.append(sample)
-                case_samples.append(sample)
-            returned_ids = list(case_samples[-1].returned_ids)
-            expected = set(case.expected_ids)
-            forbidden = set(case.forbidden_ids)
-            returned = set(returned_ids)
-            relevant = sorted(returned.intersection(expected))
-            forbidden_hits = sorted(returned.intersection(forbidden))
-            precision = (
-                1.0
-                if not returned and not expected
-                else len(relevant) / len(returned)
-                if returned
-                else 0.0
-            )
-            recall = (
-                1.0
-                if not expected and not returned
-                else len(relevant) / len(expected)
-                if expected
-                else 0.0
-            )
-            case_records.append(
-                {
-                    "case_id": case.id,
-                    "split": case.split,
-                    "category": case.category,
-                    "query": case.query,
-                    "project_scope": case.project_scope,
-                    "expected_ids": list(case.expected_ids),
-                    "forbidden_ids": list(case.forbidden_ids),
-                    "returned_ids": returned_ids,
-                    "relevant_ids": relevant,
-                    "forbidden_hits": forbidden_hits,
-                    "unexpected_ids": sorted(returned.difference(expected)),
-                    "precision": round(precision, 4),
-                    "recall": round(recall, 4),
-                    "samples": [
-                        {
-                            "wall_ms": round(item.wall_ms, 4),
-                            "cpu_ms": round(item.cpu_ms, 4),
-                            "peak_alloc_kib": round(item.peak_alloc_kib, 4),
-                        }
-                        for item in case_samples
-                    ],
-                }
-            )
-    finally:
-        if service is not None:
-            service.close()
+    offset = 0
+    for case in fixture.cases:
+        case_samples = samples[offset : offset + repetitions]
+        offset += repetitions
+        returned_ids = list(case_samples[-1].returned_ids)
+        expected = set(case.expected_ids)
+        forbidden = set(case.forbidden_ids)
+        returned = set(returned_ids)
+        relevant = sorted(returned.intersection(expected))
+        forbidden_hits = sorted(returned.intersection(forbidden))
+        precision = (
+            1.0
+            if not returned and not expected
+            else len(relevant) / len(returned)
+            if returned
+            else 0.0
+        )
+        recall = (
+            1.0
+            if not expected and not returned
+            else len(relevant) / len(expected)
+            if expected
+            else 0.0
+        )
+        case_records.append(
+            {
+                "case_id": case.id,
+                "split": case.split,
+                "category": case.category,
+                "query": case.query,
+                "project_scope": case.project_scope,
+                "expected_ids": list(case.expected_ids),
+                "forbidden_ids": list(case.forbidden_ids),
+                "returned_ids": returned_ids,
+                "relevant_ids": relevant,
+                "forbidden_hits": forbidden_hits,
+                "unexpected_ids": sorted(returned.difference(expected)),
+                "precision": round(precision, 4),
+                "recall": round(recall, 4),
+                "samples": [
+                    {
+                        "wall_ms": round(item.wall_ms, 4),
+                        "cpu_ms": round(item.cpu_ms, 4),
+                        "peak_alloc_kib": round(item.peak_alloc_kib, 4),
+                    }
+                    for item in case_samples
+                ],
+            }
+        )
     first_query = samples[0]
     warm = samples[1:] or samples
     quality_by_split = {
         split: _quality_summary([record for record in case_records if record["split"] == split])
         for split in ("development", "holdout")
     }
+    service_calls = 0 if strategy == STRATEGY_NO_MEMORY else timing_pass["call_count"]
+    allocation_service_calls = (
+        0 if strategy == STRATEGY_NO_MEMORY else allocation_pass["call_count"]
+    )
     return {
         "strategy": strategy,
         "implementation": (
@@ -533,7 +612,7 @@ def _run_strategy(
             **quality_by_split,
         },
         "timing": {
-            "bootstrap_ms": round(bootstrap_ms, 4),
+            "bootstrap_ms": round(timing_pass["bootstrap_ms"], 4),
             "bootstrap_scope": (
                 "no_service_or_sqlite"
                 if strategy == STRATEGY_NO_MEMORY
@@ -543,6 +622,11 @@ def _run_strategy(
                 )
             ),
             "first_query_ms": round(first_query.wall_ms, 4),
+            "formal_timing_scope": "wall/CPU measured with tracemalloc disabled",
+            "allocation_scope": (
+                "separate tracemalloc allocation pass in an independent temporary store; "
+                "wall/CPU/quality come only from the timing pass"
+            ),
             "wall_p50_ms": _percentile((sample.wall_ms for sample in samples), 0.50),
             "wall_p95_ms": _percentile((sample.wall_ms for sample in samples), 0.95),
             "warm_wall_p50_ms": _percentile((sample.wall_ms for sample in warm), 0.50),
@@ -555,24 +639,36 @@ def _run_strategy(
             "warm_peak_alloc_p95_kib": _percentile(
                 (sample.peak_alloc_kib for sample in warm), 0.95
             ),
-            "rss_high_water_kib": _rss_high_water_kib(),
-            "rss_scope": "whole_process_high_water_non_comparable_across_sequential_strategies",
+            "rss_high_water_kib": timing_pass["rss_high_water_kib"],
+            "rss_scope": (
+                "timing-pass process high-water; allocation pass uses a separate temporary store"
+            ),
             "sample_count": len(samples),
             "repetitions_per_case": repetitions,
+        },
+        "allocation_pass": {
+            "bootstrap_ms": round(allocation_pass["bootstrap_ms"], 4),
+            "sample_count": len(allocation_samples),
+            "call_count": allocation_pass["call_count"],
+            "service_query_calls": allocation_service_calls,
+            "returned_ids_match_timing": returned_ids_match,
+            "rss_high_water_kib": allocation_pass["rss_high_water_kib"],
+            "scope": "independent temporary store and full fixture pass under tracemalloc",
         },
         "cost": {
             "model_calls": 0,
             "model_usage": "unknown",
             "token_cost_usd": "unknown",
-            "service_query_calls": 0 if strategy == STRATEGY_NO_MEMORY else len(samples),
+            "service_query_calls": service_calls,
+            "allocation_pass_service_query_calls": allocation_service_calls,
             "sqlite_sql_calls": "unknown",
             "host_rpc_calls": 0,
             "notes": (
                 "No retrieval or storage path was invoked."
                 if strategy == STRATEGY_NO_MEMORY
                 else (
-                    "Service query-call count only; actual SQLite SQL statement count is "
-                    "unknown; no provider or Host path was invoked."
+                    "Formal timing pass query-call count only; allocation pass uses an "
+                    "independent temporary store; actual SQLite SQL statement count is unknown."
                 )
             ),
         },

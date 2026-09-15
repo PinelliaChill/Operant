@@ -1,0 +1,107 @@
+........................................................................ [  7%]
+........................................................................ [ 15%]
+........................................................................ [ 22%]
+...s.................................................................... [ 30%]
+........................................................................ [ 37%]
+........................................................................ [ 45%]
+........................................................................ [ 52%]
+..................F..................................................... [ 60%]
+........................................................................ [ 68%]
+........................................................................ [ 75%]
+........................................................................ [ 83%]
+........................................................................ [ 90%]
+........................................................................ [ 98%]
+................                                                         [100%]
+=================================== FAILURES ===================================
+________________ test_phase1e_core_loopback_urllib_closed_loop _________________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-8/test_phase1e_core_loopback_url0')
+
+    def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
+        """Exercise all eight frozen operations against Core over a real socket."""
+
+        frozen = _schema()
+        schemas = cast(dict[str, Any], frozen["components"]["schemas"])
+        operation_ids = [
+            operation["operationId"]
+            for path in cast(dict[str, Any], frozen["paths"]).values()
+            for operation in cast(dict[str, Any], path).values()
+        ]
+        assert operation_ids == [
+            "negotiateProtocol",
+            "listProjects",
+            "listWorkspaceFiles",
+            "listThreads",
+            "createSession",
+            "runSessionStream",
+            "listPendingApprovals",
+            "submitApproval",
+        ]
+        assert set(OPERATION_DEFINITIONS) == set(operation_ids)
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "README.txt").write_text("local integration fixture\n", encoding="utf-8")
+        (workspace / "nested").mkdir()
+        (workspace / "nested" / "note.txt").write_text("metadata only\n", encoding="utf-8")
+        database = tmp_path / "phase1e-loopback.sqlite3"
+        provider = _DeterministicProvider()
+        app = create_app(database, artifact_root=tmp_path / "artifacts")
+        service = app.state.operant_service
+        service.provider = cast(ModelProvider, provider)
+        profile = service.add_model_profile(
+            ModelProfile(
+                id="phase1e-local-profile",
+                name="Phase 1E local fixture",
+                model_id="phase1e-local-model",
+                base_url="http://127.0.0.1:9",
+                secret_ref="OPERANT_PHASE1E_UNUSED_KEY",
+            )
+        )
+        role = service.create_role(
+            RolePreset(
+                id="phase1e-local-role",
+                name="Phase 1E local role",
+                system_prompt="Use the deterministic local provider.",
+                model_profile_id=profile.id,
+                tool_policy=ToolPolicy(
+                    allowed_tools=("run_command",),
+                    workspace_write=True,
+                    command_execution=True,
+                ),
+                budget=Budget(max_turns=3, timeout_seconds=20),
+            )
+        )
+        initialization, created = service.initialize_workspace(workspace)
+        assert created is True
+>       with _running_uvicorn(app) as base_url:
+             ^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_phase1e_loopback_integration.py:315:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/Users/bigo/.pyenv/versions/3.13.3/lib/python3.13/contextlib.py:141: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+app = <fastapi.applications.FastAPI object at 0x1098fbb10>
+
+    @contextmanager
+    def _running_uvicorn(app: Any) -> Iterator[str]:
+        """Serve the app on an actual loopback socket for urllib transport tests."""
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+>       listener.bind(("127.0.0.1", 0))
+E       PermissionError: [Errno 1] Operation not permitted
+
+tests/test_phase1e_loopback_integration.py:102: PermissionError
+=============================== warnings summary ===============================
+../assembled/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1
+  /Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/assembled/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_phase1e_loopback_integration.py::test_phase1e_core_loopback_urllib_closed_loop
+1 failed, 950 passed, 1 skipped, 1 warning in 553.71s (0:09:13)

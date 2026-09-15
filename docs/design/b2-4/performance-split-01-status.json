@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery/.venv/bin/python",
+    "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery/scripts/benchmark_b24_memory.py",
+    "--repetitions",
+    "2",
+    "--output",
+    "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/performance-split-01/report.json"
+  ],
+  "exit_code": 3,
+  "unchanged_source": true,
+  "duration_seconds": 8.04,
+  "profile": "untraced timing plus separate traced allocation; all production checks unchanged",
+  "product_native_code": false,
+  "user_database": false
+}

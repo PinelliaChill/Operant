@@ -1,0 +1,44 @@
+{
+  "phase": "frozen_current_source_J2_multi",
+  "provider_errors": [],
+  "model_id": "gpt-5.6-luna",
+  "entry": "BoundedGraphExecutor.run -> ApplicationService.run_session",
+  "workspace": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-02/multi",
+  "database": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-02/multi/core.sqlite3",
+  "graph_run_id": "graph_run_06ede48aa53f4500bb8a534d8fbd6f4c",
+  "team_run_id": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+  "output_budget": 4096,
+  "tool_policy": [
+    "read_file"
+  ],
+  "status": "completed",
+  "output_tokens": 228,
+  "members": [
+    {
+      "member_id": "member_0",
+      "agent_id": "agent_a5742cf674c74ce2866c8f79499f1798",
+      "session_id": "session_745064275d824e699921a2934404d521",
+      "status": "completed",
+      "contexts": [
+        "context_6b0bf1612c100f63916cced288390b7f690b475d92303f451552c2b7ca9b8e80",
+        "context_7f6146d8a62e4765163901d8b7b1d1d5bee28cdcdb59cc096a838120fab0c5da"
+      ],
+      "memory_sent": true,
+      "private_message_sent": true
+    },
+    {
+      "member_id": "member_1",
+      "agent_id": "agent_c761e2cd1c3d46e2b624bf21859817c7",
+      "session_id": "session_b58eeb2722cb40bb9d1235dd1f0266e3",
+      "status": "completed",
+      "contexts": [
+        "context_64ea5ff3d1026aea3cadeed2885fe9e5fb437d394e60d9d72a3807ddb79cd6a0",
+        "context_a3878114a0494a653820d59cd78028f317d33a268da2b73226548c491d7259ea"
+      ],
+      "memory_sent": true,
+      "private_message_sent": false
+    }
+  ],
+  "private_isolation": true,
+  "same_chain": true
+}

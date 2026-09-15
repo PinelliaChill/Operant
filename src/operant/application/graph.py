@@ -1437,7 +1437,13 @@ class GraphRuntime:
         return updated
 
     def record_budget(
-        self, run_id: str, *, output_tokens: int = 0, cost_usd: float = 0, tool_calls: int = 0
+        self,
+        run_id: str,
+        *,
+        output_tokens: int = 0,
+        cost_usd: float = 0,
+        tool_calls: int = 0,
+        observed_after_stop: bool = False,
     ) -> GraphWorkflowRun:
         if (
             isinstance(output_tokens, bool)
@@ -1466,15 +1472,31 @@ class GraphRuntime:
             or not math.isfinite(run.consumed_cost_usd)
         ):
             raise GraphStateError("persisted budget usage is invalid")
-        if run.status not in {
+        active = run.status in {
             GraphRunStatus.RUNNING,
             GraphRunStatus.WAITING_APPROVAL,
             GraphRunStatus.WAITING_INPUT,
-        }:
+        }
+        stopped = run.status in {
+            GraphRunStatus.FAILED,
+            GraphRunStatus.CANCELLED,
+            GraphRunStatus.INTERRUPTED,
+            GraphRunStatus.MANUAL_RECONCILE_REQUIRED,
+        }
+        if not active and not (observed_after_stop and stopped):
             raise GraphStateError(f"cannot record budget for run {run.status.value}")
         tokens = run.consumed_output_tokens + output_tokens
         cost = run.consumed_cost_usd + cost_usd
         calls = run.consumed_tool_calls + tool_calls
+        if not active:
+            # Already-admitted calls may report usage after a sibling failure
+            # or cancellation. Account for it without reopening the run.
+            return self._save_run(
+                run,
+                consumed_output_tokens=tokens,
+                consumed_cost_usd=cost,
+                consumed_tool_calls=calls,
+            )
         budget = run.budget_snapshot
         exceeded = (
             (budget.max_output_tokens is not None and tokens > budget.max_output_tokens)

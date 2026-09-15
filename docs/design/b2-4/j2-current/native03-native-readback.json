@@ -1,0 +1,108 @@
+{
+  "recorded_by": "Codex",
+  "date": "2026-09-15T03:15:36.487998+00:00",
+  "segment": "J2-03",
+  "source_unchanged": true,
+  "base_head": "9295098",
+  "app": {
+    "binary_sha256": "6f3cb154ab6011231a65774be1c69bf8ff74163565f24bad16cb9b41e04514b4",
+    "source_head": "9295098",
+    "gui_delta": "three GUI files captured in freeze.json",
+    "signing": "local ad-hoc; not distribution/notarization"
+  },
+  "graph_run": "graph_run_06ede48aa53f4500bb8a534d8fbd6f4c",
+  "team_run": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+  "observed_native": {
+    "fresh_directory_contains_persisted_native_graph": true,
+    "select_graph_restores_team": true,
+    "agent_history_count": 6,
+    "two_nodes_completed": true,
+    "event_replay_cursor": 10,
+    "recipient_mailbox_contains_direct_message": true,
+    "sender_mailbox_empty": true,
+    "sender_sent_message_visible": "expected authorized sender history, not a recipient mailbox leak",
+    "completed_recipient_send_disabled": true,
+    "task_status_roundtrip": [
+      "completed revision2",
+      "open revision3",
+      "completed revision4"
+    ],
+    "widths_observed": [
+      1200,
+      800,
+      640
+    ],
+    "keyboard_focus": "visible outline on refresh projection at640",
+    "long_text": "wraps at640 with vertical scroll, no observed horizontal spill",
+    "disconnect": "After verified test Core stop, refresh showed Load failed / Core connection failed, run mutations disabled, no Demo fallback."
+  },
+  "tasks_database_readback": [
+    {
+      "idempotency": {
+        "create:graph-task:team_run_a77ab26ebaa64c91bf5d879aca55c480:member_0": {
+          "hash": "96ae4c6668ab912e3ddc8c27089c0ff600c1671c84d14933b619450e0cd65096",
+          "revision": 1
+        },
+        "finish:graph-task:team_run_a77ab26ebaa64c91bf5d879aca55c480:member_0:agent_a5742cf674c74ce2866c8f79499f1798:1": {
+          "hash": "beebeb9ecd6b78b26d8433febc891831d8d9ae380349ce2c0d3cd74a67e4e9cc",
+          "revision": 2
+        }
+      },
+      "task": {
+        "artifact_refs": [],
+        "assignee_ids": [
+          "agent_a5742cf674c74ce2866c8f79499f1798"
+        ],
+        "revision": 2,
+        "source_message_id": null,
+        "status": "completed",
+        "summary": "检索 B24 联合测试代号，read_file 读取 probe.txt，然后回答代号和算式结果。",
+        "task_id": "graph-task:team_run_a77ab26ebaa64c91bf5d879aca55c480:member_0",
+        "team_run_id": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+        "title": "member_0",
+        "updated_at": "2026-09-15T02:01:54.025473Z"
+      }
+    },
+    {
+      "idempotency": {
+        "create:graph-task:team_run_a77ab26ebaa64c91bf5d879aca55c480:member_1": {
+          "hash": "dce884c171b8d5d8b06f0eb1a34f77f9e075d45bbccb84befa07ffa9ee70c2fa",
+          "revision": 1
+        },
+        "finish:graph-task:team_run_a77ab26ebaa64c91bf5d879aca55c480:member_1:agent_c761e2cd1c3d46e2b624bf21859817c7:1": {
+          "hash": "cca0a226ed91656e250c043953f59b84ef7563fdbbbee1ad813fe75e7c062bdf",
+          "revision": 2
+        },
+        "gui-17lfjhg-2659dc43-6376-4d58-ad8f-3e23a5372ac0": {
+          "hash": "44fd264668590c24f0556570fa37984b732cf570c339793c9530ac07112614f7",
+          "revision": 3
+        },
+        "gui-1fngjbq-432a7b7a-1046-4a9c-8208-a8d637ffe313": {
+          "hash": "87b899b41088a2435144d4cca8e86dd7e0033246c3df865580f494df803b32c4",
+          "revision": 4
+        }
+      },
+      "task": {
+        "artifact_refs": [],
+        "assignee_ids": [
+          "agent_c761e2cd1c3d46e2b624bf21859817c7"
+        ],
+        "revision": 4,
+        "source_message_id": null,
+        "status": "completed",
+        "summary": "检索 B24 联合测试代号，read_file 读取 probe.txt，然后回答代号和算式结果。",
+        "task_id": "graph-task:team_run_a77ab26ebaa64c91bf5d879aca55c480:member_1",
+        "team_run_id": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+        "title": "member_1",
+        "updated_at": "2026-09-15T03:13:30.085043Z"
+      }
+    }
+  ],
+  "limits": [
+    "This segment reuses J2-02 real model run; no new model calls.",
+    "Only sender and recipient exist in this Team; outsider isolation uses API tests and J2-02 model-input readback.",
+    "Screenshots and native accessibility observations retained in current Codex tool history.",
+    "Artifact board empty in this new synthetic database; historical recipient publication evidence separate."
+  ],
+  "segment_status": "ended; temporary Core stopped and native app quit"
+}

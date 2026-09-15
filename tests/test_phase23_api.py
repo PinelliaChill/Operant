@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
@@ -454,6 +455,66 @@ def test_phase23_local_team_mailbox_and_ack(tmp_path) -> None:
         )
         assert team_response.status_code == 202
         team_run_id = team_response.json()["resource_id"]
+        artifact = client.app.state.operant_service._write_tool_result_artifact(
+            content=b"synthetic recipient-scoped artifact"
+        )
+        private_artifact = client.post(
+            f"/v1/teams/runs/{team_run_id}/artifacts",
+            headers=_headers("private-artifact"),
+            json={
+                "artifact_id": artifact.id,
+                "title": "private evidence",
+                "publisher_id": "agent_sender",
+                "recipient_ids": ["agent_recipient"],
+                "expected_revision": 0,
+            },
+        )
+        assert private_artifact.status_code == 202, private_artifact.text
+        private_request = json.loads(private_artifact.request.content)
+        private_replay = client.post(
+            f"/v1/teams/runs/{team_run_id}/artifacts",
+            headers=_headers("private-artifact"),
+            json=private_request,
+        )
+        assert private_replay.status_code == 202
+        assert private_replay.json() == private_artifact.json()
+        assert private_replay.headers["Idempotency-Replayed"] == "true"
+
+        def artifact_view(viewer):
+            return client.get(
+                f"/v1/teams/runs/{team_run_id}/artifacts", params={"viewer_id": viewer}
+            ).json()["artifacts"]
+
+        assert artifact_view("agent_recipient")[0]["visibility"] == "recipients"
+        assert artifact_view("agent_sender")[0]["artifact_id"] == artifact.id
+        assert artifact_view("agent_observer") == []
+        team_artifact = client.post(
+            f"/v1/teams/runs/{team_run_id}/artifacts",
+            headers=_headers("team-artifact"),
+            json={
+                "artifact_id": artifact.id,
+                "title": "team evidence",
+                "publisher_id": "agent_sender",
+                "recipient_ids": [],
+                "expected_revision": 1,
+            },
+        )
+        assert team_artifact.status_code == 202, team_artifact.text
+        assert artifact_view("agent_observer")[0]["visibility"] == "team"
+        old_replay = client.post(
+            f"/v1/teams/runs/{team_run_id}/artifacts",
+            headers=_headers("private-artifact"),
+            json=private_request,
+        )
+        assert old_replay.status_code == 202
+        assert old_replay.json() == private_artifact.json()
+        assert artifact_view("agent_observer")[0]["revision"] == 2
+        changed_replay = client.post(
+            f"/v1/teams/runs/{team_run_id}/artifacts",
+            headers=_headers("private-artifact"),
+            json={**private_request, "title": "changed payload"},
+        )
+        assert changed_replay.status_code == 409
 
         outside_message = client.post(
             f"/v1/teams/runs/{team_run_id}/messages",

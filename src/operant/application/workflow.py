@@ -1145,6 +1145,7 @@ class SequentialCodingWorkflow:
                 workspace=workspace,
                 workflow_run_id=workflow_run_id,
                 workflow_execution_lease=execution_lease,
+                memory_enabled=memory_enabled,
             ):
                 capture.observe(event.event_type, event.payload)
                 agent_id = self._persisted_runtime_agent_id(session.id, event.cursor)

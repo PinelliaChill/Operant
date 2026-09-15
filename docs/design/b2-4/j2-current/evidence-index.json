@@ -1,0 +1,43 @@
+{
+  "record_identity": "Codex",
+  "single_source_freeze": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-01/freeze.json",
+  "multi_source_freeze": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-02/freeze.json",
+  "native_build": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/native-build-recovered.json",
+  "native_scope": "Completed by native03/native04/native06; original interrupted segment evidence retained",
+  "pending": null,
+  "files": {
+    "multi.json": "045bec5aa582030641f16e1b482e56747364ee05c475514f81938ebadb8ec957",
+    "native-context-controls.json": "4ae66cf2b4e388bfbf9f4d7117d177e80c6b3a6e47a693242979a59338da5e9b",
+    "multi-readback.json": "eecfb4613af4ff1181428ebac5486af934b9f48a423321cf87b05c5df6cb0fde",
+    "single.json": "4a3f86a9222a90b86688c978d322deee8ef88e1a1c34915761df9b2e770b942c"
+  },
+  "native03": {
+    "result": "native03-native-readback.json",
+    "freeze": "native03-freeze.json",
+    "app": "native03-native-app.json",
+    "scope": "current Graph directory GUI delta; task revision, mailbox, SSE, widths/focus and disconnect; no new model calls"
+  },
+  "native04": {
+    "result": "native04-result.json",
+    "freeze": "native04-freeze.json",
+    "scope": "native self-recipient Artifact publication, other viewer empty, formal HTTP readback; ended before directory pagination fixes"
+  },
+  "nextsend": {
+    "result": "nextsend-real.json",
+    "discovery": "nextsend-discovery.json",
+    "freeze": "nextsend-freeze.json",
+    "entry": "formal ApplicationService.run_session/ModelProfile and Graph API",
+    "model": "gpt-5.6-luna",
+    "effort": "low",
+    "actual_calls": 3,
+    "output_tokens": 42,
+    "scope": "sameSession explicit baseline; exclude+refresh next-send; used-memory revoke stops before Provider; default no-install ordinary succeeds; required memory-standard409 with0Provider",
+    "limits": "No tool calls; prior J2 single/multi already covers read_file. Exclusion is not deletion of historical answers; baseline answer restricted to ACK for clean marker attribution."
+  },
+  "native06": {
+    "result": "native06-result.json",
+    "freeze": "native06-freeze.json",
+    "scope": "second-page Graph→Team restore plus Enter no duplicate POST, start disabled for terminal/bound Graph"
+  },
+  "completion": "B2-4 functional J2 complete; performance exception is outside J2 and recorded in ../performance-scope-decision.md"
+}

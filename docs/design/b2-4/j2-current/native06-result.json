@@ -1,0 +1,11 @@
+{
+  "recorded_by": "Codex",
+  "status": "passed",
+  "source_unchanged": true,
+  "native_second_page_graph_selection": true,
+  "team_restored": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+  "completed_bound_team_start_disabled": true,
+  "enter_key_post_command_count": 0,
+  "evidence": "native CUA AX and Core HTTP log; second-page Cursor observed",
+  "model_calls": 0
+}

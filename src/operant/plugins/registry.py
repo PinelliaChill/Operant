@@ -221,6 +221,8 @@ class PluginRegistry:
         if not root.is_dir():
             raise ValueError("PluginHost managed_root must be a directory")
         self.managed_root = root.resolve()
+        root_stat = self.managed_root.stat()
+        self._managed_root_identity = (root_stat.st_dev, root_stat.st_ino)
         self.state_path = Path(state_path or self.managed_root / "registry.json")
         if not self.state_path.is_absolute():
             raise ValueError("registry state path must be absolute")
@@ -516,11 +518,147 @@ class PluginRegistry:
 
     def verify_package(self, installation_id: str) -> str:
         installation = self._installation(installation_id)
-        package = self.package_path(installation_id)
-        digest = compute_package_digest(package)
+        root_stat = self.managed_root.lstat()
+        if (
+            stat.S_ISLNK(root_stat.st_mode)
+            or (root_stat.st_dev, root_stat.st_ino) != self._managed_root_identity
+        ):
+            raise PackageUnavailableError("managed plugin root identity changed")
+        directory = self.managed_root / installation_id
+        directory_stat = directory.lstat()
+        if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(directory_stat.st_mode):
+            raise PackageUnavailableError("plugin installation directory changed")
+        package = directory / "package"
+        cache: dict[str, tuple[tuple[Any, ...], str]] = getattr(self, "_package_digest_cache", {})
+        cached = cache.get(installation_id)
+        previous = cached[0] if cached is not None else None
+        signature = self._package_signature(package, previous=previous)
+        if cached is not None and signature is cached[0]:
+            digest = cached[1]
+        else:
+            digest = compute_package_digest(package)
+            if self._package_signature(package, previous=signature) is not signature:
+                raise PackageUnavailableError("installed package changed during verification")
+            cache[installation_id] = (signature, digest)
+            self._package_digest_cache = cache
         if digest != installation.manifest.package_digest:
             raise PackageUnavailableError("installed package content digest changed")
         return digest
+
+    @staticmethod
+    def _package_signature(
+        package: Path, *, previous: tuple[Any, ...] | None = None
+    ) -> tuple[Any, ...]:
+        # Device/inode/ctime prevent same-size replacement and restored-mtime
+        # writes from reusing a digest. Every boundary still checks the full
+        # directory inventory and rejects links/non-regular files.
+        entries: list[tuple[Any, ...]] | None = [] if previous is None else None
+        previous_index = 0
+
+        def matches(previous_entry: tuple[Any, ...], st: os.stat_result, relative: str) -> bool:
+            return (
+                len(previous_entry) == 8
+                and previous_entry[0] == relative
+                and previous_entry[1] == st.st_dev
+                and previous_entry[2] == st.st_ino
+                and previous_entry[3] == st.st_size
+                and previous_entry[4] == st.st_mtime_ns
+                and previous_entry[5] == st.st_ctime_ns
+                and previous_entry[6] == st.st_mode
+                and previous_entry[7] == st.st_nlink
+            )
+
+        def remember(st: os.stat_result, relative: str) -> None:
+            nonlocal entries, previous_index
+            if stat.S_ISLNK(st.st_mode) or not (
+                stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)
+            ):
+                raise PackageUnavailableError("plugin package contains an unsafe path")
+            if (
+                previous is not None
+                and entries is None
+                and previous_index < len(previous)
+                and matches(previous[previous_index], st, relative)
+            ):
+                previous_index += 1
+                if previous_index > 8192:
+                    raise PackageUnavailableError("plugin package inventory exceeds budget")
+                return
+            current = (
+                relative,
+                st.st_dev,
+                st.st_ino,
+                st.st_size,
+                st.st_mtime_ns,
+                st.st_ctime_ns,
+                st.st_mode,
+                st.st_nlink,
+            )
+            if entries is None:
+                entries = list(previous[:previous_index]) if previous is not None else []
+            entries.append(current)
+            previous_index += 1
+            if previous_index > 8192:
+                raise PackageUnavailableError("plugin package inventory exceeds budget")
+
+        def visit(directory: int, relative: str) -> None:
+            before = os.fstat(directory)
+            remember(before, relative)
+            with os.scandir(directory) as children:
+                items = sorted(
+                    (
+                        entry
+                        for entry in children
+                        if entry.name != "__pycache__" and not entry.name.endswith((".pyc", ".pyo"))
+                    ),
+                    key=lambda entry: entry.name,
+                )
+                for entry in items:
+                    st = entry.stat(follow_symlinks=False)
+                    name = relative + "/" + entry.name
+                    if stat.S_ISDIR(st.st_mode):
+                        child = os.open(
+                            entry.name,
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=directory,
+                        )
+                        try:
+                            opened = os.fstat(child)
+                            if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
+                                raise PackageUnavailableError(
+                                    "package directory changed during scan"
+                                )
+                            visit(child, name)
+                        finally:
+                            os.close(child)
+                    else:
+                        remember(st, name)
+            after = os.fstat(directory)
+            if (after.st_ino, after.st_mtime_ns, after.st_ctime_ns) != (
+                before.st_ino,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            ):
+                raise PackageUnavailableError("package directory changed during scan")
+
+        try:
+            descriptor = os.open(package, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                visit(descriptor, "")
+                path_stat = os.lstat(package)
+                opened = os.fstat(descriptor)
+                if (path_stat.st_dev, path_stat.st_ino) != (opened.st_dev, opened.st_ino):
+                    raise PackageUnavailableError("package root changed during scan")
+            finally:
+                os.close(descriptor)
+        except OSError as exc:
+            raise PackageUnavailableError("plugin package unavailable") from exc
+        if previous is not None and entries is None:
+            if previous_index == len(previous):
+                return previous
+            entries = list(previous[:previous_index])
+        assert entries is not None
+        return tuple(entries)
 
     @staticmethod
     def _actual_metadata_digest(package: Path, filename: str) -> str | None:
@@ -539,15 +677,45 @@ class PluginRegistry:
                 f"plugin metadata file {filename} cannot be opened"
             ) from exc
         try:
-            return hashlib.sha256(os.read(descriptor, 2_000_000)).hexdigest()
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_size > 2_000_000
+                or opened.st_ino != item_stat.st_ino
+            ):
+                raise PackageUnavailableError("plugin metadata file changed or exceeds budget")
+            data = os.read(descriptor, opened.st_size + 1)
+            finished = os.fstat(descriptor)
+            if (
+                len(data) != opened.st_size
+                or finished.st_mtime_ns != opened.st_mtime_ns
+                or finished.st_ctime_ns != opened.st_ctime_ns
+            ):
+                raise PackageUnavailableError("plugin metadata file changed while being read")
+            return hashlib.sha256(data).hexdigest()
         finally:
             os.close(descriptor)
 
     def _validate_package_metadata(
-        self, package: Path, manifest: PluginManifest, *, required: bool
+        self,
+        package: Path,
+        manifest: PluginManifest,
+        *,
+        required: bool,
+        verified_digest: str | None = None,
     ) -> None:
         """Bind certification digests to package files, never to self-reported fields."""
 
+        metadata_key = (
+            str(package),
+            verified_digest,
+            manifest.dependencies_digest,
+            manifest.permissions_digest,
+            required,
+        )
+        checked: set[tuple[Any, ...]] = getattr(self, "_checked_package_metadata", set())
+        if verified_digest is not None and metadata_key in checked:
+            return
         for filename, expected in (
             ("dependencies.json", manifest.dependencies_digest),
             ("permissions.json", manifest.permissions_digest),
@@ -576,9 +744,13 @@ class PluginRegistry:
                         "external runtime dependencies are unsupported by the MP-1 Host",
                     )
 
+        if verified_digest is not None:
+            checked.add(metadata_key)
+            self._checked_package_metadata = checked
+
     def verify_certification(self, installation_id: str, *, mode: str) -> Certification | None:
         installation = self._installation(installation_id)
-        self.verify_package(installation_id)
+        verified_digest = self.verify_package(installation_id)
         certification = self._certification_for(installation)
         if mode == "trusted_in_process":
             if not self.certification_is_current(installation) or certification is None:
@@ -592,7 +764,10 @@ class PluginRegistry:
                 )
             self._validate_certification_binding(certification, installation.manifest)
             self._validate_package_metadata(
-                self.package_path(installation_id), installation.manifest, required=True
+                self.managed_root / installation_id / "package",
+                installation.manifest,
+                required=True,
+                verified_digest=verified_digest,
             )
             return certification
         if mode != "isolated":
@@ -602,7 +777,10 @@ class PluginRegistry:
         if certification is not None and self.certification_is_current(installation):
             self._validate_certification_binding(certification, installation.manifest)
             self._validate_package_metadata(
-                self.package_path(installation_id), installation.manifest, required=True
+                self.managed_root / installation_id / "package",
+                installation.manifest,
+                required=True,
+                verified_digest=verified_digest,
             )
         return certification
 
@@ -1026,7 +1204,9 @@ class PluginRegistry:
         )
         return updated
 
-    def assert_lease(self, lease: RunLease, context: RpcContext) -> None:
+    def assert_lease(
+        self, lease: RunLease, context: RpcContext, *, verify_package: bool = True
+    ) -> None:
         current_lease = self.get_run(lease.lease_id)
         if current_lease.status != "active" or current_lease.expires_at <= utc_now():
             raise PluginError("lease_expired", "plugin Run lease is no longer active")
@@ -1049,7 +1229,8 @@ class PluginRegistry:
             raise PluginError(
                 "stale_epoch", "plugin request is bound to a stale or disabled binding"
             )
-        self.verify_package(installation.installation_id)
+        if verify_package:
+            self.verify_package(installation.installation_id)
 
     def create_resource(
         self,

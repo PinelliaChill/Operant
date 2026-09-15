@@ -32,6 +32,7 @@ from operant.domain.team import (
     TeamRun,
     TeamRunStatus,
     TeamTask,
+    TeamTaskStatus,
 )
 from operant.persistence.sqlite import SQLiteStore
 
@@ -541,6 +542,41 @@ class SQLiteTeamRepository(TeamRepository):
             )
         return run
 
+    def finish_team_run(self, team_run_id: str, status: TeamRunStatus) -> TeamRun:
+        if status not in {TeamRunStatus.COMPLETED, TeamRunStatus.FAILED, TeamRunStatus.CANCELLED}:
+            raise ValueError("Team completion requires a terminal status")
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT body FROM team_runs WHERE id=?", (team_run_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(team_run_id)
+            stored = TeamRun.model_validate_json(row["body"])
+            if stored.status in {
+                TeamRunStatus.COMPLETED,
+                TeamRunStatus.FAILED,
+                TeamRunStatus.CANCELLED,
+            }:
+                if stored.status != status:
+                    raise ValueError("Team terminal status cannot change")
+                return stored
+            current = stored.model_copy(
+                update={"status": status, "updated_at": datetime.now(timezone.utc)}
+            )
+            connection.execute(
+                "UPDATE team_runs SET status=?,body=?,updated_at=?,completed_at=? WHERE id=?",
+                (
+                    status.value,
+                    _json(current),
+                    current.updated_at.isoformat(),
+                    current.updated_at.isoformat(),
+                    team_run_id,
+                ),
+            )
+            self._append_event(connection, team_run_id, "team.run.updated", {"status": status})
+            return current
+
     def get_team_run(self, team_run_id: str) -> TeamRun | None:
         with self.store._connect() as connection:
             row = connection.execute(
@@ -723,6 +759,93 @@ class SQLiteTeamRepository(TeamRepository):
         with self.store._connect() as connection:
             return self._list_roster_with_connection(connection, team_run_id)
 
+    def replace_roster_agent(self, old: RosterEntry, new: RosterEntry) -> RosterEntry:
+        if (old.team_run_id, old.member_id, old.thread_id) != (
+            new.team_run_id,
+            new.member_id,
+            new.thread_id,
+        ):
+            raise ValueError("retry must preserve Team member and Session Thread")
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                "SELECT session_id,status FROM agents WHERE id=?", (old.agent_instance_id,)
+            ).fetchone()
+            replacement = connection.execute(
+                "SELECT session_id,status FROM agents WHERE id=?", (new.agent_instance_id,)
+            ).fetchone()
+            if (
+                previous is None
+                or replacement is None
+                or previous["session_id"] != replacement["session_id"]
+                or previous["status"] not in {"failed", "cancelled", "timed_out"}
+                or replacement["status"] != "created"
+            ):
+                raise ValueError("retry Agent must be new and preserve the failed Session")
+            roster_row = connection.execute(
+                "SELECT joined_at FROM team_roster WHERE team_run_id=? AND agent_id=?",
+                (old.team_run_id, old.agent_instance_id),
+            ).fetchone()
+            if roster_row is None:
+                raise GraphConflictError("retry Roster disappeared")
+            retired = old.model_copy(
+                update={
+                    "status": RosterMemberStatus.CANCELLED,
+                    "joined_at": old.joined_at or datetime.fromisoformat(roster_row["joined_at"]),
+                    "left_at": datetime.now(timezone.utc),
+                }
+            )
+            retired = RosterEntry.model_validate(retired.model_dump())
+            assert retired.left_at is not None
+            row = connection.execute(
+                "UPDATE team_roster SET status='left',body=?,left_at=? "
+                "WHERE team_run_id=? AND agent_id=? AND body=?",
+                (
+                    _json(retired),
+                    retired.left_at.isoformat(),
+                    old.team_run_id,
+                    old.agent_instance_id,
+                    _json(old),
+                ),
+            )
+            if row.rowcount != 1:
+                raise GraphConflictError("retry Roster changed")
+            connection.execute(
+                "INSERT INTO team_roster(team_run_id,agent_id,thread_id,role,status,"
+                "body,joined_at,left_at) "
+                "VALUES(?,?,?,?,'active',?,?,NULL)",
+                (
+                    new.team_run_id,
+                    new.agent_instance_id,
+                    new.thread_id,
+                    new.member_id,
+                    _json(new),
+                    (new.joined_at or datetime.now(timezone.utc)).isoformat(),
+                ),
+            )
+            task_id = f"graph-task:{new.team_run_id}:{new.member_id}"
+            task_row = connection.execute(
+                "SELECT body FROM team_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if task_row is not None:
+                task = TeamTask.model_validate(json.loads(task_row["body"])["task"])
+                self._apply_task_update_with_connection(
+                    connection,
+                    TaskBoardUpdate(
+                        idempotency_key=f"retry:{task_id}:{new.agent_instance_id}",
+                        expected_revision=task.revision,
+                        task=task.model_copy(
+                            update={
+                                "assignee_ids": (new.agent_instance_id,),
+                                "status": TeamTaskStatus.IN_PROGRESS,
+                                "revision": task.revision + 1,
+                                "updated_at": datetime.now(timezone.utc),
+                            }
+                        ),
+                    ),
+                )
+        return new
+
     @staticmethod
     def _list_roster_with_connection(
         connection: sqlite3.Connection, team_run_id: str
@@ -754,6 +877,15 @@ class SQLiteTeamRepository(TeamRepository):
                     raise ValueError("message idempotency key was reused with different input")
                 return self._projection_from_wrapper(connection, wrapper, created=False)
             message = projection.message
+            active_recipients = {
+                str(row["agent_id"])
+                for row in connection.execute(
+                    "SELECT agent_id FROM team_roster WHERE team_run_id=? AND status='active'",
+                    (message.team_run_id,),
+                )
+            }
+            if not set(message.recipient_ids).issubset(active_recipients):
+                raise ValueError("message recipients must be active Team members")
             wrapper = {
                 "message": message.model_dump(mode="json"),
                 "outbox": projection.outbox.model_dump(mode="json"),
@@ -1008,79 +1140,82 @@ class SQLiteTeamRepository(TeamRepository):
         return ack
 
     def apply_task_update(self, update: TaskBoardUpdate) -> BoardApplyResult:
-        task = update.task
-        request_hash = _hash(update)
         with self.store._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT * FROM team_tasks WHERE id = ?", (task.task_id,)
-            ).fetchone()
-            if row is None:
-                if update.expected_revision not in {None, 0}:
-                    raise ValueError("Task Board revision conflict")
-                history = {
-                    update.idempotency_key: {"hash": request_hash, "revision": task.revision}
-                }
-                wrapper = {"task": task.model_dump(mode="json"), "idempotency": history}
-                body = _json(wrapper)
-                connection.execute(
-                    """
-                    INSERT INTO team_tasks(
-                        id, team_run_id, assignee_agent_id, status, version,
-                        body, body_hash, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        task.task_id,
-                        task.team_run_id,
-                        task.assignee_ids[0] if len(task.assignee_ids) == 1 else None,
-                        task.status.value,
-                        task.revision,
-                        body,
-                        hashlib.sha256(body.encode("utf-8")).hexdigest(),
-                        task.updated_at.isoformat(),
-                        task.updated_at.isoformat(),
-                    ),
-                )
-                created = True
-            else:
-                wrapper = json.loads(str(row["body"]))
-                history = wrapper.get("idempotency", {})
-                prior = history.get(update.idempotency_key)
-                if prior is not None:
-                    if prior["hash"] != request_hash:
-                        raise ValueError("Task Board idempotency key conflict")
-                    return BoardApplyResult(revision=int(prior["revision"]), created=False)
-                current = TeamTask.model_validate(wrapper["task"])
-                if (
-                    update.expected_revision != current.revision
-                    or task.revision != current.revision + 1
-                ):
-                    raise ValueError("Task Board revision conflict")
-                history[update.idempotency_key] = {"hash": request_hash, "revision": task.revision}
-                body = _json({"task": task.model_dump(mode="json"), "idempotency": history})
-                connection.execute(
-                    """
-                    UPDATE team_tasks SET assignee_agent_id = ?, status = ?, version = ?,
-                        body = ?, body_hash = ?, updated_at = ? WHERE id = ?
-                    """,
-                    (
-                        task.assignee_ids[0] if len(task.assignee_ids) == 1 else None,
-                        task.status.value,
-                        task.revision,
-                        body,
-                        hashlib.sha256(body.encode("utf-8")).hexdigest(),
-                        task.updated_at.isoformat(),
-                        task.task_id,
-                    ),
-                )
-                created = False
-            self._append_event(
-                connection,
-                task.team_run_id,
-                "team.task.updated",
-                {"task_id": task.task_id, "revision": task.revision},
+            return self._apply_task_update_with_connection(connection, update)
+
+    def _apply_task_update_with_connection(
+        self, connection: sqlite3.Connection, update: TaskBoardUpdate
+    ) -> BoardApplyResult:
+        task = update.task
+        request_hash = _hash(update)
+        row = connection.execute(
+            "SELECT * FROM team_tasks WHERE id = ?", (task.task_id,)
+        ).fetchone()
+        if row is None:
+            if update.expected_revision not in {None, 0}:
+                raise ValueError("Task Board revision conflict")
+            history = {update.idempotency_key: {"hash": request_hash, "revision": task.revision}}
+            wrapper = {"task": task.model_dump(mode="json"), "idempotency": history}
+            body = _json(wrapper)
+            connection.execute(
+                """
+                INSERT INTO team_tasks(
+                    id, team_run_id, assignee_agent_id, status, version,
+                    body, body_hash, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task.task_id,
+                    task.team_run_id,
+                    task.assignee_ids[0] if len(task.assignee_ids) == 1 else None,
+                    task.status.value,
+                    task.revision,
+                    body,
+                    hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    task.updated_at.isoformat(),
+                    task.updated_at.isoformat(),
+                ),
             )
+            created = True
+        else:
+            wrapper = json.loads(str(row["body"]))
+            history = wrapper.get("idempotency", {})
+            prior = history.get(update.idempotency_key)
+            if prior is not None:
+                if prior["hash"] != request_hash:
+                    raise ValueError("Task Board idempotency key conflict")
+                return BoardApplyResult(revision=int(prior["revision"]), created=False)
+            current = TeamTask.model_validate(wrapper["task"])
+            if (
+                update.expected_revision != current.revision
+                or task.revision != current.revision + 1
+            ):
+                raise ValueError("Task Board revision conflict")
+            history[update.idempotency_key] = {"hash": request_hash, "revision": task.revision}
+            body = _json({"task": task.model_dump(mode="json"), "idempotency": history})
+            connection.execute(
+                """
+                UPDATE team_tasks SET assignee_agent_id = ?, status = ?, version = ?,
+                    body = ?, body_hash = ?, updated_at = ? WHERE id = ?
+                """,
+                (
+                    task.assignee_ids[0] if len(task.assignee_ids) == 1 else None,
+                    task.status.value,
+                    task.revision,
+                    body,
+                    hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    task.updated_at.isoformat(),
+                    task.task_id,
+                ),
+            )
+            created = False
+        self._append_event(
+            connection,
+            task.team_run_id,
+            "team.task.updated",
+            {"task_id": task.task_id, "revision": task.revision},
+        )
         return BoardApplyResult(revision=task.revision, created=created)
 
     def apply_artifact_update(self, update: ArtifactBoardUpdate) -> BoardApplyResult:

@@ -1,0 +1,43 @@
+{
+  "record_identity": "Codex",
+  "original_log": "/Users/bigo/.codex/sessions/2026/09/13/rollout-2026-09-13T20-28-54-01a09abd-f0d9-76e0-828e-b75a1f014e9e.jsonl",
+  "cutoff": "2026-09-14T07:47:00Z before recovery",
+  "verified": {
+    "native-single.json": {
+      "log_line": 2531,
+      "timestamp": "2026-09-14T07:46:19.262Z",
+      "call_id": "call_Msn8hPy2AhTO4yXJuigjpfvK",
+      "match": "exact original SHA256 readback",
+      "sha256": "7bea7bd9967fbccc162353c45b1900fca088c08cde677621312fc878d9c44bef"
+    },
+    "native-multi.json": {
+      "log_line": 2531,
+      "timestamp": "2026-09-14T07:46:19.262Z",
+      "call_id": "call_Msn8hPy2AhTO4yXJuigjpfvK",
+      "match": "exact original SHA256 readback",
+      "sha256": "3a15a66d0d4703560ba46b7b097fa3cd020a74a11608397762bea75a8cbed345"
+    },
+    "native-freeze.json": {
+      "log_line": 2531,
+      "timestamp": "2026-09-14T07:46:19.262Z",
+      "call_id": "call_Msn8hPy2AhTO4yXJuigjpfvK",
+      "match": "exact original SHA256 readback",
+      "sha256": "30add446da51f588d8c6adbe852d19b69735823ac822faeec15c962ebdcce083"
+    },
+    "gui-artifact-publication.json": {
+      "log_line": 2531,
+      "timestamp": "2026-09-14T07:46:19.262Z",
+      "call_id": "call_Msn8hPy2AhTO4yXJuigjpfvK",
+      "match": "exact original SHA256 readback",
+      "sha256": "a0f1d038c4cfaad053d6fdefda6c3302c694a7a15b4e4a2d783ea6cce135605c"
+    }
+  },
+  "unverified": [],
+  "recovered_file_sha256": {
+    "gui-artifact-publication.json": "a0f1d038c4cfaad053d6fdefda6c3302c694a7a15b4e4a2d783ea6cce135605c",
+    "native-single.json": "7bea7bd9967fbccc162353c45b1900fca088c08cde677621312fc878d9c44bef",
+    "native-freeze.json": "30add446da51f588d8c6adbe852d19b69735823ac822faeec15c962ebdcce083",
+    "native-multi.json": "3a15a66d0d4703560ba46b7b097fa3cd020a74a11608397762bea75a8cbed345"
+  },
+  "method": "Complete JSON comparison and exact original file SHA256 matched against public historical tool outputs before recovery; no historical commands executed"
+}

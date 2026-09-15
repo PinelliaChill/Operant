@@ -1,0 +1,1227 @@
+/**
+ * Operant 2.0 - B2-4 协作工作台与上下文检查器视觉样式 (UI-COLLAB-03)
+ * 职责：Antigravity（纯视觉组件与呈现层）
+ * 覆盖契约类：
+ *   .b24-layout, .b24-grid, .b24-form, .b24-field, .b24-actions,
+ *   .b24-list, .b24-card, .b24-error, .b24-message, .b24-inspector,
+ *   .b24-section, .b24-status, .b24-empty, .b24-fieldset, .b24-list-grid,
+ *   .b24-check-row, .b24-agent-profile, .b24-detail-list, .b24-board-item,
+ *   .b24-compat
+ * 规范：严格复用 theme.css tokens，遵循 WCAG AA 对比度，响应式适配（宽屏/768px/430px），
+ *       长文本与哈希自动折行，:focus-visible 清晰高亮，支持减弱动效偏好。
+ */
+
+/* ==========================================================================
+   1. 工作台根布局 (.b24-layout)
+   ========================================================================== */
+
+.b24-layout,
+.live23-shell.b24-layout {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  gap: 20px;
+  box-sizing: border-box;
+  color: var(--text-primary);
+}
+
+.b24-layout .live23-muted,
+.b24-layout .b24-muted {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.b24-layout-split {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;
+  align-items: flex-start;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.b24-layout-main {
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
+}
+
+.b24-layout-aside {
+  width: 360px;
+  flex-shrink: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
+}
+
+/* ==========================================================================
+   2. 响应式网格 (.b24-grid, .b24-list-grid)
+   ========================================================================== */
+
+.b24-grid {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.b24-grid-1 {
+  grid-template-columns: 1fr;
+}
+
+.b24-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.b24-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.b24-grid-auto {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.b24-list-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ==========================================================================
+   3. 卡片与分区 (.b24-card, .b24-section, .b24-fieldset)
+   ========================================================================== */
+
+.b24-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 18px 20px;
+  box-sizing: border-box;
+  color: var(--text-primary);
+  min-width: 0;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.b24-card-interactive {
+  cursor: pointer;
+}
+
+.b24-card-interactive:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.b24-card:focus-visible,
+.b24-card-interactive:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b24-card-subtle {
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.b24-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.b24-card-heading strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.b24-card-selected {
+  border-color: var(--accent-action);
+  box-shadow: 0 0 0 1px var(--accent-action);
+}
+
+/* B24Section 分区卡片 */
+.b24-section {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.b24-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.b24-section-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.b24-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.b24-section-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.b24-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.b24-section-body {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.b24-section p[role="status"] {
+  font-size: 13px;
+  color: var(--status-safe-text);
+  background: var(--status-safe-bg);
+  border: 1px solid var(--status-safe-border);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  margin: 6px 0;
+}
+
+/* Fieldset 容器 */
+.b24-fieldset {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin: 0;
+  box-sizing: border-box;
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.b24-fieldset legend {
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   4. 表单与字段 (.b24-form, .b24-field, .b24-check-row)
+   ========================================================================== */
+
+.b24-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.b24-form-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.b24-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.b24-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.b24-field-required {
+  color: var(--status-error-text);
+  margin-left: 2px;
+  font-weight: 600;
+}
+
+.b24-field input:not([type]),
+.b24-field input[type="text"],
+.b24-field input[type="number"],
+.b24-field input[type="search"],
+.b24-field select,
+.b24-field textarea {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.b24-field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.b24-field input:focus-visible,
+.b24-field select:focus-visible,
+.b24-field textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--border-focus);
+}
+
+.b24-field input::placeholder,
+.b24-field textarea::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.b24-field-help {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.b24-field-error {
+  font-size: 12px;
+  color: var(--status-error-text);
+  line-height: 1.45;
+  margin: 0;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  word-break: break-word;
+}
+
+/* 多选行 (.b24-check-row) */
+.b24-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-sizing: border-box;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.b24-check-row:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-strong);
+}
+
+.b24-check-row input[type="checkbox"] {
+  margin-top: 3px;
+  cursor: pointer;
+  accent-color: var(--accent-action);
+}
+
+.b24-check-row input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b24-check-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.b24-check-row strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.b24-check-row small {
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+/* ==========================================================================
+   5. 操作栏与按钮 (.b24-actions, 通用按钮与焦点)
+   ========================================================================== */
+
+.b24-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.b24-actions-end {
+  justify-content: flex-end;
+}
+
+.b24-actions-between {
+  justify-content: space-between;
+}
+
+.b24-actions button,
+.b24-actions .b24-btn,
+.b24-btn,
+.b24-inspector button,
+.b24-section-actions button,
+.b24-card button,
+.b24-error button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
+  text-decoration: none;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.b24-actions button.btn-sm,
+.btn-sm,
+.b24-section-actions button.btn-sm {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.b24-actions button:hover,
+.b24-actions .b24-btn:hover,
+.b24-btn:hover,
+.b24-inspector button:hover,
+.b24-section-actions button:hover,
+.b24-card button:hover,
+.b24-error button:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--text-secondary);
+}
+
+.b24-actions button:focus-visible,
+.b24-actions .b24-btn:focus-visible,
+.b24-btn:focus-visible,
+.b24-inspector button:focus-visible,
+.b24-section-actions button:focus-visible,
+.b24-card button:focus-visible,
+.b24-error button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b24-actions button:disabled,
+.b24-actions .b24-btn:disabled,
+.b24-btn:disabled,
+.b24-btn[aria-disabled="true"],
+.b24-inspector button:disabled,
+.b24-section-actions button:disabled,
+.b24-card button:disabled,
+.b24-error button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* 主操作按钮 */
+.b24-btn-primary,
+.b24-actions button.b24-btn-primary,
+.b24-actions button.btn-primary,
+.b24-actions button[data-variant="primary"] {
+  background: var(--accent-action);
+  border-color: transparent;
+  color: var(--text-inverse);
+}
+
+.b24-btn-primary:hover,
+.b24-actions button.b24-btn-primary:hover,
+.b24-actions button.btn-primary:hover,
+.b24-actions button[data-variant="primary"]:hover {
+  background: var(--accent-action-hover);
+  border-color: transparent;
+  color: var(--text-inverse);
+}
+
+/* 危险操作按钮 */
+.b24-btn-danger,
+.b24-actions button.b24-btn-danger,
+.b24-actions button.btn-danger,
+.b24-actions button[data-variant="danger"] {
+  background: var(--status-error-bg);
+  border-color: var(--status-error-border);
+  color: var(--status-error-text);
+}
+
+.b24-btn-danger:hover,
+.b24-actions button.b24-btn-danger:hover,
+.b24-actions button.btn-danger:hover,
+.b24-actions button[data-variant="danger"]:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: var(--status-error-text);
+  color: var(--status-error-text);
+}
+
+/* ==========================================================================
+   6. 列表与集合 (.b24-list, .b24-detail-list, .b24-board-item)
+   ========================================================================== */
+
+.b24-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.b24-list li,
+.b24-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-sizing: border-box;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.b24-list-item-interactive {
+  cursor: pointer;
+}
+
+.b24-list-item-interactive:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-strong);
+}
+
+.b24-list li:focus-visible,
+.b24-list-item:focus-visible,
+.b24-list-item-interactive:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b24-list-item-main,
+.b24-list li > span:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.b24-list-item-title,
+.b24-list li strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.b24-list-item-meta,
+.b24-list li small {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  word-break: break-all;
+}
+
+.b24-list li code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+}
+
+/* 详情列表 (.b24-detail-list) */
+.b24-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.b24-detail-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border-subtle);
+  font-size: 13px;
+}
+
+.b24-detail-list > div:last-child {
+  border-bottom: none;
+}
+
+.b24-detail-list dt {
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin: 0;
+}
+
+.b24-detail-list dd {
+  color: var(--text-primary);
+  font-weight: 600;
+  margin: 0;
+}
+
+.b24-detail-list dd code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-xs);
+  word-break: break-all;
+}
+
+/* 任务板卡片项 (.b24-board-item) */
+.b24-board-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-sizing: border-box;
+  flex-wrap: wrap;
+}
+
+.b24-board-item > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.b24-board-item strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.b24-board-item small {
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* ==========================================================================
+   7. 状态胶囊徽标 (.b24-status)
+   ========================================================================== */
+
+.b24-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.b24-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.b24-status-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 状态色（WCAG AA 对比度） */
+.b24-status-neutral,
+.b24-status[data-tone="neutral"] {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+
+.b24-status-neutral .b24-status-dot,
+.b24-status[data-tone="neutral"] .b24-status-dot {
+  background: var(--text-secondary);
+}
+
+.b24-status-success,
+.b24-status[data-tone="success"] {
+  background: var(--status-safe-bg);
+  color: var(--status-safe-text);
+  border-color: var(--status-safe-border);
+}
+
+.b24-status-success .b24-status-dot,
+.b24-status[data-tone="success"] .b24-status-dot {
+  background: var(--status-safe-text);
+}
+
+.b24-status-warning,
+.b24-status[data-tone="warning"] {
+  background: var(--status-warn-bg);
+  color: var(--status-warn-text);
+  border-color: var(--status-warn-border);
+}
+
+.b24-status-warning .b24-status-dot,
+.b24-status[data-tone="warning"] .b24-status-dot {
+  background: var(--status-warn-text);
+}
+
+.b24-status-danger,
+.b24-status[data-tone="danger"] {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+  border-color: var(--status-error-border);
+}
+
+.b24-status-danger .b24-status-dot,
+.b24-status[data-tone="danger"] .b24-status-dot {
+  background: var(--status-error-text);
+}
+
+/* ==========================================================================
+   8. 空状态 (.b24-empty)
+   ========================================================================== */
+
+.b24-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px 18px;
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.b24-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 4px 0;
+  word-break: break-word;
+}
+
+.b24-empty-description {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 440px;
+  margin: 0;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* ==========================================================================
+   9. 错误与警示横幅 (.b24-error)
+   ========================================================================== */
+
+.b24-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--status-error-bg);
+  border: 1px solid var(--status-error-border);
+  border-left: 4px solid var(--status-error-text);
+  border-radius: var(--radius-md);
+  color: var(--status-error-text);
+  font-size: 13px;
+  line-height: 1.5;
+  width: 100%;
+  box-sizing: border-box;
+  flex-wrap: wrap;
+}
+
+.b24-error > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.b24-error button {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   10. 协作消息卡片 (.b24-message, .b24-agent-profile)
+   ========================================================================== */
+
+.b24-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  width: 100%;
+  box-sizing: border-box;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.b24-message-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.b24-message-meta strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.b24-message p {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+/* Agent 个人页 (.b24-agent-profile) */
+.b24-agent-profile {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 18px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-top: 8px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.b24-agent-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: var(--accent-action);
+  color: var(--text-inverse);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.b24-agent-profile-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.b24-agent-profile-main h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.b24-agent-profile-main a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-action);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.b24-agent-profile-main a:hover {
+  text-decoration: underline;
+}
+
+.b24-agent-profile-main a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* 兼容深链折叠项 (.b24-compat) */
+.b24-compat {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-top: 8px;
+  box-sizing: border-box;
+}
+
+.b24-compat summary {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.b24-compat summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b24-compat[open] summary {
+  margin-bottom: 8px;
+}
+
+/* ==========================================================================
+   11. 会话上下文检查器 (.b24-inspector)
+   ========================================================================== */
+
+.b24-inspector,
+details.b24-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+details.b24-inspector > summary {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+details.b24-inspector > summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+details.b24-inspector[open] > summary {
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 8px;
+}
+
+.b24-inspector p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+details.b24-inspector article.b24-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-sizing: border-box;
+}
+
+details.b24-inspector article.b24-card p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+details.b24-inspector article.b24-card p:nth-of-type(2) {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+details.b24-inspector article.b24-card details {
+  margin: 4px 0 8px 0;
+  padding: 6px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+details.b24-inspector article.b24-card details summary {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+details.b24-inspector article.b24-card details summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+details.b24-inspector article.b24-card details[open] summary {
+  margin-bottom: 6px;
+}
+
+details.b24-inspector article.b24-card pre {
+  margin: 0;
+  padding: 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+}
+
+/* ==========================================================================
+   12. 响应式适配与极端尺寸断点 (<= 1024px / <= 768px / <= 430px)
+   ========================================================================== */
+
+@media (max-width: 1024px) {
+  .b24-layout-split {
+    flex-direction: column;
+  }
+
+  .b24-layout-aside {
+    width: 100%;
+  }
+
+  .b24-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .b24-grid,
+  .b24-grid-2,
+  .b24-grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .b24-list-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .b24-card {
+    padding: 14px 16px;
+  }
+
+  .b24-section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  /* 消除 column 布局下的 flex-basis 垂直拉伸空白 */
+  .b24-section-title,
+  .b24-card h2,
+  .b24-card h3 {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .b24-actions {
+    flex-direction: column;
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .b24-actions button,
+  .b24-actions .b24-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .b24-board-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .b24-board-item .b24-actions {
+    flex-direction: row;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .b24-inspector-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 430px) {
+  .b24-card {
+    padding: 12px 14px;
+  }
+
+  .b24-section-title {
+    font-size: 15px;
+  }
+
+  .b24-empty {
+    padding: 24px 14px;
+  }
+
+  .b24-message {
+    padding: 10px 12px;
+  }
+
+  .b24-field input,
+  .b24-field select,
+  .b24-field textarea {
+    font-size: 14px;
+  }
+
+  .b24-agent-profile {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+}
+
+/* ==========================================================================
+   13. 减弱动效偏好
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .b24-card,
+  .b24-list li,
+  .b24-list-item,
+  .b24-actions button,
+  .b24-btn,
+  .b24-field input,
+  .b24-field select,
+  .b24-field textarea,
+  .b24-check-row {
+    transition: none !important;
+    animation: none !important;
+  }
+}

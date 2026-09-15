@@ -1,0 +1,22 @@
+{
+  "record_identity": "Codex",
+  "scope": "typed recall adapter and persistent fresh synthetic run-root option",
+  "status": "targeted_passed_final_gates_pending",
+  "checks": [
+    "4 adapter cases plus 10 real package tests passed before expanded parameterization",
+    "expanded adapter parameterization: 12 passed",
+    "ruff format/check passed",
+    "model/graph --help confirms --run-root; no model call"
+  ],
+  "reviewer": "original /root/reviewer restored; approved Python dict plus full revalidation, required construct regressions added",
+  "source_hashes": {
+    "plugins/memory-standard/plugin.py": "c70b55b72f9ab0a7f4c275097187d89ef08f0bf3147fcc044f3fd1ed8478af3a",
+    "tests/test_b24_standard_adapter.py": "f061b951ecee9efbfb02a7cc06cb0dac33d3bcb5de9c72a17a0ba7c7d6d2348c",
+    "scripts/b24_model_smoke.py": "c4b4e28fd3b697fd7915d1020972a44c005a38affb1c70342477409ec750b253",
+    "scripts/b24_graph_smoke.py": "72d601d9c9592c19fbbf8f79f77a98e6fe3732426046e816417b7ac1678f8f6e"
+  },
+  "limits": [
+    "No performance gain claimed until fixed benchmark",
+    "Final full gates and fixed-source real J2 pending"
+  ]
+}

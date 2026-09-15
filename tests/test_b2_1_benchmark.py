@@ -5,7 +5,11 @@ import importlib.util
 import re
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts/benchmark_memory_baseline.py"
 _SCRIPT_SPEC = importlib.util.spec_from_file_location("b2_1_memory_baseline", _SCRIPT_PATH)
@@ -111,8 +115,13 @@ def test_b2_1_benchmark_uses_isolated_old_paths_and_no_model(tmp_path: Path) -> 
         assert result["cost"]["model_usage"] == "unknown"
         assert result["timing"]["bootstrap_ms"] >= 0
         assert result["timing"]["first_query_ms"] >= 0
+        assert result["timing"]["formal_timing_scope"] == (
+            "wall/CPU measured with tracemalloc disabled"
+        )
+        assert "independent temporary store" in result["timing"]["allocation_scope"]
+        assert "tracemalloc" in result["timing"]["allocation_scope"]
         assert result["timing"]["rss_scope"] == (
-            "whole_process_high_water_non_comparable_across_sequential_strategies"
+            "timing-pass process high-water; allocation pass uses a separate temporary store"
         )
     for strategy in (STRATEGY_DIRECT, STRATEGY_RECENT):
         result = report["strategies"][strategy]
@@ -161,3 +170,36 @@ def test_b2_1_hard_gate_and_performance_tolerances_are_frozen() -> None:
         records = report["strategies"][strategy]["cases"]
         assert any(record["category"] == "private_mailbox" for record in records)
         assert all(not record["forbidden_hits"] for record in records)
+
+
+def test_b2_1_timing_and_allocation_passes_are_separate() -> None:
+    calls: list[str] = []
+
+    def formal() -> list[SimpleNamespace]:
+        calls.append("formal")
+        return [SimpleNamespace(id="formal")]
+
+    def allocation() -> list[SimpleNamespace]:
+        calls.append("allocation")
+        return [SimpleNamespace(id="allocation")]
+
+    timing = _SCRIPT_MODULE._measure_timing(formal)
+    allocation_sample = _SCRIPT_MODULE._measure_allocation(allocation)
+    assert calls == ["formal", "allocation"]
+    assert timing.returned_ids == ("formal",)
+    assert timing.wall_ms >= 0
+    assert timing.cpu_ms >= 0
+    assert timing.peak_alloc_kib == 0
+    assert allocation_sample.returned_ids == ("allocation",)
+    assert allocation_sample.wall_ms == 0
+    assert allocation_sample.cpu_ms == 0
+    assert allocation_sample.peak_alloc_kib >= 0
+
+
+def test_b2_1_timing_pass_rejects_external_tracemalloc() -> None:
+    tracemalloc.start()
+    try:
+        with pytest.raises(RuntimeError, match="tracemalloc to be disabled"):
+            _SCRIPT_MODULE._measure_timing(lambda: [])
+    finally:
+        tracemalloc.stop()
