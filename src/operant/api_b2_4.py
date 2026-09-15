@@ -17,11 +17,18 @@ from operant.contracts.b2_4 import (
     B24Command,
     B24Result,
     CollaborationDirectory,
+    CollaborationGraphRun,
     CollaborationRole,
     ContextInspection,
     InspectedContextRevision,
 )
-from operant.domain.graph import IdempotencyClass, NodeKind, NodeSpec, WorkflowDefinition
+from operant.domain.graph import (
+    GraphWorkflowRun,
+    IdempotencyClass,
+    NodeKind,
+    NodeSpec,
+    WorkflowDefinition,
+)
 from operant.domain.security import Capability
 from operant.domain.team import (
     TeamDefinition,
@@ -143,6 +150,13 @@ def install_b2_4_routes(app: FastAPI, service: ApplicationService) -> None:
                 TeamDefinition.model_validate_json(r["body"])
                 for r in c.execute("SELECT body FROM team_definitions ORDER BY team_id,version")
             ]
+            graph_runs = [
+                GraphWorkflowRun.model_validate_json(row["body"])
+                for row in c.execute(
+                    "SELECT body FROM graph_workflow_runs "
+                    "ORDER BY updated_at DESC,id DESC LIMIT 101"
+                )
+            ]
         roles = []
         for role in service.list_roles():
             profile = service.get_model_profile(role.model_profile_id)
@@ -155,7 +169,24 @@ def install_b2_4_routes(app: FastAPI, service: ApplicationService) -> None:
                     effort=role.effort.value,
                 )
             )
-        return CollaborationDirectory(workflows=workflows, teams=teams, roles=roles)
+        return CollaborationDirectory(
+            workflows=workflows,
+            teams=teams,
+            roles=roles,
+            graph_runs=[
+                CollaborationGraphRun(
+                    id=run.id,
+                    workflow_definition_id=run.workflow_definition_id,
+                    workflow_definition_version=run.workflow_definition_version,
+                    workspace_or_target=run.workspace_or_target,
+                    team_run_id=run.team_run_id,
+                    status=run.status,
+                    updated_at=run.updated_at,
+                )
+                for run in graph_runs[:100]
+            ],
+            graph_runs_has_more=len(graph_runs) > 100,
+        )
 
     @app.get(
         "/v1/b2-4/collaboration",

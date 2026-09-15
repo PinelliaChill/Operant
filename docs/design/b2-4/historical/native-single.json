@@ -1,0 +1,29 @@
+{
+  "entry": "Actual Tauri debug app -> formal B2 Session create/run via native UI -> ApplicationService -> discovered gpt-5.6-luna",
+  "native_app": "/private/tmp/Operant B2-4 Verification.app",
+  "source_freeze": "native-freeze.json",
+  "agent_id": "agent_6f0e5e0b7eba4a9184fcfba2c3c2aacf",
+  "session_id": "session_f4f40a30c2d34148853ead959f66319d",
+  "status": "completed",
+  "model_ids": [
+    "gpt-5.6-luna"
+  ],
+  "contexts": [
+    "context_53a08e4f6481dac62ade8ec20296dda9f67137e3c97bffe036d50e108e8ba10b",
+    "context_0c09b10a9b6e67f8f47c54559d358f2f802897508511e98308da79bf120d9905"
+  ],
+  "memory_sent": true,
+  "tool_completed": true,
+  "answer": "测试代号：**CEDAR_29**  \n算式结果：**6 × 7 = 42**",
+  "native_inspector": {
+    "input_tokens": 3500,
+    "available_input_tokens": 29126,
+    "memory_tokens": 1452,
+    "memory_budget": 2000,
+    "memory_version": 1,
+    "source_conditions_expanded": true
+  },
+  "changed_sources": [],
+  "limitation": "Session was bound to the existing synthetic source Thread, whose earlier user item also contains the marker. This proves actual Memory Pack injection and tool/answer, not a causal ablation of memory.",
+  "passed": true
+}

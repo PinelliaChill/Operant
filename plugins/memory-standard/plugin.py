@@ -227,6 +227,12 @@ def _content_digest(envelope: Mapping[str, Any], source: Mapping[str, Any], comp
     return computed
 
 
+def _recall_query(query: Any) -> str:
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("recall query must be non-empty text")
+    return query.strip()
+
+
 async def _handle(operation: str, params: dict[str, Any], host: _HostAdapter) -> dict[str, Any]:
     context = _runtime.context_of(params)
     host.check_cancelled()
@@ -301,11 +307,8 @@ async def _handle(operation: str, params: dict[str, Any], host: _HostAdapter) ->
             "source_watermark": str(params.get("source_watermark", "0")),
         }
     if operation == "recall":
-        query = params.get("query")
-        if not isinstance(query, str) or not query.strip():
-            raise ValueError("recall query must be non-empty text")
         request = dict(params)
-        request["query"] = query.strip()
+        request["query"] = _recall_query(params.get("query"))
         # Core's search callback is the authority for candidates, scores and
         # current permissions.  This plugin never invents a MemoryVersionRef.
         return await host.search(request)
@@ -336,6 +339,19 @@ class StandardMemoryPlugin:
     """Host adapter returned by ``create_plugin`` in trusted mode."""
 
     async def handle(self, operation: str, request: BaseModel, host: Any) -> BaseModel:
+        if operation == "recall" and isinstance(request, RecallRequest):
+            # Keep full schema revalidation, including model_copy/model_construct
+            # values, without converting native context values to JSON and back.
+            payload = request.model_dump(mode="python")
+            _runtime.context_of(payload)
+            host.check_cancelled()
+            load_config()
+            payload["query"] = _recall_query(payload.get("query"))
+            request = RecallRequest.model_validate(payload)
+            result = host.search(request)
+            if hasattr(result, "__await__"):
+                result = await result
+            return CandidateBatch.model_validate(result.model_dump(mode="python"))
         payload = request.model_dump(mode="json")
         result = await _handle(operation, payload, _HostAdapter(host))
         result_type: Any = {

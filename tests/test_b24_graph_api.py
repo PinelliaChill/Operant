@@ -114,6 +114,47 @@ def test_formal_directory_create_publish_run_and_team_terminal(tmp_path):
         assert {a for task in tasks for a in task["assignee_ids"]} == {
             r.agent_instance_id for r in roster
         }
+        # A new client can discover native B24 runs without a legacy Workflow ID
+        # or a command receipt retained in its local component state.
+        fresh_directory = client.get("/v1/b2-4/collaboration").json()
+        summary = next(item for item in fresh_directory["graph_runs"] if item["id"] == run_id)
+        assert summary["team_run_id"] == team.team_run_id
+        assert summary["status"] == "completed"
+        assert summary["workspace_or_target"] == str(tmp_path)
+        assert "input" not in summary and "output" not in summary
+        assert fresh_directory["graph_runs_has_more"] is False
+
+
+def test_collaboration_run_directory_is_bounded_and_reports_truncation(tmp_path):
+    from operant.domain.graph import (
+        NodeKind,
+        NodeSpec,
+        WorkflowDefinition,
+        WorkflowDefinitionStatus,
+    )
+
+    app = create_app(tmp_path / "run-directory.db")
+    definition = WorkflowDefinition(
+        name="directory-only",
+        status=WorkflowDefinitionStatus.PUBLISHED,
+        nodes=(NodeSpec(node_id="worker", node_kind=NodeKind.AGENT),),
+    )
+    runs = [
+        app.state.graph_runtime.create_run(
+            definition,
+            input={"private_task_text": "should not appear in a directory summary"},
+            workspace_or_target=str(tmp_path),
+        )
+        for _ in range(101)
+    ]
+    with TestClient(app) as client:
+        response = client.get("/v1/b2-4/collaboration")
+        assert response.status_code == 200, response.text
+        directory = response.json()
+        assert directory["graph_runs_has_more"] is True
+        expected = sorted(runs, key=lambda run: (run.updated_at, run.id), reverse=True)[:100]
+        assert [run["id"] for run in directory["graph_runs"]] == [run.id for run in expected]
+        assert "private_task_text" not in response.text
 
 
 def test_resume_rejects_running_attempt_without_resetting_it(tmp_path):

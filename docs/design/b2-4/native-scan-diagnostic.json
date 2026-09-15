@@ -1,0 +1,80 @@
+{
+  "record_identity": "Codex",
+  "status": "not_passed",
+  "product_native_integration": false,
+  "finding": "tracemalloc is inside wall/CPU samples; split measurement required; fixed gates unchanged",
+  "evidence": [
+    {
+      "path": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/native-scan-diagnostic/benchmark-host-static-objects.json",
+      "sha256": "eb2cb7bc2cd17f1c0f64d5a4891059ac3460a5b0c58a6ec3dfb8fd85e66f1070",
+      "diagnostic": {
+        "backend": "C full inventory plus same outer managed-root and existing-path validation;per-thread buffer",
+        "product_files_changed": false,
+        "native_initialization": "lazy inside first Host setup",
+        "limitations": [
+          "Diagnostic monkeypatch only, not production packaging or final acceptance"
+        ]
+      },
+      "cpu_p95_ms": {
+        "direct": 3.194,
+        "trusted_in_process": 5.224,
+        "isolated": 6.407
+      }
+    },
+    {
+      "path": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/timing-without-tracer-product.json",
+      "sha256": "fd32982550b91ace2f88da72c3ab55fe681c4423d1ec85ae56d82b24d5d02590",
+      "diagnostic": {
+        "backend": "product",
+        "tracemalloc": false,
+        "acceptance": false,
+        "product_changed": false
+      },
+      "cpu_p95_ms": {
+        "direct": 2.074,
+        "trusted_in_process": 2.912,
+        "isolated": 3.869
+      }
+    },
+    {
+      "path": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/timing-without-tracer-native.json",
+      "sha256": "19ff18aa16ec9c2dffb094412fe1e435ab3ad13b0cc97a36fdb126c83bc81e8e",
+      "diagnostic": {
+        "backend": "native",
+        "tracemalloc": false,
+        "acceptance": false,
+        "product_changed": false
+      },
+      "cpu_p95_ms": {
+        "direct": 2.049,
+        "trusted_in_process": 2.955,
+        "isolated": 3.585
+      }
+    }
+  ],
+  "decision": "Do not integrate C prototype on present evidence. Preserve failures. Original performance agent owns benchmark sampling correction; root coordinates formal run after targeted tests.",
+  "bulk_attribute_followup": {
+    "source": "Codex original signature_allocation agent, local Apple SDK attr.h / vnode.h and man pages",
+    "result": "not_equivalent_as_drop_in",
+    "reason": "Directory link count excludes historical dot links and directory logical size is not promised to equal stat size. Need stat fallback for directory signature; retain all root and directory identity checks.",
+    "decision": "Stop bulk replacement candidate; no product or benchmark changes."
+  },
+  "hybrid_followup": {
+    "field_parity": "9 inherited semantic tests plus resource fork/hardlink/unicode/rewrite/dir parity passed",
+    "bulk_files": 9,
+    "field_fallbacks": 0,
+    "report": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/native-bulk-root-readback/host-report.json",
+    "sha256": "97267155ac82667222431a22d9b529a638ab1c47fb3b09d4409c7a8a3b831669",
+    "status": "not_passed",
+    "passed_modes": [
+      "direct",
+      "isolated"
+    ],
+    "trusted_failed": [
+      "bootstrap_wall",
+      "warm_wall_p95",
+      "warm_cpu_p95"
+    ],
+    "product_integrated": false
+  }
+}

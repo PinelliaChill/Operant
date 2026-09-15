@@ -1,12 +1,13 @@
 """Additive B2-4 contracts; historical protocols remain frozen."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from operant.contracts.b2_1 import MemoryPack, MemoryVersion
 from operant.domain.context import ContextRevision
-from operant.domain.graph import WorkflowDefinition
+from operant.domain.graph import GraphRunStatus, WorkflowDefinition
 from operant.domain.team import TeamDefinition
 
 
@@ -37,10 +38,22 @@ class CollaborationRole(B24Model):
     effort: str
 
 
+class CollaborationGraphRun(B24Model):
+    id: str
+    workflow_definition_id: str
+    workflow_definition_version: int = Field(ge=1)
+    workspace_or_target: str | None
+    team_run_id: str | None
+    status: GraphRunStatus
+    updated_at: datetime
+
+
 class CollaborationDirectory(B24Model):
     workflows: list[WorkflowDefinition]
     teams: list[TeamDefinition]
     roles: list[CollaborationRole]
+    graph_runs: list[CollaborationGraphRun] = Field(default_factory=list, max_length=100)
+    graph_runs_has_more: bool = False
 
 
 class B24Command(B24Model):

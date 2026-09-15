@@ -1,0 +1,14 @@
+{
+  "record_identity": "Codex",
+  "single_source_freeze": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-01/freeze.json",
+  "multi_source_freeze": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-02/freeze.json",
+  "native_build": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/native-build-recovered.json",
+  "native_scope": "readback and context exclude/refresh; Graph directory defect ended segment",
+  "pending": "new directory contract/client integration and final GUI acceptance; Host performance",
+  "files": {
+    "multi.json": "045bec5aa582030641f16e1b482e56747364ee05c475514f81938ebadb8ec957",
+    "native-context-controls.json": "4ae66cf2b4e388bfbf9f4d7117d177e80c6b3a6e47a693242979a59338da5e9b",
+    "multi-readback.json": "eecfb4613af4ff1181428ebac5486af934b9f48a423321cf87b05c5df6cb0fde",
+    "single.json": "4a3f86a9222a90b86688c978d322deee8ef88e1a1c34915761df9b2e770b942c"
+  }
+}

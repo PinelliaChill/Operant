@@ -19,9 +19,17 @@ async def main(
     output: Path | None = None,
     phase: str = "preflight_not_final_acceptance",
     model_id: str = "gpt-oss-20b",
+    run_root: Path | None = None,
 ) -> None:
     root = Path(__file__).resolve().parents[1]
-    runroot = Path(tempfile.mkdtemp(prefix="operant-b24-graph-")).resolve()
+    if run_root is None:
+        runroot = Path(tempfile.mkdtemp(prefix="operant-b24-graph-")).resolve()
+    else:
+        if not run_root.is_absolute():
+            raise ValueError("verification run root must be absolute")
+        runroot = run_root.resolve()
+        # A fresh directory prevents accidentally opening an existing user DB.
+        runroot.mkdir(parents=True, exist_ok=False)
     load_local_env("/Users/bigo/agentworkspace/codexworkspace/operant/.env")
     os.environ["OPERANT_DB_PATH"] = str(runroot / "core.sqlite3")
     from operant.api import create_app
@@ -149,7 +157,7 @@ async def main(
             sender_id=roster[1].agent_instance_id,
             recipient_ids=(roster[0].agent_instance_id,),
             audience=MessageAudience.DIRECT,
-            message_kind=MessageKind.OBSERVATION,
+            message_kind=MessageKind.FINDING,
             payload={"text": "PRIVATE_ONE_CODE is visible only to the first member."},
         ),
         idempotency_key="b24-private-message",
@@ -209,5 +217,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path)
     parser.add_argument("--phase", default="preflight_not_final_acceptance")
     parser.add_argument("--model-id", default="gpt-oss-20b")
+    parser.add_argument("--run-root", type=Path)
     args = parser.parse_args()
-    asyncio.run(main(output=args.output, phase=args.phase, model_id=args.model_id))
+    asyncio.run(
+        main(output=args.output, phase=args.phase, model_id=args.model_id, run_root=args.run_root)
+    )

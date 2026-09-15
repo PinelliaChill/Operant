@@ -28,7 +28,7 @@ import subprocess
 import sys
 import time
 import tracemalloc
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -157,7 +157,8 @@ class RpcCounter:
             "host_minus_manager_ms": round(host_total_ms - self.manager_search_ms, 4),
             "interpretation": (
                 "registry package digest work is included in verify_package; host_minus_manager "
-                "also includes typed validation, callbacks, and transport"
+                "also includes typed validation, callbacks, and transport; wall/CPU come from "
+                "the timing pass and allocation is measured in an independent pass"
             ),
         }
 
@@ -414,70 +415,112 @@ def _child_metrics(pid: int | None) -> tuple[float | None, float | None]:
     return _parse_ps_time(fields[1]) * 1000.0, rss
 
 
-def _sample(
-    call: Callable[[], CandidateBatch],
-    *,
-    child_pid: int | None,
-) -> Sample:
+def _sample_timing(call: Callable[[], CandidateBatch], *, child_pid: int | None) -> Sample:
+    """Measure one formal call with tracemalloc disabled."""
+
+    if tracemalloc.is_tracing():
+        raise RuntimeError("formal timing pass requires tracemalloc to be disabled")
     child_cpu_before, _ = _child_metrics(child_pid)
-    tracemalloc.start()
-    before_alloc, _ = tracemalloc.get_traced_memory()
     before_cpu = _cpu_seconds()
     started = time.perf_counter_ns()
     result = call()
     elapsed = (time.perf_counter_ns() - started) / 1_000_000.0
-    after_alloc, peak_alloc = tracemalloc.get_traced_memory()
     after_cpu = _cpu_seconds()
-    tracemalloc.stop()
     child_cpu_after, child_rss = _child_metrics(child_pid)
     child_cpu = (
         None
         if child_cpu_before is None or child_cpu_after is None
         else max(0.0, child_cpu_after - child_cpu_before)
     )
+    rss_kib = _rss_kib()
     return Sample(
         wall_ms=elapsed,
         cpu_ms=max(0.0, after_cpu - before_cpu) * 1000.0,
-        peak_alloc_kib=max(0.0, peak_alloc - before_alloc) / 1024.0,
-        rss_kib=_rss_kib(),
+        peak_alloc_kib=0.0,
+        rss_kib=rss_kib,
         child_cpu_ms=child_cpu,
         child_rss_kib=child_rss,
         returned_ids=tuple(item.ref.record_id for item in result.candidates),
     )
 
 
-async def _async_sample(
-    call: Callable[[], Any],
-    *,
-    child_pid: int | None,
-) -> Sample:
-    """Measure an awaitable call with the same fields as :func:`_sample`."""
+def _sample_allocation(call: Callable[[], CandidateBatch]) -> Sample:
+    """Measure one allocation-only call in the independent allocation pass."""
 
-    child_cpu_before, _ = _child_metrics(child_pid)
     tracemalloc.start()
     before_alloc, _ = tracemalloc.get_traced_memory()
+    try:
+        result = call()
+        _, peak_alloc = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return Sample(
+        wall_ms=0.0,
+        cpu_ms=0.0,
+        peak_alloc_kib=max(0.0, peak_alloc - before_alloc) / 1024.0,
+        rss_kib=_rss_kib(),
+        child_cpu_ms=None,
+        child_rss_kib=None,
+        returned_ids=tuple(item.ref.record_id for item in result.candidates),
+    )
+
+
+async def _async_sample_timing(
+    call: Callable[[], Awaitable[Any]], *, child_pid: int | None
+) -> Sample:
+    """Measure one awaitable formal call with tracemalloc disabled."""
+
+    if tracemalloc.is_tracing():
+        raise RuntimeError("formal timing pass requires tracemalloc to be disabled")
+    child_cpu_before, _ = _child_metrics(child_pid)
     before_cpu = _cpu_seconds()
     started = time.perf_counter_ns()
     result = await call()
     elapsed = (time.perf_counter_ns() - started) / 1_000_000.0
-    after_alloc, peak_alloc = tracemalloc.get_traced_memory()
     after_cpu = _cpu_seconds()
-    tracemalloc.stop()
     child_cpu_after, child_rss = _child_metrics(child_pid)
     child_cpu = (
         None
         if child_cpu_before is None or child_cpu_after is None
         else max(0.0, child_cpu_after - child_cpu_before)
     )
+    rss_kib = _rss_kib()
     return Sample(
         wall_ms=elapsed,
         cpu_ms=max(0.0, after_cpu - before_cpu) * 1000.0,
-        peak_alloc_kib=max(0.0, peak_alloc - before_alloc) / 1024.0,
-        rss_kib=_rss_kib(),
+        peak_alloc_kib=0.0,
+        rss_kib=rss_kib,
         child_cpu_ms=child_cpu,
         child_rss_kib=child_rss,
         returned_ids=tuple(item.ref.record_id for item in result.candidates),
     )
+
+
+async def _async_sample_allocation(call: Callable[[], Awaitable[Any]]) -> Sample:
+    """Measure one allocation-only awaitable call in the allocation pass."""
+
+    tracemalloc.start()
+    before_alloc, _ = tracemalloc.get_traced_memory()
+    try:
+        result = await call()
+        _, peak_alloc = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return Sample(
+        wall_ms=0.0,
+        cpu_ms=0.0,
+        peak_alloc_kib=max(0.0, peak_alloc - before_alloc) / 1024.0,
+        rss_kib=_rss_kib(),
+        child_cpu_ms=None,
+        child_rss_kib=None,
+        returned_ids=tuple(item.ref.record_id for item in result.candidates),
+    )
+
+
+# Keep the short names as timing-only aliases for focused callers.  They no
+# longer accept an allocation callback because allocation is a separate pass.
+_sample = _sample_timing
+_async_sample = _async_sample_timing
 
 
 def percentile(values: Sequence[float], fraction: float) -> float:
@@ -559,9 +602,15 @@ def _metric_summary(samples: Sequence[Sample]) -> dict[str, Any]:
         "child_cpu_p50_ms": percentile(child_cpu, 0.50) if child_cpu else None,
         "child_cpu_p95_ms": percentile(child_cpu, 0.95) if child_cpu else None,
         "child_rss_high_water_kib": max(child_rss) if child_rss else None,
-        "rss_scope": "parent_process_high_water; child metrics separate when available",
-        "cpu_scope": "parent_process; isolated child metrics separate when available",
-        "allocation_scope": "parent_process_tracemalloc; child allocation unknown",
+        "rss_scope": (
+            "parent-process high-water at formal timing sample boundary; "
+            "child metrics separate when available"
+        ),
+        "cpu_scope": "formal parent-process call without tracemalloc; child metrics separate",
+        "allocation_scope": (
+            "parent-process tracemalloc in an independent full allocation pass; child "
+            "allocation unknown; allocation wall/CPU/RPC/quality are reported separately"
+        ),
     }
 
 
@@ -592,14 +641,44 @@ def _register_run(manager: BenchmarkManager, request: RecallRequest, cutoff: str
     )
 
 
-def _direct_mode(
+def _merge_samples(
+    timing_samples: Sequence[Sample], allocation_samples: Sequence[Sample]
+) -> tuple[list[Sample], bool]:
+    """Join two complete passes while proving that result IDs are stable."""
+
+    if len(timing_samples) != len(allocation_samples):
+        raise RuntimeError("timing and allocation passes returned different sample counts")
+    returned_ids_match = all(
+        timing.returned_ids == allocation.returned_ids
+        for timing, allocation in zip(timing_samples, allocation_samples, strict=True)
+    )
+    if not returned_ids_match:
+        raise RuntimeError("timing and allocation passes returned different result IDs")
+    return [
+        Sample(
+            wall_ms=timing.wall_ms,
+            cpu_ms=timing.cpu_ms,
+            peak_alloc_kib=allocation.peak_alloc_kib,
+            rss_kib=timing.rss_kib,
+            child_cpu_ms=timing.child_cpu_ms,
+            child_rss_kib=timing.child_rss_kib,
+            returned_ids=timing.returned_ids,
+        )
+        for timing, allocation in zip(timing_samples, allocation_samples, strict=True)
+    ], returned_ids_match
+
+
+def _direct_mode_pass(
     fixture: FixtureData,
     cases: Sequence[BenchmarkCase],
     root: Path,
     repetitions: int,
+    *,
+    pass_kind: Literal["timing", "allocation"],
 ) -> dict[str, Any]:
+    allocation = pass_kind == "allocation"
     setup_started = time.perf_counter_ns()
-    ledger, versions = build_ledger(root / "direct.sqlite3", fixture)
+    ledger, versions = build_ledger(root / f"direct-{pass_kind}.sqlite3", fixture)
     cutoff = publication_cutoff(ledger)
     manager = _prepare_manager(ledger, versions, cutoff)
     setup_ms = (time.perf_counter_ns() - setup_started) / 1_000_000.0
@@ -621,13 +700,18 @@ def _direct_mode(
             def search_one(request: RecallRequest = request) -> CandidateBatch:
                 return manager.search(request)
 
-            sample = _sample(search_one, child_pid=None)
+            sample = (
+                _sample_allocation(search_one)
+                if allocation
+                else _sample_timing(search_one, child_pid=None)
+            )
             manager_search_ms += sample.wall_ms
             manager._recall_runs.pop(request.context.request_id, None)
             samples.append(sample)
             returned.append(sample.returned_ids)
     return {
         "mode": "direct",
+        "pass_kind": pass_kind,
         "status": "completed",
         "algorithm": "MemoryManager.search -> b24_fts + frozen_versions -> retrieve_memories",
         "setup_ms": round(setup_ms, 4),
@@ -659,23 +743,58 @@ def _direct_mode(
             ),
         },
         "returned_ids": returned,
+        "samples": samples,
+        "manager_search_calls": len(samples),
+        "manager_search_ms": manager_search_ms,
     }
 
 
-async def _host_mode(
+def _direct_mode(
+    fixture: FixtureData,
+    cases: Sequence[BenchmarkCase],
+    root: Path,
+    repetitions: int,
+) -> dict[str, Any]:
+    timing_pass = _direct_mode_pass(fixture, cases, root, repetitions, pass_kind="timing")
+    allocation_pass = _direct_mode_pass(fixture, cases, root, repetitions, pass_kind="allocation")
+    samples, returned_ids_match = _merge_samples(timing_pass["samples"], allocation_pass["samples"])
+    result = dict(timing_pass)
+    result.pop("pass_kind", None)
+    result.pop("samples", None)
+    result["metrics"] = _metric_summary(samples)
+    result["quality"] = timing_pass["quality"]
+    result["returned_ids"] = timing_pass["returned_ids"]
+    result["allocation_pass"] = {
+        "setup_ms": allocation_pass["setup_ms"],
+        "sample_count": len(allocation_pass["samples"]),
+        "manager_search_calls": allocation_pass["manager_search_calls"],
+        "rpc": allocation_pass["rpc"],
+        "returned_ids_match_timing": returned_ids_match,
+        "scope": (
+            "independent temporary SQLite and full fixture pass under tracemalloc; "
+            "allocation wall/CPU/quality are excluded from the timing pass"
+        ),
+    }
+    return result
+
+
+async def _host_mode_pass(
     fixture: FixtureData,
     cases: Sequence[BenchmarkCase],
     root: Path,
     repetitions: int,
     mode: Literal["trusted_in_process", "isolated"],
+    *,
+    pass_kind: Literal["timing", "allocation"],
 ) -> dict[str, Any]:
+    allocation = pass_kind == "allocation"
     setup_started = time.perf_counter_ns()
-    ledger, versions = build_ledger(root / f"{mode}.sqlite3", fixture)
+    ledger, versions = build_ledger(root / f"{mode}-{pass_kind}.sqlite3", fixture)
     cutoff = publication_cutoff(ledger)
     manager = _prepare_manager(ledger, versions, cutoff)
     package = ROOT / "plugins/memory-standard"
     manifest_path = package / "manifest.py"
-    spec = importlib.util.spec_from_file_location(f"b24_manifest_{mode}", manifest_path)
+    spec = importlib.util.spec_from_file_location(f"b24_manifest_{mode}_{pass_kind}", manifest_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("memory-standard manifest cannot be loaded")
     manifest_module = importlib.util.module_from_spec(spec)
@@ -683,7 +802,7 @@ async def _host_mode(
     manifest = manifest_module.plugin_manifest()
     now = utc_now()
     certification = Certification(
-        certification_id=f"cert.b24.benchmark.{mode}",
+        certification_id=f"cert.b24.benchmark.{mode}.{pass_kind}",
         issuer_id="issuer.local",
         plugin_id=manifest.plugin_id,
         plugin_version=manifest.plugin_version,
@@ -700,7 +819,7 @@ async def _host_mode(
     )
     config = PluginConfig(
         schema_version="operant-memory-config.v1",
-        config_id=f"config-b24-benchmark-{mode}",
+        config_id=f"config-b24-benchmark-{mode}-{pass_kind}",
         revision=0,
         extraction_model_profile_id=None,
         rerank_model_profile_id=None,
@@ -710,7 +829,9 @@ async def _host_mode(
         secret_refs={},
         effective_at=now,
     )
-    registry = PluginRegistry(root / f"managed-{mode}", trusted_issuers={"issuer.local"})
+    registry = PluginRegistry(
+        root / f"managed-{mode}-{pass_kind}", trusted_issuers={"issuer.local"}
+    )
     installation = registry.install(
         manifest,
         package.resolve(),
@@ -718,7 +839,7 @@ async def _host_mode(
         principal_id="b24-benchmark-user",
         certification=certification,
         config=config,
-        installation_id=f"installation-b24-{mode}",
+        installation_id=f"installation-b24-{mode}-{pass_kind}",
     )
     counter = RpcCounter()
 
@@ -888,7 +1009,11 @@ async def _host_mode(
                 ) -> CandidateBatch:
                     return cast(CandidateBatch, await host.invoke(lease, "recall", request))
 
-                sample = await _async_sample(invoke_one, child_pid=child_pid)
+                sample = await (
+                    _async_sample_allocation(invoke_one)
+                    if allocation
+                    else _async_sample_timing(invoke_one, child_pid=child_pid)
+                )
                 samples.append(sample)
                 returned.append(sample.returned_ids)
                 manager._recall_runs.pop(request.context.request_id, None)
@@ -899,6 +1024,7 @@ async def _host_mode(
             registry.close()
     return {
         "mode": mode,
+        "pass_kind": pass_kind,
         "status": "completed",
         "algorithm": (
             "PluginHost -> memory-standard -> Host.search -> MemoryManager.search -> b24_fts"
@@ -943,7 +1069,62 @@ async def _host_mode(
             ),
         },
         "returned_ids": returned,
+        "samples": samples,
+        "manager_search_calls": counter.manager_search_calls,
+        "manager_search_ms": counter.manager_search_ms,
     }
+
+
+async def _host_mode(
+    fixture: FixtureData,
+    cases: Sequence[BenchmarkCase],
+    root: Path,
+    repetitions: int,
+    mode: Literal["trusted_in_process", "isolated"],
+) -> dict[str, Any]:
+    """Run complete timing and allocation passes on independent Host state."""
+
+    timing_pass = await _host_mode_pass(
+        fixture,
+        cases,
+        root,
+        repetitions,
+        mode,
+        pass_kind="timing",
+    )
+    allocation_pass = await _host_mode_pass(
+        fixture,
+        cases,
+        root,
+        repetitions,
+        mode,
+        pass_kind="allocation",
+    )
+    samples, returned_ids_match = _merge_samples(timing_pass["samples"], allocation_pass["samples"])
+    result = dict(timing_pass)
+    result.pop("pass_kind", None)
+    result.pop("samples", None)
+    result["metrics"] = _metric_summary(samples)
+    result["quality"] = timing_pass["quality"]
+    result["returned_ids"] = timing_pass["returned_ids"]
+    result["allocation_pass"] = {
+        "setup_ms": allocation_pass["setup_ms"],
+        "host_startup": allocation_pass["host_startup"],
+        "sample_count": len(allocation_pass["samples"]),
+        "manager_search_calls": allocation_pass["manager_search_calls"],
+        "rpc": allocation_pass["rpc"],
+        "phase_calls": {
+            name: entry["calls"]
+            for name, entry in allocation_pass["phase_timing"].items()
+            if isinstance(entry, dict) and "calls" in entry
+        },
+        "returned_ids_match_timing": returned_ids_match,
+        "scope": (
+            "independent temporary SQLite, registry, and Host pass under tracemalloc; "
+            "allocation wall/CPU/RPC/quality are reported separately"
+        ),
+    }
+    return result
 
 
 async def _run_host_mode(*args: Any, **kwargs: Any) -> dict[str, Any]:

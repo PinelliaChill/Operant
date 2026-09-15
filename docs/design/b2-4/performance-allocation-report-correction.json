@@ -1,0 +1,31 @@
+{
+  "record_identity": "Codex",
+  "reviewer": "original /root/reviewer",
+  "finding": "P2 allocation phase zero wall caused negative derived overhead; formal gate unaffected",
+  "source_report_sha256": "c4013be675ad702b6bf101bf87bbb64044dcad476176bc427c93eba23552ed4c",
+  "correction": {
+    "trusted_in_process": {
+      "phase_calls": {
+        "manager_search": 84,
+        "host_invoke": 84,
+        "registry_assert_lease": 588,
+        "registry_verify_package": 588,
+        "registry_verify_certification": 588
+      },
+      "wall_overhead": "unavailable; allocation-only samples do not measure wall time"
+    },
+    "isolated": {
+      "phase_calls": {
+        "manager_search": 84,
+        "host_invoke": 84,
+        "registry_assert_lease": 336,
+        "registry_verify_package": 336,
+        "registry_verify_certification": 336
+      },
+      "wall_overhead": "unavailable; allocation-only samples do not measure wall time"
+    }
+  },
+  "fix": "future report emits phase_calls only, with no allocation phase_timing",
+  "validation": "tests/test_b24_benchmark.py: 8 passed including no allocation phase_timing and preserved counts",
+  "original_report_preserved": true
+}

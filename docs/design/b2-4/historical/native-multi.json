@@ -1,0 +1,47 @@
+{
+  "entry": "Actual Tauri app -> published Graph v4 formal API -> BoundedGraphExecutor and two ModelProfile Agents",
+  "source_freeze": "native-freeze.json",
+  "graph_run_id": "graph_run_feae9e32c6964397b8a1415b874dee86",
+  "team_run_id": "team_run_7c2f641d33ff4bada4e18692799ba67b",
+  "status": "completed",
+  "workspace": "/private/tmp/operant-b24-j2-20260914-04/multi",
+  "output_tokens": 389,
+  "output_budget_per_agent": 2048,
+  "native_sse_cursor": 42,
+  "members": [
+    {
+      "agent_id": "agent_3fc6170283b04d6ab37a1a99598b5575",
+      "session_id": "session_46353e78057945f3bd32082ce4e60f7d",
+      "thread_id": "thread_f5ba327e761d40fd89eebdce66312e5d",
+      "status": "completed",
+      "model_ids": [
+        "gpt-5.6-luna"
+      ],
+      "contexts": [
+        "context_b5fedfe792eaaf3cbbcfd6020a0f5066b8c94f4a2ef171b0df786322b6035f02",
+        "context_c9c670bd729b8847ef81e74d48d8e385f65bb282d85ce522e38e92cc0a49dc7d"
+      ],
+      "memory_sent": true,
+      "tool_completed": true,
+      "answer": "CEDAR_29; The independent check; 42"
+    },
+    {
+      "agent_id": "agent_91e6fb141aff4b65b1620c44e54fd56d",
+      "session_id": "session_a80c83c332ce4e14a09a0565eb298a3c",
+      "thread_id": "thread_2c62c2e1de91449e9805789f107761cc",
+      "status": "completed",
+      "model_ids": [
+        "gpt-5.6-luna"
+      ],
+      "contexts": [
+        "context_ae48d35355bb27989e3564d478b2bcacc11ef5798aceaac0c73cb156a9193806",
+        "context_330fd6e4975ba398e632e10be2a431ce24d2198bf813f0c12acdfebc70e1c6da"
+      ],
+      "memory_sent": true,
+      "tool_completed": true,
+      "answer": "CEDAR_29; 42"
+    }
+  ],
+  "changed_sources": [],
+  "passed": true
+}

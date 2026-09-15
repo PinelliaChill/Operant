@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import sys
+import tracemalloc
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/benchmark_b24_memory.py"
@@ -48,8 +52,12 @@ def test_b24_direct_report_has_quality_safety_and_real_manager_entrypoint() -> N
     assert result["model_calls"] == 0
     assert result["quality"]["forbidden_hit_count"] == 0
     assert result["metrics"]["sample_count"] == 42
+    assert "formal parent-process call without tracemalloc" in result["metrics"]["cpu_scope"]
+    assert "independent full allocation pass" in result["metrics"]["allocation_scope"]
     assert result["rpc"]["frames"] == 0
     assert result["phase_timing"]["manager_search"]["calls"] == 42
+    assert result["allocation_pass"]["manager_search_calls"] == 42
+    assert result["allocation_pass"]["returned_ids_match_timing"] is True
     # Host modes are intentionally omitted here, so the overall gate is not a
     # false pass from a partial run.
     assert report["gates"]["status"] == "not_passed"
@@ -69,6 +77,13 @@ def test_b24_trusted_stage_timing_exposes_package_validation_cost() -> None:
     assert phase["registry_verify_package"]["calls"] >= phase["host_invoke"]["calls"]
     assert phase["registry_verify_package"]["total_ms"] > 0
     assert phase["host_minus_manager_ms"] > 0
+    allocation = result["allocation_pass"]
+    assert "phase_timing" not in allocation
+    assert allocation["phase_calls"]["host_invoke"] == result["metrics"]["sample_count"]
+    assert (
+        allocation["phase_calls"]["registry_verify_package"]
+        >= allocation["phase_calls"]["host_invoke"]
+    )
     assert report["gates"]["host"]["trusted_in_process"]["checks"]["bootstrap_wall"]
 
 
@@ -130,3 +145,64 @@ def test_b24_report_is_json_serializable() -> None:
     report = benchmark.run_benchmark(modes=("direct",), repetitions=1)
     encoded = json.dumps(report, ensure_ascii=False)
     assert "operant.b2_4.memory-performance-report.v1" in encoded
+
+
+def test_b24_formal_timing_and_allocation_passes_are_separate() -> None:
+    benchmark = _benchmark_module()
+    calls: list[str] = []
+
+    def formal() -> SimpleNamespace:
+        calls.append("formal")
+        return SimpleNamespace(
+            candidates=(SimpleNamespace(ref=SimpleNamespace(record_id="formal")),)
+        )
+
+    def allocation() -> SimpleNamespace:
+        calls.append("allocation")
+        return SimpleNamespace(
+            candidates=(SimpleNamespace(ref=SimpleNamespace(record_id="allocation")),)
+        )
+
+    timing = benchmark._sample_timing(formal, child_pid=None)
+    allocation_sample = benchmark._sample_allocation(allocation)
+    assert calls == ["formal", "allocation"]
+    assert timing.returned_ids == ("formal",)
+    assert timing.peak_alloc_kib == 0
+    assert allocation_sample.returned_ids == ("allocation",)
+    assert allocation_sample.wall_ms == 0
+    assert allocation_sample.cpu_ms == 0
+
+    async_calls: list[str] = []
+
+    async def async_formal() -> SimpleNamespace:
+        async_calls.append("formal")
+        return formal()
+
+    async def async_allocation() -> SimpleNamespace:
+        async_calls.append("allocation")
+        return allocation()
+
+    async_timing = asyncio.run(benchmark._async_sample_timing(async_formal, child_pid=None))
+    async_allocation_sample = asyncio.run(benchmark._async_sample_allocation(async_allocation))
+    assert async_calls == ["formal", "allocation"]
+    assert async_timing.returned_ids == ("formal",)
+    assert async_timing.peak_alloc_kib == 0
+    assert async_allocation_sample.returned_ids == ("allocation",)
+    assert async_allocation_sample.wall_ms == 0
+    assert async_allocation_sample.cpu_ms == 0
+
+
+def test_b24_timing_pass_rejects_external_tracemalloc() -> None:
+    benchmark = _benchmark_module()
+    tracemalloc.start()
+    try:
+        with pytest.raises(RuntimeError, match="tracemalloc to be disabled"):
+            benchmark._sample_timing(lambda: SimpleNamespace(candidates=()), child_pid=None)
+        with pytest.raises(RuntimeError, match="tracemalloc to be disabled"):
+            asyncio.run(benchmark._async_sample_timing(lambda: _empty_awaitable(), child_pid=None))
+    finally:
+        tracemalloc.stop()
+
+
+async def _empty_awaitable() -> SimpleNamespace:
+    return SimpleNamespace(candidates=())

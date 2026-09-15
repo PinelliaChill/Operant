@@ -1,0 +1,1696 @@
+{
+  "schema": "operant.b2_4.memory-performance-report.v1",
+  "implementation": {
+    "source_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery",
+    "head": "9f0938ca920780b247298c1cc7198cf941ec4bb6",
+    "retrieval_policy_version": "mp3.v1",
+    "manager_entrypoint": "MemoryManager.search"
+  },
+  "dataset": {
+    "fixture_path": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery/tests/fixtures/b2_1/memory_baseline.json",
+    "file_sha256": "d4ab1378850a4dbc0691a0cb12f79e3cbb9ec5af225887e849889ad1e3858895",
+    "dataset_id": "b2_1_memory_baseline",
+    "version": 1,
+    "memory_count": 31,
+    "case_count": 42,
+    "split_counts": {
+      "development": 30,
+      "holdout": 12
+    }
+  },
+  "run": {
+    "repetitions": 2,
+    "requested_modes": [
+      "direct",
+      "trusted_in_process",
+      "isolated"
+    ],
+    "modes": [
+      "direct",
+      "trusted_in_process",
+      "isolated"
+    ],
+    "database": "temporary isolated SQLite per mode",
+    "user_database_read": false,
+    "environment_file_read": false,
+    "network": false,
+    "model_calls": 0,
+    "model_usage": "unknown",
+    "python": "3.13.3",
+    "platform": "macOS-15.7.2-arm64-arm-64bit-Mach-O"
+  },
+  "policy": {
+    "version": "mp3.v1",
+    "candidate_limit": 40,
+    "diversity_limit": 3,
+    "max_query_groups": 8,
+    "max_terms_per_group": 12
+  },
+  "old_baseline": {
+    "implementation": {
+      "worktree": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery",
+      "source_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/delivery",
+      "base_head": "ecb00437e9a44a5e79d54e8cf4944fd0d456bf02",
+      "head": "9f0938ca920780b247298c1cc7198cf941ec4bb6"
+    },
+    "quality": {
+      "old_direct_query": {
+        "all": {
+          "case_count": 42,
+          "macro_precision": 0.7143,
+          "macro_recall": 0.7143,
+          "expected_items": 38,
+          "retrieved_items": 24,
+          "relevant_items": 24,
+          "security_violations": []
+        },
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.7,
+          "macro_recall": 0.7,
+          "expected_items": 30,
+          "retrieved_items": 19,
+          "relevant_items": 19,
+          "security_violations": []
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.75,
+          "macro_recall": 0.75,
+          "expected_items": 8,
+          "retrieved_items": 5,
+          "relevant_items": 5,
+          "security_violations": []
+        }
+      },
+      "old_recent_entries": {
+        "all": {
+          "case_count": 42,
+          "macro_precision": 0.0873,
+          "macro_recall": 0.3175,
+          "expected_items": 38,
+          "retrieved_items": 206,
+          "relevant_items": 17,
+          "security_violations": []
+        },
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.0889,
+          "macro_recall": 0.2944,
+          "expected_items": 30,
+          "retrieved_items": 146,
+          "relevant_items": 12,
+          "security_violations": []
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.0833,
+          "macro_recall": 0.375,
+          "expected_items": 8,
+          "retrieved_items": 60,
+          "relevant_items": 5,
+          "security_violations": []
+        }
+      }
+    },
+    "timing": {
+      "old_direct_query": {
+        "bootstrap_ms": 844.1382,
+        "bootstrap_scope": "Service construction, SQLite initialize/migrations, role/session, fixture writes; not process startup",
+        "first_query_ms": 2.7719,
+        "formal_timing_scope": "wall/CPU measured with tracemalloc disabled",
+        "allocation_scope": "separate tracemalloc allocation pass in an independent temporary store; wall/CPU/quality come only from the timing pass",
+        "wall_p50_ms": 2.5196,
+        "wall_p95_ms": 7.0919,
+        "warm_wall_p50_ms": 2.5196,
+        "warm_wall_p95_ms": 7.0919,
+        "warm_cpu_p50_ms": 2.427,
+        "warm_cpu_p95_ms": 2.982,
+        "warm_peak_alloc_p50_kib": 3.3945,
+        "warm_peak_alloc_p95_kib": 7.4834,
+        "rss_high_water_kib": 75888.0,
+        "rss_scope": "timing-pass process high-water; allocation pass uses a separate temporary store",
+        "sample_count": 84,
+        "repetitions_per_case": 2
+      },
+      "old_recent_entries": {
+        "bootstrap_ms": 816.5714,
+        "bootstrap_scope": "Service construction, SQLite initialize/migrations, role/session, fixture writes; not process startup",
+        "first_query_ms": 2.4274,
+        "formal_timing_scope": "wall/CPU measured with tracemalloc disabled",
+        "allocation_scope": "separate tracemalloc allocation pass in an independent temporary store; wall/CPU/quality come only from the timing pass",
+        "wall_p50_ms": 2.4632,
+        "wall_p95_ms": 2.647,
+        "warm_wall_p50_ms": 2.4635,
+        "warm_wall_p95_ms": 2.647,
+        "warm_cpu_p50_ms": 2.265,
+        "warm_cpu_p95_ms": 2.465,
+        "warm_peak_alloc_p50_kib": 22.3164,
+        "warm_peak_alloc_p95_kib": 22.3164,
+        "rss_high_water_kib": 78848.0,
+        "rss_scope": "timing-pass process high-water; allocation pass uses a separate temporary store",
+        "sample_count": 84,
+        "repetitions_per_case": 2
+      }
+    },
+    "model_calls": 0,
+    "model_usage": "unknown"
+  },
+  "results": {
+    "direct": {
+      "mode": "direct",
+      "status": "completed",
+      "algorithm": "MemoryManager.search -> b24_fts + frozen_versions -> retrieve_memories",
+      "setup_ms": 81.9887,
+      "metrics": {
+        "sample_count": 84,
+        "first_query_ms": 3.0474,
+        "warm_wall_p50_ms": 1.3508,
+        "warm_wall_p95_ms": 3.6094,
+        "warm_cpu_p50_ms": 0.946,
+        "warm_cpu_p95_ms": 2.345,
+        "warm_peak_alloc_p50_kib": 30.6982,
+        "warm_peak_alloc_p95_kib": 84.3379,
+        "parent_rss_high_water_kib": 79792.0,
+        "child_cpu_p50_ms": null,
+        "child_cpu_p95_ms": null,
+        "child_rss_high_water_kib": null,
+        "rss_scope": "parent-process high-water at formal timing sample boundary; child metrics separate when available",
+        "cpu_scope": "formal parent-process call without tracemalloc; child metrics separate",
+        "allocation_scope": "parent-process tracemalloc in an independent full allocation pass; child allocation unknown; allocation wall/CPU/RPC/quality are reported separately"
+      },
+      "quality": {
+        "case_count": 42,
+        "repetitions": 2,
+        "macro_precision": 0.7353,
+        "macro_recall": 0.881,
+        "forbidden_hits": {},
+        "forbidden_hit_count": 0,
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.6628,
+          "macro_recall": 0.8667
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.9167,
+          "macro_recall": 0.9167
+        }
+      },
+      "model_calls": 0,
+      "model_usage": "unknown",
+      "token_usage": "unknown; token_budget=0 and no provider call",
+      "cost_usd": "unknown",
+      "rpc": {
+        "frames": 0,
+        "bytes": 0,
+        "nested_host_api_calls": 0,
+        "measurement": "no Host transport"
+      },
+      "phase_timing": {
+        "manager_search": {
+          "calls": 84,
+          "total_ms": 141.7653,
+          "average_ms": 1.6877
+        },
+        "host_invoke": {
+          "calls": 0,
+          "total_ms": 0.0
+        },
+        "host_minus_manager_ms": 0.0,
+        "registry_assert_lease": {
+          "calls": 0,
+          "total_ms": 0.0
+        },
+        "registry_verify_package": {
+          "calls": 0,
+          "total_ms": 0.0
+        },
+        "registry_verify_certification": {
+          "calls": 0,
+          "total_ms": 0.0
+        },
+        "interpretation": "direct reference executes the production MemoryManager.search entrypoint"
+      },
+      "returned_ids": [
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        [],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        []
+      ],
+      "manager_search_calls": 84,
+      "manager_search_ms": 141.76529299999993,
+      "allocation_pass": {
+        "setup_ms": 77.5475,
+        "sample_count": 84,
+        "manager_search_calls": 84,
+        "rpc": {
+          "frames": 0,
+          "bytes": 0,
+          "nested_host_api_calls": 0,
+          "measurement": "no Host transport"
+        },
+        "returned_ids_match_timing": true,
+        "scope": "independent temporary SQLite and full fixture pass under tracemalloc; allocation wall/CPU/quality are excluded from the timing pass"
+      }
+    },
+    "trusted_in_process": {
+      "mode": "trusted_in_process",
+      "status": "completed",
+      "algorithm": "PluginHost -> memory-standard -> Host.search -> MemoryManager.search -> b24_fts",
+      "admission": {
+        "mode": "trusted_in_process",
+        "certification_id": "cert.b24.benchmark.trusted_in_process.timing",
+        "isolation_evidence_ref": null
+      },
+      "setup_ms": 101.0373,
+      "host_startup": {
+        "spawn_ms": 5.1797,
+        "health_handshake_ms": 3.5149,
+        "total_ms": 8.6946,
+        "response": {
+          "request_id": "plugin_request_7bc375e274ac406787371ecce181baab",
+          "sdk_version": "operant-memory-sdk.v1",
+          "state": "ready",
+          "checkpoint_ref": null
+        },
+        "rpc": {
+          "frames": 0,
+          "bytes": 0
+        }
+      },
+      "metrics": {
+        "sample_count": 84,
+        "first_query_ms": 4.604,
+        "warm_wall_p50_ms": 2.5755,
+        "warm_wall_p95_ms": 5.1376,
+        "warm_cpu_p50_ms": 1.83,
+        "warm_cpu_p95_ms": 3.54,
+        "warm_peak_alloc_p50_kib": 43.4492,
+        "warm_peak_alloc_p95_kib": 97.3125,
+        "parent_rss_high_water_kib": 79792.0,
+        "child_cpu_p50_ms": null,
+        "child_cpu_p95_ms": null,
+        "child_rss_high_water_kib": null,
+        "rss_scope": "parent-process high-water at formal timing sample boundary; child metrics separate when available",
+        "cpu_scope": "formal parent-process call without tracemalloc; child metrics separate",
+        "allocation_scope": "parent-process tracemalloc in an independent full allocation pass; child allocation unknown; allocation wall/CPU/RPC/quality are reported separately"
+      },
+      "phase_timing": {
+        "manager_search": {
+          "calls": 84,
+          "total_ms": 151.226,
+          "average_ms": 1.8003
+        },
+        "host_invoke": {
+          "calls": 84,
+          "total_ms": 249.9285
+        },
+        "registry_assert_lease": {
+          "calls": 588,
+          "total_ms": 2.287
+        },
+        "registry_verify_package": {
+          "calls": 588,
+          "total_ms": 67.1206
+        },
+        "registry_verify_certification": {
+          "calls": 588,
+          "total_ms": 72.4054
+        },
+        "host_minus_manager_ms": 98.7025,
+        "interpretation": "registry package digest work is included in verify_package; host_minus_manager also includes typed validation, callbacks, and transport; wall/CPU come from the timing pass and allocation is measured in an independent pass"
+      },
+      "quality": {
+        "case_count": 42,
+        "repetitions": 2,
+        "macro_precision": 0.7353,
+        "macro_recall": 0.881,
+        "forbidden_hits": {},
+        "forbidden_hit_count": 0,
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.6628,
+          "macro_recall": 0.8667
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.9167,
+          "macro_recall": 0.9167
+        }
+      },
+      "model_calls": 0,
+      "model_usage": "unknown",
+      "token_usage": "unknown; token_budget=0 and no provider call",
+      "cost_usd": "unknown",
+      "rpc": {
+        "frames": 0,
+        "bytes": 0,
+        "outgoing_frames": 0,
+        "outgoing_bytes": 0,
+        "incoming_frames": 0,
+        "incoming_bytes": 0,
+        "callback_request_frames": 0,
+        "callback_request_bytes": 0,
+        "nested_host_api_calls": 84,
+        "measurement": "in-process calls are not RPC frames"
+      },
+      "returned_ids": [
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        [],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        []
+      ],
+      "manager_search_calls": 84,
+      "manager_search_ms": 151.22600099999994,
+      "allocation_pass": {
+        "setup_ms": 105.7077,
+        "host_startup": {
+          "spawn_ms": 6.729,
+          "health_handshake_ms": 5.376,
+          "total_ms": 12.105,
+          "response": {
+            "request_id": "plugin_request_4b6cf25ab3bf465e9931e6489125d912",
+            "sdk_version": "operant-memory-sdk.v1",
+            "state": "ready",
+            "checkpoint_ref": null
+          },
+          "rpc": {
+            "frames": 0,
+            "bytes": 0
+          }
+        },
+        "sample_count": 84,
+        "manager_search_calls": 84,
+        "rpc": {
+          "frames": 0,
+          "bytes": 0,
+          "outgoing_frames": 0,
+          "outgoing_bytes": 0,
+          "incoming_frames": 0,
+          "incoming_bytes": 0,
+          "callback_request_frames": 0,
+          "callback_request_bytes": 0,
+          "nested_host_api_calls": 84,
+          "measurement": "in-process calls are not RPC frames"
+        },
+        "phase_timing": {
+          "manager_search": {
+            "calls": 84,
+            "total_ms": 203.8427,
+            "average_ms": 2.4267
+          },
+          "host_invoke": {
+            "calls": 84,
+            "total_ms": 0.0
+          },
+          "registry_assert_lease": {
+            "calls": 588,
+            "total_ms": 4.6476
+          },
+          "registry_verify_package": {
+            "calls": 588,
+            "total_ms": 180.1744
+          },
+          "registry_verify_certification": {
+            "calls": 588,
+            "total_ms": 201.5736
+          },
+          "host_minus_manager_ms": -203.8427,
+          "interpretation": "registry package digest work is included in verify_package; host_minus_manager also includes typed validation, callbacks, and transport; wall/CPU come from the timing pass and allocation is measured in an independent pass"
+        },
+        "returned_ids_match_timing": true,
+        "scope": "independent temporary SQLite, registry, and Host pass under tracemalloc; allocation wall/CPU/RPC/quality are reported separately"
+      }
+    },
+    "isolated": {
+      "mode": "isolated",
+      "status": "completed",
+      "algorithm": "PluginHost -> memory-standard -> Host.search -> MemoryManager.search -> b24_fts",
+      "admission": {
+        "mode": "isolated",
+        "certification_id": null,
+        "isolation_evidence_ref": "sandbox-exec:4062a1bcfb8db7fff515d05f70e358921109c6b74ea6f7f7f6e9804b693fd18d"
+      },
+      "setup_ms": 197.357,
+      "host_startup": {
+        "spawn_ms": 33.6815,
+        "health_handshake_ms": 69.835,
+        "total_ms": 103.5165,
+        "response": {
+          "request_id": "plugin_request_b42bfac808fa48b7a1c20e3803c8bbc7",
+          "sdk_version": "operant-memory-sdk.v1",
+          "state": "ready",
+          "checkpoint_ref": null
+        },
+        "rpc": {
+          "frames": 2,
+          "bytes": 891
+        }
+      },
+      "metrics": {
+        "sample_count": 84,
+        "first_query_ms": 6.1077,
+        "warm_wall_p50_ms": 3.7541,
+        "warm_wall_p95_ms": 6.586,
+        "warm_cpu_p50_ms": 2.703,
+        "warm_cpu_p95_ms": 4.956,
+        "warm_peak_alloc_p50_kib": 47.6504,
+        "warm_peak_alloc_p95_kib": 103.0566,
+        "parent_rss_high_water_kib": 79792.0,
+        "child_cpu_p50_ms": 0.0,
+        "child_cpu_p95_ms": 0.0,
+        "child_rss_high_water_kib": 22704.0,
+        "rss_scope": "parent-process high-water at formal timing sample boundary; child metrics separate when available",
+        "cpu_scope": "formal parent-process call without tracemalloc; child metrics separate",
+        "allocation_scope": "parent-process tracemalloc in an independent full allocation pass; child allocation unknown; allocation wall/CPU/RPC/quality are reported separately"
+      },
+      "phase_timing": {
+        "manager_search": {
+          "calls": 84,
+          "total_ms": 185.1327,
+          "average_ms": 2.204
+        },
+        "host_invoke": {
+          "calls": 84,
+          "total_ms": 360.2774
+        },
+        "registry_assert_lease": {
+          "calls": 336,
+          "total_ms": 4.9308
+        },
+        "registry_verify_package": {
+          "calls": 336,
+          "total_ms": 51.8512
+        },
+        "registry_verify_certification": {
+          "calls": 336,
+          "total_ms": 57.0865
+        },
+        "host_minus_manager_ms": 175.1447,
+        "interpretation": "registry package digest work is included in verify_package; host_minus_manager also includes typed validation, callbacks, and transport; wall/CPU come from the timing pass and allocation is measured in an independent pass"
+      },
+      "quality": {
+        "case_count": 42,
+        "repetitions": 2,
+        "macro_precision": 0.7353,
+        "macro_recall": 0.881,
+        "forbidden_hits": {},
+        "forbidden_hit_count": 0,
+        "development": {
+          "case_count": 30,
+          "macro_precision": 0.6628,
+          "macro_recall": 0.8667
+        },
+        "holdout": {
+          "case_count": 12,
+          "macro_precision": 0.9167,
+          "macro_recall": 0.9167
+        }
+      },
+      "model_calls": 0,
+      "model_usage": "unknown",
+      "token_usage": "unknown; token_budget=0 and no provider call",
+      "cost_usd": "unknown",
+      "rpc": {
+        "frames": 336,
+        "bytes": 191306,
+        "outgoing_frames": 168,
+        "outgoing_bytes": 95443,
+        "incoming_frames": 84,
+        "incoming_bytes": 35714,
+        "callback_request_frames": 84,
+        "callback_request_bytes": 60149,
+        "nested_host_api_calls": 84,
+        "measurement": "actual stdio JSON-RPC frames; callback request bytes reconstructed from typed payload"
+      },
+      "returned_ids": [
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        [],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_gateway"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check",
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_uv_check",
+          "m_alpha_ruff",
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_context",
+          "m_alpha_identifier"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_schema"
+        ],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_recent_safe"
+        ],
+        [],
+        [],
+        [],
+        [
+          "m_alpha_malicious"
+        ],
+        [],
+        [
+          "m_alpha_branch_poetry"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_ruff",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_beta_uv",
+          "m_beta_pytest"
+        ],
+        [
+          "m_beta_pytest"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_frontend"
+        ],
+        [
+          "m_alpha_recent_safe"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_late",
+          "m_alpha_branch_uv",
+          "m_alpha_recent_safe",
+          "m_alpha_cross_task",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_alpha_cross_task",
+          "m_alpha_ruff"
+        ],
+        [
+          "m_alpha_branch_uv",
+          "m_alpha_ruff",
+          "m_alpha_cross_task",
+          "m_alpha_late",
+          "m_alpha_uv_check"
+        ],
+        [
+          "m_gamma_uv"
+        ],
+        [],
+        [
+          "m_gamma_gateway"
+        ],
+        [
+          "m_gamma_context",
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_identifier"
+        ],
+        [
+          "m_gamma_branch"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [
+          "m_gamma_late"
+        ],
+        []
+      ],
+      "manager_search_calls": 84,
+      "manager_search_ms": 185.13271600000004,
+      "allocation_pass": {
+        "setup_ms": 191.603,
+        "host_startup": {
+          "spawn_ms": 32.7914,
+          "health_handshake_ms": 67.0742,
+          "total_ms": 99.8656,
+          "response": {
+            "request_id": "plugin_request_cef9d06c1d414d0c91013a7bb5e8fdac",
+            "sdk_version": "operant-memory-sdk.v1",
+            "state": "ready",
+            "checkpoint_ref": null
+          },
+          "rpc": {
+            "frames": 2,
+            "bytes": 895
+          }
+        },
+        "sample_count": 84,
+        "manager_search_calls": 84,
+        "rpc": {
+          "frames": 336,
+          "bytes": 191978,
+          "outgoing_frames": 168,
+          "outgoing_bytes": 95779,
+          "incoming_frames": 84,
+          "incoming_bytes": 35714,
+          "callback_request_frames": 84,
+          "callback_request_bytes": 60485,
+          "nested_host_api_calls": 84,
+          "measurement": "actual stdio JSON-RPC frames; callback request bytes reconstructed from typed payload"
+        },
+        "phase_timing": {
+          "manager_search": {
+            "calls": 84,
+            "total_ms": 209.0685,
+            "average_ms": 2.4889
+          },
+          "host_invoke": {
+            "calls": 84,
+            "total_ms": 0.0
+          },
+          "registry_assert_lease": {
+            "calls": 336,
+            "total_ms": 2.9107
+          },
+          "registry_verify_package": {
+            "calls": 336,
+            "total_ms": 107.7999
+          },
+          "registry_verify_certification": {
+            "calls": 336,
+            "total_ms": 120.6585
+          },
+          "host_minus_manager_ms": -209.0685,
+          "interpretation": "registry package digest work is included in verify_package; host_minus_manager also includes typed validation, callbacks, and transport; wall/CPU come from the timing pass and allocation is measured in an independent pass"
+        },
+        "returned_ids_match_timing": true,
+        "scope": "independent temporary SQLite, registry, and Host pass under tracemalloc; allocation wall/CPU/RPC/quality are reported separately"
+      }
+    }
+  },
+  "gates": {
+    "status": "not_passed",
+    "frozen_task_gates": {
+      "warm_wall_p95_max_regression_ratio": 1.25,
+      "first_query_wall_max_regression_ratio": 1.5,
+      "warm_cpu_p95_max_regression_ratio": 1.25,
+      "warm_peak_alloc_p95_max_regression_ratio": 1.5,
+      "absolute_wall_slack_ms": 2.0,
+      "absolute_peak_alloc_slack_kib": 256.0
+    },
+    "frozen_host_gates": {
+      "future_host_in_process": {
+        "warm_wall_p95_max_regression_ratio": 1.25,
+        "bootstrap_wall_max_regression_ratio": 1.5,
+        "first_query_wall_max_regression_ratio": 1.5,
+        "warm_cpu_p95_max_regression_ratio": 1.25,
+        "warm_peak_alloc_p95_max_regression_ratio": 1.5
+      },
+      "future_host_isolated": {
+        "warm_wall_p95_max_regression_ratio": 2.0,
+        "bootstrap_wall_max_regression_ratio": 3.0,
+        "first_query_wall_max_regression_ratio": 3.0,
+        "warm_cpu_p95_max_regression_ratio": 2.0,
+        "warm_peak_alloc_p95_max_regression_ratio": 2.0
+      }
+    },
+    "direct": {
+      "passed": true,
+      "checks": {
+        "holdout_recall_not_below_old_direct": true,
+        "forbidden_hits_zero": true,
+        "warm_wall_p95": {
+          "actual": 3.6094,
+          "reference": 7.0919,
+          "ratio": 0.5089,
+          "ratio_limit": 1.25,
+          "slack": 2.0,
+          "unit": "ms",
+          "allowed_actual": 10.8649,
+          "passed": true,
+          "status": "completed"
+        },
+        "first_query_wall": {
+          "actual": 3.0474,
+          "reference": 2.7719,
+          "ratio": 1.0994,
+          "ratio_limit": 1.5,
+          "slack": 2.0,
+          "unit": "ms",
+          "allowed_actual": 6.1578,
+          "passed": true,
+          "status": "completed"
+        },
+        "warm_cpu_p95": {
+          "actual": 2.345,
+          "reference": 2.982,
+          "ratio": 0.7864,
+          "ratio_limit": 1.25,
+          "slack": 0.0,
+          "unit": "ms",
+          "allowed_actual": 3.7275,
+          "passed": true,
+          "status": "completed"
+        },
+        "warm_peak_alloc_p95": {
+          "actual": 84.3379,
+          "reference": 7.4834,
+          "ratio": 11.27,
+          "ratio_limit": 1.5,
+          "slack": 256.0,
+          "unit": "KiB",
+          "allowed_actual": 267.2251,
+          "passed": true,
+          "status": "completed"
+        }
+      }
+    },
+    "host": {
+      "trusted_in_process": {
+        "reference": "new_direct",
+        "checks": {
+          "holdout_recall_not_below_old_direct": true,
+          "forbidden_hits_zero": true,
+          "bootstrap_wall": {
+            "actual": 101.0373,
+            "reference": 81.9887,
+            "ratio": 1.2323,
+            "ratio_limit": 1.5,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 122.983,
+            "passed": true,
+            "status": "completed"
+          },
+          "warm_wall_p95": {
+            "actual": 5.1376,
+            "reference": 3.6094,
+            "ratio": 1.4234,
+            "ratio_limit": 1.25,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 4.5118,
+            "passed": false,
+            "status": "completed"
+          },
+          "first_query_wall": {
+            "actual": 4.604,
+            "reference": 3.0474,
+            "ratio": 1.5108,
+            "ratio_limit": 1.5,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 4.5711,
+            "passed": false,
+            "status": "completed"
+          },
+          "warm_cpu_p95": {
+            "actual": 3.54,
+            "reference": 2.345,
+            "ratio": 1.5096,
+            "ratio_limit": 1.25,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 2.9313,
+            "passed": false,
+            "status": "completed"
+          },
+          "warm_peak_alloc_p95": {
+            "actual": 97.3125,
+            "reference": 84.3379,
+            "ratio": 1.1538,
+            "ratio_limit": 1.5,
+            "slack": 0.0,
+            "unit": "KiB",
+            "allowed_actual": 126.5069,
+            "passed": true,
+            "status": "completed"
+          }
+        },
+        "passed": false
+      },
+      "isolated": {
+        "reference": "new_direct",
+        "checks": {
+          "holdout_recall_not_below_old_direct": true,
+          "forbidden_hits_zero": true,
+          "bootstrap_wall": {
+            "actual": 197.357,
+            "reference": 81.9887,
+            "ratio": 2.4071,
+            "ratio_limit": 3.0,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 245.9661,
+            "passed": true,
+            "status": "completed"
+          },
+          "warm_wall_p95": {
+            "actual": 6.586,
+            "reference": 3.6094,
+            "ratio": 1.8247,
+            "ratio_limit": 2.0,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 7.2188,
+            "passed": true,
+            "status": "completed"
+          },
+          "first_query_wall": {
+            "actual": 6.1077,
+            "reference": 3.0474,
+            "ratio": 2.0042,
+            "ratio_limit": 3.0,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 9.1422,
+            "passed": true,
+            "status": "completed"
+          },
+          "warm_cpu_p95": {
+            "actual": 4.956,
+            "reference": 2.345,
+            "ratio": 2.1134,
+            "ratio_limit": 2.0,
+            "slack": 0.0,
+            "unit": "ms",
+            "allowed_actual": 4.69,
+            "passed": false,
+            "status": "completed"
+          },
+          "warm_peak_alloc_p95": {
+            "actual": 103.0566,
+            "reference": 84.3379,
+            "ratio": 1.2219,
+            "ratio_limit": 2.0,
+            "slack": 0.0,
+            "unit": "KiB",
+            "allowed_actual": 168.6758,
+            "passed": true,
+            "status": "completed"
+          }
+        },
+        "passed": false
+      }
+    },
+    "quality_reference": {
+      "old_direct_holdout_recall": 0.75,
+      "new_direct_holdout_recall": 0.9167
+    }
+  },
+  "limitations": [
+    "The fixed fixture is synthetic and cannot establish production semantic quality.",
+    "The run makes zero model calls; provider usage and end-to-end task cost are unknown.",
+    "Direct and Host parent CPU/RSS/allocation scopes differ from isolated child metrics.",
+    "Isolated callback request bytes are reconstructed from typed payloads; other stdio frames are counted at transport boundaries.",
+    "trusted_in_process Host gate failed: warm_wall_p95, first_query_wall, warm_cpu_p95",
+    "isolated Host gate failed: warm_cpu_p95"
+  ]
+}

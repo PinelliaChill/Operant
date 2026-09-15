@@ -1,0 +1,23 @@
+{
+  "scope": "Browser Live formal Artifact Board publish and scope correction on synthetic temporary Core; native Graph/Session acceptance recorded separately.",
+  "artifact": {
+    "artifact_id": "artifact_c0614c2925174245af8b1d47df18bf6f",
+    "media_type": "text/plain; charset=utf-8",
+    "published_at": "2026-09-14T07:44:54.557727Z",
+    "publisher_id": "agent_2dcb2c0ad1af461babd917f55c5f3981",
+    "recipient_ids": [
+      "agent_2dcb2c0ad1af461babd917f55c5f3981"
+    ],
+    "revision": 2,
+    "source_message_id": null,
+    "team_run_id": "team_run_4d6aea385c3248dea72af65118abd9ff",
+    "title": "B24_PRIVATE_ARTIFACT_20260914",
+    "visibility": "recipients"
+  },
+  "initial_defect": "Explicit recipients were ignored by API default team visibility; rev1 briefly visible to other synthetic member.",
+  "fix": "API now derives recipients visibility for nonempty recipient_ids; empty list remains team.",
+  "expected_other_viewer": "agent_87b262bfd5354f1397c2872b1022aee9",
+  "other_viewer_check": "pending readback confirmation",
+  "source_freeze": "desktop-freeze.json",
+  "source": "src/operant/api_phase23.py"
+}
