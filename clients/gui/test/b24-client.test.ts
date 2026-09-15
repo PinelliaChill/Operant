@@ -3,7 +3,9 @@ import test from 'node:test';
 import {
   commandResourceId,
   currentRoster,
+  filterGraphRunsByWorkspace,
   normalizeCollaborationDirectory,
+  mergeGraphRunPages,
   roleLabel,
   teamLabel,
   workflowKey,
@@ -28,12 +30,42 @@ test('B2-4 directory validation preserves Core IDs without inventing entries', (
       default_coordinator: 'reviewer',
     }],
     roles: [{ id: 'role-reviewer', name: '评审员', model_profile_id: 'profile-1', model_id: 'gpt-test', effort: 'medium' }],
+    graph_runs: [],
+    graph_runs_has_more: false, graph_runs_next_cursor: null,
   });
 
   assert.equal(directory.workflows[0]?.workflow_id, 'workflow-code-review');
   assert.equal(workflowKey(directory.workflows[0]!), 'workflow-code-review:v2');
   assert.equal(teamLabel(directory.teams[0]!), '评审员 · 1 名成员 · v1');
   assert.equal(roleLabel(directory.roles[0]!), '评审员 · gpt-test');
+});
+
+test('fresh Core directory discovers native Graph and its Team without a legacy run', () => {
+  const run = {
+    id: 'native-graph', workflow_definition_id: workflow.workflow_id,
+    workflow_definition_version: 2, workspace_or_target: '/work/current',
+    team_run_id: 'team-run-native', status: 'completed', updated_at: '2026-09-15T01:00:00Z',
+  };
+  const directory = normalizeCollaborationDirectory({
+    workflows: [workflow], roles: [], teams: [], graph_runs_has_more: true, graph_runs_next_cursor: "page-2",
+    graph_runs: [run, { ...run, id: 'other-graph', workspace_or_target: '/work/other' }],
+  });
+  assert.deepEqual(filterGraphRunsByWorkspace(directory.graph_runs, '/work/current').map((item) => [item.id, item.team_run_id]), [['native-graph', 'team-run-native']]);
+  assert.equal(directory.graph_runs_has_more, true);
+  assert.equal(directory.graph_runs.length, 2);
+  assert.deepEqual(filterGraphRunsByWorkspace(directory.graph_runs, ''), []);
+  assert.deepEqual(filterGraphRunsByWorkspace(directory.graph_runs, '/work/missing'), []);
+});
+
+test('run directory rejects old or malformed projections instead of hiding a discovery error', () => {
+  const base = { workflows: [], roles: [], teams: [] };
+  assert.throws(() => normalizeCollaborationDirectory(base), /graph_runs/);
+  assert.throws(() => normalizeCollaborationDirectory({ ...base, graph_runs: [] }), /graph_runs_has_more/);
+  assert.throws(() => normalizeCollaborationDirectory({
+    ...base, graph_runs_has_more: false,
+    graph_runs: [{ id: 'bad', workflow_definition_id: 'workflow', workflow_definition_version: 1,
+      workspace_or_target: '/work/current', team_run_id: null, status: 'made-up', updated_at: '2026-09-15T01:00:00Z' }],
+  }), /status/);
 });
 
 test('B2-4 directory validation rejects incomplete Core projections', () => {
@@ -64,4 +96,13 @@ test('current roster selects retry Agent without deleting historical rows', () =
   const rows = [next, other, old];
   assert.deepEqual(currentRoster(rows), [next, other]);
   assert.equal(rows.length, 3);
+});
+
+test('Graph pages merge without losing earlier runs or duplicating updated summaries', () => {
+  const run = { id: 'older', workflow_definition_id: 'w', workflow_definition_version: 1, workspace_or_target: '/w', team_run_id: null, status: 'completed' as const, updated_at: '2026-09-14T00:00:00Z' };
+  const newer = { ...run, id: 'newer', updated_at: '2026-09-15T00:00:00Z' };
+  const pages = mergeGraphRunPages([newer], [run, { ...newer, team_run_id: 'team' }]);
+  assert.deepEqual(pages.map((r) => r.id), ['newer', 'older']);
+  assert.equal(pages[0].team_run_id, 'team');
+  assert.throws(() => normalizeCollaborationDirectory({ workflows: [], roles: [], teams: [], graph_runs: [], graph_runs_has_more: true, graph_runs_next_cursor: null }), /翻页状态/);
 });

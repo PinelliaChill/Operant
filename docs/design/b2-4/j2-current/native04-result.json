@@ -1,0 +1,42 @@
+{
+  "recorded_by": "Codex",
+  "segment": "native04",
+  "source_unchanged": true,
+  "native_gui_published": true,
+  "native_other_viewer_empty": true,
+  "native_viewer_switch_cleared_title_and_selection": true,
+  "formal_http_views": {
+    "publisher_self_recipient": {
+      "team_run_id": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+      "artifacts": [
+        {
+          "artifact_id": "artifact_b0f94a9873cb462d943ed4f51ac8851d",
+          "team_run_id": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+          "title": "B24_NATIVE04_PRIVATE_ARTIFACT",
+          "media_type": "text/plain; charset=utf-8",
+          "publisher_id": "agent_a5742cf674c74ce2866c8f79499f1798",
+          "visibility": "recipients",
+          "recipient_ids": [
+            "agent_a5742cf674c74ce2866c8f79499f1798"
+          ],
+          "source_message_id": null,
+          "revision": 1,
+          "published_at": "2026-09-15T04:17:40.847878Z"
+        }
+      ]
+    },
+    "other_viewer": {
+      "team_run_id": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+      "artifacts": []
+    }
+  },
+  "setup": {
+    "artifact_id": "artifact_b0f94a9873cb462d943ed4f51ac8851d",
+    "team_run_id": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+    "publisher_self_recipient": "agent_a5742cf674c74ce2866c8f79499f1798",
+    "other_viewer": "agent_c761e2cd1c3d46e2b624bf21859817c7",
+    "candidate_setup": "synthetic content through ApplicationService ArtifactStore; TaskBoard application update only adds candidate reference; Artifact Board publication remains pending GUI",
+    "database": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-02/multi/core.sqlite3"
+  },
+  "status": "passed; segment ended"
+}

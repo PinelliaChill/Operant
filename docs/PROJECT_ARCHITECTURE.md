@@ -71,7 +71,7 @@ Context Composer将普通记忆作为明确不可信证据加入实际Provider�
 
 Graph 重试保留原 Session/Thread，分配新的 Agent 并收窄剩余预算；旧 Roster 留作历史，新 Roster 与任务板受让人在同一事务更新。每次 Provider 请求重新读取该成员可见的消息、任务与工件，折叠工具结果按 tool_call_id 匹配；已终止成员不能接收新消息。工件发布的非空 recipient_ids 对应 recipients 可见性，空列表对应 Team 可见性。
 
-协作目录包含Core持久化的最近100条Graph运行摘要及是否有更多记录，提供工作区、状态与Team关联，不返回运行输入/输出。正式B2-4运行不再需要依赖legacy Workflow关联才能被客户端发现；新版生成契约digest为4870482d8e34ab84caa2d4b59c3ce262bb9bffa1e20ad7233955ed5afae953bb，客户端恢复选择的接入正在验收。
+协作目录在服务端按显式workspace过滤Graph运行，每页最多100条摘要，稳定Cursor携带前页排序值以继续读取；没有workspace时仅返回既有定义目录，不返回全局运行。GUI可加载更早运行并去重，正式B2-4运行不依赖legacy关联。摘要提供状态与Team关联，不返回运行输入/输出。生成契约digest为619168f06db1d9df2ba24403a3c29d662a6daa467a4a8d0d065693d04ade1933  operant-b2-4.openapi.json；目录分页已通过定向API/GUI检查，最新原生复验待完成。工作区过滤是发现范围，不额外宣称多租户授权隔离。
 
 B2-4 命令使用自己的持久幂等 journal，避开通用投影条目数裁切；当前结果以 b24-public-result.v1 包络保存已脱敏的类型化投影，旧 journal 在重放时脱敏。空 Idempotency-Key 拒绝，重放返回同一公开结果及重放响应头。
 
@@ -81,7 +81,7 @@ Host继续检查当前租约、epoch、认证、包身份与来源授权；包di
 
 本批已有 gpt-5.6-luna 正式 Session/Graph 单、双 Agent 记忆与只读工具调用的历史验收记录。原临时实施树和环境缺失后，源码已恢复到持久隔离工作树；恢复清单中的 172 个 Core/SDK/工件增量文件及 GUI 主入口产物与原版本哈希一致。历史数据和截图尚须按证据索引核对，不把恢复过程当作新的真实模型验收。恢复树已通过记忆相关27项、Graph/API/工件31项、GUI106项/typecheck/build和SDK确定生成；完整基础门禁正在复核。
 
-性能历史报告保留集召回率0.9167高于旧基线0.75、禁用样例零泄漏，但Host性能门尚未满足；工件可见性增量的独立审查已关闭，见本批 review-artifact-closure.md。性能脚本的时延/CPU采样曾包含tracemalloc开销，正在分离测量后按原门槛重验；C完整扫描仅为诊断原型，尚未接入产品。B2-4、MP-3及基础记忆插件里程碑仍未完成。当前没有推送、合并、部署或迁移用户库。
+性能历史报告保留集召回率0.9167高于旧基线0.75、禁用样例零泄漏，但Host性能门尚未满足；工件可见性增量的独立审查已关闭，见本批 review-artifact-closure.md。性能脚本已分离无tracemalloc的时延/CPU采样与独立库分配采样，三模式两pass结果ID一致；固定门槛下direct通过、trusted/isolated仍有超限，见performance-split-01-report.json；C完整扫描仅为诊断原型，尚未接入产品。B2-4、MP-3及基础记忆插件里程碑仍未完成。当前没有推送、合并、部署或迁移用户库。
 
 
 ### B2-3 / MP-2 记忆与管理集成（2026-09-13，已完成本批验收）

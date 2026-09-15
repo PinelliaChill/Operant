@@ -10,5 +10,16 @@
     "native-context-controls.json": "4ae66cf2b4e388bfbf9f4d7117d177e80c6b3a6e47a693242979a59338da5e9b",
     "multi-readback.json": "eecfb4613af4ff1181428ebac5486af934b9f48a423321cf87b05c5df6cb0fde",
     "single.json": "4a3f86a9222a90b86688c978d322deee8ef88e1a1c34915761df9b2e770b942c"
+  },
+  "native03": {
+    "result": "native03-native-readback.json",
+    "freeze": "native03-freeze.json",
+    "app": "native03-native-app.json",
+    "scope": "current Graph directory GUI delta; task revision, mailbox, SSE, widths/focus and disconnect; no new model calls"
+  },
+  "native04": {
+    "result": "native04-result.json",
+    "freeze": "native04-freeze.json",
+    "scope": "native self-recipient Artifact publication, other viewer empty, formal HTTP readback; ended before directory pagination fixes"
   }
 }

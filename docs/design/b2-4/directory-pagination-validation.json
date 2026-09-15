@@ -1,0 +1,22 @@
+{
+  "recorded_by": "Codex",
+  "scope": "workspace-scoped Graph discovery and stable keyset pagination; no workspace returns definitions only",
+  "source_hashes": {
+    "src/operant/api_b2_4.py": "47de5bb514b6101d7059112029e7e23ca4da4755bfc86d25f6d5b334cba50230",
+    "src/operant/contracts/b2_4.py": "a88dcf603f2715a0a3c897eacce6074a9f7ca4e24094ce6e02eb6f2c914a51a5",
+    "tests/test_b24_graph_api.py": "ba522ba5e06ae569a6953c97fd83b7a6c404192a823e4c42370b5b3c5d7d4a8b",
+    "sdk/protocol/schema/operant-b2-4.openapi.json": "f83c51b7588b94dfd54c1ad1e5d84fb307daa7cbd65b801d9f4749edb2f338c2",
+    "sdk/python_client/b2_4_generated.py": "e4de63f475b50bed371efeb9795ef444b3da79c59a454afbf3e0cdbc92c7a6a7",
+    "sdk/typescript-client/b2_4.generated.ts": "d5f4ace12e7bab1563dfb3dbf1c1e5a56f973d9d90214b445b694206c26b98b3",
+    "clients/gui/src/features/collab/LiveGraphTeamView.tsx": "4f87a552b3c4904ea38e9790038a59fda2a258f7b5958d28cb24d038c0339442",
+    "clients/gui/src/features/collab/b24-client.ts": "cafecdab7e5b6384e681efb8c52ee8067d7754d1f17e4cc1ecb3c1607611f8df",
+    "clients/gui/test/b24-client.test.ts": "449a9584472a8ab79b085c6cb612ae4182f451425d5918f0b8af28f58c6e23b0"
+  },
+  "schema_digest": "619168f06db1d9df2ba24403a3c29d662a6daa467a4a8d0d065693d04ade1933  operant-b2-4.openapi.json",
+  "tests": "13 API cases, including two workspaces with101runs each, pagination, foreign/malformed cursors and changed anchor;109GUI tests;typecheck/build/mypy/ruff check/diff check passed",
+  "limits": [
+    "Latest native pagination UI still to verify; native03/native04 cover earlier unchanged flows.",
+    "Full backend gates required after final remaining Core changes.",
+    "Workspace query scopes run discovery; it is not a new tenant authorization boundary."
+  ]
+}

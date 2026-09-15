@@ -8,7 +8,12 @@ import type * as B24 from '../../../../../sdk/typescript-client/b2_4.generated';
 export type CollaborationRole = B24.CollaborationRole;
 export type CollaborationTeamMember = B24.TeamMember;
 export type CollaborationTeam = B24.TeamDefinition;
-export type CollaborationDirectory = B24.CollaborationDirectory;
+export type CollaborationGraphRun = B24.CollaborationGraphRun;
+export type CollaborationDirectory = Omit<B24.CollaborationDirectory, 'graph_runs' | 'graph_runs_has_more' | 'graph_runs_next_cursor'> & {
+  graph_runs: CollaborationGraphRun[];
+  graph_runs_has_more: boolean;
+  graph_runs_next_cursor: string | null;
+};
 export type B24Command = B24.B24Command;
 export type B24Result = B24.B24Result;
 export type B24ClientLike = Pick<B24.B24Client, 'getCollaborationDirectory' | 'execute'>;
@@ -56,6 +61,47 @@ function requiredArray(value: Record<string, unknown>, key: string, label: strin
   return value[key] as unknown[];
 }
 
+function requiredBoolean(value: Record<string, unknown>, key: string, label: string): boolean {
+  if (typeof value[key] !== 'boolean') throw new Error(`${label} 缺少 ${key}。`);
+  return value[key] as boolean;
+}
+
+const GRAPH_RUN_STATUSES: readonly B24.GraphRunStatus[] = [
+  'created', 'queued', 'running', 'waiting_input', 'waiting_approval',
+  'interrupted', 'manual_reconcile_required', 'completed', 'failed', 'cancelled',
+];
+
+function graphRunSummary(raw: unknown): CollaborationGraphRun {
+  const run = object(raw, 'Graph Run 摘要');
+  const id = requiredString(run, 'id', 'Graph Run 摘要');
+  const workflowId = requiredString(run, 'workflow_definition_id', `Graph Run ${id}`);
+  const version = run.workflow_definition_version;
+  if (!Number.isInteger(version) || Number(version) < 1) {
+    throw new Error(`Graph Run ${id} 的 workflow_definition_version 无效。`);
+  }
+  const workspace = run.workspace_or_target;
+  if (workspace !== null && typeof workspace !== 'string') {
+    throw new Error(`Graph Run ${id} 的 workspace_or_target 无效。`);
+  }
+  const teamRunId = run.team_run_id;
+  if (teamRunId !== null && typeof teamRunId !== 'string') {
+    throw new Error(`Graph Run ${id} 的 team_run_id 无效。`);
+  }
+  if (typeof run.status !== 'string' || !GRAPH_RUN_STATUSES.includes(run.status as B24.GraphRunStatus)) {
+    throw new Error(`Graph Run ${id} 的 status 无效。`);
+  }
+  const updatedAt = requiredString(run, 'updated_at', `Graph Run ${id}`);
+  return {
+    id,
+    workflow_definition_id: workflowId,
+    workflow_definition_version: Number(version),
+    workspace_or_target: workspace as string | null,
+    team_run_id: teamRunId as string | null,
+    status: run.status as B24.GraphRunStatus,
+    updated_at: updatedAt,
+  };
+}
+
 /** Validate the Core projection once at the boundary; never invent IDs. */
 export function normalizeCollaborationDirectory(value: unknown): CollaborationDirectory {
   const projection = object(value, '协作目录');
@@ -91,7 +137,41 @@ export function normalizeCollaborationDirectory(value: unknown): CollaborationDi
     requiredString(team, 'default_coordinator', `Team ${id}`);
     return { ...team, members } as unknown as CollaborationTeam;
   });
-  return { workflows, teams, roles };
+  const graphRuns = requiredArray(projection, 'graph_runs', '协作目录').map(graphRunSummary);
+  const graphRunsHasMore = requiredBoolean(projection, 'graph_runs_has_more', '协作目录');
+  const cursor = projection.graph_runs_next_cursor;
+  if (cursor !== null && (typeof cursor !== 'string' || !cursor)) throw new Error('协作目录的翻页 Cursor 无效。');
+  if (graphRunsHasMore !== (cursor !== null)) throw new Error('协作目录的翻页状态不一致。');
+  return { workflows, teams, roles, graph_runs: graphRuns, graph_runs_has_more: graphRunsHasMore, graph_runs_next_cursor: cursor as string | null };
+}
+
+export function filterGraphRunsByWorkspace(runs: CollaborationGraphRun[], workspace: string): CollaborationGraphRun[] {
+  const currentWorkspace = workspace.trim();
+  if (!currentWorkspace) return [];
+  return runs
+    .filter((run) => run.workspace_or_target === currentWorkspace)
+    .slice()
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+}
+
+export function graphRunSummaryFromProjection(run: {
+  id: string;
+  workflow_definition_id: string;
+  workflow_definition_version: number;
+  workspace_or_target?: string | null;
+  team_run_id?: string | null;
+  status: B24.GraphRunStatus;
+  updated_at: string;
+}): CollaborationGraphRun {
+  return {
+    id: run.id,
+    workflow_definition_id: run.workflow_definition_id,
+    workflow_definition_version: run.workflow_definition_version,
+    workspace_or_target: run.workspace_or_target ?? null,
+    team_run_id: run.team_run_id ?? null,
+    status: run.status,
+    updated_at: run.updated_at,
+  };
 }
 
 export function commandResourceId(result: B24Result, label: string): string {
@@ -111,4 +191,11 @@ export function currentRoster<T extends { member_id: string; joined_at?: string 
     if (!previous || (entry.joined_at ?? '') > (previous.joined_at ?? '')) members.set(entry.member_id, entry);
   }
   return [...members.values()];
+}
+
+/** Keyset pages can overlap when a run is updated; retain one current summary per ID. */
+export function mergeGraphRunPages(current: CollaborationGraphRun[], incoming: CollaborationGraphRun[]): CollaborationGraphRun[] {
+  const byId = new Map(current.map((run) => [run.id, run]));
+  incoming.forEach((run) => byId.set(run.id, run));
+  return [...byId.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id));
 }

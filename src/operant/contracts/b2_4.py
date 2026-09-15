@@ -54,6 +54,7 @@ class CollaborationDirectory(B24Model):
     roles: list[CollaborationRole]
     graph_runs: list[CollaborationGraphRun] = Field(default_factory=list, max_length=100)
     graph_runs_has_more: bool = False
+    graph_runs_next_cursor: str | None = None
 
 
 class B24Command(B24Model):

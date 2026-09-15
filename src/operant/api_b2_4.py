@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Response
 
 from operant.api_b2_3 import _bounded_projection
 from operant.application.service import ApplicationService
@@ -138,7 +140,9 @@ def install_b2_4_routes(app: FastAPI, service: ApplicationService) -> None:
     app.router.on_shutdown.insert(0, shutdown)
     lock = asyncio.Lock()
 
-    def directory() -> CollaborationDirectory:
+    def directory(
+        workspace: str | None = None, cursor: str | None = None
+    ) -> CollaborationDirectory:
         with service.store._connect() as c:
             workflows = [
                 WorkflowDefinition.model_validate_json(r["body"])
@@ -150,13 +154,46 @@ def install_b2_4_routes(app: FastAPI, service: ApplicationService) -> None:
                 TeamDefinition.model_validate_json(r["body"])
                 for r in c.execute("SELECT body FROM team_definitions ORDER BY team_id,version")
             ]
-            graph_runs = [
-                GraphWorkflowRun.model_validate_json(row["body"])
-                for row in c.execute(
-                    "SELECT body FROM graph_workflow_runs "
-                    "ORDER BY updated_at DESC,id DESC LIMIT 101"
-                )
-            ]
+            # Definitions are owner-wide, but run discovery is explicitly scoped.
+            # No workspace means a definitions-only response, never global runs.
+            graph_runs = []
+            next_cursor = None
+            if cursor is not None and workspace is None:
+                raise HTTPException(status_code=422, detail="Graph cursor requires workspace")
+            if workspace is not None:
+                predicate = "json_extract(body, '$.workspace_or_target') = ?"
+                parameters: list[Any] = [workspace]
+                if cursor is not None:
+                    try:
+                        anchor = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+                        if (
+                            not isinstance(anchor, list)
+                            or len(anchor) != 3
+                            or not all(isinstance(value, str) and value for value in anchor)
+                            or anchor[0] != workspace
+                            or len(anchor[1]) > 64
+                            or len(anchor[2]) > 300
+                        ):
+                            raise ValueError("invalid cursor")
+                    except (ValueError, UnicodeError, binascii.Error) as exc:
+                        raise HTTPException(
+                            status_code=422, detail="Invalid Graph directory cursor"
+                        ) from exc
+                    predicate += " AND (updated_at < ? OR (updated_at = ? AND id < ?))"
+                    parameters.extend([anchor[1], anchor[1], anchor[2]])
+                rows = c.execute(
+                    "SELECT id,updated_at,body FROM graph_workflow_runs WHERE "
+                    + predicate
+                    + " ORDER BY updated_at DESC,id DESC LIMIT 101",
+                    parameters,
+                ).fetchall()
+                graph_runs = [GraphWorkflowRun.model_validate_json(row["body"]) for row in rows]
+                if len(rows) > 100:
+                    # Capture ordering values, not a mutable row lookup on the next page.
+                    anchor = [workspace, rows[99]["updated_at"], rows[99]["id"]]
+                    next_cursor = base64.urlsafe_b64encode(
+                        json.dumps(anchor, ensure_ascii=False).encode()
+                    ).decode()
         roles = []
         for role in service.list_roles():
             profile = service.get_model_profile(role.model_profile_id)
@@ -186,6 +223,7 @@ def install_b2_4_routes(app: FastAPI, service: ApplicationService) -> None:
                 for run in graph_runs[:100]
             ],
             graph_runs_has_more=len(graph_runs) > 100,
+            graph_runs_next_cursor=next_cursor,
         )
 
     @app.get(
@@ -193,8 +231,11 @@ def install_b2_4_routes(app: FastAPI, service: ApplicationService) -> None:
         response_model=CollaborationDirectory,
         operation_id="getB24Collaboration",
     )
-    def get_collaboration_directory() -> Any:
-        return _bounded_projection(directory())
+    def get_collaboration_directory(
+        workspace: str | None = Query(default=None, min_length=1, max_length=4096),
+        cursor: str | None = Query(default=None, min_length=1, max_length=32768),
+    ) -> Any:
+        return _bounded_projection(directory(workspace, cursor))
 
     @app.get(
         "/v1/b2-4/context/{session_id}",

@@ -1,0 +1,6 @@
+{
+  "binary_sha256": "6f3cb154ab6011231a65774be1c69bf8ff74163565f24bad16cb9b41e04514b4",
+  "source_head": "9295098",
+  "gui_delta": "three GUI files captured in freeze.json",
+  "signing": "local ad-hoc; not distribution/notarization"
+}

@@ -116,7 +116,9 @@ def test_formal_directory_create_publish_run_and_team_terminal(tmp_path):
         }
         # A new client can discover native B24 runs without a legacy Workflow ID
         # or a command receipt retained in its local component state.
-        fresh_directory = client.get("/v1/b2-4/collaboration").json()
+        fresh_directory = client.get(
+            "/v1/b2-4/collaboration", params={"workspace": str(tmp_path)}
+        ).json()
         summary = next(item for item in fresh_directory["graph_runs"] if item["id"] == run_id)
         assert summary["team_run_id"] == team.team_run_id
         assert summary["status"] == "completed"
@@ -148,13 +150,59 @@ def test_collaboration_run_directory_is_bounded_and_reports_truncation(tmp_path)
         for _ in range(101)
     ]
     with TestClient(app) as client:
-        response = client.get("/v1/b2-4/collaboration")
+        response = client.get("/v1/b2-4/collaboration", params={"workspace": str(tmp_path)})
         assert response.status_code == 200, response.text
         directory = response.json()
         assert directory["graph_runs_has_more"] is True
         expected = sorted(runs, key=lambda run: (run.updated_at, run.id), reverse=True)[:100]
         assert [run["id"] for run in directory["graph_runs"]] == [run.id for run in expected]
         assert "private_task_text" not in response.text
+        cursor = directory["graph_runs_next_cursor"]
+        next_page = client.get(
+            "/v1/b2-4/collaboration", params={"workspace": str(tmp_path), "cursor": cursor}
+        ).json()
+        assert [run["id"] for run in next_page["graph_runs"]] == [runs[0].id]
+        assert next_page["graph_runs_has_more"] is False
+        assert next_page["graph_runs_next_cursor"] is None
+        # A cursor stores the prior ordering values; a later update to its anchor
+        # must not shift the next page boundary.
+        from datetime import datetime, timezone
+
+        anchor = expected[-1]
+        app.state.graph_repository.update_run(
+            anchor.model_copy(
+                update={"updated_at": datetime.now(timezone.utc), "revision": anchor.revision + 1}
+            ),
+            expected_revision=anchor.revision,
+        )
+        after_update = client.get(
+            "/v1/b2-4/collaboration", params={"workspace": str(tmp_path), "cursor": cursor}
+        ).json()
+        assert [run["id"] for run in after_update["graph_runs"]] == [runs[0].id]
+        # Another workspace cannot consume the selected workspace's first page.
+        other = str(tmp_path / "other")
+        for _ in range(101):
+            app.state.graph_runtime.create_run(definition, workspace_or_target=other)
+        scoped = client.get("/v1/b2-4/collaboration", params={"workspace": str(tmp_path)})
+        assert [run["id"] for run in scoped.json()["graph_runs"]] == [
+            run.id for run in [expected[-1], *expected[:-1]]
+        ]
+        assert other not in scoped.text
+        assert client.get("/v1/b2-4/collaboration").json()["graph_runs"] == []
+        assert (
+            client.get(
+                "/v1/b2-4/collaboration", params={"workspace": other, "cursor": cursor}
+            ).status_code
+            == 422
+        )
+        assert client.get("/v1/b2-4/collaboration", params={"cursor": cursor}).status_code == 422
+        assert (
+            client.get(
+                "/v1/b2-4/collaboration",
+                params={"workspace": str(tmp_path), "cursor": "not-base64"},
+            ).status_code
+            == 422
+        )
 
 
 def test_resume_rejects_running_attempt_without_resetting_it(tmp_path):
