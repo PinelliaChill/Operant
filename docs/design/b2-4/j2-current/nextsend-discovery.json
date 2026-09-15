@@ -1,0 +1,8 @@
+{
+  "entry": "operant model discover via formal CLI module",
+  "exit_code": 0,
+  "exact_target_available": true,
+  "model_id": "gpt-5.6-luna",
+  "credentials_recorded": false,
+  "database": "fresh isolated discovery-only database"
+}

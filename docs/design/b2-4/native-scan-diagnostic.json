@@ -76,5 +76,22 @@
       "warm_cpu_p95"
     ],
     "product_integrated": false
+  },
+  "latest_combined_diagnostic": {
+    "path": "../../../../host-combined-diagnostic/report.json",
+    "product_integrated": false,
+    "change": "native full inventory + metadata reuse + compact-size diagnostic without in-sample double serialization",
+    "trusted_failed": {
+      "warm_wall_p95_ms": 4.8193,
+      "allowed_wall_ms": 4.688,
+      "warm_cpu_p95_ms": 3.021,
+      "allowed_cpu_ms": 2.8487
+    },
+    "isolated_passed": true,
+    "limits": [
+      "Compact JSON byte-size equivalence only verified for fixture; not a generic safe budget replacement.",
+      "Diagnostic native extension packaging and broad platform equivalence not delivered.",
+      "No product performance gate passes inferred."
+    ]
   }
 }

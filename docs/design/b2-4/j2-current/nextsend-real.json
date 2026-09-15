@@ -1,0 +1,624 @@
+{
+  "schema": "j2-next-send-harness.v1",
+  "record_identity": "Codex",
+  "status": "passed",
+  "source_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-current-05/source/src",
+  "run_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-next-send-real01/runs",
+  "model_id": "gpt-5.6-luna",
+  "environment": {
+    "base_url_env": "OPERANT_BASE_URL",
+    "secret_ref": "OPERANT_API_KEY",
+    "dotenv_loaded_by_harness": false,
+    "credentials_recorded": false
+  },
+  "planned_budget": {
+    "total_provider_calls": 3,
+    "ac04_provider_calls": 2,
+    "ac08_provider_calls": 1,
+    "max_turns_per_call": 1,
+    "max_output_tokens_per_call": 128,
+    "reserved_output_tokens": 384,
+    "timeout_seconds_per_call": 120,
+    "strong_dependency_http_calls": 1
+  },
+  "scenarios": {
+    "AC04": {
+      "status": "passed",
+      "workspace": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-next-send-real01/runs/ac04-memory",
+      "planned_provider_calls": 2,
+      "provider_calls": 2,
+      "provider_errors": [],
+      "phases": [
+        {
+          "phase": "baseline_memory_selected",
+          "exception_type": null,
+          "events": {
+            "event_types": [
+              "agent.started",
+              "model.delta",
+              "model.completed",
+              "agent.completed"
+            ],
+            "completed": true,
+            "failures": []
+          },
+          "provider_request_count": 1,
+          "provider_requests": [
+            {
+              "model_id": "gpt-5.6-luna",
+              "effort": "low",
+              "message_count": 3,
+              "message_roles": [
+                "system",
+                "user",
+                "user"
+              ],
+              "tool_names": [],
+              "public_message_facts": [
+                {
+                  "role": "system",
+                  "content_sha256": "de2c9960e2c444187696c4eb03daf965c8f309c6289b4872a0a2b5d895011c43",
+                  "content_chars": 134,
+                  "marker_hits": {
+                    "exclude": false,
+                    "revoke": false,
+                    "ordinary": false
+                  },
+                  "tool_call_names": []
+                },
+                {
+                  "role": "user",
+                  "content_sha256": "f5166caaae0ef56371968d961817dcbe6d2f6164abd9ce5cc1c1486690467abf",
+                  "content_chars": 1564,
+                  "marker_hits": {
+                    "exclude": true,
+                    "revoke": false,
+                    "ordinary": false
+                  },
+                  "tool_call_names": []
+                },
+                {
+                  "role": "user",
+                  "content_sha256": "5c71ffb4862950373fce82f2a44f66b2c6b3fde418f6f46ed1a69ccd25f7b2f6",
+                  "content_chars": 63,
+                  "marker_hits": {
+                    "exclude": false,
+                    "revoke": false,
+                    "ordinary": false
+                  },
+                  "tool_call_names": []
+                }
+              ],
+              "request_index": 1,
+              "usage": {
+                "prompt_tokens": 964,
+                "completion_tokens": 18,
+                "total_tokens": 982,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": null
+              }
+            }
+          ],
+          "context_revision": {
+            "id": "context_c03d81a00b069373d14ad15a843497d2470a6dd8b57b8fc7b441dd0361198fbd",
+            "request_ordinal": 1,
+            "model_id": "gpt-5.6-luna",
+            "message_count": 3,
+            "tool_count": 0,
+            "memory_refs": [],
+            "token_estimate": 2166,
+            "watermark": {
+              "state": "green",
+              "context_window": 32768,
+              "reserved_output_tokens": 128,
+              "tool_schema_token_estimate": 0,
+              "safety_margin_tokens": 1639,
+              "available_input_tokens": 31001,
+              "pre_compaction_token_estimate": 2166,
+              "input_token_estimate": 2166,
+              "estimation_method": "utf8_bytes_upper_bound"
+            },
+            "blocks": [
+              {
+                "block_type": "role_instructions",
+                "token_estimate": 53,
+                "source_types": [
+                  "session"
+                ]
+              },
+              {
+                "block_type": "tool_schema",
+                "token_estimate": 1,
+                "source_types": [
+                  "tool_schema"
+                ]
+              },
+              {
+                "block_type": "conversation",
+                "token_estimate": 483,
+                "source_types": [
+                  "agent"
+                ]
+              }
+            ],
+            "memory_sidecar": {
+              "present": true,
+              "valid": true,
+              "pack": {
+                "manifest_id": "manifest_d7cbdcde97d430ab7da726257ccf994f1b7479a8349daf5cca0243f90ca4b13c",
+                "run_id": "session_2426d51ccb4a4def9acb3c3b70f61773",
+                "agent_instance_id": "agent_1ba2ccf372c7452385e25ee57e6dcf72",
+                "knowledge_cutoff": "1",
+                "policy_revision": 1,
+                "permission_epoch": 0,
+                "selected": [
+                  {
+                    "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+                    "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+                    "version": 1,
+                    "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+                  }
+                ],
+                "total_token_budget": 2000,
+                "token_count": 1454,
+                "selection": "automatic_and_explicit"
+              },
+              "refresh": "frozen",
+              "excluded_record_ids": []
+            }
+          }
+        },
+        {
+          "phase": "after_exclude_refresh_next_send",
+          "exception_type": null,
+          "events": {
+            "event_types": [
+              "agent.started",
+              "model.delta",
+              "model.completed",
+              "agent.completed"
+            ],
+            "completed": true,
+            "failures": []
+          },
+          "provider_request_count": 1,
+          "provider_requests": [
+            {
+              "model_id": "gpt-5.6-luna",
+              "effort": "low",
+              "message_count": 3,
+              "message_roles": [
+                "system",
+                "user",
+                "user"
+              ],
+              "tool_names": [],
+              "public_message_facts": [
+                {
+                  "role": "system",
+                  "content_sha256": "de2c9960e2c444187696c4eb03daf965c8f309c6289b4872a0a2b5d895011c43",
+                  "content_chars": 134,
+                  "marker_hits": {
+                    "exclude": false,
+                    "revoke": false,
+                    "ordinary": false
+                  },
+                  "tool_call_names": []
+                },
+                {
+                  "role": "user",
+                  "content_sha256": "9bb25ccb436bd59ba8825e7b8a8eb6b25a4bb664f5f3ac841c074be9dfebd98b",
+                  "content_chars": 1571,
+                  "marker_hits": {
+                    "exclude": false,
+                    "revoke": true,
+                    "ordinary": false
+                  },
+                  "tool_call_names": []
+                },
+                {
+                  "role": "user",
+                  "content_sha256": "a9b0aa30617519a3bd0bc84614e779ca420f683da22e707d680b1a5f40becc07",
+                  "content_chars": 35,
+                  "marker_hits": {
+                    "exclude": false,
+                    "revoke": false,
+                    "ordinary": false
+                  },
+                  "tool_call_names": []
+                }
+              ],
+              "request_index": 2,
+              "usage": {
+                "prompt_tokens": 978,
+                "completion_tokens": 5,
+                "total_tokens": 983,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": null
+              }
+            }
+          ],
+          "context_revision": {
+            "id": "context_c03d81a00b069373d14ad15a843497d2470a6dd8b57b8fc7b441dd0361198fbd",
+            "request_ordinal": 1,
+            "model_id": "gpt-5.6-luna",
+            "message_count": 3,
+            "tool_count": 0,
+            "memory_refs": [],
+            "token_estimate": 2166,
+            "watermark": {
+              "state": "green",
+              "context_window": 32768,
+              "reserved_output_tokens": 128,
+              "tool_schema_token_estimate": 0,
+              "safety_margin_tokens": 1639,
+              "available_input_tokens": 31001,
+              "pre_compaction_token_estimate": 2166,
+              "input_token_estimate": 2166,
+              "estimation_method": "utf8_bytes_upper_bound"
+            },
+            "blocks": [
+              {
+                "block_type": "role_instructions",
+                "token_estimate": 53,
+                "source_types": [
+                  "session"
+                ]
+              },
+              {
+                "block_type": "tool_schema",
+                "token_estimate": 1,
+                "source_types": [
+                  "tool_schema"
+                ]
+              },
+              {
+                "block_type": "conversation",
+                "token_estimate": 483,
+                "source_types": [
+                  "agent"
+                ]
+              }
+            ],
+            "memory_sidecar": {
+              "present": true,
+              "valid": true,
+              "pack": {
+                "manifest_id": "manifest_d7cbdcde97d430ab7da726257ccf994f1b7479a8349daf5cca0243f90ca4b13c",
+                "run_id": "session_2426d51ccb4a4def9acb3c3b70f61773",
+                "agent_instance_id": "agent_1ba2ccf372c7452385e25ee57e6dcf72",
+                "knowledge_cutoff": "1",
+                "policy_revision": 1,
+                "permission_epoch": 0,
+                "selected": [
+                  {
+                    "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+                    "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+                    "version": 1,
+                    "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+                  }
+                ],
+                "total_token_budget": 2000,
+                "token_count": 1454,
+                "selection": "automatic_and_explicit"
+              },
+              "refresh": "frozen",
+              "excluded_record_ids": []
+            }
+          }
+        },
+        {
+          "phase": "after_revoke_next_send_fail_closed",
+          "exception_type": null,
+          "events": {
+            "event_types": [
+              "agent.failed"
+            ],
+            "completed": false,
+            "failures": [
+              {
+                "event_type": "agent.failed",
+                "error_type": "PermissionError",
+                "error_code": null
+              }
+            ]
+          },
+          "provider_request_count": 0,
+          "provider_requests": [],
+          "context_revision": {
+            "id": "context_c03d81a00b069373d14ad15a843497d2470a6dd8b57b8fc7b441dd0361198fbd",
+            "request_ordinal": 1,
+            "model_id": "gpt-5.6-luna",
+            "message_count": 3,
+            "tool_count": 0,
+            "memory_refs": [],
+            "token_estimate": 2166,
+            "watermark": {
+              "state": "green",
+              "context_window": 32768,
+              "reserved_output_tokens": 128,
+              "tool_schema_token_estimate": 0,
+              "safety_margin_tokens": 1639,
+              "available_input_tokens": 31001,
+              "pre_compaction_token_estimate": 2166,
+              "input_token_estimate": 2166,
+              "estimation_method": "utf8_bytes_upper_bound"
+            },
+            "blocks": [
+              {
+                "block_type": "role_instructions",
+                "token_estimate": 53,
+                "source_types": [
+                  "session"
+                ]
+              },
+              {
+                "block_type": "tool_schema",
+                "token_estimate": 1,
+                "source_types": [
+                  "tool_schema"
+                ]
+              },
+              {
+                "block_type": "conversation",
+                "token_estimate": 483,
+                "source_types": [
+                  "agent"
+                ]
+              }
+            ],
+            "memory_sidecar": {
+              "present": true,
+              "valid": true,
+              "pack": {
+                "manifest_id": "manifest_d7cbdcde97d430ab7da726257ccf994f1b7479a8349daf5cca0243f90ca4b13c",
+                "run_id": "session_2426d51ccb4a4def9acb3c3b70f61773",
+                "agent_instance_id": "agent_1ba2ccf372c7452385e25ee57e6dcf72",
+                "knowledge_cutoff": "1",
+                "policy_revision": 1,
+                "permission_epoch": 0,
+                "selected": [
+                  {
+                    "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+                    "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+                    "version": 1,
+                    "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+                  }
+                ],
+                "total_token_budget": 2000,
+                "token_count": 1454,
+                "selection": "automatic_and_explicit"
+              },
+              "refresh": "frozen",
+              "excluded_record_ids": []
+            }
+          }
+        }
+      ],
+      "session_id": "session_2426d51ccb4a4def9acb3c3b70f61773",
+      "exclude_record": {
+        "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+        "version": 1,
+        "baseline_selected": true
+      },
+      "revoke_record": {
+        "record_id": "memory_448a8eb29b1a4971860540bf7bddef7e",
+        "version": 1,
+        "selected_before_revoke": true
+      },
+      "manifest_after_exclude": {
+        "run_id": null,
+        "cutoff": "1",
+        "revision": 2,
+        "excluded": [
+          "memory_45f77d72afd3432590f7c75b03178308"
+        ],
+        "used_refs": [
+          {
+            "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+            "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+            "version": 1,
+            "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+          }
+        ],
+        "used_by_session_refs": [
+          {
+            "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+            "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+            "version": 1,
+            "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+          }
+        ],
+        "binding_epoch": 1
+      },
+      "manifest_after_refresh": {
+        "run_id": null,
+        "cutoff": "2",
+        "revision": 3,
+        "excluded": [
+          "memory_45f77d72afd3432590f7c75b03178308"
+        ],
+        "used_refs": [
+          {
+            "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+            "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+            "version": 1,
+            "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+          }
+        ],
+        "used_by_session_refs": [
+          {
+            "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+            "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+            "version": 1,
+            "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+          }
+        ],
+        "binding_epoch": 1
+      },
+      "manifest_after_revoke": {
+        "run_id": null,
+        "cutoff": "2",
+        "revision": 3,
+        "excluded": [
+          "memory_45f77d72afd3432590f7c75b03178308"
+        ],
+        "used_refs": [
+          {
+            "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+            "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+            "version": 1,
+            "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+          },
+          {
+            "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+            "record_id": "memory_448a8eb29b1a4971860540bf7bddef7e",
+            "version": 1,
+            "content_digest": "d52239a1f7030ac3a2dff5e942ff89f3f43dd7a6da451c128b16eed3d2a3a56a"
+          }
+        ],
+        "used_by_session_refs": [
+          {
+            "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+            "record_id": "memory_45f77d72afd3432590f7c75b03178308",
+            "version": 1,
+            "content_digest": "0f4aa5fa63bae90679e05d473b1829e3bdc424da67ce24db179ee5efb7498718"
+          },
+          {
+            "dataset_id": "dataset_2303e215c14145dab326f2b2507822f8",
+            "record_id": "memory_448a8eb29b1a4971860540bf7bddef7e",
+            "version": 1,
+            "content_digest": "d52239a1f7030ac3a2dff5e942ff89f3f43dd7a6da451c128b16eed3d2a3a56a"
+          }
+        ],
+        "binding_epoch": 1
+      }
+    },
+    "AC08": {
+      "status": "passed",
+      "workspace": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-next-send-real01/runs/ac08-no-plugin",
+      "planned_provider_calls": 1,
+      "provider_calls": 1,
+      "provider_errors": [],
+      "session_id": "session_196f69065118477ea6a05f5f695c9cb7",
+      "ordinary_task": {
+        "phase": "ordinary_task_without_plugin",
+        "exception_type": null,
+        "events": {
+          "event_types": [
+            "agent.started",
+            "model.delta",
+            "model.completed",
+            "agent.completed"
+          ],
+          "completed": true,
+          "failures": []
+        },
+        "provider_request_count": 1,
+        "provider_requests": [
+          {
+            "model_id": "gpt-5.6-luna",
+            "effort": "low",
+            "message_count": 2,
+            "message_roles": [
+              "system",
+              "user"
+            ],
+            "tool_names": [],
+            "public_message_facts": [
+              {
+                "role": "system",
+                "content_sha256": "de2c9960e2c444187696c4eb03daf965c8f309c6289b4872a0a2b5d895011c43",
+                "content_chars": 134,
+                "marker_hits": {
+                  "exclude": false,
+                  "revoke": false,
+                  "ordinary": false
+                },
+                "tool_call_names": []
+              },
+              {
+                "role": "user",
+                "content_sha256": "e759eaabcc3a348dce7c1c18d0f917e3c4a5025c970c2a6cf8cc36369fd762ca",
+                "content_chars": 76,
+                "marker_hits": {
+                  "exclude": false,
+                  "revoke": false,
+                  "ordinary": true
+                },
+                "tool_call_names": []
+              }
+            ],
+            "request_index": 1,
+            "usage": {
+              "prompt_tokens": 444,
+              "completion_tokens": 19,
+              "total_tokens": 463,
+              "cache_read_tokens": 0,
+              "cache_write_tokens": null
+            }
+          }
+        ],
+        "context_revision": {
+          "id": "context_6c5f3a7e0b9a04b4d6de3d58790f89994d1f1809f98891c5f6e0fe8fc19925e7",
+          "request_ordinal": 1,
+          "model_id": "gpt-5.6-luna",
+          "message_count": 2,
+          "tool_count": 0,
+          "memory_refs": [],
+          "token_estimate": 391,
+          "watermark": {
+            "state": "green",
+            "context_window": 32768,
+            "reserved_output_tokens": 128,
+            "tool_schema_token_estimate": 0,
+            "safety_margin_tokens": 1639,
+            "available_input_tokens": 31001,
+            "pre_compaction_token_estimate": 391,
+            "input_token_estimate": 391,
+            "estimation_method": "utf8_bytes_upper_bound"
+          },
+          "blocks": [
+            {
+              "block_type": "role_instructions",
+              "token_estimate": 53,
+              "source_types": [
+                "session"
+              ]
+            },
+            {
+              "block_type": "tool_schema",
+              "token_estimate": 1,
+              "source_types": [
+                "tool_schema"
+              ]
+            },
+            {
+              "block_type": "conversation",
+              "token_estimate": 39,
+              "source_types": [
+                "agent"
+              ]
+            }
+          ],
+          "memory_sidecar": null
+        }
+      },
+      "strong_dependency": {
+        "workflow_id": "definition_f2a8d355aa0944e28adb88c668a53c54",
+        "required_plugins": [
+          "memory-standard"
+        ],
+        "http_status": 409,
+        "error_code": "http_409",
+        "provider_calls_during_rejection": 0,
+        "plugin_host_present": false,
+        "memory_manager_initially_present": false,
+        "memory_plugin_mode": true,
+        "installed_plugin_count": 0,
+        "required_memory_unavailable": true
+      }
+    }
+  },
+  "output": "/Users/bigo/agentworkspace/codexworkspace/operant/.recovery/b2-4-20260914/j2-next-send-real01/runs/j2-next-send-result.json"
+}

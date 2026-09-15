@@ -21,5 +21,22 @@
     "result": "native04-result.json",
     "freeze": "native04-freeze.json",
     "scope": "native self-recipient Artifact publication, other viewer empty, formal HTTP readback; ended before directory pagination fixes"
+  },
+  "nextsend": {
+    "result": "nextsend-real.json",
+    "discovery": "nextsend-discovery.json",
+    "freeze": "nextsend-freeze.json",
+    "entry": "formal ApplicationService.run_session/ModelProfile and Graph API",
+    "model": "gpt-5.6-luna",
+    "effort": "low",
+    "actual_calls": 3,
+    "output_tokens": 42,
+    "scope": "sameSession explicit baseline; exclude+refresh next-send; used-memory revoke stops before Provider; default no-install ordinary succeeds; required memory-standard409 with0Provider",
+    "limits": "No tool calls; prior J2 single/multi already covers read_file. Exclusion is not deletion of historical answers; baseline answer restricted to ACK for clean marker attribution."
+  },
+  "native06": {
+    "result": "native06-result.json",
+    "freeze": "native06-freeze.json",
+    "scope": "second-page Graph→Team restore plus Enter no duplicate POST, start disabled for terminal/bound Graph"
   }
 }

@@ -1,0 +1,12 @@
+{
+  "recorded_by": "Codex",
+  "reviewer_session": "01a09abd-f0d9-76e0-828e-b75a1f014e9e",
+  "model": "gpt-5.6-luna",
+  "effort": "max",
+  "tier": "default; Fast not enabled",
+  "reviewed_checkpoint": "7a2d916",
+  "status": "interrupted before final finding closure",
+  "error": "Your workspace is out of credits. Add credits to continue.",
+  "process_checked": "CLI process absent after failed turn; not restarted",
+  "next_action": "Resume same reviewer on explicit quota restoration; reuse directory findings and read evidence"
+}

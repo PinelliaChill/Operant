@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   commandResourceId,
+  canPrepareTeamForGraph,
   currentRoster,
   filterGraphRunsByWorkspace,
   normalizeCollaborationDirectory,
@@ -105,4 +106,13 @@ test('Graph pages merge without losing earlier runs or duplicating updated summa
   assert.deepEqual(pages.map((r) => r.id), ['newer', 'older']);
   assert.equal(pages[0].team_run_id, 'team');
   assert.throws(() => normalizeCollaborationDirectory({ workflows: [], roles: [], teams: [], graph_runs: [], graph_runs_has_more: true, graph_runs_next_cursor: null }), /翻页状态/);
+});
+
+test('Team preparation requires an unbound nonterminal Graph projection', () => {
+  assert.equal(canPrepareTeamForGraph(null), false);
+  assert.equal(canPrepareTeamForGraph({status:'created', team_run_id:null}), true);
+  assert.equal(canPrepareTeamForGraph({status:'running', team_run_id:'existing-team'}), false);
+  for (const status of ['completed', 'failed', 'cancelled'] as const) {
+    assert.equal(canPrepareTeamForGraph({status, team_run_id:null}), false);
+  }
 });

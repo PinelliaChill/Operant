@@ -71,7 +71,9 @@ Context Composer将普通记忆作为明确不可信证据加入实际Provider�
 
 Graph 重试保留原 Session/Thread，分配新的 Agent 并收窄剩余预算；旧 Roster 留作历史，新 Roster 与任务板受让人在同一事务更新。每次 Provider 请求重新读取该成员可见的消息、任务与工件，折叠工具结果按 tool_call_id 匹配；已终止成员不能接收新消息。工件发布的非空 recipient_ids 对应 recipients 可见性，空列表对应 Team 可见性。
 
-协作目录在服务端按显式workspace过滤Graph运行，每页最多100条摘要，稳定Cursor携带前页排序值以继续读取；没有workspace时仅返回既有定义目录，不返回全局运行。GUI可加载更早运行并去重，正式B2-4运行不依赖legacy关联。摘要提供状态与Team关联，不返回运行输入/输出。生成契约digest为619168f06db1d9df2ba24403a3c29d662a6daa467a4a8d0d065693d04ade1933  operant-b2-4.openapi.json；目录分页已通过定向API/GUI检查，最新原生复验待完成。工作区过滤是发现范围，不额外宣称多租户授权隔离。
+协作目录在服务端按显式workspace过滤Graph运行，每页最多100条摘要，稳定Cursor携带前页排序值以继续读取；没有workspace时仅返回既有定义目录，不返回全局运行。GUI可加载更早运行并去重，正式B2-4运行不依赖legacy关联。摘要提供状态与Team关联，不返回运行输入/输出。生成契约digest为619168f06db1d9df2ba24403a3c29d662a6daa467a4a8d0d065693d04ade1933  operant-b2-4.openapi.json；目录分页已通过定向API/GUI检查，原生已通过第二页找回真实Graph/Team；Team仅通过显式按钮准备，已绑定或已结束的Graph禁用准备，Enter不重复提交。工作区过滤是发现范围，不额外宣称多租户授权隔离。
+
+B2-4 当前补验：固定源码下正式gpt-5.6-luna/low在同Session验证显式记忆进入请求、移出/刷新后新Pack生效，撤销已使用记忆后在Provider前PermissionError停止，保留历史而不重放污染上下文。默认memory_plugin_mode=True且零安装时普通Session成功，Graph强依赖memory-standard明确拒绝。证据见本批j2-current/nextsend-real.json；此证据不替代Host性能或最终独立审查。
 
 B2-4 命令使用自己的持久幂等 journal，避开通用投影条目数裁切；当前结果以 b24-public-result.v1 包络保存已脱敏的类型化投影，旧 journal 在重放时脱敏。空 Idempotency-Key 拒绝，重放返回同一公开结果及重放响应头。
 

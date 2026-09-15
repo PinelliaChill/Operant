@@ -199,3 +199,7 @@ export function mergeGraphRunPages(current: CollaborationGraphRun[], incoming: C
   incoming.forEach((run) => byId.set(run.id, run));
   return [...byId.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id));
 }
+
+export function canPrepareTeamForGraph(run: { status: B24.GraphRunStatus; team_run_id?: string | null } | null): boolean {
+  return !!run && !run.team_run_id && !['completed', 'failed', 'cancelled'].includes(run.status);
+}

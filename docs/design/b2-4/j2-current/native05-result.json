@@ -1,0 +1,19 @@
+{
+  "recorded_by": "Codex",
+  "status": "pagination passed; segment ended for keyboard-submit UX fix",
+  "source_unchanged": true,
+  "first_page_has_more_button": true,
+  "second_page_finds_existing_real_graph": true,
+  "selected_graph": "graph_run_06ede48aa53f4500bb8a534d8fbd6f4c",
+  "restored_team": "team_run_a77ab26ebaa64c91bf5d879aca55c480",
+  "notes": [
+    "101 synthetic directory entries unexecuted",
+    "Native dropdown Enter also submitted existing Team form; server prepared same Team, no new Session/Team; fix frontend submit path before final UI closure"
+  ],
+  "database_counts": {
+    "sessions": 2,
+    "context_revisions": 4,
+    "team_runs": 1,
+    "graph_workflow_runs": 102
+  }
+}
