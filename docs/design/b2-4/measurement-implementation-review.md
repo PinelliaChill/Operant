@@ -13,11 +13,10 @@
 
 当前 SHA：
 
-- `scripts/benchmark_b24_memory.py`  
+- `scripts/benchmark_b24_memory.py`
   `49b545f421580c4348d46d9fbb879f220d8b30a276cd4fbe9eb35af08f5d80ff`
-- `tests/test_b24_benchmark.py`  
+- `tests/test_b24_benchmark.py`
   `a11a04e6bf75058d33b6be4758d39c53124933eca4da4a4762847dd67b06f671`
-- `docs/design/b2-4/measurement-review.md`  
+- `docs/design/b2-4/measurement-review.md`
   `954619d1e44ec326c717dd2f8a2dd8784df639411c75d13c23a5fea8f61817cb`
 - HEAD：`06351e92a499e9d00b014aff22c1fe8f125ccfa4`
-

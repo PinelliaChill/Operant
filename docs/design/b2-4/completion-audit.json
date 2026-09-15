@@ -12,7 +12,7 @@
   "changed_paths_covered_by": "gates/observation-split-results.json:18 passed",
   "evidence_files": {
     "review-current-closure.md": "6a829433ff9ea18cc61f42718cc36d99f239942e369d050d03668a38b9d8b45a",
-    "measurement-implementation-review.md": "5e82a1a82514c18fa275ebe2888edfc0d77076278f79e5911e30d127aa810fb3",
+    "measurement-implementation-review.md": "d9141eec5004687b2c5501fc467518b5daa19afdef4ecee33c4dd2f349e3280a",
     "gates/current-04-results.json": "dbc886b670889a1737e33af9de7fd85d76995da69f39ab62513b898dc7e8952f",
     "gates/observation-split-results.json": "978ee1a1e970a74e1e28e72f5e86a1bad74cd0a9152509bfff20437abb0d3515",
     "j2-current/single.json": "4a3f86a9222a90b86688c978d322deee8ef88e1a1c34915761df9b2e770b942c",
@@ -43,5 +43,6 @@
   "no_new_model_or_performance_run": true,
   "diagnostic_native_integration": false,
   "publication": "not pushed, merged or deployed; no user database migration",
-  "cleanup": "cleanup.json: dedicated four-rule file removed"
+  "cleanup": "cleanup.json: dedicated four-rule file removed",
+  "review_format_note": "Trailing whitespace and final blank line normalized before push; review wording unchanged."
 }
