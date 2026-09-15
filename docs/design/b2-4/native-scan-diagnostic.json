@@ -52,7 +52,7 @@
       }
     }
   ],
-  "decision": "Do not integrate C prototype on present evidence. Preserve failures. Original performance agent owns benchmark sampling correction; root coordinates formal run after targeted tests.",
+  "decision": "Keep diagnostic candidates out of product. Anchored full verification also failed fixed same-run gates. Further work requires a new measured hypothesis; no unchanged rerun or threshold waiver.",
   "bulk_attribute_followup": {
     "source": "Codex original signature_allocation agent, local Apple SDK attr.h / vnode.h and man pages",
     "result": "not_equivalent_as_drop_in",
@@ -93,5 +93,87 @@
       "Diagnostic native extension packaging and broad platform equivalence not delivered.",
       "No product performance gate passes inferred."
     ]
+  },
+  "opened_stat_reuse": {
+    "directory": "../../../../native-scan-call-reuse-root01",
+    "source_sha256": "7526785cb5398c8bc51fcf1627f5de2406f03e3182edfe804ea632552c32af2f",
+    "semantics": "9existingtests plusUnicode/hardlink/ctime/nested/resource-fork passed",
+    "product_integrated": false,
+    "same_run_result": "not_passed",
+    "trusted_failures": {
+      "bootstrap_wall_ms": [
+        520.0253,
+        111.0993
+      ],
+      "warm_wall_p95_ms": [
+        5.6316,
+        5.1233
+      ],
+      "first_query_wall_ms": [
+        6.9878,
+        4.6647
+      ],
+      "cpu_p95_ms": [
+        3.961,
+        2.84
+      ]
+    },
+    "isolated_passed": true,
+    "next_candidate": "single-call fd-relative managed path walk; not cross-request cache"
+  },
+  "anchored_walk": {
+    "directory": "../../../../native-anchored-root01",
+    "source_sha256": "cb229034aa0052a7c03b9c34746de6857514d853bf6ea7aa50e41581e2f042db",
+    "report_sha256": "62d45907f13a87fc2eb1ce43811fdeca753686648ca22c4ac5ee13560eb4f4f4",
+    "semantics": "9 inherited tests, extra stat parity cases and managed-root/path replacement, symlink, permission and FD leak checks passed",
+    "product_integrated": false,
+    "same_run_result": "not_passed",
+    "trusted_failures": {
+      "warm_wall_p95_ms": [
+        6.066,
+        4.6821
+      ],
+      "warm_cpu_p95_ms": [
+        3.325,
+        2.8262
+      ]
+    },
+    "isolated_failures": {
+      "warm_cpu_p95_ms": [
+        4.577,
+        4.522
+      ]
+    },
+    "note": "Raw report implementation description inherited from opened-stat diagnostic; source hash identifies anchored C candidate. No cross-request FD cache."
+  },
+  "single_request_anchor_probe": {
+    "report": "../../../../request-anchor-diagnostic/scan_probe.json",
+    "report_sha256": "b8c19b9644aeb2803956f5093d23387f9145f47eb422097cfb05b89be03bb078",
+    "acceptance": false,
+    "comparison": "100 alternating pairs; seven complete signatures per sample; synthetic package",
+    "median_cpu_ms": {
+      "current": 0.3375,
+      "anchor": 0.366
+    },
+    "median_wall_ms": {
+      "current": 0.4371,
+      "anchor": 0.4845
+    },
+    "decision": "Stop candidate: stricter fresh path/FD and permission checks erased any benefit; no product integration",
+    "review": "Original Codex performance agent independently identified current-permission and closed-FD generation requirements; no implementation accepted"
+  },
+  "current_profile": {
+    "directory": "../../../../host-profile-current",
+    "scope": "84 trusted product requests under cProfile; diagnostic only, not gate timing",
+    "calls": {
+      "full_package_verifications": 588,
+      "posix_open": 588
+    },
+    "cumulative_seconds": {
+      "package_signature": 0.089,
+      "verify_certification": 0.116,
+      "manager_search_shared_work": 0.183
+    },
+    "finding": "Fresh directory opens and complete inventory dominate Host overhead; JSON/Pydantic cost is small. Do not infer profiler timings as formal CPU/wall gate values."
   }
 }
