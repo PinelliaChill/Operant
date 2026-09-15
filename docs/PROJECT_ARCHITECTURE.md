@@ -83,7 +83,7 @@ Host继续检查当前租约、epoch、认证、包身份与来源授权；包di
 
 本批已有 gpt-5.6-luna 正式 Session/Graph 单、双 Agent 记忆与只读工具调用的历史验收记录。原临时实施树和环境缺失后，源码已恢复到持久隔离工作树；恢复清单中的 172 个 Core/SDK/工件增量文件及 GUI 主入口产物与原版本哈希一致。历史数据和截图尚须按证据索引核对，不把恢复过程当作新的真实模型验收。当前恢复树已通过完整基础门禁969项、1项Docker条件跳过，GUI110项/typecheck/build及SDK确定生成；证据见本批gates/current-04-results.json和j2-current/evidence-index.json。当前固定环境J2单/双Agent、原生GUI及下一发送补证已经完成；gpt-5.6-luna/max独立Reviewer已关闭原目录P1/P2，当前产品增量无新增P1/P2，见review-current-closure.md。
 
-性能历史报告保留集召回率0.9167高于旧基线0.75、禁用样例零泄漏，但Host性能门尚未满足；工件可见性增量的独立审查已关闭，见本批 review-artifact-closure.md。性能脚本已分离无tracemalloc的时延/CPU采样与独立库分配采样，三模式两pass结果ID一致；固定门槛下direct通过、trusted/isolated仍有超限，见performance-split-01-report.json；C完整扫描仅为诊断原型，尚未接入产品。B2-4、MP-3及基础记忆插件里程碑仍未完成。当前没有推送、合并、部署或迁移用户库。
+性能历史报告保留集召回率0.9167高于旧基线0.75、禁用样例零泄漏，但Host性能门尚未满足；工件可见性增量的独立审查已关闭，见本批 review-artifact-closure.md。性能脚本将timing、allocation、observation放入独立库/Registry/Host；正式时延/CPU不启用额外计时或RPC编码统计，分配轮只增加tracemalloc，观测轮单独报告重建字节与调用计数。配置/POLICY、逻辑请求、每个结果和所有重复轮次的forbidden命中互校，未改冻结阈值，也不扣除观测耗时。该重构经独立审查和18项回归验证，见[观测分离验证](design/b2-4/gates/observation-split-results.json)；旧失败报告仍保留。当前产品性能门仍未通过，C完整扫描仅为诊断原型，尚未接入产品。B2-4、MP-3及基础记忆插件里程碑仍未完成。当前没有推送、合并、部署或迁移用户库。
 
 
 ### B2-3 / MP-2 记忆与管理集成（2026-09-13，已完成本批验收）

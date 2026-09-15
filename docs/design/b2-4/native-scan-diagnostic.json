@@ -175,5 +175,172 @@
       "manager_search_shared_work": 0.183
     },
     "finding": "Fresh directory opens and complete inventory dominate Host overhead; JSON/Pydantic cost is small. Do not infer profiler timings as formal CPU/wall gate values."
+  },
+  "python_static_reuse": {
+    "report": "../../../../python-static-reuse-root01/report.json",
+    "sha256": "730ecb5ad8ffea5d54f721614447572147ac69372742010f40759f7218ace145",
+    "status": "not_passed",
+    "failures": {
+      "trusted_in_process": {
+        "warm_wall_p95": {
+          "actual": 4.7069,
+          "allowed": 4.3499,
+          "unit": "ms"
+        },
+        "warm_cpu_p95": {
+          "actual": 2.973,
+          "allowed": 2.7925,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_integrated": false,
+    "source_unchanged": true
+  },
+  "minimal_native_combination": {
+    "report": "../../../../python-native-minimal-root01/report.json",
+    "sha256": "15f63f1808be6e24773a545207bda6ad1f3c55921fbd13776a037f761a2702bb",
+    "status": "not_passed",
+    "failures": {
+      "trusted_in_process": {
+        "warm_wall_p95": {
+          "actual": 4.3924,
+          "allowed": 4.359,
+          "unit": "ms"
+        },
+        "warm_cpu_p95": {
+          "actual": 2.702,
+          "allowed": 2.6362,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_integrated": false,
+    "source_unchanged": true
+  },
+  "next_candidate": "Scoped native openat only, C diagnostic underway; measurement refactor reviewed and 18 tests passed. No product native integration or performance acceptance.",
+  "native_allocation_candidate": {
+    "report": "../../../../native-allocation-root01/report.json",
+    "sha256": "5b21a9a6a434bee28bd816e7552272a70cd734056f74c1103e44ad7b9fb537ea",
+    "source_sha256": "b65eb0c692224cc3491dc28dad9c615036581244ec51fd3806ef19cfdaf5f8c4",
+    "product_integrated": false,
+    "source_unchanged": true,
+    "status": "not_passed",
+    "trusted_failures": {
+      "warm_wall_p95": {
+        "actual": 4.5063,
+        "allowed": 4.2931,
+        "unit": "ms"
+      },
+      "warm_cpu_p95": {
+        "actual": 2.715,
+        "allowed": 2.6887,
+        "unit": "ms"
+      }
+    },
+    "isolated_passed": true,
+    "safety_readback": "Root caught directory-success allocation leak; agent fixed both success paths. 9 semantic tests, extra parity, four byte comparisons and 201 nested scans (4422 allocations/frees, zero live) passed. Diagnostic allocator counters disabled in measured library."
+  },
+  "ffi_static_arguments": {
+    "report": "../../../../native-ffi-reuse-diagnostic/result.json",
+    "acceptance": false,
+    "median_7_scans_cpu_ms": [
+      0.212,
+      0.201
+    ],
+    "median_7_scans_wall_ms": [
+      0.3037085,
+      0.2915205
+    ],
+    "scope": "200 alternating pairs; reuses scalar/pointer argument objects and lexical path bytes only"
+  },
+  "clean_sampling_product": {
+    "report": "../../../../clean-sampling-product01/report.json",
+    "sha256": "535b777b11e1573011b71f145360b24edf847f4f04e61ed92df056711269ecf8",
+    "status": "not_passed",
+    "host_passed": {
+      "trusted_in_process": false,
+      "isolated": true
+    },
+    "failures": {
+      "trusted_in_process": {
+        "bootstrap_wall": {
+          "actual": 108.1208,
+          "allowed": 103.691,
+          "unit": "ms"
+        },
+        "warm_wall_p95": {
+          "actual": 5.3865,
+          "allowed": 4.5889,
+          "unit": "ms"
+        },
+        "first_query_wall": {
+          "actual": 4.3635,
+          "allowed": 4.1118,
+          "unit": "ms"
+        },
+        "warm_cpu_p95": {
+          "actual": 2.861,
+          "allowed": 2.7675,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_native_integration": false
+  },
+  "clean_sampling_native": {
+    "report": "../../../../clean-sampling-native01/report.json",
+    "sha256": "a34b9688b89e705932c9186fddc90412261175f3eb613346991162f0469750b7",
+    "status": "not_passed",
+    "host_passed": {
+      "trusted_in_process": false,
+      "isolated": true
+    },
+    "failures": {
+      "trusted_in_process": {
+        "warm_wall_p95": {
+          "actual": 5.0735,
+          "allowed": 4.9589,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_native_integration": false
+  },
+  "unrestricted_product": {
+    "report": "../../../../clean-sampling-product02-unrestricted/report.json",
+    "sha256": "366a7f19db1cd1363716d171a553029132800bb41be8114fff4aec04bf91718f",
+    "status": "not_passed",
+    "host_passed": {
+      "trusted_in_process": false,
+      "isolated": true
+    },
+    "failures": {
+      "trusted_in_process": {
+        "warm_wall_p95": {
+          "actual": 5.6387,
+          "allowed": 4.7181,
+          "unit": "ms"
+        },
+        "warm_cpu_p95": {
+          "actual": 3.222,
+          "allowed": 2.5975,
+          "unit": "ms"
+        }
+      },
+      "isolated": {}
+    },
+    "product_native_integration": false
+  },
+  "fd_permission_findings": {
+    "uid": 501,
+    "posix_and_acl": "held descriptor correctly denies READ/SEARCH tightening",
+    "mac_control": "bulk-fd-permission-root03: held FD bulk/readdir allowed, fresh open and openat both denied EPERM under same deny profile",
+    "decision": "Reject direct held-FD scanning. Only evaluate scoped openat that creates a fresh read FD at every original boundary and keeps all current path/identity/inventory checks.",
+    "root_probe": "../../../../bulk-fd-permission-root03/bulk-fd-permission-report.json"
   }
 }

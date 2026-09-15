@@ -30,7 +30,7 @@ acceptance_environment:
   release_condition: end acceptance segment before any fix
 evidence_index: []
 review_ref: "cli:01a09abd-f0d9-76e0-828e-b75a1f014e9e"
-next_action: resolve Host performance gate without weakening validation or fixed thresholds
+next_action: evaluate scoped native openat prototype; retain fresh open authorization and frozen performance gates
 ---
 # B2-4 唯一任务包
 记录身份：Codex；适用对象：所有 Agent；2026-09-13。
@@ -55,6 +55,7 @@ next_action: resolve Host performance gate without weakening validation or fixed
 | clients/gui/src/features/collab/LiveGraphTeamView.tsx、clients/gui/src/features/collab/b24-*、clients/gui/test/b24-* | Codex（原 GUI 已交权） | User |
 | clients/gui/src/features/collab/B24Presentation.tsx、clients/gui/src/styles/b2-collaboration.css | Codex（Antigravity 已实名交权） | User |
 | src/operant/application/token_counting.py、tests/test_b24_token_counting.py | Codex（原 token_budget 已交权） | User |
+| scripts/benchmark_b24_memory.py、tests/test_b24_benchmark.py | Codex负责人（中断后接手完成观测分离） | Codex负责人 |
 | 公共Schema/SDK生成/API、Ledger/迁移、Manager、Context/Runtime集成、GUI上下文接入、证据与权威文档 | Codex负责人 | User |
 
 子 Agent 先定向测试，不重复完整门禁；不提交共享树或操作用户服务。交接给改动、验证、限制、停止写入。Reviewer 只读独立审查，问题有要求来源或复现。
@@ -66,7 +67,7 @@ next_action: resolve Host performance gate without weakening validation or fixed
 | AC-02 | 自动/显式Memory Pack与ContextRevision，版本/来源/条件/原因；MP-3.2 | Codex | Schema/Manager/Composer正式入口 | Session/Workflow/Graph统一链 | 是：上下文真实 | Memory Pack/Context原子记录与显式引用回归通过，见gates/recovery-memory-final.log；当前真实单/双Agent及原生检查器读回通过，见j2-current；其余联合边界按AC-08审计 |
 | AC-03 | 常驻/动态/Skill/历史/工具/包装/输出共同预算；精确或保守估算/切模型重算；MP-3.2/3 | Codex | Core预算/工具Schema/关键条件定向检查 | 正式ModelProfile | 是：预算完整 | 预算与计数测试通过，包含于gates/recovery-complete-gates.json；未知模型保守估算，不伪报精确 |
 | AC-04 | Run截止点冻结、回合/阶段刷新、当前撤销/权限优先、污染摘要清理或停止；MP-3.4 | Codex | 并发/恢复/Provider发送前复核 | 临时库；越权/撤销零泄漏 | 是：安全语义 | 冻结/刷新/撤销/角色收紧回归通过；nextsend-real.json同Session真实下一发送验证移出/刷新生效，撤销已发送记忆后PermissionError且0Provider，源码前后一致 |
-| AC-05 | 同算法直接/进程内/隔离性能；保留集不退化及MP-0固定门；MP-3.5 | Codex | scripts/benchmark及原b2-1/evaluation-baseline.md门 | 相同数据权限模型调用数，冷/热/CPU/RSS/RPC/Token/成本分别记录 | 是：性能门 | 保留集0.9167、零泄漏；产品Host性能未达门，见performance-split-01-report.json；最新FD相对路径诊断trusted wall6.066>4.6821ms、CPU3.325>2.8262ms，isolated CPU4.577>4.522ms但未接入产品，见native-scan-diagnostic.json |
+| AC-05 | 同算法直接/进程内/隔离性能；保留集不退化及MP-0固定门；MP-3.5 | Codex | scripts/benchmark及原b2-1/evaluation-baseline.md门 | 相同数据权限模型调用数，冷/热/CPU/RSS/RPC/Token/成本分别记录 | 是：性能门 | 保留集0.9167、零泄漏；产品Host性能未达门，见performance-split-01-report.json；各后续诊断的精确数值、SHA及未接入限制统一见native-scan-diagnostic.json。固定门槛不变 |
 | AC-06 | GUI-L3模板/成员、支持编辑发布运行、群聊/定向消息、任务/工件板、Agent个人页 | Codex | 正式API/生成Client/GUI业务，服务端状态守卫 | 临时项目/Graph/Team；无需手填内部ID | 是：协作闭环 | 当前API13项目录回归、GUI110项/typecheck/build通过；native03实际Graph→Team恢复、任务rev2→3→4、消息Mailbox与SSE Cursor10通过，见j2-current/native03-native-readback.json；其他协作证据按范围复用 |
 | AC-07 | 上下文检查器实际条目版本/来源/条件/Token/原因/移出本次/刷新 | Codex | 正式Projection与GUI交互 | Session真实Provider上下文读回 | 是：可解释 | 当前真实原生检查器读回版本/来源/条件/Token；移出后Manifest rev2，刷新后rev3且保留排除，历史上下文不变，见j2-current/native-context-controls.json |
 | AC-08 | J2单Agent与真实多Agent共用记忆；无插件普通任务/强依赖显式失败 | Codex | 正式discover/ModelProfile/Session/Graph，明确workspace/tool policy | 合成任务；只读工具；受控调用预算，记录精确model ID | 是：联合硬门 | 当前gpt-5.6-luna正式单/双Agent调用通过：单RIVER_42/42、双CEDAR_29/42及私信模型输入隔离，见j2-current；nextsend-real.json中默认memory_plugin_mode=True/零安装普通Session成功，强依赖memory-standard返回明确409且0Provider |
@@ -99,4 +100,6 @@ User 已明确同意安装 `/Users/bigo/.codex/rules/operant-b2-4-verification.r
 - `performance-split-01-report.json`为产品固定门槛失败证据；后续allocation报告字段修正见`performance-allocation-report-correction.json`，不把失败改判通过。原生C、metadata和compact JSON仅独立诊断，未接入产品；最新FD相对路径诊断trusted wall6.066>4.6821ms、CPU3.325>2.8262ms，isolated CPU4.577>4.522ms，仍不满足整体门禁。
 - 原gpt-5.6-luna/max Reviewer会话`01a09abd-f0d9-76e0-828e-b75a1f014e9e`恢复后已完成75de71c代码与证据复核，原目录P1/P2关闭，无新增P1/P2，见`review-current-closure.md`。后续产品性能改动仍需增量复核。
 - 当前性能profile确认完整包检查占主要Host开销；仅单请求目录anchor微测仍变慢，已停止候选，见`native-scan-diagnostic.json`。全部诊断均未进入产品。
+- 纯Python对象复用诊断通过27项定向回归，trusted仍超门；精简native组合trusted CPU2.702>2.6362ms、wall4.3924>4.359ms，isolated通过，源码前后不变，均未进入产品。下一项仅验证扫描器局部分配优化，见`native-scan-diagnostic.json`。
+- 观测分离已完成，独立gpt-5.6-luna/max复核无P1/P2；其后补POLICY对比和实际isolated覆盖，18项回归通过，见`gates/observation-split-results.json`。新权限环境当前Python产品仍未达固定性能门；C仍仅诊断。
 - 当前剩余硬门为Host性能；验收环境冻结/事实全部保留。B2-4仍未交付，不推送、合并、部署或迁移用户库；完成后移除4条临时验收白名单。

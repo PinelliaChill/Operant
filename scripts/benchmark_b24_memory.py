@@ -30,7 +30,7 @@ import time
 import tracemalloc
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -67,6 +67,14 @@ AGENT_ID = "agent_b24_benchmark"
 REPETITIONS_DEFAULT = 2
 POLICY = RetrievalPolicy()
 MODES = ("direct", "trusted_in_process", "isolated")
+
+
+def _request_key(request: RecallRequest) -> dict[str, Any]:
+    """Compare logical inputs, excluding fresh-install identity and wall deadline."""
+    value = request.model_dump(mode="json")
+    value["context"].pop("installation_id")
+    value["context"].pop("deadline")
+    return value
 
 
 @dataclass(frozen=True)
@@ -111,6 +119,7 @@ class RpcCounter:
     incoming_bytes: int = 0
     callback_requests: int = 0
     callback_request_bytes: int = 0
+    host_invoke_calls: int = 0
     host_api_calls: int = 0
     manager_search_calls: int = 0
     manager_search_ms: float = 0.0
@@ -139,7 +148,7 @@ class RpcCounter:
                 else None,
             },
             "host_invoke": {
-                "calls": self.host_api_calls,
+                "calls": self.host_invoke_calls,
                 "total_ms": round(host_total_ms, 4),
             },
             "registry_assert_lease": {
@@ -156,9 +165,9 @@ class RpcCounter:
             },
             "host_minus_manager_ms": round(host_total_ms - self.manager_search_ms, 4),
             "interpretation": (
-                "registry package digest work is included in verify_package; host_minus_manager "
-                "also includes typed validation, callbacks, and transport; wall/CPU come from "
-                "the timing pass and allocation is measured in an independent pass"
+                "observation-only phase timings; registry package digest work is included in "
+                "verify_package; host_minus_manager also includes typed validation, callbacks, "
+                "and transport; formal timing/allocation passes are uninstrumented"
             ),
         }
 
@@ -538,13 +547,18 @@ def _quality(
     precisions: list[float] = []
     recalls: list[float] = []
     forbidden_hits: dict[str, list[str]] = {}
+    for index, sample in enumerate(samples):
+        case = cases[index % len(cases)]
+        bad = set(sample.returned_ids).intersection(case.forbidden_ids)
+        if bad:
+            forbidden_hits[case.id] = sorted(set(forbidden_hits.get(case.id, ())) | bad)
     for case, sample in zip(cases, final, strict=True):
         actual = set(sample.returned_ids)
         expected = set(case.expected_ids)
         relevant = actual.intersection(expected)
         bad = sorted(actual.intersection(case.forbidden_ids))
         if bad:
-            forbidden_hits[case.id] = bad
+            forbidden_hits[case.id] = sorted(set(forbidden_hits.get(case.id, ())) | set(bad))
         precisions.append(
             1.0 if not actual and not expected else len(relevant) / len(actual) if actual else 0.0
         )
@@ -674,7 +688,7 @@ def _direct_mode_pass(
     root: Path,
     repetitions: int,
     *,
-    pass_kind: Literal["timing", "allocation"],
+    pass_kind: Literal["timing", "allocation", "observation"],
 ) -> dict[str, Any]:
     allocation = pass_kind == "allocation"
     setup_started = time.perf_counter_ns()
@@ -684,6 +698,7 @@ def _direct_mode_pass(
     setup_ms = (time.perf_counter_ns() - setup_started) / 1_000_000.0
     samples: list[Sample] = []
     returned: list[tuple[str, ...]] = []
+    request_keys: list[dict[str, Any]] = []
     manager_search_ms = 0.0
     for repetition in range(repetitions):
         for index, case in enumerate(cases):
@@ -696,6 +711,7 @@ def _direct_mode_pass(
                 ordinal=ordinal,
             )
             _register_run(manager, request, cutoff)
+            request_keys.append(_request_key(request))
 
             def search_one(request: RecallRequest = request) -> CandidateBatch:
                 return manager.search(request)
@@ -711,6 +727,12 @@ def _direct_mode_pass(
             returned.append(sample.returned_ids)
     return {
         "mode": "direct",
+        "configuration_key": {
+            "fixture": fixture.file_sha256,
+            "policy": asdict(POLICY),
+            "role_id": ROLE_ID,
+            "agent_id": AGENT_ID,
+        },
         "pass_kind": pass_kind,
         "status": "completed",
         "algorithm": "MemoryManager.search -> b24_fts + frozen_versions -> retrieve_memories",
@@ -742,11 +764,54 @@ def _direct_mode_pass(
                 "direct reference executes the production MemoryManager.search entrypoint"
             ),
         },
+        "request_keys": request_keys,
         "returned_ids": returned,
         "samples": samples,
         "manager_search_calls": len(samples),
         "manager_search_ms": manager_search_ms,
     }
+
+
+def _assemble_passes(
+    timing: dict[str, Any], allocation: dict[str, Any], observation: dict[str, Any]
+) -> dict[str, Any]:
+    for other in (allocation, observation):
+        if timing["configuration_key"] != other["configuration_key"]:
+            raise RuntimeError("benchmark passes used different configuration/authority")
+        if timing["request_keys"] != other["request_keys"]:
+            raise RuntimeError("benchmark passes received different logical requests")
+        if timing["quality"] != other["quality"]:
+            raise RuntimeError("benchmark passes returned different quality/safety results")
+        _merge_samples(timing["samples"], other["samples"])
+    samples, _ = _merge_samples(timing["samples"], allocation["samples"])
+    result = dict(timing)
+    for name in (
+        "pass_kind",
+        "samples",
+        "phase_timing",
+        "rpc",
+        "manager_search_calls",
+        "manager_search_ms",
+    ):
+        result.pop(name, None)
+    result["metrics"] = _metric_summary(samples)
+    result["sampling_protocol"] = "independent-timing-allocation-observation.v1"
+    result["allocation_pass"] = {
+        "setup_ms": allocation["setup_ms"],
+        "sample_count": len(allocation["samples"]),
+        "returned_ids_match_timing": True,
+        "requests_match_timing": True,
+        "scope": "independent store and Host; tracemalloc only; no benchmark phase/RPC wrappers",
+    }
+    observed = dict(observation)
+    observed.pop("samples", None)
+    observed.pop("pass_kind", None)
+    observed["requests_match_timing"] = True
+    observed["returned_ids_match_timing"] = True
+    observed["quality_matches_timing"] = True
+    observed["scope"] = "independent complete observation pass; its costs never enter formal gates"
+    result["observation_pass"] = observed
+    return result
 
 
 def _direct_mode(
@@ -755,27 +820,10 @@ def _direct_mode(
     root: Path,
     repetitions: int,
 ) -> dict[str, Any]:
-    timing_pass = _direct_mode_pass(fixture, cases, root, repetitions, pass_kind="timing")
-    allocation_pass = _direct_mode_pass(fixture, cases, root, repetitions, pass_kind="allocation")
-    samples, returned_ids_match = _merge_samples(timing_pass["samples"], allocation_pass["samples"])
-    result = dict(timing_pass)
-    result.pop("pass_kind", None)
-    result.pop("samples", None)
-    result["metrics"] = _metric_summary(samples)
-    result["quality"] = timing_pass["quality"]
-    result["returned_ids"] = timing_pass["returned_ids"]
-    result["allocation_pass"] = {
-        "setup_ms": allocation_pass["setup_ms"],
-        "sample_count": len(allocation_pass["samples"]),
-        "manager_search_calls": allocation_pass["manager_search_calls"],
-        "rpc": allocation_pass["rpc"],
-        "returned_ids_match_timing": returned_ids_match,
-        "scope": (
-            "independent temporary SQLite and full fixture pass under tracemalloc; "
-            "allocation wall/CPU/quality are excluded from the timing pass"
-        ),
-    }
-    return result
+    timing = _direct_mode_pass(fixture, cases, root, repetitions, pass_kind="timing")
+    allocation = _direct_mode_pass(fixture, cases, root, repetitions, pass_kind="allocation")
+    observation = _direct_mode_pass(fixture, cases, root, repetitions, pass_kind="observation")
+    return _assemble_passes(timing, allocation, observation)
 
 
 async def _host_mode_pass(
@@ -785,9 +833,10 @@ async def _host_mode_pass(
     repetitions: int,
     mode: Literal["trusted_in_process", "isolated"],
     *,
-    pass_kind: Literal["timing", "allocation"],
+    pass_kind: Literal["timing", "allocation", "observation"],
 ) -> dict[str, Any]:
     allocation = pass_kind == "allocation"
+    observation = pass_kind == "observation"
     setup_started = time.perf_counter_ns()
     ledger, versions = build_ledger(root / f"{mode}-{pass_kind}.sqlite3", fixture)
     cutoff = publication_cutoff(ledger)
@@ -841,7 +890,7 @@ async def _host_mode_pass(
         config=config,
         installation_id=f"installation-b24-{mode}-{pass_kind}",
     )
-    counter = RpcCounter()
+    counter = RpcCounter() if observation else None
 
     def authorize_ref(context: RpcContext, ref: MemoryVersionRef) -> bool:
         version = versions.get(ref.record_id)
@@ -853,6 +902,7 @@ async def _host_mode_pass(
         )
 
     def search_callback(request: RecallRequest) -> CandidateBatch:
+        assert counter is not None
         counter.host_api_calls += 1
         if mode == "isolated":
             counter.callback_requests += 1
@@ -874,7 +924,7 @@ async def _host_mode_pass(
         registry,
         callbacks=HostCallbacks(
             authorize_memory_ref=authorize_ref,
-            search=search_callback,
+            search=search_callback if observation else manager.search,
         ),
     )
     binding = host.bind(installation.installation_id)
@@ -891,9 +941,12 @@ async def _host_mode_pass(
     spawn_ms = (time.perf_counter_ns() - spawn_started) / 1_000_000.0
 
     def instrument_registry_method(name: str, counter_name: str, time_name: str) -> None:
+        if not observation:
+            return
         original = getattr(registry, name)
 
         def timed(*args: Any, **kwargs: Any) -> Any:
+            assert counter is not None
             started = time.perf_counter_ns()
             try:
                 return original(*args, **kwargs)
@@ -924,33 +977,47 @@ async def _host_mode_pass(
         "registry_verify_certification_ms",
     )
 
+    if observation:
+        original_invoke = host.invoke
+
+        async def counted_invoke(lease: Any, operation: str, request: Any) -> Any:
+            assert counter is not None
+            counter.host_invoke_calls += 1
+            return await original_invoke(lease, operation, request)
+
+        host.invoke = counted_invoke  # type: ignore[method-assign]
+
     child_pid: int | None = None
     if mode == "isolated":
         slot = host._engines[installation.installation_id]  # noqa: SLF001 - benchmark instrumentation
         engine = cast(StdioPluginEngine, slot.engine)
         child_pid = getattr(engine.process, "pid", None)
-        original_write = engine._write  # noqa: SLF001
-        original_read = engine._read_until_response  # noqa: SLF001
+        if observation:
+            original_write = engine._write  # noqa: SLF001
+            original_read = engine._read_until_response  # noqa: SLF001
 
-        async def counted_write(payload: Mapping[str, Any], *, deadline: Any = None) -> None:
-            encoded = encode_rpc(payload, max_bytes=slot.limits.max_request_bytes)
-            counter.outgoing_frames += 1
-            counter.outgoing_bytes += len(encoded)
-            await original_write(payload, deadline=deadline)
+            async def counted_write(payload: Mapping[str, Any], *, deadline: Any = None) -> None:
+                assert counter is not None
+                encoded = encode_rpc(payload, max_bytes=slot.limits.max_request_bytes)
+                counter.outgoing_frames += 1
+                counter.outgoing_bytes += len(encoded)
+                await original_write(payload, deadline=deadline)
 
-        async def counted_read(rpc_id: int, host_api: Any) -> dict[str, Any]:
-            result = await original_read(rpc_id, host_api)
-            counter.incoming_frames += 1
-            counter.incoming_bytes += len(
-                encode_rpc(result, max_bytes=slot.limits.max_response_bytes)
-            )
-            return result
+            async def counted_read(rpc_id: int, host_api: Any) -> dict[str, Any]:
+                assert counter is not None
+                result = await original_read(rpc_id, host_api)
+                counter.incoming_frames += 1
+                counter.incoming_bytes += len(
+                    encode_rpc(result, max_bytes=slot.limits.max_response_bytes)
+                )
+                return result
 
-        engine._write = counted_write
-        engine._read_until_response = counted_read
+            engine._write = counted_write
+            engine._read_until_response = counted_read
 
     samples: list[Sample] = []
     returned: list[tuple[str, ...]] = []
+    request_keys: list[dict[str, Any]] = []
     leases: dict[str, Any] = {}
     for workspace in {case.project_scope for case in cases}:
         leases[workspace] = host.start_run(
@@ -973,10 +1040,12 @@ async def _host_mode_pass(
         raise
     readiness_ms = (time.perf_counter_ns() - readiness_started) / 1_000_000.0
     setup_ms = (time.perf_counter_ns() - setup_started) / 1_000_000.0
-    startup_rpc = {"frames": counter.rpc_frames, "bytes": counter.rpc_bytes}
+    startup_rpc = (
+        {"frames": counter.rpc_frames, "bytes": counter.rpc_bytes} if counter is not None else None
+    )
     # The callbacks close over this variable. Keep startup work separate from
     # the subsequent query counters, while retaining its RPC cost in the report.
-    counter = RpcCounter()
+    counter = RpcCounter() if observation else None
     try:
         for repetition in range(repetitions):
             for index, case in enumerate(cases):
@@ -1002,6 +1071,8 @@ async def _host_mode_pass(
                     }
                 )
 
+                request_keys.append(_request_key(request))
+
                 # Registration uses the original immutable request ID, so the
                 # copied context still points at the same run entry.
                 async def invoke_one(
@@ -1024,6 +1095,22 @@ async def _host_mode_pass(
             registry.close()
     return {
         "mode": mode,
+        "configuration_key": {
+            "fixture": fixture.file_sha256,
+            "policy": asdict(POLICY),
+            "role_id": ROLE_ID,
+            "agent_id": AGENT_ID,
+            "mode": admission.mode,
+            "manifest": manifest.model_dump(mode="json"),
+            "config": config.model_dump(mode="json", exclude={"config_id", "effective_at"}),
+            "certification": certification.model_dump(
+                mode="json", exclude={"certification_id", "valid_from", "expires_at"}
+            ),
+            "certification_validity_seconds": (
+                certification.expires_at - certification.valid_from
+            ).total_seconds(),
+            "host_budget": host.budget.model_dump(mode="json"),
+        },
         "pass_kind": pass_kind,
         "status": "completed",
         "algorithm": (
@@ -1043,8 +1130,10 @@ async def _host_mode_pass(
             "rpc": startup_rpc,
         },
         "metrics": _metric_summary(samples),
-        "phase_timing": counter.phase_report(
-            host_total_ms=sum(sample.wall_ms for sample in samples)
+        "phase_timing": (
+            counter.phase_report(host_total_ms=sum(sample.wall_ms for sample in samples))
+            if counter is not None
+            else None
         ),
         "quality": _quality(cases, samples, repetitions),
         "model_calls": 0,
@@ -1062,16 +1151,19 @@ async def _host_mode_pass(
             "callback_request_bytes": counter.callback_request_bytes,
             "nested_host_api_calls": counter.host_api_calls,
             "measurement": (
-                "actual stdio JSON-RPC frames; callback request bytes "
-                "reconstructed from typed payload"
+                "observation-only transport-boundary frame counts; byte lengths "
+                "reconstructed by encoding typed frames, not wire capture"
                 if mode == "isolated"
                 else "in-process calls are not RPC frames"
             ),
-        },
+        }
+        if counter is not None
+        else None,
+        "request_keys": request_keys,
         "returned_ids": returned,
         "samples": samples,
-        "manager_search_calls": counter.manager_search_calls,
-        "manager_search_ms": counter.manager_search_ms,
+        "manager_search_calls": counter.manager_search_calls if counter is not None else None,
+        "manager_search_ms": counter.manager_search_ms if counter is not None else None,
     }
 
 
@@ -1082,49 +1174,15 @@ async def _host_mode(
     repetitions: int,
     mode: Literal["trusted_in_process", "isolated"],
 ) -> dict[str, Any]:
-    """Run complete timing and allocation passes on independent Host state."""
-
-    timing_pass = await _host_mode_pass(
-        fixture,
-        cases,
-        root,
-        repetitions,
-        mode,
-        pass_kind="timing",
+    """Observe separately; never subtract observer overhead from a sample."""
+    timing = await _host_mode_pass(fixture, cases, root, repetitions, mode, pass_kind="timing")
+    allocation = await _host_mode_pass(
+        fixture, cases, root, repetitions, mode, pass_kind="allocation"
     )
-    allocation_pass = await _host_mode_pass(
-        fixture,
-        cases,
-        root,
-        repetitions,
-        mode,
-        pass_kind="allocation",
+    observation = await _host_mode_pass(
+        fixture, cases, root, repetitions, mode, pass_kind="observation"
     )
-    samples, returned_ids_match = _merge_samples(timing_pass["samples"], allocation_pass["samples"])
-    result = dict(timing_pass)
-    result.pop("pass_kind", None)
-    result.pop("samples", None)
-    result["metrics"] = _metric_summary(samples)
-    result["quality"] = timing_pass["quality"]
-    result["returned_ids"] = timing_pass["returned_ids"]
-    result["allocation_pass"] = {
-        "setup_ms": allocation_pass["setup_ms"],
-        "host_startup": allocation_pass["host_startup"],
-        "sample_count": len(allocation_pass["samples"]),
-        "manager_search_calls": allocation_pass["manager_search_calls"],
-        "rpc": allocation_pass["rpc"],
-        "phase_calls": {
-            name: entry["calls"]
-            for name, entry in allocation_pass["phase_timing"].items()
-            if isinstance(entry, dict) and "calls" in entry
-        },
-        "returned_ids_match_timing": returned_ids_match,
-        "scope": (
-            "independent temporary SQLite, registry, and Host pass under tracemalloc; "
-            "allocation wall/CPU/RPC/quality are reported separately"
-        ),
-    }
-    return result
+    return _assemble_passes(timing, allocation, observation)
 
 
 async def _run_host_mode(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -1378,8 +1436,8 @@ def run_benchmark(
         "The fixed fixture is synthetic and cannot establish production semantic quality.",
         "The run makes zero model calls; provider usage and end-to-end task cost are unknown.",
         "Direct and Host parent CPU/RSS/allocation scopes differ from isolated child metrics.",
-        "Isolated callback request bytes are reconstructed from typed payloads; "
-        "other stdio frames are counted at transport boundaries.",
+        "RPC/phase counters exist only in the independent observation pass; "
+        "stdio byte lengths are reconstructed by re-encoding, not wire capture.",
     ]
     limitations.extend(gate_limitations(gate_results))
     report = {
@@ -1406,7 +1464,8 @@ def run_benchmark(
             "repetitions": repetitions,
             "requested_modes": list(modes),
             "modes": list(results),
-            "database": "temporary isolated SQLite per mode",
+            "database": "independent temporary SQLite/Registry/Host per mode and pass",
+            "sampling_protocol": "independent-timing-allocation-observation.v1",
             "user_database_read": False,
             "environment_file_read": False,
             "network": False,
