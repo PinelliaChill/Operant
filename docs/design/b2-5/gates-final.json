@@ -1,0 +1,32 @@
+{
+  "evidence_head": "02c50bdbc53909fe26c4bf0e2929e2d6e91a8230",
+  "source_matches_frozen": true,
+  "pytest": {
+    "passed": 1017,
+    "failed": 0,
+    "errors": 0,
+    "skipped": [
+      {
+        "test": "tests.test_execution::test_docker_runner_integration_when_an_image_is_explicitly_provided",
+        "reason": "requires Docker and OPERANT_DOCKER_TEST_IMAGE"
+      }
+    ],
+    "seconds": 664.775
+  },
+  "ruff_format": "339 files already formatted",
+  "ruff_check": "All checks passed",
+  "mypy": "118 source files passed",
+  "uv_lock": "--check --offline passed; 42 packages",
+  "gui": {
+    "tests": 116,
+    "typecheck": "passed",
+    "build": "passed",
+    "native_build": "passed"
+  },
+  "protocol_determinism": "protocol-determinism.json",
+  "real_model": "live-07.json",
+  "retained_real_failure": "live-06.json (TimeoutError; no proposal or watermark advance)",
+  "native": "native-review-acceptance.json",
+  "review": "review-final.md: all initial findings closed; no new P1/P2",
+  "diff_check": "passed"
+}

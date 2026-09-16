@@ -22,12 +22,12 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
     ) -> None:
         atomic_path = tmp_path / "atomic.sqlite3"
         SQLiteStore(atomic_path).migrate(2)
-    
+
         class BrokenV3Store(SQLiteStore):
             def _upgrade_v3(self, connection: sqlite3.Connection) -> None:
                 super()._upgrade_v3(connection)
                 raise RuntimeError("injected migration failure")
-    
+
         with pytest.raises(RuntimeError, match="injected migration failure"):
             BrokenV3Store(atomic_path).migrate()
         assert SQLiteStore(atomic_path).schema_version() == 2
@@ -38,7 +38,7 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
                 ).fetchone()
                 is None
             )
-    
+
         empty_atomic_path = tmp_path / "empty-atomic.sqlite3"
         with pytest.raises(RuntimeError, match="injected migration failure"):
             BrokenV3Store(empty_atomic_path).migrate()
@@ -50,7 +50,7 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
                 ).fetchall()
             }
         assert tables == set()
-    
+
         store = SQLiteStore(tmp_path / "rollback.sqlite3")
         store.initialize()
         assert store.rollback(2, isolated=True) == 2
@@ -66,7 +66,7 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
             store.rollback(2, isolated=True)
         with pytest.raises(MigrationError, match="explicitly isolated"):
             store.rollback(2)
-    
+
         for name, mutation, expected in (
             (
                 "checksum",
@@ -94,14 +94,14 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
 
     def test_concurrent_migration_to_same_target_is_repeatable(tmp_path: Path) -> None:
         path = tmp_path / "concurrent.sqlite3"
-    
+
         def migrate() -> int:
             return SQLiteStore(path).migrate()
-    
+
         with ThreadPoolExecutor(max_workers=2) as executor:
 >           assert list(executor.map(lambda _item: migrate(), range(2))) == [16, 16]
 E           assert [17, 17] == [16, 16]
-E             
+E
 E             At index 0 diff: 17 != 16
 E             Use -v to get more diff
 
@@ -112,12 +112,12 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
 
     def test_concurrent_v6_initialization_and_context_request_identity(tmp_path: Path) -> None:
         database = tmp_path / "concurrent.sqlite3"
-    
+
         with ThreadPoolExecutor(max_workers=3) as executor:
             versions = list(executor.map(lambda _value: SQLiteStore(database).migrate(), range(3)))
 >       assert versions == [16, 16, 16]
 E       assert [17, 17, 17] == [16, 16, 16]
-E         
+E
 E         At index 0 diff: 17 != 16
 E         Use -v to get more diff
 
@@ -128,7 +128,7 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
 
     def test_phase1e_core_loopback_urllib_closed_loop(tmp_path: Path) -> None:
         """Exercise all eight frozen operations against Core over a real socket."""
-    
+
         frozen = _schema()
         schemas = cast(dict[str, Any], frozen["components"]["schemas"])
         operation_ids = [
@@ -147,7 +147,7 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
             "submitApproval",
         ]
         assert set(OPERATION_DEFINITIONS) == set(operation_ids)
-    
+
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / "README.txt").write_text("local integration fixture\n", encoding="utf-8")
@@ -186,19 +186,19 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
 >       with _running_uvicorn(app) as base_url:
              ^^^^^^^^^^^^^^^^^^^^^
 
-tests/test_phase1e_loopback_integration.py:315: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_phase1e_loopback_integration.py:315:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 /Users/bigo/.pyenv/versions/3.13.3/lib/python3.13/contextlib.py:141: in __enter__
     return next(self.gen)
            ^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
 app = <fastapi.applications.FastAPI object at 0x124687ed0>
 
     @contextmanager
     def _running_uvicorn(app: Any) -> Iterator[str]:
         """Serve the app on an actual loopback socket for urllib transport tests."""
-    
+
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 >       listener.bind(("127.0.0.1", 0))
@@ -211,18 +211,18 @@ tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/p
 
     def test_concurrent_v11_initialization_is_serial_and_repeatable(tmp_path: Path) -> None:
         database = tmp_path / "concurrent.sqlite3"
-    
+
         def initialize() -> int:
             store = SQLiteStore(database)
             store.initialize()
             return store.schema_version()
-    
+
         with ThreadPoolExecutor(max_workers=4) as executor:
             versions = list(executor.map(lambda _index: initialize(), range(8)))
-    
+
 >       assert versions == [16] * 8
 E       assert [17, 17, 17, 17, 17, 17, ...] == [16, 16, 16, 16, 16, 16, ...]
-E         
+E
 E         At index 0 diff: 17 != 16
 E         Use -v to get more diff
 

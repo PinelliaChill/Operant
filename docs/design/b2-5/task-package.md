@@ -1,11 +1,11 @@
 ---
 task_id: B2-5
 owner: Codex
-status: implementing
+status: complete
 scope: B2-5 / MP-4 only
 base_head: c2e89758b5d4b3c779353ca1fe863d1fec9cee79
-code_head: null
-delivery_head: null
+code_head: 02c50bdbc53909fe26c4bf0e2929e2d6e91a8230
+delivery_head: 02c50bdbc53909fe26c4bf0e2929e2d6e91a8230
 governance:
   root: /Users/bigo/agentworkspace/codexworkspace/operant
   version: workflow-20260915.1
@@ -36,9 +36,17 @@ acceptance_environment:
   resources: []
   paused_writers: []
   release_condition: null
-evidence_index: []
-review_ref: null
-next_action: 独立Reviewer收口与安全定向补测；整理交付证据后提交工作分支
+evidence_index:
+  - gates-final.json
+  - frozen-source-hashes.json
+  - protocol-determinism.json
+  - live-07.json
+  - native-review-acceptance.json
+  - native-acceptance.json
+  - review.md
+
+review_ref: review-final.md
+next_action: 已完成B2-5并停止；仅等待User后续明确授权
 ---
 # 本次目标与边界
 
@@ -60,14 +68,14 @@ next_action: 独立Reviewer收口与安全定向补测；整理交付证据后�
 
 | ID | 要求与来源 | 负责人 | 检查与环境 | 阻断及结果 |
 | --- | --- | --- | --- | --- |
-| AC-01 | MP-4.1 原始历史搜索/按需展开，当前与当时区别，权限与私人 Mailbox 隔离 | Codex | 定向历史/权限测试与正式 Query，临时库 | 是；待验 |
-| AC-02 | MP-4.2 冲突/替代、有效时间、来源依赖/撤销传播、复核期限、独立证据去重 | Codex | 领域/召回/并发与过期测试 | 是；待验 |
-| AC-03 | MP-4.3 已发布维护 Workflow+有限 Executor+现有 Scheduler，版本/cursor 固定，Proposal/水位原子幂等 | Codex | 真实 Scheduler/正式 ModelProfile，有限合成来源 | 是；待验 |
-| AC-04 | MP-4.3 取消/retry/DLQ、前台优先独立预算，关闭无迟到提交，原任务结果不受提取失败影响 | Codex | 失败/取消/关闭/重放定向测试与真实后台调用 | 是；待验 |
-| AC-05 | MP-4.4 生成 Client GUI，精确 Proposal/version 批量处理、历史/来源/生效时间/后台状态 | Codex | GUI tests/typecheck/build，正式 API/原生壳交互 | 是；待验 |
-| AC-06 | 视觉呈现、长文本/宽窄/键盘/对比、错误/断线只读无 Mock | Antigravity / Codex | 实际组件挂载自检，Codex 原生正式验收 | 是；待验 |
-| AC-07 | Core/契约影响矩阵 | Codex | 完整 ruff format/check、mypy、pytest、uv lock offline、diff；生成确定性及 GUI 脚本 | 是；待验 |
-| AC-08 | User 指定独立审查与交付 | Codex Reviewer / root | Luna/max 独立审查；阻断风险闭环，当前架构/进度同步 | 是；待验 |
+| AC-01 | MP-4.1 原始历史搜索/按需展开，当前与当时区别，权限与私人 Mailbox 隔离 | Codex | 定向历史/权限测试与正式 Query，临时库 | 通过；history/cutoff/跨项目与Mailbox定向测试、原生历史/来源展开 |
+| AC-02 | MP-4.2 冲突/替代、有效时间、来源依赖/撤销传播、复核期限、独立证据去重 | Codex | 领域/召回/并发与过期测试 | 通过；原子故障、正文digest、期限、supersedes/冲突、来源撤销与独立证据测试；原生中文纠正/替代 |
+| AC-03 | MP-4.3 已发布维护 Workflow+有限 Executor+现有 Scheduler，版本/cursor 固定，Proposal/水位原子幂等 | Codex | 真实 Scheduler/正式 ModelProfile，有限合成来源 | 通过；live-07正式Scheduler/Graph/Host+幂等/来源水位测试；登记缺失failclosed |
+| AC-04 | MP-4.3 取消/retry/DLQ、前台优先独立预算，关闭无迟到提交，原任务结果不受提取失败影响 | Codex | 失败/取消/关闭/重放定向测试与真实后台调用 | 通过；12项Scheduler定向+原Scheduler回归；live-06真实超时无提交、live-07成功/零调用 |
+| AC-05 | MP-4.4 生成 Client GUI，精确 Proposal/version 批量处理、历史/来源/生效时间/后台状态 | Codex | GUI tests/typecheck/build，正式 API/原生壳交互 | 通过；116 GUI测试/typecheck/build、精确关系选择与2项原生批量接受、Context影响 |
+| AC-06 | 视觉呈现、长文本/宽窄/键盘/对比、错误/断线只读无 Mock | Antigravity / Codex | 实际组件挂载自检，Codex 原生正式验收 | 通过；Antigravity实名挂载自检+原生宽窄/焦点/断线只读/重连；受影响关系原生复验 |
+| AC-07 | Core/契约影响矩阵 | Codex | 完整 ruff format/check、mypy、pytest、uv lock offline、diff；生成确定性及 GUI 脚本 | 通过；1017 pytest通过、1 Docker条件跳过；ruff/mypy/lock/生成确定性/GUI/原生构建；最终文档diff检查通过 |
+| AC-08 | User 指定独立审查与交付 | Codex Reviewer / root | Luna/max 独立审查；阻断风险闭环，当前架构/进度同步 | 通过；review-final.md确认3P1/4P2闭环，无新增P1/P2 |
 
 ## 取舍与证据
 
@@ -98,3 +106,18 @@ next_action: 独立Reviewer收口与安全定向补测；整理交付证据后�
 - root修复GUI关系输入：选择服务端已发布record/version全ref，不再发送空digest；纯函数测试拒绝空digest/过时版本。新增崩溃命令可核对Projection，重启时一次性生成outcome_unknown事件并保持未知命令禁止重放；API 5项通过。
 - governance子Agent负责普通propose原子元数据、Ledger正文digest校验、未来cutoff拒绝和派生记录可用状态一致性；完成后root集成。
 - 上阶段 `live-05` 和 `native-acceptance` 保留为修复前历史证据，不能自动覆盖本阶段产品差异。待全部修复后重新冻结，按受影响链路补真实模型与原生关系提交验收，并由原Reviewer差异复审。
+
+产品源码已冻结在工作分支提交`02c50bd`。原始首轮测试日志仅归档时移除行尾空格，结果/失败细节未改写；原始字节保留在本机/private/tmp日志。产品源摘要见frozen-source-hashes.json，最后只允许证据/文档更新，遇产品缺陷另行解冻。
+
+## 冻结版本最终验收（Codex，2026-09-16）
+
+- `gates-final.json`：完整Python 1017通过，1项Docker镜像条件跳过（不算容器验收），ruff format339文件/check、mypy118源文件、离线lock、GUI116项/typecheck/build及原生构建通过。全部产品源码/测试摘要仍匹配`frozen-source-hashes.json`。
+- `live-06.json`：正式模型超时进入死信，无候选、不推进水位。`live-07.json`：同一源码、相同预算在全新合成库完整成功；不重放旧未知请求，不删除失败记录。
+- `native-review-acceptance.json`：最终构建下拉选择精确目标v2，生成supersedes候选，和另一条独立候选做2项人工精确批量接受；旧head退役、新head发布，SQLite及GUI回读一致。旧原生证据按未变影响面复用，最终关系差异重新走查。
+- 用户操作入口与故障说明见`README.md`。普通工作分支源码已提交；未推送main、未合并/部署/迁移真实用户库。独立复审最终通过前仍不称B2-5完成。
+
+## 最终裁决（Codex，2026-09-16）
+
+指定 gpt-5.6-luna/max 原 Reviewer 已实名交付 `review-final.md`：3项P1、4项P2全部闭环，冻结源码无新增P1/P2；Fast工具无可用开关，未开启。Codex核对逐项要求及源码/实测/构建摘要后接受B2-5/MP-4交付，见 `completion-audit.json`。唯一容器skip和B2-4既有Host性能限制保留，不扩大为生产部署或真实用户库迁移证明。普通工作分支推送完成后停止，未进入B2-6/7。
+
+版本说明：code_head/delivery_head固定已验收产品提交；随后仅文档证据归档提交，最终远端分支tip记录在治理current/当月归档，避免文档自引用SHA。

@@ -65,9 +65,9 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
-### B2-5 / MP-4 整理与治理（集成验收中）
+### B2-5 / MP-4 整理与治理（工作分支已验收）
 
-本批唯一范围和证据入口为 [B2-5任务包](design/b2-5/task-package.md)。当前源码已增加以下能力；完整门禁、原生最终验收与独立审查尚须以该包逐项结果为准，不能把代码存在视为本批完成。
+本批唯一范围和证据入口为 [B2-5任务包](design/b2-5/task-package.md)。当前工作分支已按该任务包完成完整门禁、真实模型、原生治理和指定Luna/max独立审查；未合并、部署或迁移真实用户库。
 
 SQLite v17 在冻结的 v1～v16 上追加治理来源、关系/依赖、候选期限/复核、维护作业与水位、命令和事件表；唯一正式发布头和不可变版本仍在 Memory Ledger。迁移拒绝篡改旧校验值，非空治理证据禁止降级清表。数据集删除在 Host 清理屏障后清理 dataset-owned 新表，原始 Item 与已发送 Context 按既有历史保留规则处理。
 
@@ -81,7 +81,7 @@ B2-5 批量审阅携带精确 proposal_id、proposal_revision、proposed_version
 
 Additive `b2-5.v1` 由 `api_b2_5.py` / `contracts/b2_5.py` 生成 OpenAPI、digest、Python/TypeScript Client。Query包括当前知识/候选、历史/详情、增量治理事件和实际Context的当前来源/时效影响；副作用命令经 Action Gateway 与持久幂等journal。事件只包含对象引用与动作，重复命令不重复通知，未知写结果不能自动重放。完成回执与事件同事务；业务提交后崩溃、回执未完成时，持久journal及Projection显式保留待核对command id，启动恢复一次性发出outcome_unknown事件，不推测成功、不重放业务。GUI通过生成 Client 接入候选/冲突收件箱、精确批量确认、历史、来源/有效时间、后台开关/作业/Token/DLQ；断线保留只读投影，状态和确认范围以 Core 为准。上下文检查器保留原始实际发送内容，另显示当前失效或冲突提示。
 
-真实 `gpt-5.6-luna` 验收已证明后台候选、人工确认、正式 Session 召回、无新来源零调用和撤销下一发送阻断；当前证据 `live-05.json` 固定全部src摘要，原始失败与脚本误判仍保留。原生治理与实际上下文走查见 `native-acceptance.json`；完整门禁首轮与受影响补跑见任务包。独立审查尚待收口，后续改动按输入摘要核对证据适用范围。
+真实 `gpt-5.6-luna` 验收已证明后台候选、人工确认、正式 Session 召回、无新来源零调用和撤销下一发送阻断；当前证据 `live-07.json` 固定全部src摘要，原始失败与脚本误判仍保留。原生治理、实际上下文及精确替代批量差异走查见 `native-acceptance.json`、`native-review-acceptance.json`；完整门禁1017通过、1 Docker条件跳过，见`gates-final.json`。初审3项P1/4项P2已修复，原Luna/max差异复审确认闭环且无新增P1/P2，见`review-final.md`；后续改动按输入摘要核对证据适用范围。
 
 ### B2-4 / MP-3 本地交付（含明确性能限制）
 
