@@ -1,0 +1,24 @@
+{
+  "source_evidence": "live-04.json",
+  "product_sources_unchanged": true,
+  "original_report_preserved": true,
+  "harness_issue": "Expected raised PermissionError; formal entry yielded agent.failed PermissionError instead",
+  "revoked_next_send": {
+    "event": "agent.failed",
+    "error_type": "PermissionError",
+    "model_calls": 0
+  },
+  "actual_graph_runs": [
+    {
+      "id": "graph_run_scheduler_aa118e3da3eda1ed6ae8ae027e14ac2a5ed99599e0803893facada2b16a0e636",
+      "status": "completed"
+    },
+    {
+      "id": "graph_run_scheduler_3a6db9e870ad533f4694d47a552f888c6eb96a54acaa6a1c1aed17cbc2393fa3",
+      "status": "completed"
+    }
+  ],
+  "disabled_create_http": 409,
+  "disabled_create_code": "memory_disabled",
+  "completed": true
+}

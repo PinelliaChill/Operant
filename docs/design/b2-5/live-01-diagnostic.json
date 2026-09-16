@@ -1,0 +1,1 @@
+{"phase":"failed_before_model","result":"Scheduler dead_letter gateway.ValidationError; snapshot envelope mismatch","model_calls":0,"database":".operant/b25-live-01/core.sqlite3","change":"Unify maintenance envelope and project durable Scheduler failures in jobs query","not_final_acceptance":true}

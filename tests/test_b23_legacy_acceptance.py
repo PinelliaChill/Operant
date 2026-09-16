@@ -137,8 +137,8 @@ async def test_v14_to_v15_project_memory_migration_is_quarantined_and_scoped(
     # This is the only schema upgrade in the drill.  It operates on the
     # synthetic copy above, never on a configured/user database.
     assert old_store.initialize() is None
-    assert old_store.schema_version() == 16
-    assert [row["version"] for row in old_store.list_applied_migrations()] == list(range(1, 17))
+    assert old_store.schema_version() == 17
+    assert [row["version"] for row in old_store.list_applied_migrations()] == list(range(1, 18))
 
     app = create_app(source_db)
     service = app.state.operant_service

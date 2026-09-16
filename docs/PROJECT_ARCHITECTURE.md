@@ -2,7 +2,7 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-15
+> 最后更新：2026-09-16
 >
 > 对应版本：B2-4 / MP-3 本地交付（SQLite v16；additive `b2-4.v1`；User接受Host性能限制）
 
@@ -64,6 +64,24 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
     `unsigned_candidate_not_for_release`，不能冒充正式发布物。
 
 ## 2. 当前完成度
+
+### B2-5 / MP-4 整理与治理（集成验收中）
+
+本批唯一范围和证据入口为 [B2-5任务包](design/b2-5/task-package.md)。当前源码已增加以下能力；完整门禁、原生最终验收与独立审查尚须以该包逐项结果为准，不能把代码存在视为本批完成。
+
+SQLite v17 在冻结的 v1～v16 上追加治理来源、关系/依赖、候选期限/复核、维护作业与水位、命令和事件表；唯一正式发布头和不可变版本仍在 Memory Ledger。迁移拒绝篡改旧校验值，非空治理证据禁止降级清表。数据集删除在 Host 清理屏障后清理 dataset-owned 新表，原始 Item 与已发送 Context 按既有历史保留规则处理。
+
+`memory_plugins/governance.py` 提供项目 canonical Item 历史搜索与按需展开，固定 Cursor 分页，区分当时记录和当前约定；不读取或复制私人 Mailbox。治理来源仍校验当前项目、版本摘要、可用性及权限；原始来源被不同记忆摘要引用时递归去重，不增加独立证据数。冲突/替代关系只记录精确版本，Proposal 未确认不移动发布头。有效时间与复核期限在服务端检查，来源撤销传播到派生依赖；正式 Runtime、Host 授权和兼容查询均阻断失效来源。已有 Run 的知识截止点仍可引用历史版本，但当前撤销与时效优先；已发送内容保留，污染历史的后续发送失败关闭。
+
+B2-5 批量审阅携带精确 proposal_id、proposal_revision、proposed_version（含摘要）和 base_head_revision，先核对整批再同事务接受/拒绝、写审阅审计，不能部分确认。接受前重新检查复核期限与来源；未解决conflicts_with拒绝发布，supersedes接受时原子退役目标head，目标已变化则整批回滚。过期或head已变化的精确候选仍可被用户拒绝。B2-3 老确认入口拒绝带治理元数据的候选，要求使用新契约。人工修正同样先形成候选；后台语义提取固定为 inferred，不可自我确认。
+
+`memory_plugins/maintenance.py` 通过已发布的有限单节点 Workflow 和原 Scheduler RunRequest/租约调度执行。每个 ModelProfile 的定义锁定其摘要；仅 B2-5 已登记的精确 RunRequest、Workflow版本和完整快照可进入维护执行器，随后仍经过原 Graph Action Gateway。发布定义含明确维护执行标记，已入队但登记缺失时进入manual reconcile，不回退普通Graph；未知模型结果不能因数据库提交幂等而自动重试。真实 GraphRun/NodeAttempt 保存运行与终态；不存在以 Relay/本地任务ID冒充 GraphRun 的路径。源码/插件包、绑定与权限 epoch、Host配置、模型、来源 Cursor 与预算在作业创建时固定，Host RunLease 跨越模型调用，在提交前重新验证；候选版本/Proposal、来源依赖及处理水位同事务提交。
+
+维护模型通过无工具正式 Session 调用，维护自身 Thread 从后续提取来源中排除。有限来源批次只推进到实际处理截止点，无新来源不调用模型或产生例行候选通知。前台已有 Session 租约时后台让步，维护调用全局并发为一，输入预算在模型调用前检查；Token按实际usage单独计量，未知美元成本保留未知。失败不改写原始任务结果，未完成提交不推进水位；失败与取消使用持久 Scheduler/Graph 状态及原 DLQ 显式重试，关闭/重开不能使旧租约恢复有效。默认 Host 后台开关关闭，B2-5治理入口显式设置；旧插件配置中的维护关闭也同步到Host开关。
+
+Additive `b2-5.v1` 由 `api_b2_5.py` / `contracts/b2_5.py` 生成 OpenAPI、digest、Python/TypeScript Client。Query包括当前知识/候选、历史/详情、增量治理事件和实际Context的当前来源/时效影响；副作用命令经 Action Gateway 与持久幂等journal。事件只包含对象引用与动作，重复命令不重复通知，未知写结果不能自动重放。完成回执与事件同事务；业务提交后崩溃、回执未完成时，持久journal及Projection显式保留待核对command id，启动恢复一次性发出outcome_unknown事件，不推测成功、不重放业务。GUI通过生成 Client 接入候选/冲突收件箱、精确批量确认、历史、来源/有效时间、后台开关/作业/Token/DLQ；断线保留只读投影，状态和确认范围以 Core 为准。上下文检查器保留原始实际发送内容，另显示当前失效或冲突提示。
+
+真实 `gpt-5.6-luna` 验收已证明后台候选、人工确认、正式 Session 召回、无新来源零调用和撤销下一发送阻断；当前证据 `live-05.json` 固定全部src摘要，原始失败与脚本误判仍保留。原生治理与实际上下文走查见 `native-acceptance.json`；完整门禁首轮与受影响补跑见任务包。独立审查尚待收口，后续改动按输入摘要核对证据适用范围。
 
 ### B2-4 / MP-3 本地交付（含明确性能限制）
 

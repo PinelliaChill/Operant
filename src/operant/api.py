@@ -3575,6 +3575,9 @@ def create_app(
     from operant.api_b2_4 import install_b2_4_routes
 
     install_b2_4_routes(app, service)
+    from operant.api_b2_5 import install_b2_5_routes
+
+    install_b2_5_routes(app, service)
     local_authorizer = phase56_local_authorizer or (
         lambda request: (
             request.client is not None and request.client.host in {"127.0.0.1", "::1", "testclient"}
