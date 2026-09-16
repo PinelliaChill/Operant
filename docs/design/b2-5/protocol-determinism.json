@@ -1,0 +1,9 @@
+{
+  "unchanged": true,
+  "sha256": {
+    "sdk/protocol/schema/operant-b2-5.openapi.json": "7e42afe571c299e903a86a624fc4411da88e28b5abd86fcc9744745138de055f",
+    "sdk/protocol/schema/operant-b2-5.openapi.sha256": "cfd634f68a0438c8826739b6b6a7dd4a3f328077e17de2733010a6f99aca2db6",
+    "sdk/typescript-client/b2_5.generated.ts": "12bd0ceed7e7ab7bea772e7412e06e73d669b596d6018399529fe51c98296548",
+    "sdk/python_client/b2_5_generated.py": "4335903e3bec7fc2aa13fef233aa63560c78bd719af74e30b47439399051a47e"
+  }
+}

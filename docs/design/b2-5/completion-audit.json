@@ -1,0 +1,110 @@
+{
+  "identity": "Codex",
+  "scope": "B2-5/MP-4 only",
+  "evidence_head": "02c50bdbc53909fe26c4bf0e2929e2d6e91a8230",
+  "requirements": [
+    {
+      "id": "MP-4.1",
+      "requirement": "授权历史搜索、按需展开、固定截止点、当前与历史区别、Mailbox隔离",
+      "evidence": [
+        "tests/test_b25_governance.py",
+        "tests/test_b25_api.py",
+        "native-acceptance.json"
+      ],
+      "result": "passed"
+    },
+    {
+      "id": "MP-4.2",
+      "requirement": "冲突/替代、有效期/复核期限、精确批量CAS、来源撤销/派生可用性、同源证据去重、完整版本身份",
+      "evidence": [
+        "tests/test_b25_governance.py",
+        "review-final.md",
+        "native-review-acceptance.json",
+        "live-07.json"
+      ],
+      "result": "passed"
+    },
+    {
+      "id": "MP-4.3",
+      "requirement": "已发布有限维护Workflow/Executor、现有Scheduler/Graph、Host租约、冻结来源/配置/模型版本、原子幂等Proposal与水位",
+      "evidence": [
+        "src/operant/memory_plugins/maintenance.py",
+        "tests/test_b25_maintenance.py",
+        "tests/test_b25_scheduler_integration.py",
+        "live-07.json"
+      ],
+      "result": "passed"
+    },
+    {
+      "id": "MP-4.3-failures",
+      "requirement": "取消/retry/DLQ、前台优先独立预算、开关阻断迟到提交、无新来源零模型/零候选通知、未知结果不重放",
+      "evidence": [
+        "b25-scheduler-regression.log",
+        "b25-api-review-fixes.log",
+        "live-06.json",
+        "live-07.json"
+      ],
+      "result": "passed"
+    },
+    {
+      "id": "MP-4.4",
+      "requirement": "生成Query/Event/Client、候选与冲突/历史/后台状态GUI、精确版本选择、实际上下文影响、断线只读",
+      "evidence": [
+        "protocol-determinism.json",
+        "b25-gui-test.log",
+        "native-acceptance.json",
+        "native-review-acceptance.json"
+      ],
+      "result": "passed"
+    },
+    {
+      "id": "visual",
+      "requirement": "Antigravity新进程实名接收与实际挂载视觉自检，Codex原生验收",
+      "evidence": [
+        "governance-root:memory/communication/items/COM-20260916-001.md",
+        "native-acceptance.json",
+        "native-review-acceptance.json"
+      ],
+      "result": "passed"
+    },
+    {
+      "id": "gates",
+      "requirement": "完整ruff format/check、mypy、pytest、离线lock、diff；GUI脚本/原生构建与协议确定性",
+      "evidence": [
+        "gates-final.json",
+        "b25-final-pytest.log",
+        "b25-format-frozen.log",
+        "b25-ruff-frozen.log",
+        "b25-mypy-frozen.log",
+        "b25-lock-frozen.log",
+        "b25-native-review-build.log"
+      ],
+      "result": "passed with explicit Docker skip"
+    },
+    {
+      "id": "independent-review",
+      "requirement": "指定gpt-5.6-luna/max独立审查并闭环；Fast仅可用时启用",
+      "evidence": [
+        "review.md",
+        "review-final.md"
+      ],
+      "result": "passed; Fast unavailable/not enabled"
+    },
+    {
+      "id": "scope-governance",
+      "requirement": "持久隔离树/B2-4已合并基线/当前规则；不进入后续批次、不合并部署或迁移真实库",
+      "evidence": [
+        "task-package.md",
+        "governance-start-snapshot.json",
+        "frozen-source-hashes.json"
+      ],
+      "result": "passed"
+    }
+  ],
+  "limits": [
+    "Docker集成测试缺少显式镜像而跳过，不算容器验收",
+    "B2-4既有Host性能限制沿用",
+    "只验本地Core/隔离原生壳和合成数据，未宣称公网多租户或用户库迁移"
+  ],
+  "completion": "Requirements verified against current frozen product sources and recorded live results; independent review passed. Ordinary origin work-branch delivery is recorded in governance current/archive."
+}

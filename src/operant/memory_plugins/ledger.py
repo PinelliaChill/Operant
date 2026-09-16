@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -558,6 +558,11 @@ class MemoryLedger:
 
     @staticmethod
     def _insert_version(connection: sqlite3.Connection, version: MemoryVersion) -> None:
+        actual_digest = hashlib.sha256(version.content.encode("utf-8")).hexdigest()
+        if actual_digest != version.ref.content_digest:
+            raise LedgerValidationError(
+                "memory version content digest does not match its immutable reference"
+            )
         body = _model_json(version)
         try:
             connection.execute(
@@ -1033,8 +1038,14 @@ class MemoryLedger:
         idempotency_key: str | None = None,
         request_digest: str | None = None,
         permission_epoch: int = 0,
+        transaction_guard: Callable[[sqlite3.Connection, MemoryProposal], None] | None = None,
+        commit_callback: Callable[[sqlite3.Connection, MemoryProposal], None] | None = None,
     ) -> MemoryProposal:
         """Persist a pending Proposal and leave the publication head alone."""
+
+        if transaction_guard is not None and commit_callback is not None:
+            raise LedgerValidationError("propose accepts only one transaction metadata callback")
+        guard = transaction_guard or commit_callback
 
         supplied_proposal = _as_proposal(proposal) if proposal is not None else None
         normalized_version = _as_version(version) if version is not None else None
@@ -1098,6 +1109,8 @@ class MemoryLedger:
                 result = self._decode_idempotency(*cached)
                 if not isinstance(result, MemoryProposal):
                     raise LedgerValidationError("idempotency result type mismatch for propose")
+                if guard is not None:
+                    guard(connection, result)
                 return result
 
             head = self._stored_head(connection, dataset_id, record_id)
@@ -1222,6 +1235,8 @@ class MemoryLedger:
             except sqlite3.IntegrityError as exc:
                 existing = self._stored_proposal(connection, built.proposal_id)
                 if existing is not None and _model_json(existing) == _model_json(built):
+                    if guard is not None:
+                        guard(connection, existing)
                     return existing
                 raise LedgerConflictError(
                     "proposal identity or idempotency key already exists"
@@ -1235,6 +1250,8 @@ class MemoryLedger:
                 "proposal",
                 built,
             )
+            if guard is not None:
+                guard(connection, built)
         return built
 
     create_proposal = propose
@@ -1440,6 +1457,270 @@ class MemoryLedger:
     publish = confirm_proposal
     accept_proposal = confirm_proposal
     confirm = confirm_proposal
+
+    @staticmethod
+    def _batch_review_field(entry: Any, name: str, *, default: Any = None) -> Any:
+        """Read an internal exact-review DTO without importing public contracts.
+
+        B2-5's public ``ExactProposal`` is owned by Core.  The ledger accepts
+        that DTO, a plain mapping, or a ``MemoryProposal`` so the publication
+        primitive remains independent from the protocol package.
+        """
+
+        if isinstance(entry, Mapping):
+            return entry.get(name, default)
+        return getattr(entry, name, default)
+
+    @classmethod
+    def _normalize_batch_reviews(cls, entries: Sequence[Any]) -> list[dict[str, Any]]:
+        if not entries:
+            raise LedgerValidationError("proposal review batch cannot be empty")
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for entry in entries:
+            proposal_id = cls._batch_review_field(entry, "proposal_id")
+            proposal_revision = cls._batch_review_field(entry, "proposal_revision")
+            proposed_version = cls._batch_review_field(entry, "proposed_version")
+            base_head_revision = cls._batch_review_field(entry, "base_head_revision")
+            if base_head_revision is None:
+                base_head = cls._batch_review_field(entry, "base_head")
+                base_head_revision = cls._batch_review_field(base_head, "revision")
+            if not isinstance(proposal_id, str) or not proposal_id:
+                raise LedgerValidationError("proposal review requires proposal_id")
+            if proposal_id in seen:
+                raise LedgerConflictError("proposal review batch contains a duplicate proposal")
+            if (
+                not isinstance(proposal_revision, int)
+                or isinstance(proposal_revision, bool)
+                or proposal_revision < 0
+            ):
+                raise LedgerValidationError("proposal review requires an exact proposal_revision")
+            if (
+                not isinstance(base_head_revision, int)
+                or isinstance(base_head_revision, bool)
+                or base_head_revision < 0
+            ):
+                raise LedgerValidationError("proposal review requires an exact base_head_revision")
+            normalized_ref = _as_ref(proposed_version)
+            seen.add(proposal_id)
+            normalized.append(
+                {
+                    "proposal_id": proposal_id,
+                    "proposal_revision": proposal_revision,
+                    "proposed_version": normalized_ref,
+                    "base_head_revision": base_head_revision,
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _decode_batch(result_type: str, body: str) -> tuple[Any, ...]:
+        raw = json.loads(body)
+        if not isinstance(raw, list):
+            raise LedgerValidationError("stored proposal review result is not a list")
+        if result_type == "batch_heads":
+            return tuple(MemoryHead.model_validate(item) for item in raw)
+        if result_type == "batch_proposals":
+            return tuple(MemoryProposal.model_validate(item) for item in raw)
+        raise LedgerValidationError(f"unknown stored proposal review result type: {result_type}")
+
+    def review_proposals_batch(
+        self,
+        entries: Sequence[Any],
+        *,
+        decision: Literal["accept", "reject"] = "accept",
+        dataset_id: str | None = None,
+        permission_epoch: int | None = None,
+        idempotency_key: str | None = None,
+        request_digest: str | None = None,
+        transaction_guard: Callable[[sqlite3.Connection, tuple[MemoryProposal, ...]], None]
+        | None = None,
+    ) -> tuple[MemoryHead | MemoryProposal, ...]:
+        """Review several proposals after one complete validation pass.
+
+        Every entry must carry the exact proposal id, proposal revision,
+        immutable proposed version reference (including its digest), and base
+        head revision.  The method keeps a single ``BEGIN IMMEDIATE``
+        transaction open while validating all entries and only then mutates
+        any head or proposal.  A stale entry therefore rolls back the entire
+        batch instead of leaving an earlier entry accepted.
+        """
+
+        if decision not in {"accept", "reject"}:
+            raise LedgerValidationError("proposal review decision must be accept or reject")
+        normalized = self._normalize_batch_reviews(entries)
+        request = {
+            "entries": normalized,
+            "decision": decision,
+            "dataset_id": dataset_id,
+            "permission_epoch": permission_epoch,
+        }
+        # Resolve the dataset outside the transaction only for the idempotency
+        # table key.  The authoritative owner checks happen again below while
+        # the write lock is held.
+        requested_dataset = dataset_id
+        if requested_dataset is None:
+            requested_dataset = normalized[0]["proposed_version"].dataset_id
+        digest = _request_fingerprint("review_proposals_batch", request, request_digest)
+        result_type = "batch_heads" if decision == "accept" else "batch_proposals"
+        with self._write() as connection:
+            cached = self._idempotency_result(
+                connection,
+                "review_proposals_batch",
+                requested_dataset,
+                idempotency_key,
+                digest,
+            )
+            if cached is not None:
+                return self._decode_batch(*cached)
+
+            stored_entries: list[tuple[dict[str, Any], MemoryProposal, MemoryHead]] = []
+            record_ids: set[tuple[str, str]] = set()
+            actual_dataset: str | None = None
+            for item in normalized:
+                stored = self._stored_proposal(connection, item["proposal_id"])
+                if stored is None:
+                    raise LedgerNotFoundError(f"memory proposal not found: {item['proposal_id']}")
+                if actual_dataset is None:
+                    actual_dataset = stored.owner.dataset_id
+                if stored.owner.dataset_id != actual_dataset:
+                    raise LedgerConflictError("proposal review batch must use one dataset")
+                if dataset_id is not None and stored.owner.dataset_id != dataset_id:
+                    raise LedgerConflictError(
+                        "unknown_owner: proposal is outside the requested dataset"
+                    )
+                if stored.proposal_revision != item["proposal_revision"]:
+                    raise LedgerConflictError(
+                        f"proposal revision conflict: expected {item['proposal_revision']}, "
+                        f"got {stored.proposal_revision}"
+                    )
+                if stored.proposed_version != item["proposed_version"]:
+                    raise LedgerConflictError("proposed version reference conflict")
+                if stored.base_head.revision != item["base_head_revision"]:
+                    raise LedgerConflictError("base head revision conflict")
+                if stored.state != "pending":
+                    raise LedgerConflictError(f"proposal is {stored.state}, not pending")
+                key = (stored.owner.dataset_id, stored.base_head.record_id)
+                if key in record_ids:
+                    raise LedgerConflictError(
+                        "proposal review batch contains multiple proposals for one record"
+                    )
+                record_ids.add(key)
+                head = self._stored_head(connection, *key)
+                if head is None:
+                    raise LedgerNotFoundError("proposal record head is missing")
+                if decision == "accept" and head.revision != item["base_head_revision"]:
+                    raise LedgerConflictError(
+                        f"head revision conflict: expected {item['base_head_revision']}, "
+                        f"got {head.revision}"
+                    )
+                if decision == "accept" and head.state in {"deleted", "revoked"}:
+                    raise LedgerConflictError("record is tombstoned and cannot be reviewed")
+                if permission_epoch is not None and head.permission_epoch != permission_epoch:
+                    raise LedgerConflictError("permission epoch conflict")
+                target = self._stored_version(
+                    connection,
+                    stored.proposed_version.dataset_id,
+                    stored.proposed_version.record_id,
+                    stored.proposed_version.version,
+                )
+                if target is None or target.ref != stored.proposed_version:
+                    raise LedgerNotFoundError("proposal target version is missing or changed")
+                stored_entries.append((item, stored, head))
+
+            if actual_dataset is None:
+                raise LedgerValidationError("proposal review batch has no dataset")
+            if requested_dataset != actual_dataset:
+                raise LedgerConflictError("proposal review dataset does not match its target")
+
+            if transaction_guard is not None:
+                transaction_guard(
+                    connection, tuple(stored for _item, stored, _head in stored_entries)
+                )
+
+            if decision == "reject":
+                results: tuple[MemoryHead | MemoryProposal, ...] = tuple(
+                    self._mark_proposal_state(connection, stored, "rejected")
+                    for _item, stored, _head in stored_entries
+                )
+            else:
+                accepted: list[MemoryHead] = []
+                for _item, stored, head in stored_entries:
+                    cursor = self._next_cursor(connection)
+                    next_head = head.model_copy(
+                        update={
+                            "published_version": stored.proposed_version,
+                            "revision": head.revision + 1,
+                            "publication_cursor": cursor,
+                            "state": "published",
+                            "permission_epoch": head.permission_epoch
+                            if permission_epoch is None
+                            else permission_epoch,
+                        }
+                    )
+                    updated = connection.execute(
+                        """
+                        UPDATE memory_ledger_heads
+                        SET published_version = ?, published_digest = ?, revision = ?,
+                            publication_cursor = ?, state = ?, permission_epoch = ?, body = ?
+                        WHERE dataset_id = ? AND record_id = ? AND revision = ?
+                        """,
+                        (
+                            next_head.published_version.version
+                            if next_head.published_version
+                            else None,
+                            next_head.published_version.content_digest
+                            if next_head.published_version
+                            else None,
+                            next_head.revision,
+                            next_head.publication_cursor,
+                            next_head.state,
+                            next_head.permission_epoch,
+                            _model_json(next_head),
+                            head.dataset_id,
+                            head.record_id,
+                            head.revision,
+                        ),
+                    )
+                    if updated.rowcount != 1:
+                        raise LedgerConflictError("head changed during proposal review")
+                    self._mark_proposal_state(connection, stored, "accepted")
+                    accepted.append(next_head)
+                results = tuple(accepted)
+
+            self._store_idempotency(
+                connection,
+                "review_proposals_batch",
+                actual_dataset,
+                idempotency_key,
+                digest,
+                result_type,
+                results,
+            )
+            return results
+
+    def confirm_proposals(
+        self,
+        entries: Sequence[Any],
+        **kwargs: Any,
+    ) -> tuple[MemoryHead, ...]:
+        """Convenience alias for an atomic acceptance batch."""
+
+        result = self.review_proposals_batch(entries, decision="accept", **kwargs)
+        return tuple(item for item in result if isinstance(item, MemoryHead))
+
+    def reject_proposals(
+        self,
+        entries: Sequence[Any],
+        **kwargs: Any,
+    ) -> tuple[MemoryProposal, ...]:
+        """Convenience alias for an atomic rejection batch."""
+
+        result = self.review_proposals_batch(entries, decision="reject", **kwargs)
+        return tuple(item for item in result if isinstance(item, MemoryProposal))
+
+    batch_confirm_proposals = confirm_proposals
+    batch_reject_proposals = reject_proposals
 
     def reject_proposal(self, proposal_id: str, *, dataset_id: str | None = None) -> MemoryProposal:
         with self._write() as connection:

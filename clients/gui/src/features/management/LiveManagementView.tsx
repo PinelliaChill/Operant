@@ -25,6 +25,8 @@ import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
+import { currentBrowserOrigin } from '../../lib/liveBaseUrl';
+import { B25Client } from '../../../../../sdk/typescript-client/b2_5.generated';
 import {
   B23AdapterError,
   B23ManagementAdapter,
@@ -43,6 +45,8 @@ import {
   normalizeB23Error,
 } from '../../live/b23Adapter';
 import type { RailOutletContext } from '../../app/RailLayout';
+import { B25GovernancePanel } from './B25GovernancePanel';
+import type { B25ClientLike, B2ModelClientLike } from './b25-state';
 
 export type ManagementTab = 'projects' | 'knowledge' | 'plugins' | 'settings' | 'skills' | 'retention';
 
@@ -251,6 +255,10 @@ interface ManagementPanelProps {
   busy: boolean;
   onTab: (tab: ManagementTab) => void;
   auditReport?: ArtifactAuditReportView;
+  b25Client: B25ClientLike | null;
+  b2Client: B2ModelClientLike | null;
+  connectionStatus: string;
+  refresh: () => Promise<void>;
 }
 
 const FormError: React.FC<{ message: string; id?: string }> = ({ message, id = 'b2-memory-form-error' }) => (
@@ -471,7 +479,8 @@ const KnowledgeRecord: React.FC<{
               <div key={proposal.proposal_id} className="b2-memory-card b2-memory-proposal">
               <div className="b2-memory-meta"><code>{proposal.proposal_id}</code><StatusBadge status={statusKind(proposal.state)} label={statusLabel(proposal.state)} size="sm" /><span>期望 revision {proposal.expected_revision}</span></div>
               <p>{proposal.content}</p>
-              {proposal.state === 'pending' && <div className="b2-memory-actions"><ActionButton label="确认提议" tone="primary" onClick={() => void execute({ action: 'memory_confirm', project_id: record.project_id, proposal_id: proposal.proposal_id, expected_revision: proposal.expected_revision, confirmed: true }, '确认记忆提议')} disabled={busy} icon={<Check size={13} aria-hidden="true" />} /></div>}
+              {/* Legacy memory_confirm is intentionally not rendered; B2-5 review carries expiry/CAS guards. */}
+              {proposal.state === 'pending' && <p className="b2-memory-warning" role="status">待处理候选请在下方“高级知识治理”中核对精确 Proposal、版本和 CAS 后确认。</p>}
             </div>
           ))}
         </div>
@@ -486,7 +495,7 @@ const KnowledgeRecord: React.FC<{
   );
 };
 
-const KnowledgePanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) => {
+const KnowledgePanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, b25Client, b2Client, connectionStatus, refresh }) => {
   const [projectId, setProjectId] = useState('');
   const [query, setQuery] = useState('');
   const [content, setContent] = useState('');
@@ -555,6 +564,14 @@ const KnowledgePanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }
           <div className="b2-memory-actions"><ActionButton label="保存记忆" tone="primary" type="submit" onClick={() => undefined} disabled={busy || !projectId || !content.trim() || !confirmed} icon={<Check size={13} aria-hidden="true" />} /></div>
         </form>
       </section>
+      <B25GovernancePanel
+        client={b25Client}
+        modelClient={b2Client}
+        projects={state.projects}
+        connectionStatus={connectionStatus}
+        initialProjectId={projectId || undefined}
+        onMutation={refresh}
+      />
       <section aria-labelledby="knowledge-records-title">
         <div className="b2-memory-card-header"><div><h2 id="knowledge-records-title">正式记录与候选提议</h2><p>{records.length} 条记录；展示来源、版本与 revision，客户端不覆盖旧记录。</p></div><span className="b2-memory-status">{state.global_enabled ? '全局记忆已开启' : '全局记忆已关闭'}</span></div>
         {records.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Sparkles} title="暂无项目知识" description="查询没有返回记录，或当前项目尚未保存知识。" /></div> : <div className="b2-memory-grid">{records.map((record) => <KnowledgeRecord key={record.record_id} record={record} execute={execute} busy={busy} />)}</div>}
@@ -701,7 +718,7 @@ const SettingsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
   };
   return (
     <div className="b2-memory" data-panel="settings">
-      <section className="b2-memory-card"><div className="b2-memory-card-header"><div><h2>记忆开关</h2><p>全局开关优先于项目开关；实际生效范围、来源与时间由服务端返回。</p></div><Power size={18} aria-hidden="true" /></div><div className="b2-memory-actions"><span className="b2-memory-status" data-status={state.global_enabled ? 'enabled' : 'disabled'}>全局：{state.global_enabled ? '已开启' : '已关闭'}</span><ActionButton label={state.global_enabled ? '关闭全局记忆' : '开启全局记忆'} tone={state.global_enabled ? 'ghost' : 'primary'} onClick={() => void switchMemory(!state.global_enabled)} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /></div><div className="b2-memory-form"><label htmlFor="settings-project">项目范围</label><ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="settings-project" /><div className="b2-memory-actions">{projectId && <><span className="b2-memory-status" data-status={state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? 'enabled' : 'disabled'}>项目：{state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? '已开启' : '已关闭'}</span><ActionButton label="切换项目记忆" onClick={() => { const project = state.projects.find((entry) => entry.project_id === projectId); if (project) void switchMemory(!project.memory_enabled, project.project_id); }} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="迁移项目记忆" onClick={() => void execute({ action: 'memory_migrate', project_id: projectId, confirmed: true }, '迁移项目记忆')} disabled={busy} icon={<RefreshCw size={13} aria-hidden="true" />} /></>}</div></div></section>
+      <section className="b2-memory-card"><div className="b2-memory-card-header"><div><h2>记忆开关</h2><p>全局开关优先于项目开关；实际生效范围、来源与时间由服务端返回。</p></div><Power size={18} aria-hidden="true" /></div><div className="b2-memory-actions"><span className="b2-memory-status" data-status={state.global_enabled ? 'enabled' : 'disabled'}>全局：{state.global_enabled ? '已开启' : '已关闭'}</span><ActionButton label={state.global_enabled ? '关闭全局记忆' : '开启全局记忆'} tone={state.global_enabled ? 'ghost' : 'primary'} onClick={() => void switchMemory(!state.global_enabled)} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /></div><div className="b2-memory-form"><label htmlFor="settings-project">项目范围</label><ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="settings-project" /><div className="b2-memory-actions">{projectId && <><span className="b2-memory-status" data-status={state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? 'enabled' : 'disabled'}>项目：{state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? '已开启' : '已关闭'}</span><ActionButton label="切换项目记忆" onClick={() => { const project = state.projects.find((entry) => entry.project_id === projectId); if (project) void switchMemory(!project.memory_enabled, project.project_id); }} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="迁移项目记忆" onClick={() => void execute({ action: 'memory_migrate', project_id: projectId, confirmed: true }, '迁移项目记忆')} disabled={busy} icon={<RefreshCw size={13} aria-hidden="true" />} /></>}</div><div className="b2-memory-actions"><ActionButton label="打开高级知识治理" onClick={() => onTab('knowledge')} disabled={busy} icon={<ExternalLink size={13} aria-hidden="true" />} /></div></div></section>
       <section aria-labelledby="settings-source-title"><div className="b2-memory-card-header"><div><h2 id="settings-source-title">配置来源与作用域</h2><p>用于核对 global/project 生效来源，客户端不自行推断覆盖关系。</p></div><ActionButton label="查看项目知识" onClick={() => onTab('knowledge')} icon={<ExternalLink size={13} aria-hidden="true" />} disabled={busy} /></div>{state.settings.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Settings2} title="暂无配置" description="服务端尚未返回设置来源。" /></div> : <div className="b2-memory-grid">{state.settings.map((setting) => <article key={`${setting.scope}-${setting.key}`} className="b2-memory-card"><div className="b2-memory-card-header"><h3>{setting.key}</h3><span className="b2-memory-status">{setting.scope}</span></div><div className="b2-memory-meta"><span>来源：{setting.source}</span><span>生效：{setting.effective_at}</span></div><pre className="b2-memory-record-content">{safeJson(setting.value)}</pre></article>)}</div>}</section>
     </div>
   );
@@ -796,11 +813,12 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) =
 };
 
 export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ initialTab = 'settings' }) => {
-  const { clientMode, b23Client, connectionStatus, addNotification } = useOperant();
+  const { clientMode, b23Client, b2Client, connectionStatus, addNotification } = useOperant();
   const { showSidebarOpenBtn, openSidebar } = useOutletContext<RailOutletContext>();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = queryTab(searchParams.get('tab'), initialTab);
   const adapter = useMemo(() => b23Client ? new B23ManagementAdapter(b23Client) : null, [b23Client]);
+  const b25Client = useMemo(() => new B25Client(currentBrowserOrigin()), []);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [state, setState] = useState<B23ManagementState>();
   const [error, setError] = useState<B23UiError>();
@@ -909,7 +927,17 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
 
   const currentState = state as B23ManagementState;
   const writesDisabled = Boolean(actionLabel) || phase !== 'ready' || connectionStatus !== 'connected' || unknownWrite;
-  const panelProps: ManagementPanelProps = { state: currentState, execute, busy: writesDisabled, onTab: setTab, auditReport };
+  const panelProps: ManagementPanelProps = {
+    state: currentState,
+    execute,
+    busy: writesDisabled,
+    onTab: setTab,
+    auditReport,
+    b25Client,
+    b2Client,
+    connectionStatus,
+    refresh,
+  };
 
   return (
     <div className="section-view" data-client-mode="live">

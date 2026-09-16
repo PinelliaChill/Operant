@@ -1,0 +1,81 @@
+
+> operant-desktop@0.1.0 tauri
+> tauri build --debug --bundles app
+
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm --prefix ../gui run build`
+
+> operant-gui@2.0.0 build
+> tsc && vite build && node scripts/check-bundle.mjs
+
+vite v6.4.3 building for production...
+transforming...
+✓ 1732 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                 0.96 kB │ gzip:  0.49 kB
+dist/assets/LiveChatView-DrPhmyxN.css           0.17 kB │ gzip:  0.13 kB
+dist/assets/ExtensionsView-hWJEVsKb.css         2.22 kB │ gzip:  0.75 kB
+dist/assets/CollabView-BdVsmKKl.css             2.57 kB │ gzip:  0.82 kB
+dist/assets/TasksView-CMZI2uRF.css              4.34 kB │ gzip:  1.30 kB
+dist/assets/SchedulesView-BdradJ9k.css          4.69 kB │ gzip:  1.17 kB
+dist/assets/LiveManagementView-tPP5u7O6.css    13.05 kB │ gzip:  2.56 kB
+dist/assets/B24Presentation-DfzRizey.css       18.52 kB │ gzip:  3.11 kB
+dist/assets/index-Bi0YlNYB.css                104.05 kB │ gzip: 15.34 kB
+dist/assets/chevron-down-hdD_wzl5.js            0.30 kB │ gzip:  0.25 kB
+dist/assets/play-CZHO9c5p.js                    0.31 kB │ gzip:  0.25 kB
+dist/assets/square-B9aCBZoq.js                  0.32 kB │ gzip:  0.26 kB
+dist/assets/arrow-right-CSmNoozc.js             0.34 kB │ gzip:  0.27 kB
+dist/assets/arrow-left-B_QAR4Rs.js              0.34 kB │ gzip:  0.27 kB
+dist/assets/terminal-C2YgLp9H.js                0.36 kB │ gzip:  0.29 kB
+dist/assets/pause-BqNMTpXh.js                   0.38 kB │ gzip:  0.27 kB
+dist/assets/panel-left-open-CpLHXD1C.js         0.41 kB │ gzip:  0.30 kB
+dist/assets/activity-Axb4rX3r.js                0.41 kB │ gzip:  0.31 kB
+dist/assets/history-BnCAqofm.js                 0.41 kB │ gzip:  0.30 kB
+dist/assets/menu-Cn2sMBmI.js                    0.42 kB │ gzip:  0.28 kB
+dist/assets/database-BMGPK0Wu.js                0.42 kB │ gzip:  0.31 kB
+dist/assets/external-link-D7Irv2xW.js           0.42 kB │ gzip:  0.30 kB
+dist/assets/archive-aCE3T7YD.js                 0.43 kB │ gzip:  0.31 kB
+dist/assets/link-BfsYlOTk.js                    0.43 kB │ gzip:  0.30 kB
+dist/assets/wrench-BJa70mZo.js                  0.43 kB │ gzip:  0.31 kB
+dist/assets/download-C8zZHE3L.js                0.44 kB │ gzip:  0.32 kB
+dist/assets/workflow-DUzoBMWL.js                0.44 kB │ gzip:  0.31 kB
+dist/assets/pencil-B1oc10OR.js                  0.45 kB │ gzip:  0.33 kB
+dist/assets/send-horizontal-Bko6b1u_.js         0.46 kB │ gzip:  0.33 kB
+dist/assets/file-code-B-0XckVg.js               0.49 kB │ gzip:  0.32 kB
+dist/assets/refresh-cw-CSlDnqrW.js              0.49 kB │ gzip:  0.33 kB
+dist/assets/file-text-Br3EppCT.js               0.51 kB │ gzip:  0.32 kB
+dist/assets/trash-2-BTktgaKg.js                 0.53 kB │ gzip:  0.35 kB
+dist/assets/LoadingSkeleton-CTtatN5v.js         0.60 kB │ gzip:  0.43 kB
+dist/assets/server-COIMhcpZ.js                  0.88 kB │ gzip:  0.42 kB
+dist/assets/brain-6llqREOy.js                   0.91 kB │ gzip:  0.47 kB
+dist/assets/EmptyState-CKJZL7bj.js              1.21 kB │ gzip:  0.70 kB
+dist/assets/B24Presentation-D-pjCvkv.js         1.22 kB │ gzip:  0.44 kB
+dist/assets/CollabWorkflowCanvas-BtcJjHRj.js    3.98 kB │ gzip:  1.89 kB
+dist/assets/MessageList-DatljKHI.js             4.86 kB │ gzip:  1.87 kB
+dist/assets/AgentFocusView-DbjjIjAA.js          5.09 kB │ gzip:  2.21 kB
+dist/assets/WorkflowSessionView-6Pt61Xfx.js     6.17 kB │ gzip:  2.52 kB
+dist/assets/ApprovalCenterView-BB7goMTn.js      8.17 kB │ gzip:  3.04 kB
+dist/assets/TasksView-BROcNsko.js               8.66 kB │ gzip:  3.32 kB
+dist/assets/ProjectsView-CpLzGcEz.js           11.64 kB │ gzip:  3.65 kB
+dist/assets/RunDetailView-CcoF-1N5.js          15.45 kB │ gzip:  5.14 kB
+dist/assets/GraphCanvas-Bpsn82-l.js            16.50 kB │ gzip:  5.88 kB
+dist/assets/SkillsView-nyg4DwPe.js             20.64 kB │ gzip:  5.94 kB
+dist/assets/ExtensionsView-4tl-Y2k0.js         24.27 kB │ gzip:  7.82 kB
+dist/assets/LiveChatView-KKOPAqnM.js           27.50 kB │ gzip:  9.07 kB
+dist/assets/SchedulesView-C5zK7KRB.js          28.19 kB │ gzip:  8.51 kB
+dist/assets/AgentsView-D7KnGfb0.js             29.84 kB │ gzip:  7.86 kB
+dist/assets/ChatView-CcMqccIW.js               30.62 kB │ gzip:  9.05 kB
+dist/assets/CollabView-DQ_tfHcJ.js             67.63 kB │ gzip: 20.24 kB
+dist/assets/SettingsView-NjdvalzU.js          103.16 kB │ gzip: 25.27 kB
+dist/assets/LiveManagementView-B3Eun0v1.js    106.46 kB │ gzip: 26.98 kB
+dist/assets/operant-sdk-Cg8CirHG.js           190.84 kB │ gzip: 26.76 kB
+dist/assets/index--hWC7b3n.js                 192.98 kB │ gzip: 57.19 kB
+dist/assets/react-vendor-Dbjw3RdR.js          287.97 kB │ gzip: 92.25 kB
+✓ built in 1.23s
+   Compiling operant-desktop v0.1.0 (/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-5/clients/desktop/src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.88s
+       Built application at: /Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-5/.operant/native-target/debug/operant-desktop
+    Bundling Operant.app (/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-5/.operant/native-target/debug/bundle/macos/Operant.app)
+    Finished 1 bundle at:
+        /Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-5/.operant/native-target/debug/bundle/macos/Operant.app

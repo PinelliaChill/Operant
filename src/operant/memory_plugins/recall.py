@@ -191,6 +191,12 @@ class MemoryRun:
 
             if not memory_conditions_match(version, None):
                 return False
+            from operant.memory_plugins.governance import GovernanceService
+
+            if not GovernanceService(self.manager).version_dependencies_valid(
+                version.ref, context=self.context
+            ):
+                return False
             return all(self.manager.authorize_source(self.context, s) for s in version.sources)
         except Exception:
             return False

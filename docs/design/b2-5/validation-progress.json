@@ -1,0 +1,27 @@
+{
+  "python_full": {
+    "result": "993 passed, 5 failed, 3 skipped",
+    "seconds": 664.07,
+    "log": "b25-full-pytest.log",
+    "resolution": "4 stale v16 migration assertions updated for v17; original loopback test rerun with local socket permission"
+  },
+  "migration_rerun": {
+    "result": "105 collected tests passed",
+    "log": "b25-migration-rerun.log"
+  },
+  "loopback_rerun": {
+    "result": "1 passed with actual local socket",
+    "log": "b25-loopback-rerun.log"
+  },
+  "ruff_format": "336 files already formatted at check; final added tests require directional recheck",
+  "ruff_check": "passed",
+  "mypy": "118 sources passed",
+  "uv_lock": "42 packages; --check --offline passed",
+  "git_diff_check": "passed",
+  "gui": "115 tests passed; typecheck and build passed; final native rebuild passed",
+  "protocol": "protocol-determinism.json",
+  "real_model": "live-05.json",
+  "native": "native-acceptance.json",
+  "independent_review": "pending",
+  "current_src_matches_live05": true
+}

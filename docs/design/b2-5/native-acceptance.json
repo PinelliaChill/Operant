@@ -1,0 +1,36 @@
+{
+  "identity": "Codex",
+  "phase": "b25_native_acceptance",
+  "origin": "tauri://localhost",
+  "binary_path": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-5/.operant/native-target/debug/bundle/macos/Operant.app/Contents/MacOS/operant-desktop",
+  "binary_sha256": "e1733f5147203d66308a3d4e77408fe76c3134ae49f1a1bcdce34d6682be44fa",
+  "gui_source_hashes": {
+    "clients/gui/src/features/chat/B24ContextInspector.tsx": "20b19cca768d909e9e378f3c97a0644731e55b05999b5adad9ab7c6f1027113f",
+    "clients/gui/src/features/management/B25GovernancePanel.tsx": "606ad30edb10f703f0e0fa27c643e94b15a44fefac4707e5a67dd4f2faa41cdd",
+    "clients/gui/src/features/management/B25Presentation.tsx": "289c75d8983d3f7f32734baf7839dbced551452102ca937c0b068fb15d67a5f9",
+    "clients/gui/src/features/management/b25-state.ts": "f5e1c0469affe3e7aa03c60c66be997d57d9fb8066f70f1b1e6f4989a9be094f",
+    "clients/gui/src/features/management/b25-governance.css": "375e578d7428847ed264babd2b812880845a0bda486ee5684ccc877b10c95142",
+    "clients/gui/src/features/management/LiveManagementView.tsx": "2a2bc6e39107da9d7a44ee5ae381c2e1df1224e378325cd09d3139f0eaa3ca6a"
+  },
+  "core_source_evidence": "live-05.json",
+  "database": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-5/.operant/b25-live-05/core.sqlite3",
+  "checks": [
+    "正式API中文提议 -> 精确接受 -> published v1",
+    "中文历史Query -> canonical Item按需展开",
+    "真实Scheduler succeeded / no_change, 输入827/输出155与零调用0/0展示",
+    "来源撤销记录显示source_unavailable，未称可用",
+    "窄屏约557x820，长job/record标识换行，Host开关Tab焦点可见",
+    "Core停止时断线只读，保留原投影，禁止治理写操作；相同库重连恢复",
+    "最终GUI构建重新打开，人工候选文案准确",
+    "合成conflicts_with候选接受被正式API拒绝并呈中文解决提示",
+    "冲突候选精确拒绝，同页基础投影同步显示已拒绝",
+    "当前记录修改自动携带record_id/base rev1，人工接受v2，基础投影同步revision2/version2",
+    "实际Session检查器显示gpt-5.6-luna发送内容B25_CEDAR_73及当前来源失效警示，历史内容保留"
+  ],
+  "limits": [
+    "合成隔离库，不代表真实用户数据迁移",
+    "窄屏/断线基础走查在前一个GUI构建完成；末次仅改统一刷新和两处文案，最终构建已验证其影响路径",
+    "视觉宽窄长文本焦点颜色自检另见Antigravity COM-20260916-001，未声称完成数值WCAG审计"
+  ],
+  "completed": true
+}

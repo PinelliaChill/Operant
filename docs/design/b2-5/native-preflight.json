@@ -1,0 +1,16 @@
+{
+  "phase": "baseline_preflight_only",
+  "base_head": "c2e89758b5d4b3c779353ca1fe863d1fec9cee79",
+  "core": "B2-5 isolated worktree baseline process, no reload",
+  "gui": "Existing B2-4 verification native shell; not B2-5 GUI acceptance",
+  "binary_sha256": "cd7bcfff1440da77762794ace702cd94715cbb34b5ea82fc0a7ba34970d93a9a",
+  "database": "/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/operant-b24-model-pccvcgp0/core.sqlite3",
+  "origin": "tauri://localhost",
+  "checks": [
+    "Core connected",
+    "native projects query shows isolated synthetic project",
+    "native knowledge page shows RIVER_42 from formal management API"
+  ],
+  "mutations": 0,
+  "window": "closed"
+}

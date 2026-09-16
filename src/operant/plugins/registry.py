@@ -1547,6 +1547,36 @@ class PluginRegistry:
             )
         )
 
+    def configure_maintenance(self, binding_id: str, *, enabled: bool) -> BindingRecord:
+        """Version the Host maintenance switch without changing recall permissions."""
+        binding = self._binding(binding_id)
+        installation = self._installation(binding.installation_id)
+        if installation.state == PluginLifecycleState.UNINSTALLED.value:
+            raise PluginError("package_unavailable", "cannot configure an uninstalled plugin")
+        if binding.config.maintenance_enabled == enabled:
+            return binding
+        config = binding.config.model_copy(
+            update={
+                "maintenance_enabled": enabled,
+                "revision": binding.config.revision + 1,
+                "effective_at": utc_now(),
+            }
+        )
+        updated = binding.model_copy(update={"config": config, "updated_at": utc_now()})
+        updated_installation = installation.model_copy(
+            update={"config": config, "updated_at": utc_now()}
+        )
+        self._replace(
+            bindings=tuple(
+                updated if b.binding_id == binding_id else b for b in self._state.bindings
+            ),
+            installations=tuple(
+                updated_installation if i.installation_id == installation.installation_id else i
+                for i in self._state.installations
+            ),
+        )
+        return updated
+
     def configure(self, installation_id: str, config: dict[str, Any]) -> None:
         installation = self._installation(installation_id)
         if installation.state != "disabled":

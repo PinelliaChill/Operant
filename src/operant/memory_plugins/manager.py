@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
@@ -88,6 +89,7 @@ class MemoryManager:
             authorize_proposal=self.authorize_proposal,
         )
         self._lock = asyncio.Lock()
+        self._maintenance_cancel_project: Callable[[str], None] | None = None
         self._recall_runs: dict[str, MemoryRun] = {}
         self._pending_refs: dict[str, MemoryVersionRef] = {}
         self._active_skill_runs: dict[str, set[str]] = {}
@@ -624,6 +626,10 @@ class MemoryManager:
             self._validate_config(i, config)
             self._state["plugin_config"][i.installation_id] = config
             self.registry.configure(i.installation_id, config)
+            if i.binding_id and isinstance(config.get("maintenance_enabled"), bool):
+                self.registry.configure_maintenance(
+                    i.binding_id, enabled=config["maintenance_enabled"]
+                )
         elif action in (
             "skill_discover",
             "skill_install",
@@ -656,6 +662,9 @@ class MemoryManager:
         )
 
     async def _stop_project(self, p: dict[str, Any]) -> None:
+        cancel = getattr(self, "_maintenance_cancel_project", None)
+        if cancel is not None:
+            cancel(p["project_id"])
         if p["installation_id"]:
             receipt = await self.host.stop(
                 p["installation_id"], stop_run_ids=self._management_runs(p["installation_id"])
@@ -740,6 +749,11 @@ class MemoryManager:
                 "b24_manifests",
             ):
                 c.execute(f"DELETE FROM {table} WHERE dataset_id=?", (dataset_id,))
+            from operant.memory_plugins.b25_schema import schema_contracts
+
+            for table, columns in schema_contracts()[0].items():
+                if "dataset_id" in columns:
+                    c.execute(f'DELETE FROM "{table}" WHERE dataset_id=?', (dataset_id,))
             self.ledger._disable_purge(c)
             for row in c.execute(
                 "SELECT command_id,result FROM b23_commands WHERE result IS NOT NULL"
@@ -934,6 +948,20 @@ class MemoryManager:
             self.registry.close()
 
     def authorize_source(self, context: RpcContext, source: SourceRef) -> bool:
+        from operant.memory_plugins.governance import GovernanceService
+
+        for project in self._state["projects"]:
+            if self._scope(project) != context.scope or not project.get("installation_id"):
+                continue
+            installation = self.registry.get_installation(project["installation_id"])
+            if installation.dataset_id != context.dataset_id:
+                continue
+            return GovernanceService(self).source_authorized(
+                project["project_id"], source, context=context
+            )
+        return False
+
+    def _authorize_source_legacy(self, context: RpcContext, source: SourceRef) -> bool:
         if source.source_type == "memory_version":
             if (
                 source.scope != context.scope
@@ -991,7 +1019,13 @@ class MemoryManager:
                 row = c.execute(
                     "SELECT body FROM b23_sources WHERE source_id=?", (request.source.source_id,)
                 ).fetchone()
-            text = row["body"]
+            if row is not None:
+                text = row["body"]
+            else:
+                item = self.store.get_item(request.source.source_id)
+                if not isinstance(item.payload, UserMessagePayload):
+                    raise PermissionError("only canonical user content is an extraction source")
+                text = item.payload.text
         if len(text.encode()) > request.max_bytes:
             raise ValueError("source exceeds plugin read budget")
         return HostReadResult(source=request.source, text=text, truncated=False)
@@ -1152,8 +1186,18 @@ class MemoryManager:
         )
         return CandidateBatch(
             request_id=request.context.request_id,
-            candidates=tuple(CandidateReference(ref=v.ref, score=1.0) for v in versions),
+            candidates=tuple(
+                CandidateReference(ref=v.ref, score=1.0)
+                for v in versions
+                if all(self.authorize_source(request.context, source) for source in v.sources)
+                and self._governance_dependencies_valid(v)
+            ),
         )
+
+    def _governance_dependencies_valid(self, version: MemoryVersion) -> bool:
+        from operant.memory_plugins.governance import GovernanceService
+
+        return GovernanceService(self).version_dependencies_valid(version.ref)
 
     def _context(self, lease: Any) -> RpcContext:
         return RpcContext(
@@ -1218,6 +1262,15 @@ class MemoryManager:
                 )
             elif cmd.action == "memory_confirm":
                 proposal = self.ledger.get_proposal(self._required(cmd.proposal_id, "proposal_id"))
+                with self.store._connect() as c:
+                    governed = c.execute(
+                        "SELECT 1 FROM b25_governance_proposals WHERE proposal_id=?",
+                        (proposal.proposal_id,),
+                    ).fetchone()
+                if governed is not None:
+                    raise PluginError(
+                        "exact_review_required", "B2-5 candidates require an exact version review"
+                    )
                 self._pending_refs[context.request_id] = proposal.proposed_version
                 if not self.authorize_proposal(context, proposal):
                     raise PermissionError("proposal scope or provenance is not current")
@@ -1396,7 +1449,11 @@ class MemoryManager:
                 include_candidates=include_candidates,
                 limit=limit,
             )
-            return [self._compat(v, workspace) for v in versions]
+            return [
+                self._compat(v, workspace)
+                for v in versions
+                if self._governance_dependencies_valid(v)
+            ]
         return []
 
     def compat_get(
@@ -1413,8 +1470,8 @@ class MemoryManager:
             if version is not None and version != head.published_version.version:
                 raise PermissionError("historical memory version is not currently active")
             value = self.ledger.get_version(i.dataset_id, record_id, head.published_version.version)
-            if value.scope != self._scope(p):
-                raise PermissionError("memory scope mismatch")
+            if value.scope != self._scope(p) or not self._governance_dependencies_valid(value):
+                raise PermissionError("memory scope or source is no longer valid")
             result = self._compat(value, workspace)
             self.service._authorize_memory(
                 snapshot, result.kind, operation="read", memory=result, project_scope=workspace
