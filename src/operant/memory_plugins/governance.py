@@ -1603,6 +1603,15 @@ class GovernanceService:
                             )
                         )
                     )
+        from operant.memory_plugins.experience_skills import ExperienceSkillService
+
+        # Current authorization already fails closed after the governance
+        # transaction; also update the derived Skill lifecycle projection.
+        affected.extend(
+            ExperienceSkillService(self.manager).propagate_source_revocation(
+                project_id, normalized, reason=reason[:500] or "source revoked"
+            )
+        )
         return tuple(affected)
 
     revoke = revoke_source
@@ -1948,6 +1957,10 @@ class GovernanceService:
             ):
                 return False
             if self._dependency_blocked(ref.dataset_id, ref.record_id, ref.version):
+                return False
+            from operant.memory_plugins.worktree_knowledge import publication_active
+
+            if not publication_active(self.manager, ref):
                 return False
             for source in version.sources:
                 if source.source_type == "memory_version":

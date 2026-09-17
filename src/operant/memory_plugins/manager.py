@@ -187,6 +187,12 @@ class MemoryManager:
         installation = self.registry.get_installation(
             self._required(p["installation_id"], "selected plugin")
         )
+        if (
+            enabled
+            and self._dataset(installation.dataset_id).installation_id
+            != installation.installation_id
+        ):
+            raise PluginError("unknown_owner", "selected plugin no longer owns this dataset")
         if enabled and (
             not self._state["global_enabled"]
             or not p["memory_enabled"]
@@ -374,7 +380,7 @@ class MemoryManager:
                 "installations": installations,
                 "datasets": datasets,
                 "settings": settings,
-                "skills": self._state["skills"],
+                "skills": [*self._state["skills"], *self._experience_skill_projection()],
                 "skill_catalog": self._skill_catalog(),
                 "artifacts": self._artifacts(),
                 "records": [
@@ -382,6 +388,31 @@ class MemoryManager:
                 ],
             }
         )
+
+    def _experience_skill_projection(self) -> list[dict[str, Any]]:
+        from operant.memory_plugins.experience_skills import ExperienceSkillService
+
+        result = []
+        skills = ExperienceSkillService(self)
+        for project in self._state["projects"]:
+            if project["archived"]:
+                continue
+            for view in skills.state(project["project_id"]).skills:
+                result.append(
+                    {
+                        "skill_id": view.skill_id,
+                        "name": view.version.name,
+                        "state": view.head.state
+                        if view.dependency_state == "active"
+                        else "blocked",
+                        "package_ref": "experience:" + view.version.artifact.artifact_id,
+                        "project_ids": [project["project_id"]]
+                        if view.head.state == "published"
+                        else [],
+                        "trust_status": view.trust_status,
+                    }
+                )
+        return result
 
     def _skill_catalog(self) -> list[dict[str, str]]:
         from operant.persistence.phase45 import SQLitePhase45Repository
@@ -684,10 +715,27 @@ class MemoryManager:
                 return d
         raise ValueError("dataset not found")
 
+    def _check_shared_cleanup(self, dataset_id: str, installation_id: str) -> None:
+        from operant.memory_plugins.sharing import SharingService
+
+        blockers = SharingService(self).cleanup_blockers(dataset_id, installation_id)
+        if blockers:
+            raise PluginError(
+                "cleanup_blocked", "dataset has active grants, consumers or a pending transfer"
+            )
+        dataset = self._dataset(dataset_id)
+        if dataset.installation_id not in (None, installation_id):
+            raise PluginError("unknown_owner", "dataset is owned by another installation")
+
     async def _uninstall(
         self, i: Any, policy: Literal["keep", "delete"]
     ) -> tuple[str, str, Any, Any]:
-        if policy == "delete":
+        # Ownership is authoritative even when an old installation still points
+        # at the transferred dataset. Its uninstall must not create a purge plan.
+        dataset = self._dataset(i.dataset_id)
+        retained_for_owner = dataset.installation_id not in (None, i.installation_id)
+        if policy == "delete" and not retained_for_owner:
+            self._check_shared_cleanup(i.dataset_id, i.installation_id)
             self._state["cleanup"][i.dataset_id] = i.installation_id
             self._save()
         receipt = await self.host.uninstall(
@@ -696,7 +744,7 @@ class MemoryManager:
             stop_run_ids=self._management_runs(i.installation_id),
         )
         if (receipt.ack if receipt.ack == "completed" else receipt.state) == "completed":
-            if policy == "delete":
+            if policy == "delete" and not retained_for_owner:
                 self._state["cleanup"][i.dataset_id] = i.installation_id
                 self._save()
                 await self._finish_delete(i.dataset_id)
@@ -705,6 +753,7 @@ class MemoryManager:
             (receipt.ack if receipt.ack == "completed" else receipt.state),
             "卸载状态："
             + (receipt.ack if receipt.ack == "completed" else receipt.state)
+            + ("；数据已移交，保留新所有者的数据" if retained_for_owner else "")
             + "；历史会话、独立导出与备份保留",
             None,
             None,
@@ -716,6 +765,7 @@ class MemoryManager:
         # create this authorization. No user workspace files are included.
         if dataset_id not in self._state["cleanup"]:
             raise PluginError("cleanup_blocked", "no explicit dataset deletion plan")
+        self._check_shared_cleanup(dataset_id, self._state["cleanup"][dataset_id])
         for installation in self.registry.list_installations():
             if installation.dataset_id != dataset_id:
                 continue
@@ -754,6 +804,8 @@ class MemoryManager:
             for table, columns in schema_contracts()[0].items():
                 if "dataset_id" in columns:
                     c.execute(f'DELETE FROM "{table}" WHERE dataset_id=?', (dataset_id,))
+            for table in ("b26_memory_packs", "b26_memory_uploads"):
+                c.execute(f'DELETE FROM "{table}" WHERE dataset_id=?', (dataset_id,))
             self.ledger._disable_purge(c)
             for row in c.execute(
                 "SELECT command_id,result FROM b23_commands WHERE result IS NOT NULL"
@@ -868,6 +920,15 @@ class MemoryManager:
         from operant.skills import SkillDiscovery
 
         repository = SQLitePhase45Repository(self.store)
+        if cmd.skill_id:
+            with self.store._connect() as c:
+                derived = c.execute(
+                    "SELECT 1 FROM b26_skill_heads WHERE skill_id=?", (cmd.skill_id,)
+                ).fetchone()
+            if derived:
+                raise PluginError(
+                    "upgrade_required", "experience Skills require exact B2-6 version commands"
+                )
         if cmd.action == "skill_discover":
             if not self.skill_roots:
                 raise ValueError("尚未配置可信 Skill 根目录")
@@ -1147,6 +1208,13 @@ class MemoryManager:
             with self.store._connect() as connection:
                 rows = connection.execute(sql, parameters).fetchall()
             values = [MemoryVersion.model_validate_json(row["body"]) for row in rows]
+            from operant.memory_plugins.worktree_knowledge import workspace_facts
+
+            condition_context = (
+                workspace_facts(self, run.project)
+                if any(v.conditions.commit_ref or v.conditions.tree_digest for v in values)
+                else None
+            )
             cursors = {
                 value.ref: int(row["cursor"]) for value, row in zip(values, rows, strict=True)
             }
@@ -1170,6 +1238,7 @@ class MemoryManager:
                     search,
                     policy=policy,
                     query_plan=plan,
+                    condition_context=condition_context,
                     resolve=lambda ref: next((v for v in values if v.ref == ref), None),
                     cutoff_resolver=lambda version: cursors.get(version.ref),
                     visibility=run.validate,

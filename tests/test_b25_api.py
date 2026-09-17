@@ -95,7 +95,7 @@ def test_v17_migration_preserves_frozen_history(tmp_path):
     store = SQLiteStore(tmp_path / "migration.sqlite3")
     store.migrate(16)
     previous = store.list_applied_migrations()
-    store.initialize()
+    store.migrate(17)
     assert store.schema_version() == 17
     assert store.list_applied_migrations()[:16] == previous
     with store._connect() as connection:

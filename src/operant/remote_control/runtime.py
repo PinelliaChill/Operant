@@ -83,6 +83,11 @@ RemoteCapabilityMap = Mapping[tuple[str, str], tuple[Capability, ...]]
 
 
 DEFAULT_REMOTE_OPERATION_CAPABILITIES: dict[tuple[str, str], tuple[Capability, ...]] = {
+    # MP-5.4 memory operations cross the existing Remote Control envelope.
+    # The Memory Core still performs project/session/source checks; this map
+    # only binds the transport operation to its single remote capability.
+    ("memory", "query"): (Capability.REMOTE_CONTROL_OBSERVE,),
+    ("memory", "command"): (Capability.REMOTE_CONTROL_COMMAND,),
     ("remote_projection", "read"): (
         Capability.REMOTE_CONTROL_OBSERVE,
         Capability.WORKSPACE_READ,

@@ -720,6 +720,14 @@ class MemoryLedger:
             return MemoryHead.model_validate_json(body)
         if result_type == "tombstone":
             return Tombstone.model_validate_json(body)
+        if result_type == "promoted":
+            payload = json.loads(body)
+            return (
+                MemoryVersion.model_validate(payload["version"]),
+                MemoryHead.model_validate(payload["head"]),
+            )
+        if result_type == "refs":
+            return tuple(MemoryVersionRef.model_validate(item) for item in json.loads(body))
         raise LedgerValidationError(f"unknown stored idempotency result type: {result_type}")
 
     def save_version(
@@ -1457,6 +1465,355 @@ class MemoryLedger:
     publish = confirm_proposal
     accept_proposal = confirm_proposal
     confirm = confirm_proposal
+
+    def promote_verified(
+        self,
+        candidate_ref: MemoryVersionRef | Mapping[str, Any],
+        *,
+        target_scope: Scope | Mapping[str, Any],
+        target_commit_ref: str,
+        target_tree_digest: str,
+        verification_artifact_refs: Sequence[str],
+        verification_digest: str,
+        expected_head_revision: int | None = None,
+        permission_epoch: int | None = None,
+        reason: str = "verified Writer merge",
+        idempotency_key: str | None = None,
+        request_digest: str | None = None,
+    ) -> tuple[MemoryVersion, MemoryHead]:
+        """Publish a new project version only after Core verified a merge target.
+
+        The candidate remains an immutable Run-scoped version.  Promotion
+        appends a new version with the target Project scope and advances the
+        same publication head in one ledger transaction.  ``idempotency_key``
+        is normally the parent Writer-evidence identity; it lets the sharing
+        projection recover after a registry or evidence write is interrupted.
+        """
+
+        normalized_ref = _as_ref(candidate_ref)
+        normalized_scope = _as_scope(target_scope)
+        refs = tuple(dict.fromkeys(item for item in verification_artifact_refs if item))
+        if not refs:
+            raise LedgerValidationError("verified promotion requires evidence references")
+        if not isinstance(target_commit_ref, str):
+            raise LedgerValidationError("verified promotion requires a commit identity")
+        commit_ref = (
+            target_commit_ref[4:] if target_commit_ref.startswith("git:") else target_commit_ref
+        )
+        if not 7 <= len(commit_ref) <= 128 or any(char.isspace() for char in commit_ref):
+            raise LedgerValidationError("verified promotion commit identity is invalid")
+        if len(target_tree_digest) != 64 or any(
+            char not in "0123456789abcdef" for char in target_tree_digest
+        ):
+            raise LedgerValidationError("verified promotion tree digest is invalid")
+        if not reason.strip():
+            raise LedgerValidationError("verified promotion reason is required")
+        digest = _request_fingerprint(
+            "promote_verified",
+            {
+                "candidate_ref": normalized_ref,
+                "target_scope": normalized_scope,
+                "target_commit_ref": target_commit_ref,
+                "target_tree_digest": target_tree_digest,
+                "verification_artifact_refs": refs,
+                "verification_digest": verification_digest,
+                "expected_head_revision": expected_head_revision,
+                "permission_epoch": permission_epoch,
+                "reason": reason,
+            },
+            request_digest,
+        )
+        with self._write() as connection:
+            cached = self._idempotency_result(
+                connection,
+                "promote_verified",
+                normalized_ref.dataset_id,
+                idempotency_key,
+                digest,
+            )
+            if cached is not None:
+                result = self._decode_idempotency(*cached)
+                if (
+                    not isinstance(result, tuple)
+                    or len(result) != 2
+                    or not isinstance(result[0], MemoryVersion)
+                    or not isinstance(result[1], MemoryHead)
+                ):
+                    raise LedgerValidationError("promotion idempotency result is malformed")
+                return result
+            candidate = self._stored_version(
+                connection,
+                normalized_ref.dataset_id,
+                normalized_ref.record_id,
+                normalized_ref.version,
+            )
+            if candidate is None or candidate.ref != normalized_ref:
+                raise LedgerNotFoundError("Writer memory candidate is unavailable")
+            if not isinstance(candidate.scope, RunScope):
+                raise LedgerConflictError("only a Run-scoped Writer candidate can be promoted")
+            if not isinstance(normalized_scope, (WorkspaceScope, RunScope)):
+                raise LedgerValidationError("project promotion requires Workspace or Run scope")
+            head = self._stored_head(
+                connection, normalized_ref.dataset_id, normalized_ref.record_id
+            )
+            if head is None:
+                head = self._head_for_create(
+                    normalized_ref.dataset_id,
+                    normalized_ref.record_id,
+                    permission_epoch=permission_epoch or 0,
+                )
+                self._insert_head(connection, head)
+            if head.state in {"deleted", "revoked"}:
+                raise LedgerConflictError("record is tombstoned and cannot be promoted")
+            self._check_expected(expected_head_revision, head.revision)
+            effective_epoch = (
+                head.permission_epoch if permission_epoch is None else permission_epoch
+            )
+            if effective_epoch != head.permission_epoch:
+                raise LedgerConflictError("permission epoch conflict during promotion")
+            if head.published_version == normalized_ref:
+                raise LedgerConflictError("Writer candidate is already the publication head")
+            max_row = connection.execute(
+                "SELECT MAX(version) AS max_version FROM memory_ledger_versions "
+                "WHERE dataset_id=? AND record_id=?",
+                (normalized_ref.dataset_id, normalized_ref.record_id),
+            ).fetchone()
+            next_version = int(max_row["max_version"] or 0) + 1
+            now = _now()
+            conditions = candidate.conditions.model_copy(
+                update={
+                    "commit_ref": f"git:{commit_ref}",
+                    "tree_digest": target_tree_digest,
+                    "verified_at": now,
+                }
+            )
+            promoted = candidate.model_copy(
+                update={
+                    "ref": normalized_ref.model_copy(update={"version": next_version}),
+                    "kind": "project",
+                    "scope": normalized_scope,
+                    # Git identity verification does not establish the truth
+                    # of a model's conclusion or attest a business test run.
+                    "evidence": candidate.evidence,
+                    "conditions": conditions,
+                    "recorded_at": now,
+                }
+            )
+            self._insert_version(connection, promoted)
+            proposal = MemoryProposal(
+                proposal_id=f"promotion_{digest}",
+                proposal_revision=0,
+                owner=promoted.owner,
+                operation="merge",
+                base_head=head,
+                proposed_version=promoted.ref,
+                source_refs=promoted.sources,
+                extractor_version="b2-6-sharing",
+                reason=reason.strip(),
+                state="pending",
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_ledger_proposals(
+                    proposal_id, dataset_id, record_id, proposal_revision,
+                    base_head_revision, proposed_version, state, body,
+                    idempotency_key, request_digest, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal.proposal_id,
+                    promoted.ref.dataset_id,
+                    promoted.ref.record_id,
+                    proposal.proposal_revision,
+                    head.revision,
+                    promoted.ref.version,
+                    proposal.state,
+                    _model_json(proposal),
+                    None,
+                    digest,
+                    now.isoformat(),
+                ),
+            )
+            cursor = self._next_cursor(connection)
+            next_head = head.model_copy(
+                update={
+                    "published_version": promoted.ref,
+                    "revision": head.revision + 1,
+                    "publication_cursor": cursor,
+                    "state": "published",
+                    "permission_epoch": effective_epoch,
+                }
+            )
+            updated = connection.execute(
+                """
+                UPDATE memory_ledger_heads
+                SET published_version=?, published_digest=?, revision=?,
+                    publication_cursor=?, state=?, permission_epoch=?, body=?
+                WHERE dataset_id=? AND record_id=? AND revision=?
+                """,
+                (
+                    promoted.ref.version,
+                    promoted.ref.content_digest,
+                    next_head.revision,
+                    next_head.publication_cursor,
+                    next_head.state,
+                    next_head.permission_epoch,
+                    _model_json(next_head),
+                    head.dataset_id,
+                    head.record_id,
+                    head.revision,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise LedgerConflictError("head changed during verified promotion")
+            self._mark_proposal_state(connection, proposal, "accepted")
+            self._store_idempotency(
+                connection,
+                "promote_verified",
+                normalized_ref.dataset_id,
+                idempotency_key,
+                digest,
+                "promoted",
+                {"version": promoted, "head": next_head},
+            )
+            return promoted, next_head
+
+    def copy_dataset(
+        self,
+        source_dataset_id: str,
+        destination_dataset_id: str,
+        *,
+        owner: DatasetOwner,
+        target_scope: Scope | Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        request_digest: str | None = None,
+    ) -> tuple[MemoryVersionRef, ...]:
+        """Copy immutable memory history and publication heads to a new dataset.
+
+        The source rows are never modified.  A destination owner and optional
+        registered target scope are applied to copied versions, while source
+        ``SourceRef`` provenance remains intact for revocation and audit.
+        """
+
+        if source_dataset_id == destination_dataset_id:
+            raise LedgerValidationError("dataset copy requires distinct source and destination IDs")
+        if owner.dataset_id != destination_dataset_id:
+            raise LedgerValidationError("destination owner does not match destination dataset")
+        normalized_scope = None if target_scope is None else _as_scope(target_scope)
+        digest = _request_fingerprint(
+            "copy_dataset",
+            {
+                "source_dataset_id": source_dataset_id,
+                "destination_dataset_id": destination_dataset_id,
+                "owner": owner,
+                "target_scope": normalized_scope,
+            },
+            request_digest,
+        )
+        with self._write() as connection:
+            cached = self._idempotency_result(
+                connection,
+                "copy_dataset",
+                source_dataset_id,
+                idempotency_key,
+                digest,
+            )
+            if cached is not None:
+                result = self._decode_idempotency(*cached)
+                if not isinstance(result, tuple) or not all(
+                    isinstance(item, MemoryVersionRef) for item in result
+                ):
+                    raise LedgerValidationError("dataset copy idempotency result is malformed")
+                return result
+            rows = connection.execute(
+                "SELECT body FROM memory_ledger_versions WHERE dataset_id=? "
+                "ORDER BY record_id,version",
+                (source_dataset_id,),
+            ).fetchall()
+            refs: list[MemoryVersionRef] = []
+            versions_by_record: dict[str, list[MemoryVersion]] = {}
+            for row in rows:
+                source = MemoryVersion.model_validate_json(row["body"])
+                scope = normalized_scope or source.scope
+                copied = source.model_copy(
+                    update={
+                        "ref": source.ref.model_copy(update={"dataset_id": destination_dataset_id}),
+                        "owner": owner,
+                        "scope": scope,
+                    }
+                )
+                existing = self._stored_version(
+                    connection,
+                    destination_dataset_id,
+                    copied.ref.record_id,
+                    copied.ref.version,
+                )
+                if existing is not None:
+                    if existing != copied:
+                        raise LedgerConflictError("destination memory version identity differs")
+                else:
+                    self._insert_version(connection, copied)
+                refs.append(copied.ref)
+                versions_by_record.setdefault(copied.ref.record_id, []).append(copied)
+            head_rows = connection.execute(
+                "SELECT body FROM memory_ledger_heads WHERE dataset_id=? ORDER BY record_id",
+                (source_dataset_id,),
+            ).fetchall()
+            for row in head_rows:
+                source_head = MemoryHead.model_validate_json(row["body"])
+                copied_versions = versions_by_record.get(source_head.record_id, [])
+                if not copied_versions:
+                    continue
+                destination_published = None
+                if source_head.published_version is not None:
+                    destination_published = source_head.published_version.model_copy(
+                        update={"dataset_id": destination_dataset_id}
+                    )
+                destination_head = source_head.model_copy(
+                    update={
+                        "dataset_id": destination_dataset_id,
+                        "published_version": destination_published,
+                        "publication_cursor": (
+                            self._next_cursor(connection)
+                            if source_head.state == "published"
+                            else source_head.publication_cursor
+                        ),
+                    }
+                )
+                existing_head = self._stored_head(
+                    connection, destination_dataset_id, source_head.record_id
+                )
+                if existing_head is None:
+                    self._insert_head(connection, destination_head)
+                elif existing_head != destination_head:
+                    raise LedgerConflictError("destination memory head identity differs")
+            tombstones = connection.execute(
+                "SELECT body FROM memory_ledger_tombstones WHERE dataset_id=?",
+                (source_dataset_id,),
+            ).fetchall()
+            for row in tombstones:
+                source_tombstone = Tombstone.model_validate_json(row["body"])
+                copied_tombstone = source_tombstone.model_copy(
+                    update={"dataset_id": destination_dataset_id}
+                )
+                existing_tombstone = self._stored_tombstone(
+                    connection, destination_dataset_id, copied_tombstone.record_id
+                )
+                if existing_tombstone is None:
+                    self._upsert_tombstone(connection, copied_tombstone)
+                elif existing_tombstone != copied_tombstone:
+                    raise LedgerConflictError("destination dataset tombstone identity differs")
+            result = tuple(refs)
+            self._store_idempotency(
+                connection,
+                "copy_dataset",
+                source_dataset_id,
+                idempotency_key,
+                digest,
+                "refs",
+                result,
+            )
+            return result
 
     @staticmethod
     def _batch_review_field(entry: Any, name: str, *, default: Any = None) -> Any:

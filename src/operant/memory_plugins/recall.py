@@ -188,8 +188,14 @@ class MemoryRun:
                 if access_version.agent_ids and self.agent_id not in access_version.agent_ids:
                     return False
             from operant.memory_plugins.retrieval import memory_conditions_match
+            from operant.memory_plugins.worktree_knowledge import workspace_facts
 
-            if not memory_conditions_match(version, None):
+            facts = (
+                workspace_facts(self.manager, self.project)
+                if version.conditions.commit_ref or version.conditions.tree_digest
+                else None
+            )
+            if not memory_conditions_match(version, facts):
                 return False
             from operant.memory_plugins.governance import GovernanceService
 
