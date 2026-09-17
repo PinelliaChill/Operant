@@ -137,7 +137,7 @@ def test_concurrent_v11_initialization_is_serial_and_repeatable(tmp_path: Path) 
     with ThreadPoolExecutor(max_workers=4) as executor:
         versions = list(executor.map(lambda _index: initialize(), range(8)))
 
-    assert versions == [17] * 8
+    assert versions == [18] * 8
     store = SQLiteStore(database)
     assert [row["version"] for row in store.list_applied_migrations()] == list(range(1, 19))
     assert V11_TABLES.issubset(_table_names(database))
