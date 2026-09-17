@@ -134,7 +134,7 @@ def test_v1_through_v7_upgrade_to_v8_and_repeat_initialize(
     assert store.migrate(starting_version) == starting_version
     store.initialize()
     store.initialize()
-    assert store.schema_version() == 17
+    assert store.schema_version() == 18
 
 
 def test_v8_failure_is_atomic_and_rollback_requires_empty_phase1d_tables(
@@ -186,7 +186,7 @@ def test_v8_failure_is_atomic_and_rollback_requires_empty_phase1d_tables(
         rolled_back_ddl["prompt_blocks_source_refs_guard"]
         == v7_ddl["prompt_blocks_source_refs_guard"]
     )
-    assert empty.migrate() == 17
+    assert empty.migrate() == 18
     with empty._connect() as connection:
         upgraded_ddl = {
             row["name"]: empty._normalize_schema_sql(row["sql"])
@@ -262,7 +262,7 @@ def test_exact_phase1d_previews_upgrade_both_context_provenance_guards(
 
     upgraded = SQLiteStore(database)
     upgraded.initialize()
-    assert upgraded.schema_version() == 17
+    assert upgraded.schema_version() == 18
     applied_v8 = next(item for item in upgraded.list_applied_migrations() if item["version"] == 8)
     assert applied_v8["checksum"] == SQLiteStore._FROZEN_MIGRATION_CHECKSUMS[8]
     _objects, expected = upgraded._canonical_schema_objects(8)

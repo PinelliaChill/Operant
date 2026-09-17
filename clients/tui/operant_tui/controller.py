@@ -8,6 +8,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from sdk.python_client import Phase1EClient, Phase23Client, Phase45Client, Phase56Client
+from sdk.python_client.b2_6_generated import B26Client
 from sdk.python_client.phase23_generated import ScopedCursorTracker
 from sdk.python_client.transport import Phase1EError
 
@@ -99,17 +100,32 @@ class ClientController:
         phase23: Any | None = None,
         phase45: Any | None = None,
         phase56: Any | None = None,
+        b26: Any | None = None,
     ) -> None:
         base_url = validate_core_url(core_url)
         self.phase1e = phase1e or Phase1EClient(base_url)
         self.phase23 = phase23 or Phase23Client(base_url)
         self.phase45 = phase45 or Phase45Client(base_url)
         self.phase56 = phase56 or Phase56Client(base_url)
+        self.b26 = b26 or B26Client(base_url)
         self._graph_cursors: dict[str, ScopedCursorTracker] = {}
 
     def negotiate(self) -> None:
         for client in (self.phase1e, self.phase23, self.phase45, self.phase56):
             client.negotiate_protocol(force=True)
+
+    def experience(self, project_id: str) -> Any:
+        project_id = project_id.strip()
+        if not project_id:
+            raise ValueError("请填写项目 ID")
+        self.b26.negotiate_protocol()
+        return self.b26.get_experience(project_id)
+
+    def experience_command(self, command: dict[str, Any], *, idempotency_key: str) -> Any:
+        if not command.get("project_id") or not command.get("action"):
+            raise ValueError("经验命令需要项目和操作")
+        # The generated client owns schema negotiation and error semantics.
+        return self.b26.execute(command, idempotency_key=idempotency_key)
 
     def graph_projection(self, run_id: str) -> tuple[Any, list[Any]]:
         run_id = run_id.strip()

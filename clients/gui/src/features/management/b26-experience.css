@@ -1,0 +1,910 @@
+/**
+ * Operant 2.0 - B2-6 经验技能与授权协作呈现样式 (UI-EXP-01)
+ * 负责人：Antigravity (视觉执行)
+ * 契约类：.b26-presentation, .b26-header, .b26-tabs, .b26-section,
+ *         .b26-card-grid, .b26-card, .b26-badge, .b26-modal, .b26-field
+ * 约束：克制的中性石灰底 + 统一深松绿强调色，遵循 WCAG AA 对比度；
+ *       字段/卡片完全来自 props，无权限/待验证/撤销等状态文字明确可读；
+ *       全面支持桌面多列、768px 响应式折叠及 430px 窄屏无水平溢出。
+ */
+
+/* ==========================================================================
+   1. 根容器与整体布局 (.b26-presentation)
+   ========================================================================== */
+
+.b26-presentation {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+  padding: 20px 24px;
+  box-sizing: border-box;
+  color: var(--text-primary);
+  background-color: var(--bg-app);
+  font-family: var(--font-sans, inherit);
+}
+
+/* ==========================================================================
+   2. 头部栏与操作区域 (.b26-header)
+   ========================================================================== */
+
+.b26-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.b26-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.b26-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.b26-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  color: var(--accent-action);
+}
+
+.b26-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.b26-header-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.b26-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+}
+
+.b26-status-pill.readonly {
+  background: var(--status-warn-bg);
+  color: var(--status-warn-text);
+  border-color: var(--status-warn-border);
+}
+
+.b26-status-pill.busy {
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
+  border-color: var(--status-info-border);
+}
+
+/* ==========================================================================
+   3. 全局横幅与通知 (.b26-banner)
+   ========================================================================== */
+
+.b26-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.5;
+  box-sizing: border-box;
+  animation: b26-fade-in 0.15s ease-out;
+}
+
+.b26-banner-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.b26-banner-content {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.b26-banner.error {
+  background: var(--status-error-bg);
+  border: 1px solid var(--status-error-border);
+  color: var(--status-error-text);
+}
+
+.b26-banner.notice {
+  background: var(--status-safe-bg);
+  border: 1px solid var(--status-safe-border);
+  color: var(--status-safe-text);
+}
+
+.b26-banner.readonly-warning {
+  background: var(--status-warn-bg);
+  border: 1px solid var(--status-warn-border);
+  color: var(--status-warn-text);
+}
+
+/* ==========================================================================
+   4. 标签页导航 (.b26-tabs)
+   ========================================================================== */
+
+.b26-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.b26-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.b26-tab-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.b26-tab-btn.active {
+  color: var(--accent-action);
+  font-weight: 600;
+  border-bottom-color: var(--accent-action);
+  background: var(--accent-subtle);
+}
+
+.b26-tab-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.b26-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+.b26-tab-btn.active .b26-tab-badge {
+  background: var(--accent-action);
+  color: var(--text-inverse);
+}
+
+/* ==========================================================================
+   5. 板块容器 (.b26-section)
+   ========================================================================== */
+
+.b26-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.b26-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.b26-section-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 240px;
+}
+
+.b26-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.b26-section-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.b26-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 过滤与搜索条 */
+.b26-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.b26-search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.b26-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* ==========================================================================
+   6. 卡片网格与卡片组件 (.b26-card-grid, .b26-card)
+   ========================================================================== */
+
+.b26-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.b26-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden;
+}
+
+.b26-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.b26-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.b26-card-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.b26-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.b26-card-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+/* 状态徽章 */
+.b26-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+
+.b26-badge.safe {
+  background: var(--status-safe-bg);
+  color: var(--status-safe-text);
+  border-color: var(--status-safe-border);
+}
+
+.b26-badge.warn {
+  background: var(--status-warn-bg);
+  color: var(--status-warn-text);
+  border-color: var(--status-warn-border);
+}
+
+.b26-badge.error {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+  border-color: var(--status-error-border);
+}
+
+.b26-badge.info {
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
+  border-color: var(--status-info-border);
+}
+
+.b26-badge.neutral {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+}
+
+.b26-card-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 事实列表 (Facts) */
+.b26-card-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+
+.b26-fact-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+.b26-fact-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.b26-fact-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-align: right;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+/* 卡片警告 */
+.b26-card-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--status-warn-bg);
+  border: 1px solid var(--status-warn-border);
+  color: var(--status-warn-text);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.b26-card-warning-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ==========================================================================
+   7. 空状态展示 (.b26-empty)
+   ========================================================================== */
+
+.b26-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 24px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.b26-empty-icon {
+  width: 40px;
+  height: 40px;
+  color: var(--text-muted);
+}
+
+.b26-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.b26-empty-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 440px;
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   8. 操作模态框与表单交互 (.b26-modal, .b26-field)
+   ========================================================================== */
+
+.b26-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+  animation: b26-fade-in 0.15s ease-out;
+}
+
+.b26-modal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 580px;
+  max-height: 90vh;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  box-sizing: border-box;
+  overflow: hidden;
+  animation: b26-slide-up 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.b26-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.b26-modal-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.b26-modal-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.b26-modal-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.b26-modal-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.b26-modal-close-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.b26-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px;
+  overflow-y: auto;
+  max-height: calc(90vh - 150px);
+}
+
+.b26-disabled-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--status-warn-bg);
+  border: 1px solid var(--status-warn-border);
+  color: var(--status-warn-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.b26-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.b26-field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.b26-required-mark {
+  color: var(--status-error-text);
+  font-weight: 700;
+}
+
+.b26-input,
+.b26-textarea,
+.b26-select {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  font-family: inherit;
+}
+
+.b26-input:focus,
+.b26-textarea:focus,
+.b26-select:focus {
+  border-color: var(--accent-action);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.b26-textarea {
+  min-height: 80px;
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.b26-checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.b26-checkbox {
+  margin-top: 3px;
+  cursor: pointer;
+  accent-color: var(--accent-action);
+  width: 16px;
+  height: 16px;
+}
+
+.b26-field-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 确认复选框区域 */
+.b26-confirm-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.b26-confirm-box.dangerous {
+  background: var(--status-error-bg);
+  border-color: var(--status-error-border);
+  color: var(--status-error-text);
+}
+
+.b26-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+/* ==========================================================================
+   9. 通用按钮组件 (.b26-btn)
+   ========================================================================== */
+
+.b26-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.b26-btn:focus-visible,
+.b26-tab-btn:focus-visible,
+.b26-input:focus-visible,
+.b26-textarea:focus-visible,
+.b26-select:focus-visible,
+.b26-checkbox:focus-visible,
+.b26-modal-close-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b26-btn-primary {
+  background: var(--accent-action);
+  color: var(--text-inverse);
+  border-color: var(--accent-action);
+}
+
+.b26-btn-primary:hover:not(:disabled) {
+  background: var(--accent-action-hover);
+  border-color: var(--accent-action-hover);
+}
+
+.b26-btn-primary:active:not(:disabled) {
+  background: var(--accent-action-active);
+}
+
+.b26-btn-secondary {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.b26-btn-secondary:hover:not(:disabled) {
+  background: var(--bg-surface);
+  border-color: var(--text-secondary);
+}
+
+.b26-btn-danger {
+  background: var(--status-error-text);
+  color: var(--text-inverse);
+  border-color: var(--status-error-text);
+}
+
+.b26-btn-danger:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.b26-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   10. 动画与自适应规约
+   ========================================================================== */
+
+@keyframes b26-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes b26-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .b26-presentation,
+  .b26-card,
+  .b26-btn,
+  .b26-modal-backdrop,
+  .b26-modal-panel,
+  .b26-banner {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* 768px 响应式折叠 */
+@media (max-width: 768px) {
+  .b26-presentation {
+    padding: 14px 16px;
+    gap: 16px;
+  }
+
+  .b26-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .b26-header-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .b26-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .b26-section-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .b26-section-actions {
+    width: 100%;
+  }
+
+  .b26-section-actions .b26-btn {
+    flex: 1;
+  }
+
+  .b26-modal-panel {
+    max-height: 95vh;
+  }
+}
+
+/* 430px 极窄屏适配 */
+@media (max-width: 430px) {
+  .b26-presentation {
+    padding: 10px 12px;
+  }
+
+  .b26-title {
+    font-size: 18px;
+  }
+
+  .b26-card {
+    padding: 12px;
+  }
+
+  .b26-fact-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .b26-fact-value {
+    text-align: left;
+  }
+
+  .b26-modal-backdrop {
+    padding: 8px;
+  }
+
+  .b26-modal-panel {
+    border-radius: var(--radius-md);
+  }
+
+  .b26-modal-footer {
+    flex-direction: column;
+  }
+
+  .b26-modal-footer .b26-btn {
+    width: 100%;
+  }
+}

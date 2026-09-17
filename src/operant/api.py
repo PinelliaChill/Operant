@@ -1308,6 +1308,7 @@ def create_app(
     phase56_local_authorizer: Authorizer | None = None,
     phase56_relay_authorizer: Authorizer | None = None,
     phase56_remote_executor: Any | None = None,
+    phase56_memory_connectors: Mapping[str, Any] | None = None,
     phase56_remote_operation_capabilities: Any | None = None,
     phase56_gateway_config: RemoteGatewayConfig | None = None,
     phase56_multiwriter_roots: Mapping[str, str | Path] | None = None,
@@ -3578,6 +3579,10 @@ def create_app(
     from operant.api_b2_5 import install_b2_5_routes
 
     install_b2_5_routes(app, service)
+    from operant.api_b2_6 import install_b2_6_routes
+
+    app.state.b26_remote_connectors = dict(phase56_memory_connectors or {})
+    install_b2_6_routes(app, service)
     local_authorizer = phase56_local_authorizer or (
         lambda request: (
             request.client is not None and request.client.host in {"127.0.0.1", "::1", "testclient"}
@@ -3600,6 +3605,7 @@ def create_app(
         executor=phase56_remote_executor,
         operation_capabilities=phase56_remote_operation_capabilities,
     )
+    app.state.b26_connect_remote(remote_control_service)
     gateway_connection_repository = SQLiteRemoteGatewayConnectionRepository(store)
     install_beta_gateway_routes(
         app,

@@ -3377,6 +3377,22 @@ class ApplicationService:
                 if self.memory_manager
                 else ""
             )
+            experience_run = None
+            if self.memory_manager is not None and self.memory_plugin_mode:
+                from operant.memory_plugins.experience_runtime import begin_experience_run
+
+                experience_run = begin_experience_run(
+                    self.memory_manager,
+                    workspace=normalized_workspace,
+                    session_id=session.id,
+                    agent_id=agent.id,
+                    snapshot=session.role_snapshot,
+                    enabled=memory_enabled,
+                )
+                if experience_run is not None:
+                    skill_context = "\n\n".join(
+                        filter(None, (skill_context, experience_run.content()))
+                    )
             memory_run = None
             if self.memory_manager is not None and self.memory_plugin_mode and memory_enabled:
                 from operant.memory_plugins.recall import begin_memory_run
@@ -3393,6 +3409,7 @@ class ApplicationService:
                 )
             context_composer = PersistentContextComposer(
                 collaboration_context=_collaboration_context,
+                before_compose=experience_run.guard if experience_run is not None else None,
                 memory_run=memory_run,
                 count_provider_tokens=self.memory_plugin_mode,
                 store=self.store,

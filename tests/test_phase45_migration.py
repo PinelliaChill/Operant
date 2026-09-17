@@ -137,9 +137,9 @@ def test_concurrent_v11_initialization_is_serial_and_repeatable(tmp_path: Path) 
     with ThreadPoolExecutor(max_workers=4) as executor:
         versions = list(executor.map(lambda _index: initialize(), range(8)))
 
-    assert versions == [17] * 8
+    assert versions == [18] * 8
     store = SQLiteStore(database)
-    assert [row["version"] for row in store.list_applied_migrations()] == list(range(1, 18))
+    assert [row["version"] for row in store.list_applied_migrations()] == list(range(1, 19))
     assert V11_TABLES.issubset(_table_names(database))
 
 
@@ -198,7 +198,7 @@ def test_v11_rollback_requires_empty_isolated_database(tmp_path: Path) -> None:
         )
     with pytest.raises(MigrationError, match="Phase 5A tables"):
         populated.rollback(10, isolated=True)
-    assert populated.schema_version() == 17
+    assert populated.schema_version() == 18
 
 
 def test_mcp_lifecycle_events_are_append_only_and_configs_store_references(

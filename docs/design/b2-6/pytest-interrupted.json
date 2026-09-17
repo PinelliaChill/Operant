@@ -1,0 +1,11 @@
+{
+  "completed": false,
+  "reason": "tool-turn process terminated; no pytest process remained on system inspection",
+  "observed_failures": [
+    "test_m0_persistence latest version constants (2)",
+    "test_phase1b_persistence concurrent latest version constant (1)"
+  ],
+  "fix_commit": "e707922f000d32b1b7237172a7a84399036e24f3",
+  "product_source_changed": false,
+  "replacement": "pytest-final-02.xml"
+}

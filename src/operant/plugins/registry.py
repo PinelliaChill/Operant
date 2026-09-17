@@ -377,6 +377,12 @@ class PluginRegistry:
     def get_installation(self, installation_id: str) -> InstallationRecord:
         return self._installation(installation_id)
 
+    def get_dataset(self, dataset_id: str) -> DatasetRecord:
+        for item in self._state.datasets:
+            if item.dataset_id == dataset_id:
+                return item
+        raise PluginError("unknown_owner", "plugin dataset is not registered")
+
     def get_binding(self, binding_id: str) -> BindingRecord:
         return self._binding(binding_id)
 
@@ -1297,19 +1303,238 @@ class PluginRegistry:
     def resource_lookup(
         self, installation_id: str, resource_id: str
     ) -> tuple[PrivateIndexResource, Path] | None:
+        installation = self._installation(installation_id)
         for stored in self._state.resources:
             resource = stored.resource
             if (
                 resource.resource_id != resource_id
-                or resource.installation_id != installation_id
+                or resource.owner.dataset_id != installation.dataset_id
+                or (
+                    resource.installation_id != installation_id
+                    and installation_id not in resource.consumer_ids
+                )
                 or stored.status == "deleted"
             ):
                 continue
             if resource.category != "index" or resource.storage != "managed_directory":
                 return None
-            path = path_under(self.installation_root(installation_id), stored.relative_path)
+            path = path_under(
+                self.installation_root(resource.installation_id), stored.relative_path
+            )
             return PrivateIndexResource.model_validate(resource.model_dump()), path
         return None
+
+    def attach_dataset_consumer(self, dataset_id: str, installation_id: str) -> None:
+        """Retain Host resources for an explicitly authorized dataset reader."""
+
+        self._installation(installation_id)
+        self.get_dataset(dataset_id)
+        changed = False
+        resources: list[StoredResource] = []
+        for stored in self._state.resources:
+            resource = stored.resource
+            if resource.owner.dataset_id != dataset_id:
+                resources.append(stored)
+                continue
+            if installation_id in resource.consumer_ids:
+                resources.append(stored)
+                continue
+            changed = True
+            resources.append(
+                stored.model_copy(
+                    update={
+                        "resource": resource.model_copy(
+                            update={"consumer_ids": (*resource.consumer_ids, installation_id)}
+                        )
+                    }
+                )
+            )
+        if changed:
+            self._replace(resources=tuple(resources))
+
+    def revoke_dataset_consumer(self, dataset_id: str, installation_id: str) -> None:
+        """Remove one explicit reader while retaining the resource owner."""
+
+        self.get_dataset(dataset_id)
+        resources: list[StoredResource] = []
+        changed = False
+        for stored in self._state.resources:
+            resource = stored.resource
+            if (
+                resource.owner.dataset_id != dataset_id
+                or resource.installation_id == installation_id
+            ):
+                resources.append(stored)
+                continue
+            consumers = tuple(item for item in resource.consumer_ids if item != installation_id)
+            changed = changed or consumers != resource.consumer_ids
+            resources.append(
+                stored.model_copy(
+                    update={"resource": resource.model_copy(update={"consumer_ids": consumers})}
+                )
+            )
+        if changed:
+            self._replace(resources=tuple(resources))
+
+    def transfer_dataset(
+        self,
+        source_dataset_id: str,
+        *,
+        destination_dataset_id: str,
+        destination_installation_id: str,
+        expected_revision: int,
+        mode: Literal["transfer", "authorized_copy"],
+    ) -> DatasetRecord:
+        """Move the registry owner or validate the destination copy owner.
+
+        Memory rows are copied by the Core ledger.  This method updates the
+        Host-owned consumer/resource projection and is idempotent after the
+        destination already owns the requested dataset.
+        """
+
+        source = self.get_dataset(source_dataset_id)
+        destination = self.get_dataset(destination_dataset_id)
+        installation = self._installation(destination_installation_id)
+        if source.revision != expected_revision and not (
+            mode == "transfer" and source.installation_id == destination_installation_id
+        ):
+            raise PluginError("stale_epoch", "dataset transfer revision is stale")
+        if mode == "transfer":
+            if source_dataset_id != destination_dataset_id:
+                raise PluginError("unknown_owner", "transfer must preserve dataset identity")
+            if source.installation_id == destination_installation_id:
+                return source
+            if installation.state not in {
+                PluginLifecycleState.DISABLED.value,
+                PluginLifecycleState.FAILED.value,
+                PluginLifecycleState.BLOCKED.value,
+            }:
+                raise PluginError(
+                    "permission_denied",
+                    "destination installation must be stopped before dataset transfer",
+                )
+            binding = self._binding(installation.binding_id) if installation.binding_id else None
+            if binding is not None and (binding.enabled or binding.active_run_ids):
+                raise PluginError(
+                    "permission_denied",
+                    "destination binding must be disabled with no active Runs",
+                )
+            old_destination_dataset_id = installation.dataset_id
+            old_destination = self.get_dataset(old_destination_dataset_id)
+            if old_destination_dataset_id == source_dataset_id:
+                raise PluginError("revision_conflict", "destination dataset identity is ambiguous")
+            if old_destination.installation_id != destination_installation_id:
+                raise PluginError(
+                    "unknown_owner", "destination installation dataset is inconsistent"
+                )
+            transferred_owner = DatasetOwner(
+                kind="plugin_dataset",
+                owner_namespace=f"dataset:{source_dataset_id}",
+                dataset_id=source_dataset_id,
+                principal_id=installation.owner.principal_id,
+            )
+            updated_installation = installation.model_copy(
+                update={
+                    "dataset_id": source_dataset_id,
+                    "owner": transferred_owner,
+                    "permission_epoch": installation.permission_epoch + 1,
+                    "updated_at": utc_now(),
+                }
+            )
+            updated_binding = (
+                None
+                if binding is None
+                else binding.model_copy(
+                    update={
+                        "dataset_id": source_dataset_id,
+                        "permission_epoch": binding.permission_epoch + 1,
+                        "active_run_ids": (),
+                        "enabled": False,
+                        "updated_at": utc_now(),
+                    }
+                )
+            )
+            updated = source.model_copy(
+                update={
+                    "owner": transferred_owner,
+                    "installation_id": destination_installation_id,
+                    "state": "bound",
+                    "revision": source.revision + 1,
+                }
+            )
+            retained_destination = old_destination.model_copy(
+                update={
+                    "installation_id": None,
+                    "state": "retained",
+                    "revision": old_destination.revision + 1,
+                }
+            )
+            resources: list[StoredResource] = []
+            for stored in self._state.resources:
+                resource = stored.resource
+                if resource.owner.dataset_id != source_dataset_id:
+                    resources.append(stored)
+                    continue
+                consumers = (
+                    resource.consumer_ids
+                    if destination_installation_id in resource.consumer_ids
+                    else (*resource.consumer_ids, destination_installation_id)
+                )
+                resources.append(
+                    stored.model_copy(
+                        update={"resource": resource.model_copy(update={"consumer_ids": consumers})}
+                    )
+                )
+            self._replace(
+                bindings=tuple(
+                    updated_binding
+                    if updated_binding is not None and item.binding_id == updated_binding.binding_id
+                    else item
+                    for item in self._state.bindings
+                ),
+                installations=tuple(
+                    updated_installation
+                    if item.installation_id == destination_installation_id
+                    else item
+                    for item in self._state.installations
+                ),
+                datasets=tuple(
+                    updated
+                    if item.dataset_id == source_dataset_id
+                    else retained_destination
+                    if item.dataset_id == old_destination_dataset_id
+                    else item
+                    for item in self._state.datasets
+                ),
+                resources=tuple(resources),
+            )
+            return updated
+        if source_dataset_id == destination_dataset_id:
+            raise PluginError("unknown_owner", "authorized_copy requires a new dataset id")
+        if installation.dataset_id != destination_dataset_id:
+            raise PluginError(
+                "unknown_owner", "destination installation does not own the copied dataset"
+            )
+        if (
+            destination.installation_id == destination_installation_id
+            and destination.state == "bound"
+        ):
+            return destination
+        updated_destination = destination.model_copy(
+            update={
+                "owner": installation.owner,
+                "installation_id": destination_installation_id,
+                "state": "bound",
+                "revision": destination.revision + 1,
+            }
+        )
+        self._replace(
+            datasets=tuple(
+                updated_destination if item.dataset_id == destination_dataset_id else item
+                for item in self._state.datasets
+            )
+        )
+        return updated_destination
 
     def resource_revision(self, resource_id: str) -> int:
         for stored in self._state.resources:
@@ -1332,10 +1557,16 @@ class PluginRegistry:
         return revision
 
     def resources_for(self, installation_id: str) -> tuple[StoredResource, ...]:
+        installation = self._installation(installation_id)
         return tuple(
             item
             for item in self._state.resources
-            if item.resource.installation_id == installation_id and item.status != "deleted"
+            if item.status != "deleted"
+            and item.resource.owner.dataset_id == installation.dataset_id
+            and (
+                item.resource.installation_id == installation_id
+                or installation_id in item.resource.consumer_ids
+            )
         )
 
     def begin_uninstall(
@@ -1354,10 +1585,25 @@ class PluginRegistry:
         requested = set(stop_run_ids)
         active = set(binding.active_run_ids) if binding else set()
         blockers = active.difference(requested)
+        dataset = self.get_dataset(installation.dataset_id)
+        transferred_owner = (
+            dataset.installation_id is not None
+            and dataset.installation_id != installation_id
+            and dataset.state == "bound"
+        )
         items: list[CleanupItem] = []
         for stored in self.resources_for(installation_id):
             resource = stored.resource
-            if resource.consumer_ids and set(resource.consumer_ids) - {installation_id}:
+            if transferred_owner:
+                items.append(
+                    CleanupItem(
+                        resource_id=resource.resource_id,
+                        outcome="retained",
+                        reason="keep_selected",
+                        blocker_ids=(),
+                    )
+                )
+            elif resource.consumer_ids and set(resource.consumer_ids) - {installation_id}:
                 items.append(
                     CleanupItem(
                         resource_id=resource.resource_id,
@@ -1420,11 +1666,11 @@ class PluginRegistry:
                 "updated_at": utc_now(),
             }
         )
-        dataset = next(
-            item for item in self._state.datasets if item.dataset_id == installation.dataset_id
-        )
         updated_dataset = dataset.model_copy(
-            update={"state": "deleting", "revision": dataset.revision + 1}
+            update={
+                "state": dataset.state if transferred_owner else "deleting",
+                "revision": dataset.revision if transferred_owner else dataset.revision + 1,
+            }
         )
         self._state = self._state.model_copy(
             update={
@@ -1509,12 +1755,22 @@ class PluginRegistry:
             item for item in self._state.datasets if item.dataset_id == installation.dataset_id
         )
         retained = any(item.outcome == "retained" for item in plan.items)
-        updated_dataset = dataset.model_copy(
-            update={
-                "state": "retained" if retained else "deleted",
-                "installation_id": None,
-                "revision": dataset.revision + 1,
-            }
+        # A retained dataset has no installation owner after ``keep``.  Its
+        # original uninstalled installation may later receive an explicit
+        # ``dataset_delete`` cleanup plan, and that plan is allowed to finish
+        # the deletion.  A dataset currently owned by another installation is
+        # the transfer case and must remain untouched by this plan.
+        owns_dataset = dataset.installation_id in (None, plan.installation_id)
+        updated_dataset = (
+            dataset.model_copy(
+                update={
+                    "state": "retained" if retained else "deleted",
+                    "installation_id": None,
+                    "revision": dataset.revision + 1,
+                }
+            )
+            if owns_dataset
+            else dataset
         )
         completed = plan.model_copy(update={"state": "completed", "updated_at": utc_now()})
         self._replace(

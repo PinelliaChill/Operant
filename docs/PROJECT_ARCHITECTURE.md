@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-16
+> 最后更新：2026-09-17
 >
-> 对应版本：B2-4 / MP-3 本地交付（SQLite v16；additive `b2-4.v1`；User接受Host性能限制）
+> 对应版本：B2-6 / MP-5 已完成本批验收（SQLite v18；additive `b2-6.v1`；J3范围内通过；保留B2-4 Host性能限制）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -65,9 +65,46 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
-### B2-5 / MP-4 整理与治理（工作分支已验收）
+### B2-6 / MP-5 经验、共享与远程边界（已完成本批验收）
 
-本批唯一范围和证据入口为 [B2-5任务包](design/b2-5/task-package.md)。当前工作分支已按该任务包完成完整门禁、真实模型、原生治理和指定Luna/max独立审查；未合并、部署或迁移真实用户库。
+本批范围与逐项证据见 [B2-6任务包](design/b2-6/task-package.md)。实现基于已合并的B2-5；
+Skill与共享已有真实模型分段，Writer正式Git/运行时链、数据集移交和原生Skill生命周期已验；
+固定源码三段真实模型复验、门禁与Luna/max独立签审已完成，J3按本批范围通过。
+完整套件首轮1050通过/1旧版本断言失败/1Docker条件skip，唯一测试断言修正后该文件16项通过；
+产品源码未变，复用后覆盖1051通过/1条件skip，不冒称一次全绿。GUI121、TUI12及真实原生壳证据见任务包。
+
+`experience_skills.py` 将有来源且经审阅的procedure变成只含资料的Skill Artifact，固定版本、资源hash、
+来源与信任状态；验证后以CAS更新发布头，停用及回退继续校验来源和权限。它复用ArtifactStore、
+Memory Ledger和原Skill管理投影，不创建第二套文件安装器；旧生命周期命令不能绕过经验Skill的精确版本检查。
+技能正文不授予工具权限。`experience_runtime.py` 在正式Session上下文中加入已授权Skill与显式共享内容，
+每次发送前检查来源、发布状态、角色、模型及Agent限制。历史快照保留原Agent身份，新Agent重新取快照；
+同Session无Agent白名单的历史可在当前授权下复用，撤销后阻断再次发送，不删除既有Context历史。
+
+`sharing.py` 管理显式worktree登记、精确记录授权和撤销、Writer证据及数据集移交。
+Writer候选维持RunScope，Core要求成功MergeRun的目标路径对应当前项目的有效工作区登记，
+核对Core初始化身份、明确的git结果commit与实际干净目标tree，再生成内容寻址验证Artifact；
+拒绝调用方提供的验证refs，晋级时再次检查工件正文、hash和目标身份，才追加项目版本。
+该验证只证明合并目标身份与干净树，不宣称业务测试通过，原inferred证据等级保持不变。
+已晋级版本的commit/tree条件由正式召回读取已登记workspace的当前clean Git事实验证；
+缺少事实、未提交改动或目标tree变化时不匹配，不能靠去掉条件让知识生效。晋级证据或登记撤销也阻断依赖。
+数据所有权来自Registry；旧插件卸载不能创建对新所有者数据的清除计划，旧绑定不能继续运行。
+个人偏好由显式命令保存到当前principal范围，Query返回完整授权版本；共享固定目标项目、角色/模型、
+期限及epoch。正式ModelProfile/Session的跨项目复用与撤销下一发送已有真实调用证据。
+数据集移交的真实Manager测试覆盖新所有者继续写入、旧绑定拒绝与旧安装delete不删除已移交数据。
+
+`remote_memory.py` 把用途、期限、目标、记录版本、权限epoch与预算固定到最小包，并复用已注册Target的
+lease及正式队列。`remote_query.py` 在原配对设备/RemoteSession签名加密请求之上返回短期加密投影，
+Relay只处理opaque密文；Host接收、队列接收与Target完成分别记录。当前已验本地InMemory connector与
+正式controller适配路径，不代表生产HTTPS connector已验。上传只能进入本地候选审阅，不能直接发布知识。
+
+`api_b2_6.py` 提供独立协议协商、项目投影、事件与命令；写操作经Action Gateway、精确对象参数和持久
+幂等journal，未知结果不能自动重放。Schema/两种SDK由`generate_b2_6.py`生成。SQLite v18追加本批元数据、
+命令/事件和Run输入引用表，既有v1～v17校验保持冻结，非空本批表拒绝降级清除。
+GUI的经验与授权面板接在正式管理页，Textual TUI通过Alt+4进入；断线只读、人工刷新核对，源码投影不是验收结论。
+
+### B2-5 / MP-4 整理与治理（已合并验收）
+
+本批唯一范围和证据入口为 [B2-5任务包](design/b2-5/task-package.md)。该批已完成完整门禁、真实模型、原生治理和指定Luna/max独立审查，并合并为本树基线；未部署或迁移真实用户库。
 
 SQLite v17 在冻结的 v1～v16 上追加治理来源、关系/依赖、候选期限/复核、维护作业与水位、命令和事件表；唯一正式发布头和不可变版本仍在 Memory Ledger。迁移拒绝篡改旧校验值，非空治理证据禁止降级清表。数据集删除在 Host 清理屏障后清理 dataset-owned 新表，原始 Item 与已发送 Context 按既有历史保留规则处理。
 

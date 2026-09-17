@@ -102,7 +102,9 @@ class PersistentContextComposer:
         memory_run: MemoryRun | None = None,
         count_provider_tokens: bool = False,
         collaboration_context: Callable[[], str] | None = None,
+        before_compose: Callable[[], None] | None = None,
     ) -> None:
+        self.before_compose = before_compose
         self.collaboration_context = collaboration_context
         self.count_provider_tokens = count_provider_tokens
         self.memory_run = memory_run
@@ -142,6 +144,8 @@ class PersistentContextComposer:
         tools: Sequence[ToolDefinition],
         request_ordinal: int,
     ) -> ComposedContext:
+        if self.before_compose is not None:
+            self.before_compose()
         if not messages or messages[0].role is not MessageRole.SYSTEM:
             raise ContextCompositionError("model input must begin with role instructions")
         identity = f"{self.agent_id}:{request_ordinal}"

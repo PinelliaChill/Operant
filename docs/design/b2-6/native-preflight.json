@@ -1,0 +1,16 @@
+{
+  "phase": "baseline_preflight_only",
+  "implementation_base": "b871b3310c501ee0c08e761520bf824df2427de4",
+  "core_source": "B2-5 predecessor, serve --desktop",
+  "core_pid": 54046,
+  "database": "/private/tmp/operant-b26-model-preflight/core.sqlite3",
+  "gui_source": "B2-5 existing native shell, not B2-6 GUI acceptance",
+  "binary_sha256": "9c7cfa84b21cc96af2f18d199ad201a516df70e5648ac68f9c92898188895106",
+  "origin": "tauri://localhost",
+  "checks": [
+    "Core connected after using supported --desktop startup",
+    "native projects query displayed synthetic preflight project and installation"
+  ],
+  "mutations": 0,
+  "initial_failure": "uvicorn direct startup lacks fixed Tauri CORS; corrected to operant serve --desktop"
+}

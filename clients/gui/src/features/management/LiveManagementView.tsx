@@ -1,3 +1,4 @@
+import { B26ExperiencePanel } from "./B26ExperiencePanel";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -572,6 +573,7 @@ const KnowledgePanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, 
         initialProjectId={projectId || undefined}
         onMutation={refresh}
       />
+      <B26ExperiencePanel management={state} projectId={projectId} connectionStatus={connectionStatus} onMutation={refresh} />
       <section aria-labelledby="knowledge-records-title">
         <div className="b2-memory-card-header"><div><h2 id="knowledge-records-title">正式记录与候选提议</h2><p>{records.length} 条记录；展示来源、版本与 revision，客户端不覆盖旧记录。</p></div><span className="b2-memory-status">{state.global_enabled ? '全局记忆已开启' : '全局记忆已关闭'}</span></div>
         {records.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Sparkles} title="暂无项目知识" description="查询没有返回记录，或当前项目尚未保存知识。" /></div> : <div className="b2-memory-grid">{records.map((record) => <KnowledgeRecord key={record.record_id} record={record} execute={execute} busy={busy} />)}</div>}
@@ -770,7 +772,7 @@ const RetentionPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, 
   );
 };
 
-const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) => {
+const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, connectionStatus, refresh }) => {
   const [projectId, setProjectId] = useState('');
   const [uninstallId, setUninstallId] = useState<string | null>(null);
   const activeProjects = state.projects.filter((project) => !project.archived);
@@ -806,8 +808,9 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) =
       <section aria-labelledby="skills-installed-title">
         <div className="b2-memory-card-header"><div><h2 id="skills-installed-title">已安装 Skill</h2><p>{skills.length} 个 Skill；可按项目启用、停用或卸载安装副本。</p></div></div>
         <div className="b2-memory-form"><label htmlFor="skills-project">项目范围</label><ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="skills-project" /><small>项目级启停会提交 project_id；卸载安装副本不会删除独立来源。</small></div>
-        {skills.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Sparkles} title="暂无已安装 Skill" description="从上方目录选择安装。" /></div> : <div className="b2-memory-grid">{skills.map((skill) => { const projectIds = skill.project_ids ?? []; const enabled = Boolean(projectId && projectIds.includes(projectId)); return <article className="b2-memory-card" key={skill.skill_id} data-state={skill.state}><div className="b2-memory-card-header"><div><h3>{skill.name}</h3><p><code>{skill.package_ref}</code></p></div><StatusBadge status={statusKind(skill.state)} label={statusLabel(skill.state)} size="sm" /></div><div className="b2-memory-meta"><span>信任：{skill.trust_status ?? '未提供'}</span><span>已启用项目：{projectIds.length ? projectIds.join('、') : '无'}</span></div><div className="b2-memory-actions"><ActionButton label={enabled ? '停用当前项目' : '启用当前项目'} onClick={() => void toggleProjectSkill(skill)} disabled={busy || !projectId || ['disabled', 'deactivated', 'uninstalled'].includes(skill.state)} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label={uninstallId === skill.skill_id ? '再次点击确认卸载' : '卸载 Skill'} tone={uninstallId === skill.skill_id ? 'primary' : 'ghost'} onClick={() => void uninstall(skill)} disabled={busy} icon={<Trash2 size={13} aria-hidden="true" />} /></div>{uninstallId === skill.skill_id && <p className="b2-memory-warning" role="status">卸载只删除当前安装副本并保留来源；再次点击按钮才提交。</p>}</article>; })}</div>}
+        {skills.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Sparkles} title="暂无已安装 Skill" description="从上方目录选择安装。" /></div> : <div className="b2-memory-grid">{skills.map((skill) => { const projectIds = skill.project_ids ?? []; const enabled = Boolean(projectId && projectIds.includes(projectId)); return <article className="b2-memory-card" key={skill.skill_id} data-state={skill.state}><div className="b2-memory-card-header"><div><h3>{skill.name}</h3><p><code>{skill.package_ref}</code></p></div><StatusBadge status={statusKind(skill.state)} label={statusLabel(skill.state)} size="sm" /></div><div className="b2-memory-meta"><span>信任：{skill.trust_status ?? '未提供'}</span><span>已启用项目：{projectIds.length ? projectIds.join('、') : '无'}</span></div><div className="b2-memory-actions"><ActionButton label={enabled ? '停用当前项目' : '启用当前项目'} onClick={() => void toggleProjectSkill(skill)} disabled={busy || !projectId || skill.package_ref.startsWith('experience:') || ['disabled', 'deactivated', 'uninstalled'].includes(skill.state)} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label={uninstallId === skill.skill_id ? '再次点击确认卸载' : '卸载 Skill'} tone={uninstallId === skill.skill_id ? 'primary' : 'ghost'} onClick={() => void uninstall(skill)} disabled={busy || skill.package_ref.startsWith('experience:')} icon={<Trash2 size={13} aria-hidden="true" />} /></div>{uninstallId === skill.skill_id && <p className="b2-memory-warning" role="status">卸载只删除当前安装副本并保留来源；再次点击按钮才提交。</p>}</article>; })}</div>}
       </section>
+      <B26ExperiencePanel management={state} projectId={projectId} connectionStatus={connectionStatus} onMutation={refresh} />
     </div>
   );
 };

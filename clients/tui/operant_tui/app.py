@@ -44,6 +44,7 @@ class OperantTui(App[None]):
         Binding("alt+2", "focus_pane('main')", "运行"),
         Binding("alt+3", "focus_pane('inspector')", "检查器"),
         Binding("?", "help", "帮助"),
+        Binding("alt+4", "experience", "经验与授权"),
         Binding("/", "command", "命令"),
         Binding("escape", "dismiss_layer", "关闭"),
         Binding("q", "quit", "退出", show=False),
@@ -269,6 +270,11 @@ class OperantTui(App[None]):
         if pane.display:
             focusable = pane.query("Input, Button, ListView").first()
             focusable.focus()
+
+    def action_experience(self) -> None:
+        from .experience import ExperienceScreen
+
+        self.push_screen(ExperienceScreen(self.controller))
 
     def action_help(self) -> None:
         self.query_one("#error", Static).update(
