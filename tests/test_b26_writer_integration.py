@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -151,6 +151,15 @@ class _WriterRecallProvider(ModelProvider):
         )
 
 
+def _deterministic_profile() -> ModelProfile:
+    return ModelProfile(
+        name="B2-6 Writer deterministic",
+        model_id="b26-writer-deterministic-model",
+        base_url="https://invalid.test/v1",
+        secret_ref="B26_WRITER_TEST_KEY",
+    )
+
+
 def _artifact(
     root: Path,
     *,
@@ -183,6 +192,8 @@ async def run_writer_chain(
     model_profile: ModelProfile,
     provider: ModelProvider,
     role_budget: Budget | None = None,
+    before_publish_check: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    after_publish_check: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     repository_root = tmp_path / "repository"
     repository_root.mkdir()
@@ -424,6 +435,22 @@ async def run_writer_chain(
             assert completed_merge.merge_run_id in report
             assert completed_merge.result_artifact_ref.removeprefix("git:") in report
             assert eligible.target_tree_digest in report
+        promotion_context = {
+            "tmp_path": tmp_path,
+            "repository_root": repository_root,
+            "target_root": target_root,
+            "runtime": runtime,
+            "writer_repository": writer_repository,
+            "sharing": sharing,
+            "project_id": project_id,
+            "registration": registration,
+            "graph_run": graph_run,
+            "completed_merge": completed_merge,
+            "evidence": evidence,
+            "eligible": eligible,
+        }
+        if before_publish_check is not None:
+            await before_publish_check(promotion_context)
         promoted_result = await sharing.execute(
             SharingCommand(
                 action="writer_memory_promote",
@@ -451,6 +478,10 @@ async def run_writer_chain(
                 f"git-tree:{_git(target_root, 'rev-parse', 'HEAD^{tree}')}".encode("ascii")
             ).hexdigest()
         )
+        promotion_context["published"] = published
+        promotion_context["promoted"] = promoted
+        if after_publish_check is not None:
+            await after_publish_check(promotion_context)
 
         profile = service.add_model_profile(model_profile)
         role = service.create_role(
@@ -565,13 +596,128 @@ async def test_writer_candidate_merge_promotion_and_next_send_revocation(
 ) -> None:
     result = await run_writer_chain(
         tmp_path,
-        model_profile=ModelProfile(
-            name="B2-6 Writer deterministic",
-            model_id="b26-writer-deterministic-model",
-            base_url="https://invalid.test/v1",
-            secret_ref="B26_WRITER_TEST_KEY",
-        ),
+        model_profile=_deterministic_profile(),
         provider=_WriterRecallProvider(),
     )
     assert result["dirty_tree_blocked"] is True
     assert result["evidence_revocation_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_writer_promotion_rejects_clean_target_outside_registration(
+    tmp_path: Path,
+) -> None:
+    async def check(context: dict[str, Any]) -> None:
+        merge = context["completed_merge"]
+        adapter = context["runtime"].merge_adapter
+        assert isinstance(adapter, TrustedGitMultiWriterAdapter)
+        assert merge.result_artifact_ref is not None
+        rogue_root = context["tmp_path"] / "rogue-target"
+        _git(
+            context["repository_root"],
+            "worktree",
+            "add",
+            "--detach",
+            str(rogue_root),
+            merge.result_artifact_ref.removeprefix("git:"),
+        )
+        original_root = adapter._roots["target"]
+        adapter._roots["target"] = rogue_root.resolve()
+        try:
+            eligible = context["eligible"]
+            result = await context["sharing"].execute(
+                SharingCommand(
+                    action="writer_memory_promote",
+                    project_id=context["project_id"],
+                    evidence_id=eligible.evidence_id,
+                    expected_revision=eligible.revision,
+                )
+            )
+            assert result.status == "blocked", result.message
+            assert result.state is not None
+            assert result.state.writer_evidence[0].state == "eligible"
+        finally:
+            adapter._roots["target"] = original_root
+        assert _git(rogue_root, "status", "--porcelain", "--untracked-files=all") == ""
+
+    result = await run_writer_chain(
+        tmp_path,
+        model_profile=_deterministic_profile(),
+        provider=_WriterRecallProvider(),
+        before_publish_check=check,
+    )
+    assert result["dirty_tree_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_writer_promotion_rejects_opaque_reconcile_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def check(context: dict[str, Any]) -> None:
+        sharing = context["sharing"]
+        repository = sharing.writer_repository
+        original_get_merge_run = repository.get_merge_run
+
+        def opaque_merge_result(merge_run_id: str) -> Any:
+            merge = original_get_merge_run(merge_run_id)
+            return merge.model_copy(update={"result_artifact_ref": "reconcile:opaque-result"})
+
+        eligible = context["eligible"]
+        with monkeypatch.context() as patch:
+            patch.setattr(repository, "get_merge_run", opaque_merge_result)
+            result = await sharing.execute(
+                SharingCommand(
+                    action="writer_memory_promote",
+                    project_id=context["project_id"],
+                    evidence_id=eligible.evidence_id,
+                    expected_revision=eligible.revision,
+                )
+            )
+        assert result.status == "blocked", result.message
+        assert result.state is not None
+        assert result.state.writer_evidence[0].state == "eligible"
+
+    result = await run_writer_chain(
+        tmp_path,
+        model_profile=_deterministic_profile(),
+        provider=_WriterRecallProvider(),
+        before_publish_check=check,
+    )
+    assert result["dirty_tree_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_published_writer_verify_with_refs_is_idempotent_and_recall_continues(
+    tmp_path: Path,
+) -> None:
+    async def check(context: dict[str, Any]) -> None:
+        published = context["published"]
+        sharing = context["sharing"]
+        before = sharing.writer_evidence(context["project_id"])[0]
+        assert before == published
+        result = await sharing.execute(
+            SharingCommand(
+                action="writer_memory_verify",
+                project_id=context["project_id"],
+                evidence_id=published.evidence_id,
+                merge_run_id=context["completed_merge"].merge_run_id,
+                verification_artifact_refs=("forged-client-ref",),
+                expected_revision=published.revision,
+            )
+        )
+        assert result.status == "completed", result.message
+        assert result.state is not None
+        after = result.state.writer_evidence[0]
+        assert after.state == "published"
+        assert after.revision == before.revision
+        assert after.published_memory_ref == before.published_memory_ref
+        assert after.verification_artifact_refs == before.verification_artifact_refs
+
+    result = await run_writer_chain(
+        tmp_path,
+        model_profile=_deterministic_profile(),
+        provider=_WriterRecallProvider(),
+        after_publish_check=check,
+    )
+    assert result["context_revision_count"] == 1

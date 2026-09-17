@@ -619,6 +619,13 @@ def test_real_git_writer_merge_is_required_for_ledger_promotion(tmp_path: Path) 
         _git(root, "commit", "-m", f"writer {writer}")
     target_commit = base
     artifacts: list[PatchCommitArtifact] = []
+    projects = {
+        "project-a": {
+            "project_id": "project-a",
+            "workspace_id": "workspace-a",
+            "installation_id": "installation-a",
+        }
+    }
     service, store, ledger = _service(
         tmp_path,
         registry=SimpleNamespace(
@@ -626,13 +633,7 @@ def test_real_git_writer_merge_is_required_for_ledger_promotion(tmp_path: Path) 
                 owner=_owner("dataset-a"), permission_epoch=0, dataset_id="dataset-a"
             )
         ),
-        projects={
-            "project-a": {
-                "project_id": "project-a",
-                "workspace_id": "workspace-a",
-                "installation_id": "installation-a",
-            }
-        },
+        projects=projects,
     )
     init, _created = store.register_workspace(
         WorkspaceInitialization(
@@ -642,6 +643,7 @@ def test_real_git_writer_merge_is_required_for_ledger_promotion(tmp_path: Path) 
             writable=True,
         )
     )
+    projects["project-a"]["workspace_id"] = init.id
     service.register_worktree(
         ProjectWorktreeRegistration(
             project_id="project-a",
