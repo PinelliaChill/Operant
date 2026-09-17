@@ -1,0 +1,32 @@
+{
+  "phase": "b26_baseline_preflight",
+  "provider_errors": [],
+  "model_id": "gpt-5.6-luna",
+  "workspace": "/private/tmp/operant-b26-model-preflight",
+  "database": "/private/tmp/operant-b26-model-preflight/core.sqlite3",
+  "session_id": "session_225052daa85144139584c67778f6370a",
+  "thread_id": "thread_84aa39fd3bd34eae8261a68345ba13af",
+  "entry": "ApplicationService.run_session",
+  "tool_policy": [
+    "read_file"
+  ],
+  "output_budget": 2048,
+  "events": [
+    "agent.started",
+    "model.completed",
+    "tool.started",
+    "tool.completed",
+    "model.delta",
+    "model.completed",
+    "agent.completed"
+  ],
+  "failures": [],
+  "answer": "测试代号：RIVER_42  \n算式结果：6 × 7 = 42",
+  "context_revision_ids": [
+    "context_977f882b5727a4082d00a1a6cc8e26f97c644ebf07e0cb3120465c51ef11ee88",
+    "context_bc7ff68929c372de880865d47a920bbb0b8ae10d4fb50b841fc50be2a8f24836"
+  ],
+  "memory_sent": true,
+  "completed": true,
+  "tool_called": true
+}

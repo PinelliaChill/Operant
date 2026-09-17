@@ -1,0 +1,22 @@
+{
+  "completed": true,
+  "entry": "OperantTui Alt+4 / generated B26Client over actual local HTTP",
+  "kind": "headless_textual_live_client",
+  "project_id": "project_528aba57a43349b098a885533975b109",
+  "skill_id": "skill_fd461c9ce822f5b50bcf1ccdedb7dee47f9e2860b31fcabef336945e119725fe",
+  "head_revision": 5,
+  "checks": [
+    "protocol_negotiation",
+    "live_projection",
+    "exact_command_preparation",
+    "escape_return"
+  ],
+  "write_submitted": false,
+  "source_hashes": {
+    "clients/tui/operant_tui/__init__.py": "a955d7c95e940bcb6d11f168abdcfad3f391b2abeb8baeca1107af494b975d1c",
+    "clients/tui/operant_tui/__main__.py": "9424bba5b5ec28cec32d9b770b3692934cc35af9f6429e3ce6e05052d2901d8b",
+    "clients/tui/operant_tui/app.py": "86ad77fdf0db580454aa45db52e3b6feddd998c6c38e16510c87fe41b927f839",
+    "clients/tui/operant_tui/controller.py": "73408b59a1e585eba253229459673ba28c21347346b2d45ed4e4d7300f34864f",
+    "clients/tui/operant_tui/experience.py": "aa1ea6b9a59a30759318c72784f395ceb7f69c54fe6975d3c44e409af3845141"
+  }
+}

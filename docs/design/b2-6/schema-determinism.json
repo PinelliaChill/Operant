@@ -1,0 +1,11 @@
+{
+  "completed": true,
+  "generation_runs": 2,
+  "unchanged": true,
+  "hashes": {
+    "sdk/protocol/schema/operant-b2-6.openapi.json": "6c4e09e3568aa07295a43befb273818b62536cdb499a994be03e8bb44003d33d",
+    "sdk/protocol/schema/operant-b2-6.openapi.sha256": "9e708bbf9670a5b062dfba2ee69a6e2682c9aa5275bbe851b7c9755ef994e3a9",
+    "sdk/python_client/b2_6_generated.py": "48c4c7ec3fd26add3f7288488efa43be993e1adbdd6e1419a99dfa0a8c3ba669",
+    "sdk/typescript-client/b2_6.generated.ts": "63fc986b6615ed46283a825ed0758bb3ab0bd1b656e730fa075fab0b7e39968f"
+  }
+}

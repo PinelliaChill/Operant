@@ -1,0 +1,53 @@
+{
+  "code_head": "dce035dfc5c59d82b9de704c48899319b5dc4b85",
+  "product_head": "e41cf5699445c4785b0f164d20766b74eb2eba54",
+  "completed": true,
+  "pytest": {
+    "kind": "full_suite_plus_test_expectation_only_recheck",
+    "full_suite": {
+      "file": "pytest-final-03.xml",
+      "passed": 1050,
+      "failed": 1,
+      "skipped": 1
+    },
+    "recheck": {
+      "file": "pytest-phase45-final.xml",
+      "passed": 16,
+      "failed": 0
+    },
+    "unique_cases": {
+      "passed": 1051,
+      "failed": 0,
+      "skipped": 1
+    },
+    "product_source_unchanged": true,
+    "only_changed_file": "tests/test_phase45_migration.py",
+    "reason": "v18 concurrent result assertion still expected v17; one-line test correction, whole file rechecked",
+    "skip": "Docker and OPERANT_DOCKER_TEST_IMAGE unavailable"
+  },
+  "static": {
+    "ruff_format": "378 files already formatted",
+    "ruff_check": "passed",
+    "mypy": "134 source files passed",
+    "uv_lock_offline": "passed",
+    "diff_check": "passed"
+  },
+  "gui": {
+    "tests": 121,
+    "typecheck": "passed",
+    "build": "passed",
+    "changed_since_native_evidence": false
+  },
+  "tui": {
+    "tests": 12,
+    "live": "tui-live-final-02.json",
+    "write_submitted": false
+  },
+  "schema": "schema-determinism.json",
+  "real_model": [
+    "writer-live-final-03.json",
+    "skill-live-final-03.json",
+    "sharing-live-final-03.json"
+  ],
+  "native": "native-live-final.json"
+}
