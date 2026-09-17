@@ -94,7 +94,13 @@ class MemoryManager:
         self._pending_refs: dict[str, MemoryVersionRef] = {}
         self._active_skill_runs: dict[str, set[str]] = {}
         self._owns_host = host is None
-        self.catalog_root = Path(__file__).resolve().parents[3] / "plugins"
+        package_root = Path(__file__).resolve().parents[1]
+        bundled_catalog = package_root / "bundled_plugins"
+        self.catalog_root = (
+            bundled_catalog
+            if bundled_catalog.is_dir()
+            else Path(__file__).resolve().parents[3] / "plugins"
+        )
         self._state = self._load()
         self._state.setdefault("skill_digests", {})
         history = self._state.setdefault("setting_history", {})

@@ -65,6 +65,23 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
+### B2-7 / MP-6 综合验收与候选交付（验收中）
+
+本批从已合并的 B2-6 `5b7833a` 开始；范围、冻结版本与逐项结果见
+[B2-7 任务包](design/b2-7/task-package.md)。在最终模型、桌面、门禁及独立审查齐备前，
+不把候选构建成功标为 Beta 2.0 工程完成。B2-4 Host 性能限制继续保留。
+
+`ApplicationService` 的旧 Memory 写入口统一返回 `schema_upgrade_required`；旧查询通过
+`MemoryManager` 的授权与正式发布头。未接入 Manager 的显式历史版本读取仅保留只读兼容，
+不再提供旧关键词自动激活或旧自动写入。`SequentialCodingWorkflow` 删除最近条目自动拼接、
+任务结束自动候选写回及验证命令关键词晋级；正式 Session 使用同一插件召回链。
+显式请求旧候选写开关会失败并提示升级到 Proposal/CAS。
+
+Python wheel 与 sdist 现在包含两个内置插件、生成协议 Schema 与摘要；协议协商和插件目录
+优先读取包内资源，源码开发保留仓库路径。候选使用独立 wheel 安装环境验证，不能用源码目录
+可运行来代替安装包可用。SQLite 仍为 v18，公共协议版本和 Schema 未因资源定位调整而改变。
+真实隔离迁移只使用合成旧库副本；原用户库、正式发布、签名、公证、生产远程连接器均不属于本批动作。
+
 ### B2-6 / MP-5 经验、共享与远程边界（已完成本批验收）
 
 本批范围与逐项证据见 [B2-6任务包](design/b2-6/task-package.md)。实现基于已合并的B2-5；
@@ -1146,7 +1163,7 @@ Leader 和一个 Writer，不是通用多 Writer 或高可用集群。
 
 ### Memory
 
-生产启动以本章前述 B2-3 dataset Ledger 为准。下列 `Memory` 是仍保留的旧版本兼容模型及历史数据结构；自动晋升策略不再用于生产插件记忆模式。
+运行时以本章前述 B2-3 dataset Ledger 为准。下列 `Memory` 仅是仍保留的旧版本兼容模型及历史数据结构；B2-7 已移除应用层旧写入与自动晋升路径。
 
 旧 `Memory` 分为：
 
@@ -1154,9 +1171,9 @@ Leader 和一个 Writer，不是通用多 Writer 或高可用集群。
 - `episodic`：记录一次任务经历，默认是待确认候选；
 - `project`：必须绑定项目作用域，可被后续任务复用。
 
-每条 Memory 保存来源 Session、来源任务、置信度、角色作用域、版本和状态。更新不会覆盖旧版本；
-`memory_scope` 在 Service 层真正执行读写判权，而不只是提示词字段。持久知识默认先进入
-`candidate`，只有显式确认或满足高置信度、可追踪来源和验证信号的保守规则才进入 `active`。
+历史 Memory 保存来源 Session、来源任务、置信度、角色作用域、版本和状态，保留旧版本用于解释与
+显式迁移。新写入必须经过 dataset Proposal/CAS；旧数据导入维持 `legacy_unverified`，不因旧 `active`
+状态自动获得新可信发布资格。作用域、来源撤销和权限在当前治理入口重新核验。
 
 ### Evaluation Suite、Run 与 Result
 
@@ -2071,11 +2088,9 @@ Workflow 通过 CLI 和 API/SSE 暴露，并有确定性 Provider 集成测试�
 `manual_reconcile_required`，默认拒绝自动重放写操作；用户核对 workspace 后必须显式设置
 `allow_coder_replay` 才能继续。启动时遗留的 `running` 任务会先标记为 `interrupted`。
 
-任务开始时只向角色注入与绝对 workspace 精确匹配、当前有效且 Snapshot 允许读取的 Project
-Memory。任务完成后，把成功 Explorer 的结构化摘要保存为 candidate Project Memory，用于承载项目
-结构与编码约定；仅把已验证成功的安全测试命令自动保存为 active Project Memory；Coder 总结先保存
-为 candidate Episodic Memory。两类模型摘要均需人工确认后才能激活。这一策略避免跨项目召回和
-未经验证的模型结论污染持久知识。
+任务的各角色通过正式 Session 召回与绝对 workspace 匹配、当前权限允许的插件知识。Workflow
+本身不再拼接最近条目，也不在完成时自动保存摘要或按验证命令关键词发布知识。跨任务形成知识使用
+已发布的有限维护流程或显式提议，来源与 Proposal/CAS 同事务保存，并由审阅决定发布。
 
 Workflow 还会产生：
 
@@ -2085,7 +2100,7 @@ Workflow 还会产生：
 | `workflow.rework_started` | 明确 `REWORK` 后开始指定轮次的 Coder 返工 |
 | `workflow.rework_limit_reached` | 最后一轮仍是 `REWORK`，不再自动写入 workspace |
 | `workflow.subtask_result` | 返回单角色的结构化完成或失败结果 |
-| `workflow.memory_candidate` | 返回任务生成的 Project/Episodic Memory ID、状态和来源 |
+| `workflow.memory_candidate` | 历史事件仍可回放；B2-7 的协调器不再产生此旧自动写入事件 |
 | `workflow.failed` | 必需角色失败，停止后续角色 |
 | `workflow.completed` | 明确批准后汇总全部子任务结果 |
 

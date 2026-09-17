@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
+
+from operant.package_resources import protocol_schema_path
 
 if TYPE_CHECKING:
     from operant.memory_plugins.manager import MemoryManager
@@ -64,9 +65,7 @@ def install_b2_3_routes(app: FastAPI, service: ApplicationService) -> None:
 
     @app.get("/v1/protocol/b2-3", operation_id="negotiateB23")
     def negotiate() -> dict[str, Any]:
-        path = (
-            Path(__file__).resolve().parents[2] / "sdk/protocol/schema/operant-b2-3.openapi.sha256"
-        )
+        path = protocol_schema_path("operant-b2-3.openapi.sha256")
         if not path.is_file():
             raise HTTPException(503, "B2-3 schema digest unavailable")
         return {

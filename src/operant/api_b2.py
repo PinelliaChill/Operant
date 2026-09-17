@@ -16,6 +16,7 @@ from operant.application.service import ApplicationService
 from operant.contracts.b2_1 import TaskAction, TaskSource
 from operant.domain.models import AgentInstance, Session
 from operant.domain.threads import ConversationThread, Item, LegacySourceType, ThreadLegacyRef
+from operant.package_resources import protocol_schema_path
 from operant.persistence.sqlite import NotFoundError
 from operant.protocol import is_sensitive_key, redact_public_text
 
@@ -128,12 +129,7 @@ def install_b2_routes(app: FastAPI, service: ApplicationService) -> None:
     @app.get("/v1/protocol/b2", operation_id="negotiateB2")
     def negotiate() -> dict[str, Any]:
         configured = os.environ.get("OPERANT_B2_SCHEMA_DIGEST_PATH")
-        path = (
-            Path(configured)
-            if configured
-            else Path(__file__).resolve().parents[2]
-            / "sdk/protocol/schema/operant-b2.openapi.sha256"
-        )
+        path = Path(configured) if configured else protocol_schema_path("operant-b2.openapi.sha256")
         if not path.is_absolute():
             raise HTTPException(status_code=503, detail="B2 digest path must be absolute")
         try:

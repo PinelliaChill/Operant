@@ -7,7 +7,6 @@ import hashlib
 import inspect
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
@@ -28,6 +27,7 @@ from operant.contracts.b2_6_sharing import SharingCommand
 from operant.contracts.b2_6_skills import SkillCommand
 from operant.domain.security import Capability
 from operant.memory_plugins.manager import MemoryManager
+from operant.package_resources import protocol_schema_path
 from operant.persistence.sqlite import NotFoundError
 from operant.plugins.protocol import PluginError
 
@@ -155,9 +155,7 @@ def install_b2_6_routes(app: FastAPI, service: ApplicationService) -> None:
 
     @app.get("/v1/protocol/b2-6", operation_id="negotiateB26")
     def negotiate() -> dict[str, Any]:
-        path = (
-            Path(__file__).resolve().parents[2] / "sdk/protocol/schema/operant-b2-6.openapi.sha256"
-        )
+        path = protocol_schema_path("operant-b2-6.openapi.sha256")
         if not path.is_file():
             raise HTTPException(
                 503, {"code": "schema_unavailable", "message": "经验与共享契约不可用"}

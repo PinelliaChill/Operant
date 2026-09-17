@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from operant.package_resources import protocol_schema_path
+
 PHASE1E_PROTOCOL_VERSION = "phase1e.v1"
 PHASE1E_MIN_CLIENT_VERSION = "phase1e.v1"
 PHASE1E_CAPABILITIES: tuple[str, ...] = (
@@ -179,11 +181,7 @@ def _digest_path() -> Path:
         if not candidate.is_absolute():
             raise ProtocolSchemaUnavailable("protocol digest path must be absolute")
         return candidate
-    # Source checkout path. Packaging/integration can inject an absolute path
-    # through OPERANT_PHASE1E_SCHEMA_DIGEST_PATH without changing this module.
-    return (
-        Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase1e.openapi.sha256"
-    )
+    return protocol_schema_path("operant-phase1e.openapi.sha256")
 
 
 def _phase23_digest_path() -> Path:
@@ -193,9 +191,7 @@ def _phase23_digest_path() -> Path:
         if not candidate.is_absolute():
             raise ProtocolSchemaUnavailable("protocol digest path must be absolute")
         return candidate
-    return (
-        Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase23.openapi.sha256"
-    )
+    return protocol_schema_path("operant-phase23.openapi.sha256")
 
 
 def _phase45_digest_path() -> Path:
@@ -205,9 +201,7 @@ def _phase45_digest_path() -> Path:
         if not candidate.is_absolute():
             raise ProtocolSchemaUnavailable("protocol digest path must be absolute")
         return candidate
-    return (
-        Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase45.openapi.sha256"
-    )
+    return protocol_schema_path("operant-phase45.openapi.sha256")
 
 
 def _phase56_digest_path() -> Path:
@@ -217,9 +211,7 @@ def _phase56_digest_path() -> Path:
         if not candidate.is_absolute():
             raise ProtocolSchemaUnavailable("protocol digest path must be absolute")
         return candidate
-    return (
-        Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-phase56.openapi.sha256"
-    )
+    return protocol_schema_path("operant-phase56.openapi.sha256")
 
 
 def _beta_digest_path() -> Path:
@@ -229,4 +221,4 @@ def _beta_digest_path() -> Path:
         if not candidate.is_absolute():
             raise ProtocolSchemaUnavailable("protocol digest path must be absolute")
         return candidate
-    return Path(__file__).resolve().parents[3] / "sdk/protocol/schema/operant-beta.openapi.sha256"
+    return protocol_schema_path("operant-beta.openapi.sha256")

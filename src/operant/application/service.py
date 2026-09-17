@@ -97,9 +97,7 @@ from operant.domain.memory import (
     MemoryKind,
     MemorySource,
     MemoryStatus,
-    default_memory_status,
     parse_memory_scope,
-    passes_conservative_activation,
 )
 from operant.domain.models import (
     AgentStatus,
@@ -494,7 +492,6 @@ class _PersistentActionGateway:
 
 
 class ApplicationService:
-    memory_plugin_mode: bool = False
     memory_manager: MemoryManager | None = None
     memory_manager_factory: Callable[[], MemoryManager] | None = None
 
@@ -518,6 +515,10 @@ class ApplicationService:
             raise ValueError("session lease TTL must be positive")
         self.store = store
         self.provider = provider
+        # These are instance-owned so a service cannot inherit a manager or
+        # factory from another ApplicationService instance.
+        self.memory_manager = None
+        self.memory_manager_factory = None
         self.factory = AgentFactory(store)
         self.slash_commands = SlashCommandRegistry()
         self._cancellations: dict[str, asyncio.Event] = {}
@@ -2627,6 +2628,22 @@ class ApplicationService:
 
     # Memory use cases
 
+    def _memory_manager_for_compat(self) -> MemoryManager:
+        """Return the selected manager used by compatibility reads.
+
+        The legacy Core memory tables remain available to migration tooling,
+        but application reads must go through the selected plugin so scope,
+        publication, provenance, and revocation checks stay authoritative.
+        """
+
+        manager = self.memory_manager
+        if manager is None and self.memory_manager_factory is not None:
+            manager = self.memory_manager_factory()
+            self.memory_manager = manager
+        if manager is None:
+            raise PermissionError("memory plugin is not installed or selected")
+        return manager
+
     def save_memory(
         self,
         memory: Memory | RoleSnapshot | None = None,
@@ -2652,75 +2669,11 @@ class ApplicationService:
         positional argument; the normal explicit form is
         ``save_memory(memory, snapshot=snapshot)``.
 
-        Durable episodic/project items start as candidates.  They become active
-        only with explicit confirmation or when the caller opts into the narrow
-        provenance-and-verification rule implemented by the domain layer.
+        This pre-plugin writer is retained only for source compatibility.  New
+        writes must use the B2-3 Proposal/CAS management commands, which bind
+        ownership, provenance, publication, and the expected dataset head.
         """
-        if self.memory_plugin_mode:
-            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
-
-        if isinstance(memory, RoleSnapshot):
-            if snapshot is not None:
-                raise ValueError("provide the RoleSnapshot only once")
-            snapshot = memory
-            memory = None
-        if snapshot is None:
-            raise ValueError("snapshot is required for memory writes")
-        if confirm is not None:
-            confirmed = confirm
-
-        if memory is None:
-            if kind is None or content is None:
-                raise ValueError("kind and content are required when memory is not provided")
-            normalized_kind = self._coerce_memory_kind(kind)
-            effective_session_id = source_session_id or session_id
-            requested_status = (
-                MemoryStatus(status)
-                if status is not None
-                else default_memory_status(normalized_kind)
-            )
-            memory = Memory(
-                kind=normalized_kind,
-                content=content,
-                project_scope=project_scope,
-                role_scope=self._normalize_role_scope(role_scope),
-                source_session_id=effective_session_id,
-                source_task=source_task,
-                confidence=confidence,
-                status=requested_status,
-            )
-        else:
-            if any(
-                value is not None
-                for value in (
-                    kind,
-                    content,
-                    project_scope,
-                    role_scope,
-                    source_session_id,
-                    source_task,
-                )
-            ):
-                raise ValueError("memory fields cannot be mixed with an existing Memory")
-            if status is not None:
-                memory = memory.model_copy(update={"status": MemoryStatus(status)})
-
-        if memory.kind is MemoryKind.WORKING and memory.source_session_id is None and session_id:
-            memory = memory.model_copy(update={"source_session_id": session_id})
-        self._authorize_memory(
-            snapshot,
-            memory.kind,
-            operation="write",
-            memory=memory,
-            session_id=session_id,
-            project_scope=memory.project_scope,
-        )
-        memory = self._prepare_activation(
-            memory,
-            confirmed=confirmed,
-            allow_conservative_activation=allow_conservative_activation,
-        )
-        return self.store.create_memory(memory)
+        raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
     def create_memory(
         self,
@@ -2768,12 +2721,13 @@ class ApplicationService:
         project_scope: str | None = None,
         version: int | None = None,
     ) -> Memory:
-        if self.memory_plugin_mode:
-            if self.memory_manager is None and self.memory_manager_factory is not None:
-                self.memory_manager = self.memory_manager_factory()
-            if self.memory_manager is None:
-                raise PermissionError("memory plugin is not installed or selected")
-            return self.memory_manager.compat_get(memory_id, project_scope, snapshot, version)
+        # Explicit references in an old context snapshot remain readable for
+        # migration and explanation.  New/plugin-managed bindings always take
+        # the governed compatibility route above the legacy Core tables.
+        if self.memory_manager is not None or self.memory_manager_factory is not None:
+            return self._memory_manager_for_compat().compat_get(
+                memory_id, project_scope, snapshot, version
+            )
         memory = self.store.get_memory(memory_id, version)
         self._authorize_memory(
             snapshot,
@@ -2796,42 +2750,8 @@ class ApplicationService:
         include_candidates: bool = False,
         limit: int = 20,
     ) -> list[Memory]:
-        if self.memory_plugin_mode:
-            if self.memory_manager is None and self.memory_manager_factory is not None:
-                self.memory_manager = self.memory_manager_factory()
-            if self.memory_manager is None:
-                return []
-            return self.memory_manager.compat_query(
-                query, project_scope, snapshot, include_candidates, limit
-            )
-        scope = parse_memory_scope(snapshot.memory_scope)
-        requested_kinds: tuple[MemoryKind, ...]
-        if kinds is None:
-            requested_kinds = tuple(scope.read)
-        else:
-            requested_kinds = tuple(self._coerce_memory_kind(kind) for kind in kinds)
-            denied = [kind.value for kind in requested_kinds if not scope.can_read(kind)]
-            if denied:
-                raise PermissionError(f"memory read scope does not allow: {sorted(set(denied))}")
-        if not requested_kinds:
-            return []
-        for kind in requested_kinds:
-            self._authorize_memory(
-                snapshot,
-                kind,
-                operation="read",
-                session_id=session_id,
-                project_scope=project_scope,
-            )
-        return self.store.search_memories(
-            query,
-            project_scope=project_scope,
-            source_session_id=session_id,
-            kinds=requested_kinds,
-            role_id=snapshot.role_id,
-            role_name=snapshot.role_name,
-            include_candidates=include_candidates,
-            limit=limit,
+        return self._memory_manager_for_compat().compat_query(
+            query, project_scope, snapshot, include_candidates, limit
         )
 
     def search_memories(
@@ -2869,50 +2789,7 @@ class ApplicationService:
         allow_conservative_activation: bool = False,
         **changes: Any,
     ) -> Memory:
-        if self.memory_plugin_mode:
-            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
-        current = self.store.get_memory(memory_id)
-        self._authorize_memory(
-            snapshot,
-            current.kind,
-            operation="write",
-            memory=current,
-            session_id=session_id,
-            project_scope=project_scope or current.project_scope,
-        )
-        if confirm is not None:
-            confirmed = confirm
-        if "kind" in changes:
-            next_kind = self._coerce_memory_kind(changes["kind"])
-            changes["kind"] = next_kind
-            self._authorize_memory(
-                snapshot,
-                next_kind,
-                operation="write",
-                memory=None,
-                session_id=session_id,
-                project_scope=changes.get("project_scope", project_scope or current.project_scope),
-            )
-        requested_status = changes.get("status")
-        if requested_status is not None:
-            changes["status"] = MemoryStatus(requested_status)
-        if current.status is MemoryStatus.ACTIVE and "status" not in changes:
-            changes["status"] = current.status
-        else:
-            preview = Memory.model_validate(
-                {
-                    **current.model_dump(),
-                    **changes,
-                    "version": current.version + 1,
-                }
-            )
-            preview = self._prepare_activation(
-                preview,
-                confirmed=confirmed,
-                allow_conservative_activation=allow_conservative_activation,
-            )
-            changes["status"] = preview.status
-        return self.store.update_memory(memory_id, **changes)
+        raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
     def confirm_memory(
         self,
@@ -2923,19 +2800,7 @@ class ApplicationService:
         project_scope: str | None = None,
     ) -> Memory:
         """Explicitly activate a candidate after a human or trusted caller confirms it."""
-        if self.memory_plugin_mode:
-            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
-
-        current = self.store.get_memory(memory_id)
-        self._authorize_memory(
-            snapshot,
-            current.kind,
-            operation="write",
-            memory=current,
-            session_id=session_id,
-            project_scope=project_scope or current.project_scope,
-        )
-        return self.store.update_memory(memory_id, status=MemoryStatus.ACTIVE)
+        raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
     def activate_memory(
         self,
@@ -2948,25 +2813,7 @@ class ApplicationService:
         allow_conservative_activation: bool = False,
     ) -> Memory:
         """Activate a candidate through explicit confirmation or the safe rule."""
-        if self.memory_plugin_mode:
-            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
-
-        current = self.store.get_memory(memory_id)
-        self._authorize_memory(
-            snapshot,
-            current.kind,
-            operation="write",
-            memory=current,
-            session_id=session_id,
-            project_scope=project_scope or current.project_scope,
-        )
-        self._prepare_activation(
-            current,
-            confirmed=confirmed,
-            allow_conservative_activation=allow_conservative_activation,
-            require_active=True,
-        )
-        return self.store.update_memory(memory_id, status=MemoryStatus.ACTIVE)
+        raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
     def deactivate_memory(
         self,
@@ -2976,18 +2823,7 @@ class ApplicationService:
         session_id: str | None = None,
         project_scope: str | None = None,
     ) -> Memory:
-        if self.memory_plugin_mode:
-            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
-        current = self.store.get_memory(memory_id)
-        self._authorize_memory(
-            snapshot,
-            current.kind,
-            operation="write",
-            memory=current,
-            session_id=session_id,
-            project_scope=project_scope or current.project_scope,
-        )
-        return self.store.deactivate_memory(memory_id)
+        raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
     def list_memory_versions(
         self,
@@ -3027,39 +2863,6 @@ class ApplicationService:
             version=version,
         )
         return memory.source
-
-    @staticmethod
-    def _coerce_memory_kind(kind: MemoryKind | str) -> MemoryKind:
-        return kind if isinstance(kind, MemoryKind) else MemoryKind(kind)
-
-    @staticmethod
-    def _normalize_role_scope(value: Collection[str] | str | None) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        values = value.split(",") if isinstance(value, str) else value
-        return tuple(item.strip() for item in values if item.strip())
-
-    @staticmethod
-    def _prepare_activation(
-        memory: Memory,
-        *,
-        confirmed: bool,
-        allow_conservative_activation: bool,
-        require_active: bool = False,
-    ) -> Memory:
-        if confirmed:
-            return memory.model_copy(update={"status": MemoryStatus.ACTIVE})
-        if allow_conservative_activation and passes_conservative_activation(memory):
-            return memory.model_copy(update={"status": MemoryStatus.ACTIVE})
-        if memory.status is MemoryStatus.ACTIVE and (
-            memory.kind is MemoryKind.WORKING and passes_conservative_activation(memory)
-        ):
-            return memory
-        if memory.status is not MemoryStatus.ACTIVE and not require_active:
-            return memory
-        raise PermissionError(
-            "candidate knowledge requires explicit confirmation or conservative activation"
-        )
 
     @staticmethod
     def _authorize_memory(
@@ -3366,23 +3169,21 @@ class ApplicationService:
                 policy=session.role_snapshot.tool_policy,
             )
             normalized_workspace = str(Path(workspace).resolve())
-            if (
-                self.memory_plugin_mode
-                and self.memory_manager is None
-                and self.memory_manager_factory
-            ):
-                self.memory_manager = self.memory_manager_factory()
+            manager = self.memory_manager
+            if manager is None and self.memory_manager_factory is not None:
+                manager = self.memory_manager_factory()
+                self.memory_manager = manager
             skill_context = (
-                self.memory_manager.begin_skill_run(normalized_workspace, agent.id)
-                if self.memory_manager
+                manager.begin_skill_run(normalized_workspace, agent.id)
+                if manager is not None and memory_enabled
                 else ""
             )
             experience_run = None
-            if self.memory_manager is not None and self.memory_plugin_mode:
+            if manager is not None:
                 from operant.memory_plugins.experience_runtime import begin_experience_run
 
                 experience_run = begin_experience_run(
-                    self.memory_manager,
+                    manager,
                     workspace=normalized_workspace,
                     session_id=session.id,
                     agent_id=agent.id,
@@ -3394,11 +3195,11 @@ class ApplicationService:
                         filter(None, (skill_context, experience_run.content()))
                     )
             memory_run = None
-            if self.memory_manager is not None and self.memory_plugin_mode and memory_enabled:
+            if manager is not None and memory_enabled:
                 from operant.memory_plugins.recall import begin_memory_run
 
                 memory_run = await begin_memory_run(
-                    self.memory_manager,
+                    manager,
                     session_id=session.id,
                     agent_id=agent.id,
                     run_id=memory_run_id or workflow_run_id or session.id,
@@ -3411,7 +3212,7 @@ class ApplicationService:
                 collaboration_context=_collaboration_context,
                 before_compose=experience_run.guard if experience_run is not None else None,
                 memory_run=memory_run,
-                count_provider_tokens=self.memory_plugin_mode,
+                count_provider_tokens=manager is not None,
                 store=self.store,
                 session=session,
                 agent_id=agent.id,

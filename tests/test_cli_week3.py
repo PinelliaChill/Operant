@@ -9,7 +9,6 @@ from typer.testing import CliRunner
 import operant.cli as cli
 from operant.application.service import ApplicationService
 from operant.application.workflow import WorkflowEvent
-from operant.domain.memory import MemoryStatus
 from operant.domain.models import ModelProfile, RolePreset
 from operant.domain.workflow import WorkflowRun, WorkflowRunEvent, WorkflowRunStatus
 from operant.persistence.sqlite import SQLiteStore
@@ -149,7 +148,7 @@ def test_workflow_resume_passes_allow_coder_replay(
     assert '"event_type": "workflow.completed"' in result.stdout
 
 
-def test_memory_commands_use_session_snapshot_for_permissions(tmp_path: Path, monkeypatch) -> None:
+def test_legacy_memory_commands_require_formal_management(tmp_path: Path, monkeypatch) -> None:
     service = make_service(tmp_path)
     session = service.create_session("role_memory_cli")
     monkeypatch.setattr(cli, "_service", lambda: service)
@@ -171,12 +170,10 @@ def test_memory_commands_use_session_snapshot_for_permissions(tmp_path: Path, mo
             "Task A",
             "--confidence",
             "0.96",
-            "--allow-conservative-activation",
         ],
     )
-    assert added.exit_code == 0
-    saved = json.loads(added.stdout)
-    assert saved["status"] == MemoryStatus.ACTIVE.value
+    assert added.exit_code == 2
+    assert "Proposal/CAS" in added.output
 
     searched = runner.invoke(
         cli.app,
@@ -190,50 +187,10 @@ def test_memory_commands_use_session_snapshot_for_permissions(tmp_path: Path, mo
             "calculator",
         ],
     )
-    assert searched.exit_code == 0
-    assert "tests/test_calculator.py" in searched.stdout
+    assert searched.exit_code == 2
+    assert "插件未安装或未选择" in searched.output
 
-    candidate = runner.invoke(
-        cli.app,
-        [
-            "memory",
-            "add",
-            "--kind",
-            "episodic",
-            "--content",
-            "A candidate observation.",
-            "--session-id",
-            session.id,
-            "--source-task",
-            "Task A",
-        ],
-    )
-    candidate_id = json.loads(candidate.stdout)["id"]
-    confirmed = runner.invoke(
-        cli.app,
-        ["memory", "confirm", candidate_id, "--session-id", session.id],
-    )
-    assert confirmed.exit_code == 0
-    assert json.loads(confirmed.stdout)["status"] == MemoryStatus.ACTIVE.value
-
-    deactivated = runner.invoke(
-        cli.app,
-        ["memory", "deactivate", candidate_id, "--session-id", session.id],
-    )
-    assert deactivated.exit_code == 0
-    assert json.loads(deactivated.stdout)["status"] == MemoryStatus.INACTIVE.value
-
-    restricted_role = service.create_role(
-        RolePreset(
-            id="role_readonly_memory_cli",
-            name="Read Only Memory CLI Role",
-            system_prompt="Read project knowledge.",
-            model_profile_id="cli_model",
-            memory_scope="read: [project]; write: []",
-        )
-    )
-    restricted_session = service.create_session(restricted_role.id)
-    denied = runner.invoke(
+    removed_option = runner.invoke(
         cli.app,
         [
             "memory",
@@ -241,12 +198,25 @@ def test_memory_commands_use_session_snapshot_for_permissions(tmp_path: Path, mo
             "--kind",
             "project",
             "--content",
-            "must be rejected",
+            "legacy option",
             "--session-id",
-            restricted_session.id,
-            "--project-scope",
-            "calculator",
+            session.id,
+            "--allow-conservative-activation",
         ],
     )
-    assert denied.exit_code != 0
-    assert isinstance(denied.exception, PermissionError)
+    assert removed_option.exit_code == 2
+    assert "allow-conservative-activation" in removed_option.output
+
+    confirmed = runner.invoke(
+        cli.app,
+        ["memory", "confirm", "legacy-memory", "--session-id", session.id],
+    )
+    assert confirmed.exit_code == 2
+    assert "memory_confirm" in confirmed.output
+
+    deactivated = runner.invoke(
+        cli.app,
+        ["memory", "deactivate", "legacy-memory", "--session-id", session.id],
+    )
+    assert deactivated.exit_code == 2
+    assert "memory_deactivate" in deactivated.output

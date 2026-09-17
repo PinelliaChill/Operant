@@ -40,7 +40,10 @@ workflow_app = typer.Typer(
     no_args_is_help=True,
     help="运行 Planner → 只读 Explorer → Coder → Reviewer 工作流。",
 )
-memory_app = typer.Typer(no_args_is_help=True, help="按 Session Role Snapshot 管理 Memory。")
+memory_app = typer.Typer(
+    no_args_is_help=True,
+    help="查询兼容 Memory；写入、确认和停用请使用 B2-3 Proposal/CAS 命令。",
+)
 evaluation_app = typer.Typer(no_args_is_help=True, help="管理并顺序运行可复现 Evaluation Suite。")
 evaluation_suite_app = typer.Typer(no_args_is_help=True, help="创建和查询 Evaluation Suite。")
 evaluation_result_app = typer.Typer(no_args_is_help=True, help="查询 Evaluation Result。")
@@ -62,7 +65,6 @@ def _service() -> ApplicationService:
         OpenAICompatibleProvider(),
     )
     service.initialize()
-    service.memory_plugin_mode = True
     return service
 
 
@@ -781,38 +783,29 @@ def _memory_snapshot(
     return service.get_session(session_id).role_snapshot
 
 
-@memory_app.command("add", help="通过 Session Role Snapshot 保存一条 Memory。")
+@memory_app.command(
+    "add",
+    help="旧版 Memory 写入已下线；请使用 `memory manage memory_save` 的 B2-3 命令。",
+)
 def add_memory(
-    kind: MemoryKind = typer.Option(..., help="Memory 类型：working、episodic 或 project。"),
-    content: str = typer.Option(..., help="要保存的知识内容。"),
-    session_id: str = typer.Option(..., help="用于判定 Memory 读写权限的 Session ID。"),
-    project_scope: str | None = typer.Option(None, help="project Memory 的项目作用域。"),
-    source_task: str | None = typer.Option(None, help="产生这条 Memory 的任务描述。"),
-    role_scope: str | None = typer.Option(None, help="可选的角色作用域，逗号分隔。"),
-    confidence: float = typer.Option(0.5, min=0.0, max=1.0),
-    confirm: bool = typer.Option(False, help="显式确认候选知识并立即激活。"),
-    allow_conservative_activation: bool = typer.Option(
-        False,
-        help="允许通过保守来源和验证规则激活候选知识。",
+    kind: MemoryKind = typer.Option(..., help="旧版兼容参数；本命令会拒绝写入。"),
+    content: str = typer.Option(..., help="旧版兼容参数；本命令会拒绝写入。"),
+    session_id: str = typer.Option(..., help="旧版兼容参数；本命令会拒绝写入。"),
+    project_scope: str | None = typer.Option(None, help="旧版兼容参数；本命令会拒绝写入。"),
+    source_task: str | None = typer.Option(None, help="旧版兼容参数；本命令会拒绝写入。"),
+    role_scope: str | None = typer.Option(None, help="旧版兼容参数；本命令会拒绝写入。"),
+    confidence: float = typer.Option(
+        0.5, min=0.0, max=1.0, help="旧版兼容参数；本命令会拒绝写入。"
     ),
+    confirm: bool = typer.Option(False, help="旧版兼容参数；本命令会拒绝写入。"),
 ) -> None:
-    service = _service()
-    memory = service.save_memory(
-        snapshot=_memory_snapshot(service, session_id),
-        session_id=session_id,
-        kind=kind,
-        content=content,
-        project_scope=project_scope,
-        source_task=source_task,
-        role_scope=role_scope,
-        confidence=confidence,
-        confirm=confirm,
-        allow_conservative_activation=allow_conservative_activation,
+    del kind, content, session_id, project_scope, source_task, role_scope, confidence, confirm
+    raise typer.BadParameter(
+        "旧版 Memory 写入已下线；请使用 `memory manage memory_save` 的 B2-3 Proposal/CAS 命令。"
     )
-    console.print_json(memory.model_dump_json(indent=2))
 
 
-@memory_app.command("search", help="通过 Session Role Snapshot 检索可读 Memory。")
+@memory_app.command("search", help="通过已选 Memory 插件检索可读 Memory。")
 def search_memory(
     query: str = typer.Argument(help="全文检索关键词。"),
     session_id: str = typer.Option(..., help="用于判定 Memory 读取权限的 Session ID。"),
@@ -822,49 +815,53 @@ def search_memory(
     limit: int = typer.Option(20, min=1, max=100),
 ) -> None:
     service = _service()
-    memories = service.query_memories(
-        query,
-        snapshot=_memory_snapshot(service, session_id),
-        session_id=session_id,
-        project_scope=project_scope,
-        kinds=kind,
-        include_candidates=include_candidates,
-        limit=limit,
-    )
+    try:
+        memories = service.query_memories(
+            query,
+            snapshot=_memory_snapshot(service, session_id),
+            session_id=session_id,
+            project_scope=project_scope,
+            kinds=kind,
+            include_candidates=include_candidates,
+            limit=limit,
+        )
+    except PermissionError as exc:
+        raise typer.BadParameter(
+            "Memory 插件未安装或未选择；请使用 `memory manage memory_search`。"
+        ) from exc
     for memory in memories:
         console.print(memory.model_dump_json(), markup=False, highlight=False)
 
 
-@memory_app.command("confirm", help="确认并激活候选 Memory。")
+@memory_app.command(
+    "confirm",
+    help="旧版 Memory 确认已下线；请使用 `memory manage memory_confirm`。",
+)
 def confirm_memory(
     memory_id: str = typer.Argument(help="Memory ID。"),
     session_id: str = typer.Option(..., help="用于判定 Memory 写入权限的 Session ID。"),
     project_scope: str | None = typer.Option(None, help="project Memory 的项目作用域。"),
 ) -> None:
-    service = _service()
-    memory = service.confirm_memory(
-        memory_id,
-        snapshot=_memory_snapshot(service, session_id),
-        session_id=session_id,
-        project_scope=project_scope,
+    del memory_id, session_id, project_scope
+    raise typer.BadParameter(
+        "旧版 Memory 确认已下线；请使用 `memory manage memory_confirm` 的 B2-3 Proposal/CAS 命令。"
     )
-    console.print_json(memory.model_dump_json(indent=2))
 
 
-@memory_app.command("deactivate", help="停用一条 Memory，并创建新的停用版本。")
+@memory_app.command(
+    "deactivate",
+    help="旧版 Memory 停用已下线；请使用 `memory manage memory_deactivate`。",
+)
 def deactivate_memory(
     memory_id: str = typer.Argument(help="Memory ID。"),
     session_id: str = typer.Option(..., help="用于判定 Memory 写入权限的 Session ID。"),
     project_scope: str | None = typer.Option(None, help="project Memory 的项目作用域。"),
 ) -> None:
-    service = _service()
-    memory = service.deactivate_memory(
-        memory_id,
-        snapshot=_memory_snapshot(service, session_id),
-        session_id=session_id,
-        project_scope=project_scope,
+    del memory_id, session_id, project_scope
+    raise typer.BadParameter(
+        "旧版 Memory 停用已下线；请使用 `memory manage memory_deactivate` 的 B2-3 "
+        "Proposal/CAS 命令。"
     )
-    console.print_json(memory.model_dump_json(indent=2))
 
 
 @memory_app.command("manage", help="通过 B2-3 正式 HTTP Client 管理记忆、插件、数据集和项目。")

@@ -122,7 +122,6 @@ async def test_formal_session_persists_exact_pack_with_context(setup):
 
     app, m, p, session, cmd, _ = setup
     m.service.provider = Provider()
-    m.service.memory_plugin_mode = True
     await cmd(action="memory_save", project_id=p, content="使用 uv 管理依赖", confirmed=True)
     workspace = m.store.get_workspace_initialization_by_id(
         m._project(p)["workspace_id"]
@@ -265,7 +264,6 @@ async def test_history_permission_is_per_session_and_live_role_rechecked(setup):
 @pytest.mark.asyncio
 async def test_composer_setup_failure_releases_plugin_run(setup, monkeypatch):
     _, m, p, session, cmd, _ = setup
-    m.service.memory_plugin_mode = True
     await cmd(action="memory_save", project_id=p, content="使用 uv 管理依赖", confirmed=True)
 
     def fail_composer(**kwargs):

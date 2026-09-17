@@ -39,6 +39,8 @@ packages = ["src/operant"]
 [tool.hatch.build.targets.wheel.force-include]
 "sdk/__init__.py" = "sdk/__init__.py"
 "sdk/python_client" = "sdk/python_client"
+"plugins" = "operant/bundled_plugins"
+"sdk/protocol/schema" = "operant/protocol_schema"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -47,7 +49,9 @@ include = [
   "/pyproject.toml",
   "/sdk/__init__.py",
   "/sdk/python_client",
+  "/sdk/protocol/schema",
   "/src/operant",
+  "/plugins",
 ]
 exclude = ["**/__pycache__", "**/*.pyc"]
 

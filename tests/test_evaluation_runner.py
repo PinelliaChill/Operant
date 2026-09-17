@@ -29,7 +29,7 @@ from operant.domain.evaluation import (
     ModelPricing,
     VerificationCommand,
 )
-from operant.domain.memory import MemoryKind
+from operant.domain.memory import Memory, MemoryKind, MemoryStatus
 from operant.domain.messages import (
     Message,
     ModelResponse,
@@ -125,7 +125,10 @@ def _role_snapshot(service: ApplicationService, pricing: ModelPricing):
 
 
 @pytest.mark.asyncio
-async def test_runner_isolates_secrets_and_captures_memory_metrics_and_cost(tmp_path: Path) -> None:
+async def test_runner_isolates_secrets_and_captures_memory_metrics_and_cost(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source = tmp_path / "fixture"
     _fixture(source)
     (source / ".env").write_text("OPERANT_KEY=do-not-copy", encoding="utf-8")
@@ -150,17 +153,45 @@ async def test_runner_isolates_secrets_and_captures_memory_metrics_and_cost(tmp_
     provider = CapturingProvider()
     service = _service(tmp_path, provider)
     author = service.create_session("role_eval")
-    memory = service.save_memory(
-        snapshot=author.role_snapshot,
-        session_id=author.id,
-        kind=MemoryKind.PROJECT,
-        content="Use the source fixture's unittest convention.",
-        project_scope=str(source.resolve()),
-        source_session_id=author.id,
-        source_task="seed memory",
-        confidence=0.95,
-        confirmed=True,
+    # This test exercises evaluator isolation and metrics.  Its historical
+    # input is deliberately a store-level legacy fixture; production writes
+    # remain unavailable through ApplicationService and no plugin is attached
+    # to this service.  The narrow adapter is scoped to this test only.
+    memory = service.store.create_memory(
+        Memory(
+            id="evaluation-legacy-memory",
+            kind=MemoryKind.PROJECT,
+            content="Use the source fixture's unittest convention.",
+            project_scope=str(source.resolve()),
+            source_session_id=author.id,
+            source_task="seed memory",
+            confidence=0.95,
+            status=MemoryStatus.ACTIVE,
+        )
     )
+
+    def read_fixture(
+        query: str,
+        *,
+        snapshot: RoleSnapshot,
+        session_id: str | None = None,
+        project_scope: str | None = None,
+        kinds: object = None,
+        include_candidates: bool = False,
+        limit: int = 20,
+    ) -> list[Memory]:
+        del query, kinds, include_candidates, limit
+        service._authorize_memory(  # noqa: SLF001 - isolated test fixture
+            snapshot,
+            memory.kind,
+            operation="read",
+            memory=memory,
+            session_id=session_id,
+            project_scope=project_scope,
+        )
+        return [memory]
+
+    monkeypatch.setattr(service, "query_memories", read_fixture)
     pricing = ModelPricing(
         model_profile_id="model_eval",
         model_id="eval-model",

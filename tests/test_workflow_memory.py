@@ -5,7 +5,6 @@ import pytest
 
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
-from operant.domain.memory import MemoryKind, MemoryStatus
 from operant.domain.messages import (
     Message,
     ModelResponse,
@@ -159,7 +158,10 @@ async def consume_with_expected_unittest_approval(
 
 
 @pytest.mark.asyncio
-async def test_workflow_retrieves_prior_memory_and_generates_candidates(tmp_path: Path) -> None:
+async def test_workflow_does_not_use_legacy_memory_recall_or_writeback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     (tmp_path / "test_sample.py").write_text(
         "import unittest\n\n"
         "class SampleTest(unittest.TestCase):\n"
@@ -169,18 +171,15 @@ async def test_workflow_retrieves_prior_memory_and_generates_candidates(tmp_path
     )
     provider = MemoryWorkflowProvider()
     service = memory_workflow_service(tmp_path, provider)
-    author = service.create_session("role_coder")
-    prior = service.save_memory(
-        snapshot=author.role_snapshot,
-        session_id=author.id,
-        kind=MemoryKind.PROJECT,
-        content="Fix calculator using the existing unittest convention.",
-        project_scope=str(tmp_path),
-        source_session_id=author.id,
-        source_task="Task A",
-        confidence=0.95,
-        confirmed=True,
-    )
+
+    def fail_if_read(*_args: object, **_kwargs: object) -> list[object]:
+        raise AssertionError("workflow must not use the legacy memory query")
+
+    def fail_if_write(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("workflow must not use the legacy memory writer")
+
+    monkeypatch.setattr(service, "query_memories", fail_if_read)
+    monkeypatch.setattr(service, "save_memory", fail_if_write)
 
     events = await consume_with_expected_unittest_approval(
         service,
@@ -195,41 +194,7 @@ async def test_workflow_retrieves_prior_memory_and_generates_candidates(tmp_path
         ),
     )
 
-    assert prior.content in provider.messages["Planner"][0]
-    memory_events = [event for event in events if event.event_type == "workflow.memory_candidate"]
-    assert {event.payload["status"] for event in memory_events} == {
-        MemoryStatus.ACTIVE.value,
-        MemoryStatus.CANDIDATE.value,
-    }
-    reader = service.create_session("role_planner")
-    reused = service.query_memories(
-        "unittest calculator",
-        snapshot=reader.role_snapshot,
-        session_id=reader.id,
-        project_scope=str(tmp_path),
-    )
-    generated = next(memory for memory in reused if memory.id != prior.id)
-    assert generated.content == "验证命令：python3 -m unittest -v"
-    assert generated.source_session_id is not None
-    project_candidates = service.query_memories(
-        "Explorer completed",
-        snapshot=reader.role_snapshot,
-        session_id=reader.id,
-        project_scope=str(tmp_path),
-        kinds=(MemoryKind.PROJECT,),
-        include_candidates=True,
-    )
-    structure_candidate = next(
-        memory
-        for memory in project_candidates
-        if memory.content.startswith("项目结构与编码约定候选")
-    )
-    assert structure_candidate.status is MemoryStatus.CANDIDATE
-    assert structure_candidate.source_session_id == next(
-        event.session_id
-        for event in events
-        if event.role == "explorer" and event.event_type == "workflow.subtask_result"
-    )
+    assert not any(event.event_type == "workflow.memory_candidate" for event in events)
     assert events[-1].event_type == "workflow.completed"
 
 
@@ -247,23 +212,16 @@ async def test_workflow_evaluation_memory_controls_skip_reads_and_writeback(
     )
     provider = MemoryWorkflowProvider()
     service = memory_workflow_service(tmp_path, provider)
-    author = service.create_session("role_coder")
-    prior = service.save_memory(
-        snapshot=author.role_snapshot,
-        session_id=author.id,
-        kind=MemoryKind.PROJECT,
-        content="This prior memory must not be read by a disabled evaluation.",
-        project_scope=str(tmp_path),
-        source_session_id=author.id,
-        source_task="seed",
-        confidence=0.95,
-        confirmed=True,
-    )
 
     def fail_if_read(*_args: object, **_kwargs: object) -> list[object]:
-        raise AssertionError("memory_enabled=False must not query project Memory")
+        raise AssertionError("memory_enabled=False must not query memory")
 
     monkeypatch.setattr(service, "query_memories", fail_if_read)
+    monkeypatch.setattr(
+        service,
+        "save_memory",
+        lambda *_args, **_kwargs: pytest.fail("memory_enabled=False must not write memory"),
+    )
     events = await consume_with_expected_unittest_approval(
         service,
         SequentialCodingWorkflow(service).run(
@@ -281,9 +239,21 @@ async def test_workflow_evaluation_memory_controls_skip_reads_and_writeback(
     )
 
     assert events[-1].event_type == "workflow.completed"
-    assert all(
-        prior.content not in message
-        for messages in provider.messages.values()
-        for message in messages
-    )
     assert not any(event.event_type == "workflow.memory_candidate" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_legacy_workflow_write_switch_requires_plugin_command(tmp_path: Path) -> None:
+    service = memory_workflow_service(tmp_path, MemoryWorkflowProvider())
+    stream = SequentialCodingWorkflow(service).run(
+        task="legacy write request",
+        workspace=tmp_path,
+        main_role_id="role_main",
+        planner_role_id="role_planner",
+        coder_role_id="role_coder",
+        reviewer_role_id="role_reviewer",
+        persist_memory_candidates=True,
+    )
+
+    with pytest.raises(ValueError, match="schema_upgrade_required"):
+        await anext(stream)

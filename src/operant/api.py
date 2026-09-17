@@ -1352,7 +1352,6 @@ def create_app(
         physical_delete_authorization=physical_delete_authorization,
     )
     service.initialize()
-    service.memory_plugin_mode = True
     workflow = SequentialCodingWorkflow(service)
     app = FastAPI(
         title="Operant API",

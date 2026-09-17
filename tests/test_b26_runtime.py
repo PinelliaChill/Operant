@@ -65,7 +65,6 @@ async def test_formal_session_skill_context_and_revoked_history(experience):  # 
     provider = Provider()
     service.provider = provider
     service.memory_manager = manager
-    service.memory_plugin_mode = True
     events = [
         e
         async for e in service.run_session(
