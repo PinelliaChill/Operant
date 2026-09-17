@@ -462,7 +462,7 @@ def test_concurrent_v6_initialization_and_context_request_identity(tmp_path: Pat
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         versions = list(executor.map(lambda _value: SQLiteStore(database).migrate(), range(3)))
-    assert versions == [17, 17, 17]
+    assert versions == [18, 18, 18]
 
     store = SQLiteStore(database)
     _profile, _role, session, agent = _scope(store)

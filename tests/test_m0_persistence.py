@@ -278,7 +278,7 @@ def test_migrations_are_atomic_reject_corruption_and_support_explicit_empty_roll
         ("gap", "DELETE FROM schema_migrations WHERE version=2", "version gap"),
         (
             "future",
-            "INSERT INTO schema_migrations VALUES (18, 'future', 'future', 'now')",
+            "INSERT INTO schema_migrations VALUES (19, 'future', 'future', 'now')",
             "newer than this build",
         ),
     ):
@@ -298,7 +298,7 @@ def test_concurrent_migration_to_same_target_is_repeatable(tmp_path: Path) -> No
         return SQLiteStore(path).migrate()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        assert list(executor.map(lambda _item: migrate(), range(2))) == [17, 17]
+        assert list(executor.map(lambda _item: migrate(), range(2))) == [18, 18]
     assert SQLiteStore(path).schema_version() == 18
 
 
