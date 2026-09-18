@@ -432,12 +432,19 @@ def install_b2_5_routes(app: FastAPI, service: ApplicationService) -> None:
                         raise HTTPException(
                             409,
                             {
-                                "code": "manual_reconcile_required",
+                                "code": "command_outcome_unknown",
                                 "message": "上次结果未知，请刷新核对，勿自动重放",
                             },
                         )
                     response.headers["Idempotent-Replayed"] = "true"
-                    return B25Result(**json.loads(old["result"]), state=projection(body.project_id))
+                    return cast(
+                        B25Result,
+                        _bounded_projection(
+                            B25Result(
+                                **json.loads(old["result"]), state=projection(body.project_id)
+                            )
+                        ),
+                    )
                 try:
                     project = m._project(body.project_id)
                     installation = m.registry.get_installation(project["installation_id"])
@@ -528,7 +535,10 @@ def install_b2_5_routes(app: FastAPI, service: ApplicationService) -> None:
                     action=body.action,
                     payload=payload,
                 )
-                return B25Result(**payload, state=projection(body.project_id))
+                return cast(
+                    B25Result,
+                    _bounded_projection(B25Result(**payload, state=projection(body.project_id))),
+                )
             except (
                 GovernanceError,
                 MaintenanceError,

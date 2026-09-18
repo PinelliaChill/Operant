@@ -1382,6 +1382,8 @@ def create_app(
             code = detail["code"]
             message = detail["message"]
         recovery = RecoveryAction.NONE
+        if code in {"command_outcome_unknown", "manual_reconcile_required"}:
+            recovery = RecoveryAction.MANUAL_RECONCILE
         if exc.status_code == 400 and message.startswith("Last-Event-ID requires"):
             code = "invalid_event_cursor"
             recovery = RecoveryAction.REFRESH_AND_RETRY
@@ -1496,6 +1498,8 @@ def create_app(
         if request.method == "POST" and request.url.path in {
             "/v1/b2-3/commands",
             "/v1/b2-4/commands",
+            "/v1/b2-5/commands",
+            "/v1/b2-6/commands",
         }:
             # These routes own durable bounded command journals. Do not persist
             # a second snapshot or truncate their typed projection results.

@@ -257,13 +257,18 @@ def install_b2_6_routes(app: FastAPI, service: ApplicationService) -> None:
                         raise HTTPException(
                             409,
                             {
-                                "code": "manual_reconcile_required",
+                                "code": "command_outcome_unknown",
                                 "message": "上次结果待核对，不能自动重放",
                             },
                         )
                     response.headers["Idempotent-Replayed"] = "true"
-                    return B26Result(
-                        **json.loads(old["result"]), state=projection(command.project_id)
+                    return cast(
+                        B26Result,
+                        _bounded_projection(
+                            B26Result(
+                                **json.loads(old["result"]), state=projection(command.project_id)
+                            )
+                        ),
                     )
                 c.execute(
                     "INSERT INTO b26_commands VALUES(?,?,?,?,?)",
@@ -335,7 +340,10 @@ def install_b2_6_routes(app: FastAPI, service: ApplicationService) -> None:
                             datetime.now(timezone.utc).isoformat(),
                         ),
                     )
-                return B26Result(**payload, state=projection(command.project_id))
+                return cast(
+                    B26Result,
+                    _bounded_projection(B26Result(**payload, state=projection(command.project_id))),
+                )
             except (ValueError, RuntimeError, LookupError, PermissionError) as exc:
                 # Preserve a pending receipt: a multi-store write may have partly completed.
                 raise translate(exc) from exc
