@@ -1372,7 +1372,8 @@ async def _cross_task_learning(harness: EvaluationHarness, *, real: bool) -> dic
                     session.id,
                     user_message=(
                         "请使用 read_file 读取 b27-learning-source.txt，"
-                        "再用简短中文总结可复用验证顺序。"
+                        "再用简短中文总结可复用验证顺序。保留资料的主题名称、"
+                        "适用对象和前置条件，以便后续按任务检索；不要补充资料之外的步骤。"
                     ),
                     workspace=str(project.workspace),
                     thread_id=thread.id,
