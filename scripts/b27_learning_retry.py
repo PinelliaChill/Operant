@@ -75,7 +75,7 @@ async def run(args: argparse.Namespace) -> dict:
             "cross-task-reuse",
             "development",
             "cross_task_learning",
-            "B27跨任务验证应按什么顺序运行哪些命令？",
+            "B27跨任务验证说明记载了什么顺序？请转述记忆中的命令、适用对象与前置条件，并注明这只是推断证据，不能称为已验证。无须运行命令。",
             "alpha",
             (record.ref.record_id,),
             (),
@@ -97,7 +97,10 @@ async def run(args: argparse.Namespace) -> dict:
             "evidence_head": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], text=True
             ).strip(),
-            "entry": "new ApplicationService.run_session / unchanged role, budget, query and frozen record",
+            "entry": (
+                "ApplicationService.run_session / unchanged role, budget and frozen record; "
+                "explicit evidence-qualified recall query"
+            ),
             "prior_report": str(args.report),
             "database": str(root / "core.sqlite3"),
             "freeze": learning["freeze"],
@@ -116,7 +119,9 @@ async def run(args: argparse.Namespace) -> dict:
             "total_cost_usd": None,
             "cost_state": "unknown",
             "limitations": [
-                "Earlier read-only reuse timed out; no tool/write is replayed.",
+                "Earlier reuse timed out; another declined inferred evidence; both retained.",
+                "Supplementary query asks for inferred evidence with conditions, "
+                "without upgrading its trust.",
                 "Prior timed-out request usage is unknown and is not counted as zero.",
             ],
         }
