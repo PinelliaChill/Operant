@@ -1,0 +1,35 @@
+{
+  "schema": "operant.b2_7.real-preflight.v1",
+  "status": "completed",
+  "evidence_head": "002f98cd5b5f8a5df1a9360ad40bd19d0c5b862d",
+  "model_discovery": {
+    "command": "uv run --frozen operant model discover",
+    "selected_model_id": "gpt-5.6-luna",
+    "discovered_count": 67,
+    "secret_ref": "OPERANT_API_KEY",
+    "provider_url": "omitted"
+  },
+  "entry": "ApplicationService.run_session",
+  "model_id": "gpt-5.6-luna",
+  "model_profile_id": "model_b27_evaluation",
+  "workspace_scope": "alpha",
+  "tool_policy": [
+    "read_file"
+  ],
+  "write_allowed": false,
+  "memory_enabled": false,
+  "tool_called": true,
+  "agent_completed": true,
+  "elapsed_ms": 11219.2336,
+  "usage": {
+    "state": "known",
+    "prompt_tokens": 1196,
+    "completion_tokens": 61,
+    "total_tokens": 1257
+  },
+  "cost_usd": null,
+  "limitations": [
+    "预检只证明一次受控 read_file 入口；不证明完整真实对照或多 Agent 验收。",
+    "模型正文不写入报告。"
+  ]
+}

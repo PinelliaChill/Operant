@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
-import shlex
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -22,7 +20,6 @@ from operant.domain.graph import (
     NodeRunStatus,
     WorkflowDefinitionStatus,
 )
-from operant.domain.memory import MemoryKind
 from operant.domain.models import AgentStatus, RolePreset
 from operant.domain.workflow import (
     WorkflowRun,
@@ -439,14 +436,21 @@ class SequentialCodingWorkflow:
         resumed_from_id: str | None = None,
         memory_enabled: bool = True,
         memory_project_scope: str | Path | None = None,
-        persist_memory_candidates: bool = True,
+        persist_memory_candidates: bool = False,
         _checkpoint_results: tuple[WorkflowSubtaskResult, ...] = (),
     ) -> AsyncIterator[WorkflowEvent]:
         """Create, persist, and stream one workflow execution.
 
         SQLite is the source of truth. Every event is committed before it is
         yielded, so an SSE disconnect leaves a resumable stage checkpoint.
+
+        ``persist_memory_candidates`` is retained for source compatibility with
+        the pre-plugin coordinator.  The coordinator no longer writes memory;
+        callers using the old switch must move to the B2-3 Proposal/CAS entry.
         """
+
+        if persist_memory_candidates:
+            raise ValueError("schema_upgrade_required: use B2-3 dataset Proposal/CAS commands")
 
         workspace_path = Path(workspace).resolve(strict=False)
         memory_scope_path = (
@@ -573,15 +577,6 @@ class SequentialCodingWorkflow:
                     guard_lost.set()
                     self.service.cancel_workflow_children(run.id)
                     break
-                if raw_event.event_type == "workflow.completed" and persist_memory_candidates:
-                    for memory_event in self._knowledge_candidate_events(run, raw_event):
-                        persisted_memory_event = memory_event.model_copy(
-                            update={"workflow_run_id": run.id}
-                        )
-                        persisted_memory_event = self._persist_workflow_event(
-                            run.id, persisted_memory_event
-                        )
-                        yield persisted_memory_event
                 event = raw_event.model_copy(update={"workflow_run_id": run.id})
                 event = self._persist_workflow_event(run.id, event)
                 graph_bridge.observe(event)
@@ -1129,16 +1124,6 @@ class SequentialCodingWorkflow:
                 raise ConflictError("workflow execution lease is expired, cancelled, or fenced")
             session = self.service.create_session(capture.role_id)
             capture.session_id = session.id
-            memory_context = (
-                self._memory_context(
-                    session_id=session.id,
-                    workspace=(workspace if memory_project_scope is None else memory_project_scope),
-                )
-                if memory_enabled
-                else ""
-            )
-            if memory_context:
-                message = f"{message}\n\n可复用的已确认项目知识：\n{memory_context}"
             async for event in self.service.run_session(
                 session.id,
                 user_message=message,
@@ -1381,214 +1366,3 @@ class SequentialCodingWorkflow:
         if last_reviewer >= 0:
             return checkpoints[: last_reviewer + 1]
         return tuple(result for result in checkpoints if result.role != "coder")
-
-    def _memory_context(
-        self,
-        *,
-        session_id: str,
-        workspace: str | Path,
-    ) -> str:
-        if self.service.memory_plugin_mode:
-            # MP-2 explicit management does not activate the old automatic policy.
-            return ""
-        session = self.service.get_session(session_id)
-        try:
-            memories = self.service.query_memories(
-                "",
-                snapshot=session.role_snapshot,
-                session_id=session_id,
-                project_scope=str(Path(workspace).resolve(strict=False)),
-                kinds=(MemoryKind.PROJECT,),
-                limit=5,
-            )
-        except (PermissionError, ValueError):
-            return ""
-        return "\n".join(
-            f"- [{memory.kind.value}] {memory.content[:1_500]}" for memory in memories
-        )[:6_000]
-
-    def _knowledge_candidate_events(
-        self,
-        run: WorkflowRun,
-        completed_event: WorkflowEvent,
-    ) -> list[WorkflowEvent]:
-        if self.service.memory_plugin_mode:
-            # MP-2 explicit management does not activate the old automatic policy.
-            return []
-        raw_subtasks = completed_event.payload.get("subtasks")
-        if not isinstance(raw_subtasks, list):
-            return []
-        coder_result: WorkflowSubtaskResult | None = None
-        for raw in reversed(raw_subtasks):
-            if not isinstance(raw, dict) or raw.get("role") != "coder":
-                continue
-            try:
-                candidate = WorkflowSubtaskResult.model_validate(raw)
-            except ValueError:
-                continue
-            if candidate.succeeded:
-                coder_result = candidate
-                break
-        if coder_result is None or not coder_result.session_id:
-            return []
-
-        session = self.service.get_session(coder_result.session_id)
-        events: list[WorkflowEvent] = []
-        for raw in raw_subtasks:
-            if not isinstance(raw, dict) or raw.get("role") != "explorer":
-                continue
-            try:
-                explorer_result = WorkflowSubtaskResult.model_validate(raw)
-            except ValueError:
-                continue
-            summary = explorer_result.summary.strip()
-            if not explorer_result.succeeded or not explorer_result.session_id or not summary:
-                continue
-            try:
-                memory = self.service.save_memory(
-                    snapshot=session.role_snapshot,
-                    session_id=session.id,
-                    kind=MemoryKind.PROJECT,
-                    content=(
-                        f"项目结构与编码约定候选（{explorer_result.role_id}）：{summary[-2_000:]}"
-                    ),
-                    project_scope=run.workspace,
-                    source_session_id=explorer_result.session_id,
-                    source_task=run.task,
-                    confidence=0.5,
-                )
-            except (PermissionError, ValueError):
-                continue
-            events.append(
-                WorkflowEvent(
-                    role="workflow",
-                    session_id=explorer_result.session_id,
-                    event_type="workflow.memory_candidate",
-                    payload={
-                        "memory_id": memory.id,
-                        "kind": memory.kind.value,
-                        "status": memory.status.value,
-                        "source_session_id": explorer_result.session_id,
-                    },
-                )
-            )
-        for command in self._verified_commands(coder_result.session_id):
-            try:
-                memory = self.service.save_memory(
-                    snapshot=session.role_snapshot,
-                    session_id=session.id,
-                    kind=MemoryKind.PROJECT,
-                    content=f"验证命令：{command}",
-                    project_scope=run.workspace,
-                    source_session_id=session.id,
-                    source_task=run.task,
-                    confidence=0.98,
-                    allow_conservative_activation=True,
-                )
-            except (PermissionError, ValueError):
-                continue
-            events.append(
-                WorkflowEvent(
-                    role="workflow",
-                    session_id=session.id,
-                    event_type="workflow.memory_candidate",
-                    payload={
-                        "memory_id": memory.id,
-                        "kind": memory.kind.value,
-                        "status": memory.status.value,
-                        "source_session_id": session.id,
-                    },
-                )
-            )
-
-        summary = coder_result.summary.strip()
-        if summary:
-            try:
-                memory = self.service.save_memory(
-                    snapshot=session.role_snapshot,
-                    session_id=session.id,
-                    kind=MemoryKind.EPISODIC,
-                    content=f"任务实现摘要：{summary[-2_000:]}",
-                    source_session_id=session.id,
-                    source_task=run.task,
-                    confidence=0.5,
-                )
-            except (PermissionError, ValueError):
-                pass
-            else:
-                events.append(
-                    WorkflowEvent(
-                        role="workflow",
-                        session_id=session.id,
-                        event_type="workflow.memory_candidate",
-                        payload={
-                            "memory_id": memory.id,
-                            "kind": memory.kind.value,
-                            "status": memory.status.value,
-                            "source_session_id": session.id,
-                        },
-                    )
-                )
-        return events
-
-    def _verified_commands(self, session_id: str) -> tuple[str, ...]:
-        pending: dict[str, str] = {}
-        verified: list[str] = []
-        for event in self.service.list_events(session_id):
-            if event.event_type == "model.completed":
-                tool_calls = event.payload.get("tool_calls")
-                if not isinstance(tool_calls, list):
-                    continue
-                for raw in tool_calls:
-                    if not isinstance(raw, dict) or raw.get("name") != "run_command":
-                        continue
-                    call_id = raw.get("id")
-                    arguments_json = raw.get("arguments_json")
-                    if not isinstance(call_id, str) or not isinstance(arguments_json, str):
-                        continue
-                    try:
-                        arguments = json.loads(arguments_json)
-                    except json.JSONDecodeError:
-                        continue
-                    argv = arguments.get("argv") if isinstance(arguments, dict) else None
-                    if self._is_safe_verification_argv(argv):
-                        assert isinstance(argv, list)
-                        pending[call_id] = shlex.join(str(token) for token in argv)
-            elif event.event_type == "tool.completed":
-                call_id = event.payload.get("tool_call_id")
-                if not isinstance(call_id, str) or call_id not in pending:
-                    continue
-                try:
-                    result = json.loads(str(event.payload.get("result", "")))
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(result, dict) and result.get("exit_code") == 0:
-                    command = pending[call_id]
-                    if command not in verified:
-                        verified.append(command)
-        return tuple(verified)
-
-    @staticmethod
-    def _is_safe_verification_argv(value: Any) -> bool:
-        if not isinstance(value, list) or not value or not all(isinstance(v, str) for v in value):
-            return False
-        if any(
-            len(token) > 200
-            or "\n" in token
-            or token.startswith(("http://", "https://"))
-            or re.search(r"(?i)(?:key|token|password|secret)=", token)
-            for token in value
-        ):
-            return False
-        prefixes = (
-            ("pytest",),
-            ("python", "-m", "unittest"),
-            ("python3", "-m", "unittest"),
-            ("uv", "run", "pytest"),
-            ("uv", "run", "ruff"),
-            ("uv", "run", "mypy"),
-            ("npm", "test"),
-            ("cargo", "test"),
-            ("go", "test"),
-        )
-        return any(tuple(value[: len(prefix)]) == prefix for prefix in prefixes)

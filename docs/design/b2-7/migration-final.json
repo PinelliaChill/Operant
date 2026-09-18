@@ -1,0 +1,92 @@
+{
+  "credentials_scope": "none_loaded",
+  "database_scope": "synthetic_only",
+  "evidence_head": "002f98cd5b5f8a5df1a9360ad40bd19d0c5b862d",
+  "limitations": [
+    "This drill does not prove a real provider/model or desktop GUI flow.",
+    "PluginRegistry exposes explicit immutable installations rather than one atomic package-upgrade command; same-dataset replacement requires a retained dataset and no active old Run.",
+    "A blocked real sandbox result is not an isolation acceptance."
+  ],
+  "migration": {
+    "applied_versions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "canonical_tables": [
+      "workspace_initializations",
+      "threads",
+      "items",
+      "memories",
+      "memory_versions"
+    ],
+    "empty_rollback": {
+      "database": "/private/tmp/operant-b27-migration-final/rollback-empty-v18.sqlite3",
+      "isolated_flag": true,
+      "status": "passed",
+      "target_version": 17
+    },
+    "populated_rollback": {
+      "database": "/private/tmp/operant-b27-migration-final/rollback-populated-v18.sqlite3",
+      "error_type": "MigrationError",
+      "reason_code": "experience_evidence_present",
+      "schema_version_after_attempt": 18,
+      "status": "blocked"
+    },
+    "post_migration_canonical_hash": "fe78a2d1e8f388beab8b7ffd7a343b46cc6d9ed828216febaaefd97f69292fc7",
+    "post_migration_counts": {
+      "items": 1,
+      "memories": 1,
+      "memory_versions": 2,
+      "threads": 1,
+      "workspace_initializations": 2
+    },
+    "pre_migration_canonical_hash": "fe78a2d1e8f388beab8b7ffd7a343b46cc6d9ed828216febaaefd97f69292fc7",
+    "pre_migration_counts": {
+      "items": 1,
+      "memories": 1,
+      "memory_versions": 2,
+      "threads": 1,
+      "workspace_initializations": 2
+    },
+    "seed": {
+      "memory_id": "b27-legacy-memory",
+      "workspace_ref": "/private/tmp/operant-b27-migration-final/legacy-project-workspace"
+    },
+    "source_created_by": "SQLiteStore.migrate(target_version=14)",
+    "source_database": "/private/tmp/operant-b27-migration-final/legacy-v14.sqlite3",
+    "source_schema_version": 14,
+    "status": "passed",
+    "upgrade_database": "/private/tmp/operant-b27-migration-final/upgrade-v18.sqlite3",
+    "upgrade_target_schema_version": 18
+  },
+  "real_isolation": {
+    "evidence_ref": "sandbox-exec:0985a4fb0d8c35e4335f46b0fac88de854c300d060cfa81428e15dffdf0c968e",
+    "isolation_claim": "real_sandbox_exec_only",
+    "lifecycle_state": "ready",
+    "managed_write_observed": "real-isolated-worker-ran",
+    "mode": "isolated",
+    "package": "/private/tmp/operant-b27-migration-final/plugin-managed/plugin_installation_287c2d47ec9a40bb80d6581fed0a715a/package",
+    "platform": "macOS-15.7.2-arm64-arm-64bit-Mach-O",
+    "process_pid": 75847,
+    "runner": "/usr/bin/sandbox-exec",
+    "status": "passed"
+  },
+  "run_root": "/private/tmp/operant-b27-migration-final",
+  "source_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7"
+}

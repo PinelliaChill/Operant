@@ -1,0 +1,13 @@
+{
+  "profile_id": "model_30ced9cb3aad4a97ba4cc4e21da6d819",
+  "role_id": "role_bfab7eb2ef18453b9bfcfb6998851bb7",
+  "model_id": "gpt-5.6-luna",
+  "budget": {
+    "max_turns": 3,
+    "max_output_tokens": 1200,
+    "timeout_seconds": 90
+  },
+  "tool_policy": [
+    "read_file"
+  ]
+}

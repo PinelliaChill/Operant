@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from operant.application.service import ApplicationService
-from operant.domain.memory import MemoryKind, MemoryStatus
+from operant.domain.memory import Memory, MemoryKind, MemoryStatus
 from operant.domain.models import ModelProfile, RolePreset
 from operant.persistence.sqlite import SQLiteStore
 from operant.providers.openai_compatible import OpenAICompatibleProvider
@@ -34,121 +34,95 @@ def service_with_memory_role(tmp_path: Path) -> tuple[ApplicationService, str]:
     return service, role.id
 
 
-def test_task_a_saves_verification_command_and_task_b_reuses_it(tmp_path: Path) -> None:
-    service, role_id = service_with_memory_role(tmp_path)
-    task_a = service.create_session(role_id)
-    task_b = service.create_session(role_id)
-
-    saved = service.save_memory(
-        snapshot=task_a.role_snapshot,
-        session_id=task_a.id,
-        kind=MemoryKind.PROJECT,
-        content="Run pytest tests/test_calculator.py after every change.",
-        project_scope="calculator",
-        source_session_id=task_a.id,
-        source_task="Task A verification command",
-        confidence=0.96,
-        allow_conservative_activation=True,
-    )
-
-    assert saved.status is MemoryStatus.ACTIVE
-    reused = service.query_memories(
-        "pytest calculator",
-        snapshot=task_b.role_snapshot,
-        session_id=task_b.id,
-        project_scope="calculator",
-    )
-
-    assert [memory.content for memory in reused] == [saved.content]
-    assert (
-        service.trace_memory_source(
-            saved.id,
-            snapshot=task_b.role_snapshot,
-            session_id=task_b.id,
-            project_scope="calculator",
-        ).source_session_id
-        == task_a.id
-    )
-
-
-def test_candidate_requires_confirmation_and_updates_are_versioned(tmp_path: Path) -> None:
+def test_legacy_memory_writes_have_one_upgrade_path(tmp_path: Path) -> None:
     service, role_id = service_with_memory_role(tmp_path)
     session = service.create_session(role_id)
 
-    candidate = service.save_memory(
-        snapshot=session.role_snapshot,
-        session_id=session.id,
-        kind=MemoryKind.EPISODIC,
-        content="The first attempt needed an extra fixture.",
-        source_session_id=session.id,
-        source_task="Task A observation",
-        confidence=0.5,
-    )
-    assert candidate.status is MemoryStatus.CANDIDATE
-    with pytest.raises(PermissionError, match="confirmation"):
-        service.activate_memory(
-            candidate.id,
-            snapshot=session.role_snapshot,
-            session_id=session.id,
-        )
-
-    active = service.confirm_memory(
-        candidate.id,
-        snapshot=session.role_snapshot,
-        session_id=session.id,
-    )
-    updated = service.update_memory(
-        candidate.id,
-        snapshot=session.role_snapshot,
-        session_id=session.id,
-        content="The confirmed attempt needed an extra fixture.",
-    )
-    versions = service.list_memory_versions(
-        candidate.id,
-        snapshot=session.role_snapshot,
-        session_id=session.id,
-    )
-
-    assert active.version == 2
-    assert updated.version == 3
-    assert [memory.status for memory in versions] == [
-        MemoryStatus.CANDIDATE,
-        MemoryStatus.ACTIVE,
-        MemoryStatus.ACTIVE,
-    ]
-    assert versions[0].source_session_id == session.id
-
-
-def test_memory_scope_prevents_cross_kind_and_cross_project_access(tmp_path: Path) -> None:
-    service, role_id = service_with_memory_role(tmp_path)
-    session = service.create_session(role_id)
-
-    with pytest.raises(PermissionError, match="does not allow: working"):
+    # No rollout marker can re-enable the removed Core writer.
+    with pytest.raises(ValueError, match="schema_upgrade_required"):
         service.save_memory(
             snapshot=session.role_snapshot,
             session_id=session.id,
-            kind=MemoryKind.WORKING,
-            content="session-only context",
+            kind=MemoryKind.PROJECT,
+            content="legacy writer",
+            project_scope=str(tmp_path),
         )
-
-    saved = service.save_memory(
-        snapshot=session.role_snapshot,
-        session_id=session.id,
-        kind=MemoryKind.PROJECT,
-        content="Project-specific pytest command.",
-        project_scope="project-a",
-        source_session_id=session.id,
-        source_task="Task A",
-        confidence=0.96,
-        allow_conservative_activation=True,
-    )
-    assert saved.status is MemoryStatus.ACTIVE
-    assert (
-        service.query_memories(
-            "pytest",
+    with pytest.raises(ValueError, match="schema_upgrade_required"):
+        service.create_memory(
             snapshot=session.role_snapshot,
             session_id=session.id,
-            project_scope="project-b",
+            kind=MemoryKind.PROJECT,
+            content="legacy writer",
+            project_scope=str(tmp_path),
         )
-        == []
+
+    legacy = service.store.create_memory(
+        Memory(
+            id="legacy-memory",
+            kind=MemoryKind.PROJECT,
+            content="historical migration row",
+            project_scope=str(tmp_path),
+            source_session_id=session.id,
+            status=MemoryStatus.ACTIVE,
+        )
     )
+    for operation in (
+        lambda: service.update_memory(
+            legacy.id,
+            snapshot=session.role_snapshot,
+            session_id=session.id,
+            content="attempted rewrite",
+        ),
+        lambda: service.confirm_memory(
+            legacy.id,
+            snapshot=session.role_snapshot,
+            session_id=session.id,
+        ),
+        lambda: service.activate_memory(
+            legacy.id,
+            snapshot=session.role_snapshot,
+            session_id=session.id,
+        ),
+        lambda: service.deactivate_memory(
+            legacy.id,
+            snapshot=session.role_snapshot,
+            session_id=session.id,
+        ),
+    ):
+        with pytest.raises(ValueError, match="schema_upgrade_required"):
+            operation()
+
+    assert service.store.get_memory(legacy.id) == legacy
+
+
+def test_legacy_explicit_reads_are_kept_but_search_requires_plugin_governance(
+    tmp_path: Path,
+) -> None:
+    service, role_id = service_with_memory_role(tmp_path)
+    session = service.create_session(role_id)
+    legacy = service.store.create_memory(
+        Memory(
+            id="legacy-read",
+            kind=MemoryKind.PROJECT,
+            content="historical migration row",
+            project_scope=str(tmp_path),
+            status=MemoryStatus.ACTIVE,
+        )
+    )
+
+    assert (
+        service.get_memory(
+            legacy.id,
+            snapshot=session.role_snapshot,
+            session_id=session.id,
+            project_scope=str(tmp_path),
+        )
+        == legacy
+    )
+    with pytest.raises(PermissionError, match="memory plugin is not installed or selected"):
+        service.query_memories(
+            "historical",
+            snapshot=session.role_snapshot,
+            session_id=session.id,
+            project_scope=str(tmp_path),
+        )

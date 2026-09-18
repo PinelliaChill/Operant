@@ -1,0 +1,36 @@
+{
+  "base_head": "da01a12bca269aea2d8b80b68732979ad9986649",
+  "scope": "test fixture portability only; product unchanged",
+  "first_ci_run": 35309496969,
+  "first_ci_results": {
+    "python3.10": {
+      "passed": 1065,
+      "failed": 3,
+      "skipped": 3
+    },
+    "python3.12": {
+      "passed": 1066,
+      "failed": 2,
+      "skipped": 3
+    }
+  },
+  "targeted_result": {
+    "passed": 27,
+    "failed": 0,
+    "log": "ci-portability-targeted.log",
+    "junit": "ci-portability-targeted.xml"
+  },
+  "source_hashes": {
+    "tests/test_b27_fault_migration.py": "70ece7c89c8149211a8226dd694f0d1d9e28d8ecb682592cb59cf30addd85f65",
+    "tests/test_beta_auth.py": "51995834d4e0b985511315d78d2c010fb68d21b8aa7d5c80f1468cd69b56fead",
+    "tests/test_cli_week3.py": "78159227a138c03c6bb378bbbcb3841fa23467f67977c0d6ead9f4d3ae7b23e0",
+    "tests/test_phase0_reliability.py": "b226c81100ca6a8cdc4f141b79fa9c267c5b622aca0d26876cdf290a0a2ed6df"
+  },
+  "checks": {
+    "ruff_format": true,
+    "ruff_check": true,
+    "diff_check": true
+  },
+  "candidate_rebuild_required": false,
+  "merge_status": "pending_required_CI"
+}

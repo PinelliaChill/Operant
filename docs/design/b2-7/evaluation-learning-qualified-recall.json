@@ -1,0 +1,49 @@
+{
+  "completed": true,
+  "evidence_head": "6661ef51f35905747f796da2a30d0f05ee8cca55",
+  "entry": "new ApplicationService.run_session / unchanged role, budget and frozen record; explicit evidence-qualified recall query",
+  "prior_report": "docs/design/b2-7/evaluation-learning-final-04.json",
+  "database": "/private/tmp/operant-b27-learning-final-04/core.sqlite3",
+  "freeze": {
+    "dataset_id": "dataset_7edc7e5f401b4ecab51c19b0c93d5e9e",
+    "knowledge_cutoff": "29",
+    "record_id": "record_edcd5eceeade48318258f6e71d5173f1",
+    "frozen_before_reuse": true
+  },
+  "record_digest": "bddbcf519af4a3cbac48d127a9985c3de4d6f3a95a12ad950f1880b7d4f950c8",
+  "formation_reused": true,
+  "selected_ids": [
+    "record_edcd5eceeade48318258f6e71d5173f1"
+  ],
+  "cutoff_matches": true,
+  "task_succeeded": true,
+  "answer_success": true,
+  "answer_order_ok": true,
+  "answer_sha256": "187817e89117f06a3093b36575cbdc38f1ca8cdf12986d2586f86a075c1e25c9",
+  "reuse_model_completed_calls": 1,
+  "reuse_usage": {
+    "state": "known",
+    "prompt_tokens": 1263,
+    "completion_tokens": 146,
+    "total_tokens": 1409,
+    "manifest_cutoff": "29"
+  },
+  "successful_chain_usage": {
+    "state": "known",
+    "prompt_tokens": 2562,
+    "completion_tokens": 255,
+    "total_tokens": 2817
+  },
+  "failed_attempt_usage": {
+    "state": "unknown",
+    "reason": "no_model_completed_event",
+    "manifest_cutoff": "29"
+  },
+  "total_cost_usd": null,
+  "cost_state": "unknown",
+  "limitations": [
+    "Earlier read-only reuse timed out; another completed but declined inferred evidence; both retained.",
+    "This supplementary query explicitly asks to report inferred evidence with its conditions, without upgrading its trust.",
+    "Prior timed-out request usage is unknown and is not counted as zero."
+  ]
+}

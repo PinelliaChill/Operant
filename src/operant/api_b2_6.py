@@ -7,7 +7,6 @@ import hashlib
 import inspect
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
@@ -28,6 +27,7 @@ from operant.contracts.b2_6_sharing import SharingCommand
 from operant.contracts.b2_6_skills import SkillCommand
 from operant.domain.security import Capability
 from operant.memory_plugins.manager import MemoryManager
+from operant.package_resources import protocol_schema_path
 from operant.persistence.sqlite import NotFoundError
 from operant.plugins.protocol import PluginError
 
@@ -155,9 +155,7 @@ def install_b2_6_routes(app: FastAPI, service: ApplicationService) -> None:
 
     @app.get("/v1/protocol/b2-6", operation_id="negotiateB26")
     def negotiate() -> dict[str, Any]:
-        path = (
-            Path(__file__).resolve().parents[2] / "sdk/protocol/schema/operant-b2-6.openapi.sha256"
-        )
+        path = protocol_schema_path("operant-b2-6.openapi.sha256")
         if not path.is_file():
             raise HTTPException(
                 503, {"code": "schema_unavailable", "message": "经验与共享契约不可用"}
@@ -259,13 +257,18 @@ def install_b2_6_routes(app: FastAPI, service: ApplicationService) -> None:
                         raise HTTPException(
                             409,
                             {
-                                "code": "manual_reconcile_required",
+                                "code": "command_outcome_unknown",
                                 "message": "上次结果待核对，不能自动重放",
                             },
                         )
                     response.headers["Idempotent-Replayed"] = "true"
-                    return B26Result(
-                        **json.loads(old["result"]), state=projection(command.project_id)
+                    return cast(
+                        B26Result,
+                        _bounded_projection(
+                            B26Result(
+                                **json.loads(old["result"]), state=projection(command.project_id)
+                            )
+                        ),
                     )
                 c.execute(
                     "INSERT INTO b26_commands VALUES(?,?,?,?,?)",
@@ -337,7 +340,10 @@ def install_b2_6_routes(app: FastAPI, service: ApplicationService) -> None:
                             datetime.now(timezone.utc).isoformat(),
                         ),
                     )
-                return B26Result(**payload, state=projection(command.project_id))
+                return cast(
+                    B26Result,
+                    _bounded_projection(B26Result(**payload, state=projection(command.project_id))),
+                )
             except (ValueError, RuntimeError, LookupError, PermissionError) as exc:
                 # Preserve a pending receipt: a multi-store write may have partly completed.
                 raise translate(exc) from exc

@@ -1,0 +1,174 @@
+{
+  "schema": "operant.b2-7.evaluation-acceptance.v1",
+  "record_identity": "Codex",
+  "worktree_head": "684bea1",
+  "product_freeze": "b932e30",
+  "status": "completed_with_recorded_negative_results",
+  "raw_reports_unchanged": true,
+  "dataset": {
+    "path": "tests/fixtures/b2_7/memory_evaluation.json",
+    "memory_count": 29,
+    "case_count": 43,
+    "development_count": 31,
+    "holdout_count": 12
+  },
+  "deterministic": {
+    "report": "evaluation-deterministic-final.json",
+    "evidence_head": "42b2186f",
+    "mode": "deterministic_baseline",
+    "runs": "43x3",
+    "model_calls": 0,
+    "status": "completed",
+    "metrics": {
+      "no_memory": {
+        "development": {
+          "precision": 0.354839,
+          "recall": 0.354839
+        },
+        "holdout": {
+          "precision": 0.333333,
+          "recall": 0.333333
+        }
+      },
+      "old_recent_entries": {
+        "development": {
+          "precision": 0.077419,
+          "recall": 0.268817
+        },
+        "holdout": {
+          "precision": 0.083333,
+          "recall": 0.416667
+        }
+      },
+      "new_fts": {
+        "development": {
+          "precision": 0.774194,
+          "recall": 0.72043
+        },
+        "holdout": {
+          "precision": 0.916667,
+          "recall": 0.875
+        }
+      }
+    },
+    "interpretation": "固定合成 fixture 的协议/召回基线，不是模型质量或普遍收益证明。"
+  },
+  "real_provider": {
+    "report": "evaluation-real-final.json",
+    "evidence_head": "5d41b97",
+    "model_id": "gpt-5.6-luna",
+    "cases_per_strategy": 4,
+    "strategy_count": 3,
+    "total_calls": 12,
+    "task_succeeded": "12/12",
+    "answer_success": {
+      "no_memory": "0/4",
+      "old_recent_entries": "2/4",
+      "new_fts": "3/4"
+    },
+    "cross_task_learning": {
+      "status": "blocked",
+      "formation_model_calls": 2,
+      "error_code": "governance_proposal_missing"
+    },
+    "usage": {
+      "cost": "unknown",
+      "first_token": "not_measured",
+      "first_model_wait_ms": null,
+      "unknown_is_not_zero": true
+    },
+    "interpretation": "小规模固定输入的真实观察，不外推为普遍质量收益或延迟优化。"
+  },
+  "learning_chain": {
+    "formation": {
+      "report": "evaluation-learning-final-04.json",
+      "evidence_head": "8c4e6c4",
+      "entry": "ApplicationService.run_session -> B25 propose/review",
+      "frozen_record_pack_selected": true,
+      "original_reuse": {
+        "completed": false,
+        "model_completed_calls": 0,
+        "reason": "timeout/no_model_completed_event"
+      },
+      "model_completed_calls": 2,
+      "actual_read_file_calls": 1
+    },
+    "fixed_query_retry": {
+      "report": "evaluation-learning-retry.json",
+      "evidence_head": "6661ef5",
+      "frozen_record_pack_selected": true,
+      "model_completed_calls": 1,
+      "answer_success": false,
+      "classification": "selected_but_refused_inferred_evidence",
+      "prior_timeout_usage": "unknown_not_zero"
+    },
+    "qualified_recall_supplement": {
+      "report": "evaluation-learning-qualified-recall.json",
+      "evidence_head": "6661ef5",
+      "frozen_record_pack_selected": true,
+      "model_completed_calls": 1,
+      "answer_success": true,
+      "query_changed": true,
+      "explicitly_reports_inferred_evidence_and_conditions": true,
+      "trust_upgraded": false,
+      "counts_as_original_fixed_query_success": false,
+      "source_state": "6661ef5 plus uncommitted scripts/b27_learning_retry.py qualified-query change, committed in 684bea1; subsequent formatting/result-description edits only",
+      "final_script_head": "684bea1"
+    },
+    "closure": "formation_governance_freeze_and_qualified_cross_task_reuse_verified; original_fixed_query_negative_retained"
+  },
+  "failure_ledger": [
+    {
+      "report": "evaluation-real-attempt-20260918.json",
+      "classification": "script_measurement_defect",
+      "reason": "旧脚本读取 ContextRevision 便捷字段而非实际 b24_context_memory.body.pack.selected，并误算旧策略无 model completed。",
+      "accepted_as_final": false
+    },
+    {
+      "report": "evaluation-learning-final.json",
+      "classification": "real_product_projection_receipt_truncation",
+      "reason": "B25业务已提交，但通用M0截断大投影affected_ids，评测不能读取proposal；修复见b932e30及24项回归。",
+      "accepted_as_final": false
+    },
+    {
+      "report": "evaluation-learning-final-02.json",
+      "classification": "evaluation_source_reference_defect",
+      "reason": "脚本对AgentItem纯文本计算hash，与Core完整typed payload的canonical source digest不符；改用正式history API。",
+      "accepted_as_final": false
+    },
+    {
+      "report": "evaluation-learning-final-03.json",
+      "classification": "invalid_reuse_selection",
+      "reason": "复用选中 a_recent 而非形成 record。",
+      "accepted_as_final": false
+    },
+    {
+      "report": "pytest-projection-fix.xml",
+      "classification": "real_product_large_projection_failure",
+      "reason": "修复阶段首轮测试发现未知写结果错误码与既有公开契约不一致；保留command_outcome_unknown后24项通过。",
+      "accepted_as_final": false,
+      "repair_evidence": "pytest-projection-fix-02.xml: 24 passed"
+    }
+  ],
+  "product_projection_repair": {
+    "product_source_scope": [
+      "src/operant/api.py",
+      "src/operant/api_b2_5.py",
+      "src/operant/api_b2_6.py"
+    ],
+    "migration_registry_host_source_changed": false,
+    "repair_regression": "pytest-projection-fix-02.xml: 24 passed",
+    "separate_from_evaluation_script_fix": true
+  },
+  "claims": {
+    "deterministic_matrix_complete": true,
+    "real_three_strategy_matrix_complete": true,
+    "original_fixed_query_learning_complete": false,
+    "general_quality_gain": false,
+    "latency_optimization": false,
+    "first_token_measured": false,
+    "cost_known": false,
+    "scoped_formation_then_reuse_verified": true
+  },
+  "acceptance_basis": "review.md final independent review of original MP-6.2 scope; no requirement that every model answer succeeds"
+}

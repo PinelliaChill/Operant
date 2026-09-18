@@ -1,0 +1,60 @@
+......F....                                                              [100%]
+=================================== FAILURES ===================================
+_ test_committed_mutation_with_lost_receipt_recovers_as_unknown_without_replay _
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-317/test_committed_mutation_with_l0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108e13490>
+
+    def test_committed_mutation_with_lost_receipt_recovers_as_unknown_without_replay(
+        tmp_path, monkeypatch
+    ):
+        import operant.api_b2_5 as api
+    
+        database = tmp_path / "crash.sqlite3"
+        app = create_app(database)
+        original = api._record_completion
+        with TestClient(app, raise_server_exceptions=False) as client:
+            project = setup_project(client, tmp_path)
+    
+            def crash(*args, **kwargs):
+                raise RuntimeError("injected crash after business commit")
+    
+            monkeypatch.setattr(api, "_record_completion", crash)
+            request = {
+                "action": "propose",
+                "project_id": project,
+                "content": "已提交但回执丢失的合成事实",
+            }
+            headers = {"Idempotency-Key": "unknown-command"}
+            response = client.post("/v1/b2-5/commands", json=request, headers=headers)
+            assert response.status_code == 500
+            state = client.get(f"/v1/b2-5/projects/{project}/governance").json()
+            assert len(state["proposals"]) == 1
+            assert state["unresolved_command_ids"] == ["unknown-command"]
+            monkeypatch.setattr(api, "_record_completion", original)
+        with TestClient(create_app(database)) as client:
+            state = client.get(f"/v1/b2-5/projects/{project}/governance").json()
+            assert len(state["proposals"]) == 1
+            assert state["unresolved_command_ids"] == ["unknown-command"]
+            events = client.get(f"/v1/b2-5/projects/{project}/events").json()["events"]
+            assert len(events) == 1
+            assert events[0]["action"] == "outcome_unknown"
+            assert events[0]["affected_ids"] == ["unknown-command"]
+            response = client.post("/v1/b2-5/commands", json=request, headers=headers)
+            assert response.status_code == 409
+>           assert response.json()["error"]["code"] == "command_outcome_unknown"
+E           AssertionError: assert 'manual_reconcile_required' == 'command_outcome_unknown'
+E             
+E             - command_outcome_unknown
+E             + manual_reconcile_required
+
+tests/test_b25_api.py:206: AssertionError
+=============================== warnings summary ===============================
+.venv/lib/python3.13/site-packages/fastapi/testclient.py:1
+  /Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_b25_api.py::test_committed_mutation_with_lost_receipt_recovers_as_unknown_without_replay
+1 failed, 10 passed, 1 warning in 33.27s

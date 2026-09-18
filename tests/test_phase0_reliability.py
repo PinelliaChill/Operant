@@ -1234,10 +1234,11 @@ async def test_cross_instance_workflow_cancel_stops_all_parallel_explorers(
 ) -> None:
     store = SQLiteStore(tmp_path / "workflow-cancel.sqlite3")
     provider = RoleAwareBlockingProvider()
+    # This checks cancellation while leases are live, not one-second expiry
+    # during another instance's synchronous schema initialization on slow hosts.
     service = ApplicationService(
         store,
         provider,
-        session_lease_ttl_seconds=1,
         session_lease_heartbeat_seconds=0.01,
     )
     service.initialize()
@@ -1295,7 +1296,6 @@ async def test_cross_instance_workflow_cancel_stops_all_parallel_explorers(
     other = ApplicationService(
         SQLiteStore(store.path),
         provider,
-        session_lease_ttl_seconds=1,
         session_lease_heartbeat_seconds=0.01,
     )
     other.initialize()

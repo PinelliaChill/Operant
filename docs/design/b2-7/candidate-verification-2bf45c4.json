@@ -1,0 +1,66 @@
+{
+  "acceptance_head": "5d41b97563cc2803ac9700d098ced6099b632e2e",
+  "candidate_built_head": "2bf45c4a2263490880bc1e351cc8c5612d158809",
+  "product_paths_changed_since_build": [],
+  "package_smoke": {
+    "entry": "installed wheel / isolated Python -I / public Core commands",
+    "wheel_sha256": "41e7abb679af3b6a0c0a5ef80fbe1100371fc85ad5bb1169f3bd5209de0d8008",
+    "exit_code": 0,
+    "database": "/private/tmp/operant-b27-package-final/core.sqlite3",
+    "model_called": false,
+    "completed": true,
+    "module": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7/.operant/package-venv/lib/python3.13/site-packages/operant/__init__.py",
+    "catalog_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7/.operant/package-venv/lib/python3.13/site-packages/operant/bundled_plugins",
+    "checks": [
+      {
+        "plugin": "memory-standard",
+        "installed": true,
+        "saved_and_recalled": true,
+        "keep_uninstalled": true
+      },
+      {
+        "plugin": "memory-notebook",
+        "installed": true,
+        "saved_and_recalled": true,
+        "keep_uninstalled": true
+      }
+    ],
+    "protocols": [
+      "",
+      "phase23",
+      "phase45",
+      "phase56",
+      "beta",
+      "b2",
+      "b2-3",
+      "b2-4",
+      "b2-5",
+      "b2-6"
+    ]
+  },
+  "tui_wheel_tests": {
+    "count": 12,
+    "result": "passed",
+    "python": "3.11.16",
+    "log": "tui-wheel-tests.log"
+  },
+  "desktop": {
+    "kind": "release optimized macOS arm64",
+    "signing": "ad-hoc linker signature only; no Developer ID",
+    "notarization": "not_performed",
+    "zip": "dist/b2-7-candidate/Operant-Beta-2.0-candidate-macos-arm64.zip"
+  },
+  "artifacts": {
+    "dist/b2-7-candidate/Operant-Beta-2.0-candidate-macos-arm64.zip": "64f12b0acd65757eaa3ed2b7920a90d92130bece80a38a7f44c48fab5f717d22",
+    "dist/b2-7-candidate/python/operant_agent-0.1.0.tar.gz": "02e6a38022f90d8afbffd0e7aa2ad4b4fe9ca3f6db32f8ed9bfb01e69b2e90f9",
+    "dist/b2-7-candidate/python/operant_agent-0.1.0-py3-none-any.whl": "41e7abb679af3b6a0c0a5ef80fbe1100371fc85ad5bb1169f3bd5209de0d8008",
+    "dist/b2-7-candidate/python/.gitignore": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1",
+    "dist/b2-7-candidate/python/release-manifest.json": "6a25ab3c942d64de5798121844248912dcacc0c434383a7a830fb37518e3b5eb",
+    "dist/b2-7-candidate/python/operant-agent.spdx.json": "08bba8444716129df4dc17035ad45bc05722471b5e253acf209df88f54d9de99",
+    "dist/b2-7-candidate/python/SHA256SUMS": "08352e17136dbdd24a8101fece7d017ab16818155607c46ccb1e15c2e036a9ea",
+    "dist/b2-7-candidate/tui/operant_tui-0.1.0.tar.gz": "b71bb491e53beb45f2dab881b270d48b8a84998cee56a857e72d58f66a06e0f0",
+    "dist/b2-7-candidate/tui/.gitignore": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1",
+    "dist/b2-7-candidate/tui/operant_tui-0.1.0-py3-none-any.whl": "49061ce6bcb7ef55222ef1d42b105de1a8cf71c5a47c48405752bf0742d853ef"
+  },
+  "formal_release": false
+}

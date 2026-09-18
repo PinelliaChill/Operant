@@ -37,15 +37,14 @@ from operant.domain.team import (
     TeamMember,
 )
 from operant.memory_plugins.recall import load_manifest, publication_cutoff, save_manifest
+from operant.package_resources import protocol_schema_path
 from operant.persistence.sqlite import NotFoundError
 
 
 def install_b2_4_routes(app: FastAPI, service: ApplicationService) -> None:
     @app.get("/v1/protocol/b2-4", operation_id="negotiateB24")
     def negotiate() -> dict[str, Any]:
-        path = (
-            Path(__file__).resolve().parents[2] / "sdk/protocol/schema/operant-b2-4.openapi.sha256"
-        )
+        path = protocol_schema_path("operant-b2-4.openapi.sha256")
         if not path.is_file():
             raise HTTPException(503, "B2-4 schema unavailable")
         return {

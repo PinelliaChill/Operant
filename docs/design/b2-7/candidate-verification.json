@@ -1,0 +1,126 @@
+{
+  "acceptance_head": "684bea1ca994d59ea63df7c34ba2f75cf076c7fc",
+  "candidate_built_head": "8c4e6c4d66ca5ecda922c633ba57ced19b81e312",
+  "product_paths_changed_since_build": [],
+  "package_smoke": {
+    "entry": "installed wheel / isolated Python -I / public Core commands",
+    "wheel_sha256": "b5ec636b231a9507200ab25cf2527ba4779733f9852f711fdab3864aedb2e0ab",
+    "exit_code": 0,
+    "database": "/private/tmp/operant-b27-package-final-02/core.sqlite3",
+    "model_called": false,
+    "completed": true,
+    "module": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7/.operant/package-venv/lib/python3.13/site-packages/operant/__init__.py",
+    "catalog_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7/.operant/package-venv/lib/python3.13/site-packages/operant/bundled_plugins",
+    "checks": [
+      {
+        "plugin": "memory-standard",
+        "installed": true,
+        "saved_and_recalled": true,
+        "keep_uninstalled": true
+      },
+      {
+        "plugin": "memory-notebook",
+        "installed": true,
+        "saved_and_recalled": true,
+        "keep_uninstalled": true
+      }
+    ],
+    "protocols": [
+      "",
+      "phase23",
+      "phase45",
+      "phase56",
+      "beta",
+      "b2",
+      "b2-3",
+      "b2-4",
+      "b2-5",
+      "b2-6"
+    ],
+    "evidence": "docs/design/b2-7/package-final-02.json",
+    "source_revision": "8c4e6c4d66ca5ecda922c633ba57ced19b81e312"
+  },
+  "tui_wheel_tests": {
+    "count": 12,
+    "result": "passed",
+    "python": "3.11.16",
+    "entry": "installed operant-tui wheel with latest candidate Core wheel",
+    "core_wheel_sha256": "b5ec636b231a9507200ab25cf2527ba4779733f9852f711fdab3864aedb2e0ab",
+    "tui_wheel_sha256": "49061ce6bcb7ef55222ef1d42b105de1a8cf71c5a47c48405752bf0742d853ef",
+    "log": "tui-wheel-tests-final.log"
+  },
+  "desktop": {
+    "kind": "release optimized macOS arm64",
+    "signing": "ad-hoc linker signature only; no Developer ID",
+    "notarization": "not_performed",
+    "zip": "dist/b2-7-candidate/Operant-Beta-2.0-candidate-macos-arm64.zip",
+    "evidence_status": "completed: native-fresh.json + native-upgrade.json + native-projection-final.json",
+    "final_product_head": "b932e30b31e707191417aeb8ab00b1265906c9ae"
+  },
+  "artifacts": {
+    "dist/b2-7-candidate/Operant-Beta-2.0-candidate-macos-arm64.zip": "64f12b0acd65757eaa3ed2b7920a90d92130bece80a38a7f44c48fab5f717d22",
+    "dist/b2-7-candidate/README.md": "6181f2000343b40d219abeadd47dc8007aede377f4b93d451d10c7e3fae0719e",
+    "dist/b2-7-candidate/USAGE.md": "34be747fe05d40264eadec877c92936a027749426c5fa6f78e183e051a1c802c",
+    "dist/b2-7-candidate/python/.gitignore": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1",
+    "dist/b2-7-candidate/python/operant-agent.spdx.json": "fe6ea733865c88c842b597d82737d6225f78dcd53fb6ad42c49abeba81b4ca46",
+    "dist/b2-7-candidate/python/operant_agent-0.1.0-py3-none-any.whl": "b5ec636b231a9507200ab25cf2527ba4779733f9852f711fdab3864aedb2e0ab",
+    "dist/b2-7-candidate/python/operant_agent-0.1.0.tar.gz": "5b613d3e8d35396865a99ff68525b01ea9c8c511b3d4bbeb3b5888fd9468f8a1",
+    "dist/b2-7-candidate/python/release-manifest.json": "d8e618c5d0eb283fa854b5283d677bb83541782ac3964a430ff08e4ef1eebea9",
+    "dist/b2-7-candidate/tui/.gitignore": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1",
+    "dist/b2-7-candidate/tui/operant_tui-0.1.0-py3-none-any.whl": "49061ce6bcb7ef55222ef1d42b105de1a8cf71c5a47c48405752bf0742d853ef",
+    "dist/b2-7-candidate/tui/operant_tui-0.1.0.tar.gz": "b71bb491e53beb45f2dab881b270d48b8a84998cee56a857e72d58f66a06e0f0"
+  },
+  "formal_release": false,
+  "schema": "operant.b2_7.candidate-verification.v2",
+  "product_freeze_head": "b932e30b31e707191417aeb8ab00b1265906c9ae",
+  "product_path_scope": [
+    "src",
+    "plugins",
+    "sdk",
+    "clients/tui",
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "source_revision_check": {
+    "release_manifest": "dist/b2-7-candidate/python/release-manifest.json",
+    "manifest_source_revision": "8c4e6c4d66ca5ecda922c633ba57ced19b81e312",
+    "current_acceptance_head": "684bea1ca994d59ea63df7c34ba2f75cf076c7fc",
+    "product_paths_unchanged": true,
+    "scope": [
+      "src",
+      "plugins",
+      "sdk",
+      "clients/tui",
+      "pyproject.toml",
+      "uv.lock"
+    ]
+  },
+  "release_manifest": {
+    "path": "dist/b2-7-candidate/python/release-manifest.json",
+    "sha256": "d8e618c5d0eb283fa854b5283d677bb83541782ac3964a430ff08e4ef1eebea9",
+    "source_revision": "8c4e6c4d66ca5ecda922c633ba57ced19b81e312",
+    "uv_lock_sha256": "679d8ba9a9be476fc89f21276f91e96e31ed740d9471551abeaac554f9965f40",
+    "artifact_hashes_match": true,
+    "distribution_trust": "unsigned_candidate_not_for_release",
+    "formal_release": false
+  },
+  "candidate_checksums": {
+    "path": "dist/b2-7-candidate/SHA256SUMS",
+    "sha256": "e4236cf09501547136faa0ec7515aa013ffe7324e964cd5bea574a4cf1b20833",
+    "covered_artifacts": 11,
+    "excludes_self": true
+  },
+  "previous_verification": "candidate-verification-2bf45c4.json",
+  "limitations": [
+    "Candidate is unsigned and not notarized; formal release is false.",
+    "Model-free package smoke and 12 TUI unit tests do not constitute real-model or native desktop acceptance.",
+    "No complete source archive was generated in this step.",
+    "B2-4 Host performance limitation and remote/Docker boundaries remain unchanged."
+  ],
+  "complete_bundle": {
+    "path": "dist/Operant-B2-7-candidate.zip",
+    "sha256": "2a92aa27d2a8f978ddefe975eaae7baf396dd6dc34a0126dbe46130c0b27b0ca",
+    "size_bytes": 3785659,
+    "contains": "desktop + Core/TUI wheel/sdist + SBOM/manifests/checksums + Chinese instructions"
+  }
+}

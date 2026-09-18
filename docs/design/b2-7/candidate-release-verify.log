@@ -1,0 +1,1 @@
+release_checks.py verify --dist dist/b2-7-candidate/python: exit 0

@@ -1,0 +1,250 @@
+{
+  "schema": "operant.b2_7.memory-evaluation-report.v1",
+  "mode": "real_provider",
+  "status": "partial",
+  "evidence_head": "42b2186f778f118312fdeecf92747c8347859ae1",
+  "model_discovery": {
+    "command": "uv run --frozen operant model discover",
+    "selected_model_id": "gpt-5.6-luna",
+    "discovered_count": 67,
+    "secret_ref": "OPERANT_API_KEY",
+    "provider_url": "omitted"
+  },
+  "entrypoints": {
+    "application": "ApplicationService.run_session",
+    "memory": "MemoryManager.begin_memory_run -> PluginHost.invoke -> memory-standard",
+    "legacy_control": "script recent selection -> compat_get authorization -> private old-style evidence block"
+  },
+  "fixture": {
+    "dataset_id": "b2_7_memory_evaluation",
+    "version": 1,
+    "memory_count": 29,
+    "fixed_case_count": 43,
+    "sample_case_ids": [],
+    "development_count": 0,
+    "holdout_count": 0,
+    "sha256": "0bfd8379215faf2f71ce766f3f910436ec1a6944252b0aa0c4cb97144bb13482",
+    "file_sha256": "bb3780b7188da76527601b3ece48783e66474ea6a13102916cfc1177ec8ba677"
+  },
+  "configuration": {
+    "model_id": "gpt-5.6-luna",
+    "model_profile_id": "model_b27_evaluation",
+    "role_id": "role_b27_evaluation_reader",
+    "memory_scope": "read: [project]; write: []",
+    "budget": {
+      "max_turns": 1,
+      "timeout_seconds": 90,
+      "max_output_tokens": 384,
+      "max_tool_calls": 0
+    },
+    "host_mode": "trusted_in_process",
+    "secret_ref": "OPERANT_API_KEY",
+    "provider_url": "omitted",
+    "permissions": "project scope only; no tools; no writes"
+  },
+  "results": {
+    "no_memory": {
+      "strategy": "no_memory",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 0,
+          "macro_precision": null,
+          "macro_recall": null,
+          "macro_relatedness": null,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 0,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 0,
+          "macro_precision": null,
+          "macro_recall": null,
+          "macro_relatedness": null,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 0,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": null,
+        "answer_success_rate": null,
+        "correction_count": 0,
+        "correction_rate": null,
+        "answer_order_rate": null
+      },
+      "metrics": {
+        "sample_count": 0,
+        "latency_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "cpu_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "rss_kib_max": null,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 0,
+        "usage": {
+          "state": "unknown",
+          "reason": "provider_usage_missing"
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 0,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    },
+    "old_recent_entries": {
+      "strategy": "old_recent_entries",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 0,
+          "macro_precision": null,
+          "macro_recall": null,
+          "macro_relatedness": null,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 0,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 0,
+          "macro_precision": null,
+          "macro_recall": null,
+          "macro_relatedness": null,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 0,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": null,
+        "answer_success_rate": null,
+        "correction_count": 0,
+        "correction_rate": null,
+        "answer_order_rate": null
+      },
+      "metrics": {
+        "sample_count": 0,
+        "latency_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "cpu_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "rss_kib_max": null,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 0,
+        "usage": {
+          "state": "unknown",
+          "reason": "provider_usage_missing"
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 0,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    },
+    "new_fts": {
+      "strategy": "new_fts",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 0,
+          "macro_precision": null,
+          "macro_recall": null,
+          "macro_relatedness": null,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 0,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 0,
+          "macro_precision": null,
+          "macro_recall": null,
+          "macro_relatedness": null,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 0,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": null,
+        "answer_success_rate": null,
+        "correction_count": 0,
+        "correction_rate": null,
+        "answer_order_rate": null
+      },
+      "metrics": {
+        "sample_count": 0,
+        "latency_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "cpu_ms": {
+          "p50": null,
+          "p95": null
+        },
+        "rss_kib_max": null,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 0,
+        "usage": {
+          "state": "unknown",
+          "reason": "provider_usage_missing"
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 0,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    }
+  },
+  "case_results": [],
+  "cross_task_learning": {
+    "status": "blocked",
+    "mode": "real",
+    "error_code": "governance_proposal_missing",
+    "proposal_id": null,
+    "returned_proposal_ids": [],
+    "formation_entry": "B25 /v1/b2-5/commands propose",
+    "formation_model_calls": 2,
+    "formation_usage": {
+      "state": "known",
+      "prompt_tokens": 1239,
+      "completion_tokens": 77,
+      "total_tokens": 1316
+    }
+  },
+  "limitations": [
+    "Provider usage 缺失时保持 unknown；本次 ModelProfile 没有价格配置，因此总成本保持 unknown。",
+    "报告只保存 usage 状态与答案哈希，不保存模型正文、凭据或 Provider URL。",
+    "Host 性能复用 B2-4；本次只记录可得 RPC/调用计数，不优化 Host。",
+    "固定样本是小规模工程验收，不构成统计显著性或收益比例证明。",
+    "只对本次发现的精确模型 ID 和本次隔离数据库有效。"
+  ]
+}

@@ -496,7 +496,6 @@ async def run_writer_chain(
         )
         session = service.create_session(role.id)
         service.provider = provider
-        service.memory_plugin_mode = True
         first = [
             event
             async for event in service.run_session(

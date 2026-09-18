@@ -343,15 +343,22 @@ def test_callback_rejects_duplicate_parameters_without_consuming_state(tmp_path:
 
 
 @pytest.mark.parametrize(
-    "extra_claims",
+    ("claim_name", "claim_value"),
     [
-        {"nbf": int(time.time()) + 600},
-        {"iat": int(time.time()) + 600},
-        {"exp": float("inf")},
-        {"azp": "foreign-client"},
+        ("nbf", 600),
+        ("iat", 600),
+        ("exp", float("inf")),
+        ("azp", "foreign-client"),
     ],
 )
-def test_id_token_rejects_invalid_time_claims(tmp_path: Path, extra_claims: dict[str, Any]) -> None:
+def test_id_token_rejects_invalid_time_claims(
+    tmp_path: Path, claim_name: str, claim_value: Any
+) -> None:
+    # Compute future time claims per case.  Parametrize-time values become
+    # stale when the full suite spends several minutes before this test runs.
+    if claim_name in {"nbf", "iat"}:
+        claim_value = int(time.time()) + int(claim_value)
+    extra_claims = {claim_name: claim_value}
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     state: dict[str, Any] = {"extra_claims": extra_claims}
     app = create_app(
