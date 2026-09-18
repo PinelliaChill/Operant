@@ -77,6 +77,11 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 任务结束自动候选写回及验证命令关键词晋级；正式 Session 使用同一插件召回链。
 显式请求旧候选写开关会失败并提示升级到 Proposal/CAS。
 
+兼容查询、单条读取和历史列表统一逐版本检查项目、dataset、当前发布/撤销、binding/permission epoch、
+角色、Agent、条件、敏感级别和来源依赖。Agent 限制只能使用 Core 当前有效 Session lease 解析出的
+实际 Agent；普通历史查询不能自报身份绕过。无 Manager 的旧历史读取也逐版本授权，不能用当前版本
+的可见性放行更早的私有内容。
+
 Python wheel 与 sdist 现在包含两个内置插件、生成协议 Schema 与摘要；协议协商和插件目录
 优先读取包内资源，源码开发保留仓库路径。候选使用独立 wheel 安装环境验证，不能用源码目录
 可运行来代替安装包可用。SQLite 仍为 v18，公共协议版本和 Schema 未因资源定位调整而改变。
