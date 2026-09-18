@@ -2644,6 +2644,30 @@ class ApplicationService:
             raise PermissionError("memory plugin is not installed or selected")
         return manager
 
+    def _trusted_agent_id_for_session(self, session_id: str | None) -> str | None:
+        """Resolve the agent bound to a live Core run lease.
+
+        Compatibility reads may need to enforce an agent-bound plugin version.
+        The caller must not be able to claim an arbitrary agent id, so the
+        identity comes only from the in-process lease that Core bound after it
+        validated the Agent and Session pair.  Reads outside a live run fail
+        closed for agent-restricted versions.
+        """
+
+        if session_id is None:
+            return None
+        lease = self._session_run_leases.get(session_id)
+        if lease is None or lease.agent_id is None:
+            return None
+        try:
+            self.store.assert_session_run_lease(lease)
+            agent = self.store.get_agent(lease.agent_id)
+        except (ConflictError, NotFoundError, ValueError):
+            return None
+        if agent.session_id != session_id or agent.status is not AgentStatus.RUNNING:
+            return None
+        return agent.id
+
     def save_memory(
         self,
         memory: Memory | RoleSnapshot | None = None,
@@ -2726,7 +2750,11 @@ class ApplicationService:
         # the governed compatibility route above the legacy Core tables.
         if self.memory_manager is not None or self.memory_manager_factory is not None:
             return self._memory_manager_for_compat().compat_get(
-                memory_id, project_scope, snapshot, version
+                memory_id,
+                project_scope,
+                snapshot,
+                version,
+                session_id=session_id,
             )
         memory = self.store.get_memory(memory_id, version)
         self._authorize_memory(
@@ -2751,7 +2779,13 @@ class ApplicationService:
         limit: int = 20,
     ) -> list[Memory]:
         return self._memory_manager_for_compat().compat_query(
-            query, project_scope, snapshot, include_candidates, limit
+            query,
+            project_scope,
+            snapshot,
+            include_candidates,
+            limit,
+            kinds=kinds,
+            session_id=session_id,
         )
 
     def search_memories(
@@ -2833,17 +2867,28 @@ class ApplicationService:
         session_id: str | None = None,
         project_scope: str | None = None,
     ) -> list[Memory]:
+        if self.memory_manager is not None or self.memory_manager_factory is not None:
+            return self._memory_manager_for_compat().compat_list_versions(
+                memory_id,
+                project_scope,
+                snapshot,
+                session_id=session_id,
+            )
         versions = self.store.list_memory_versions(memory_id)
         if not versions:
             return []
-        self._authorize_memory(
-            snapshot,
-            versions[-1].kind,
-            operation="read",
-            memory=versions[-1],
-            session_id=session_id,
-            project_scope=project_scope or versions[-1].project_scope,
-        )
+        # Legacy rows are still readable for migration, but a history request
+        # must authorize every version independently.  Authorizing only the
+        # current tail would disclose an older role- or session-bound row.
+        for memory in versions:
+            self._authorize_memory(
+                snapshot,
+                memory.kind,
+                operation="read",
+                memory=memory,
+                session_id=session_id,
+                project_scope=project_scope or memory.project_scope,
+            )
         return versions
 
     def trace_memory_source(

@@ -1,10 +1,12 @@
 """Run the B2-1 MP-0.5 synthetic Memory baseline.
 
-The benchmark deliberately exercises the existing ``ApplicationService``
-Memory query path against an isolated SQLite database.  It does not load
-environment secrets, open a user database, call a model, or implement a new
-index.  The recent-entry variant is the empty-query form used by the current
-workflow Memory context path.  The no-memory control returns an empty result
+The benchmark preserves the frozen pre-plugin retrieval baseline in an
+isolated SQLite fixture. Its private adapter reproduces the former Service
+authorization checks and calls that fixture's ``SQLiteStore`` directly; it is
+not an application fallback or a production memory entry point. It does not
+load environment secrets, open a user database, call a model, or implement a
+new index. The recent-entry variant is the empty-query form used by the
+historical workflow path. The no-memory control returns an empty result
 without constructing a Service or opening SQLite.
 """
 
@@ -28,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from operant.application.service import ApplicationService
-from operant.domain.memory import Memory, MemoryKind, MemoryStatus
+from operant.domain.memory import Memory, MemoryKind, MemoryStatus, parse_memory_scope
 from operant.domain.messages import Message, ToolDefinition
 from operant.domain.models import ModelProfile, RolePreset, RoleSnapshot
 from operant.persistence.sqlite import SQLiteStore
@@ -329,10 +331,11 @@ def _invoke_strategy(
     if service is None or snapshot is None:
         raise RuntimeError(f"{strategy} requires the isolated Service fixture")
     # ``old_recent_entries`` intentionally uses the empty query employed by
-    # SequentialCodingWorkflow._memory_context.  Both branches remain calls
-    # into the existing service/store implementation; no new FTS is built here.
+    # the historical SequentialCodingWorkflow context path. Both branches
+    # use the private fixture adapter below; no application fallback is kept.
     query = case.query if strategy == STRATEGY_DIRECT else ""
-    return service.query_memories(
+    return _query_private_legacy_fixture(
+        service,
         query,
         snapshot=snapshot,
         session_id=session_id,
@@ -340,6 +343,51 @@ def _invoke_strategy(
         kinds=(MemoryKind.PROJECT,),
         include_candidates=False,
         limit=case.limit,
+    )
+
+
+def _query_private_legacy_fixture(
+    service: ApplicationService,
+    query: str,
+    *,
+    snapshot: RoleSnapshot,
+    session_id: str,
+    project_scope: str | None,
+    kinds: tuple[MemoryKind, ...],
+    include_candidates: bool,
+    limit: int,
+) -> list[Memory]:
+    """Read the frozen legacy fixture without reopening a product bypass.
+
+    This is deliberately local to the benchmark. It preserves the old
+    Service authorization and SQLite search semantics needed to compare a
+    future candidate against the recorded baseline while the application
+    Service itself remains plugin-governed.
+    """
+
+    scope = parse_memory_scope(snapshot.memory_scope)
+    denied = [kind.value for kind in kinds if not scope.can_read(kind)]
+    if denied:
+        raise PermissionError(f"memory read scope does not allow: {sorted(set(denied))}")
+    if not kinds:
+        return []
+    for kind in kinds:
+        service._authorize_memory(  # noqa: SLF001 - frozen benchmark authorization
+            snapshot,
+            kind,
+            operation="read",
+            session_id=session_id,
+            project_scope=project_scope,
+        )
+    return service.store.search_memories(
+        query,
+        project_scope=project_scope,
+        source_session_id=session_id,
+        kinds=kinds,
+        role_id=snapshot.role_id,
+        role_name=snapshot.role_name,
+        include_candidates=include_candidates,
+        limit=limit,
     )
 
 
@@ -601,10 +649,9 @@ def _run_strategy(
         "implementation": (
             "deterministic empty result; no Service, SQLite, or retrieval call"
             if strategy == STRATEGY_NO_MEMORY
-            else "ApplicationService.query_memories(query=case.query) -> "
-            "existing SQLiteStore.search_memories"
+            else "private frozen-fixture adapter(query=case.query) -> SQLiteStore.search_memories"
             if strategy == STRATEGY_DIRECT
-            else "ApplicationService.query_memories(query='') -> current recent-entry path"
+            else "private frozen-fixture adapter(query='') -> SQLiteStore.search_memories"
         ),
         "cases": case_records,
         "quality": {

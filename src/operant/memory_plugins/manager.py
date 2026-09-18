@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
@@ -1269,10 +1269,14 @@ class MemoryManager:
             ),
         )
 
-    def _governance_dependencies_valid(self, version: MemoryVersion) -> bool:
+    def _governance_dependencies_valid(
+        self, version: MemoryVersion, *, project_id: str | None = None
+    ) -> bool:
         from operant.memory_plugins.governance import GovernanceService
 
-        return GovernanceService(self).version_dependencies_valid(version.ref)
+        return GovernanceService(self).version_dependencies_valid(
+            version.ref, project_id=project_id
+        )
 
     def _context(self, lease: Any) -> RpcContext:
         return RpcContext(
@@ -1501,71 +1505,309 @@ class MemoryManager:
             self._pending_refs.pop(context.request_id, None)
             self.registry.release_run(lease.lease_id)
 
-    def compat_query(
-        self, query: str, workspace: str | None, snapshot: Any, include_candidates: bool, limit: int
-    ) -> list[Memory]:
-        from operant.domain.memory import MemoryKind
+    def _compat_requested_kinds(
+        self,
+        snapshot: Any,
+        workspace: str | None,
+        *,
+        session_id: str | None,
+        kinds: Collection[Any] | None,
+    ) -> frozenset[Any]:
+        """Preserve the legacy query kind contract at the plugin boundary."""
 
-        for p in self._state["projects"]:
-            initialization = self.store.get_workspace_initialization_by_id(p["workspace_id"])
+        from operant.domain.memory import MemoryKind, parse_memory_scope
+
+        scope = parse_memory_scope(snapshot.memory_scope)
+        if kinds is None:
+            requested = tuple(scope.read)
+        else:
+            try:
+                requested = tuple(MemoryKind(kind) for kind in kinds)
+            except ValueError as exc:
+                raise ValueError("unknown memory kind") from exc
+            denied = [kind.value for kind in requested if not scope.can_read(kind)]
+            if denied:
+                raise PermissionError(f"memory read scope does not allow: {sorted(set(denied))}")
+        if not requested:
+            return frozenset()
+        for kind in requested:
+            self.service._authorize_memory(
+                snapshot,
+                kind,
+                operation="read",
+                session_id=session_id,
+                project_scope=workspace,
+            )
+        return frozenset(requested)
+
+    def _compat_agent_id(self, session_id: str | None) -> str | None:
+        """Use only Core's live lease identity for agent-bound versions."""
+
+        return self.service._trusted_agent_id_for_session(session_id)
+
+    def _compat_history_active(self, version: MemoryVersion) -> bool:
+        """Require an actual publication event and a non-revoked history ref."""
+
+        from operant.memory_plugins.recall import history_publication_active
+
+        try:
+            with self.store._connect() as connection:
+                row = connection.execute(
+                    "SELECT 1 FROM b24_publications "
+                    "WHERE dataset_id=? AND record_id=? AND version=? "
+                    "AND state='published' LIMIT 1",
+                    (version.ref.dataset_id, version.ref.record_id, version.ref.version),
+                ).fetchone()
+            return row is not None and history_publication_active(self, version.ref)
+        except Exception:
+            return False
+
+    def _compat_authorize_version(
+        self,
+        version: MemoryVersion,
+        project: dict[str, Any],
+        installation: Any,
+        snapshot: Any,
+        workspace: str | None,
+        *,
+        session_id: str | None,
+        agent_id: str | None,
+        head: Any | None = None,
+        require_current: bool = False,
+        require_history: bool = False,
+        allow_candidate: bool = False,
+        condition_context: Any | None = None,
+    ) -> Memory:
+        """Apply the plugin version policy before exposing a legacy ``Memory``."""
+
+        from operant.memory_plugins.retrieval import (
+            MAXIMUM_RECALL_SENSITIVITY,
+            memory_conditions_match,
+            memory_sensitivity_visible,
+        )
+
+        if version.ref.dataset_id != installation.dataset_id:
+            raise PermissionError("memory belongs to another dataset")
+        if version.scope != self._scope(project):
+            raise PermissionError("memory scope is outside the selected project")
+        current_head = head or self.ledger.get_head(version.ref.dataset_id, version.ref.record_id)
+        if installation.binding_id is None:
+            raise PermissionError("memory installation has no active binding")
+        try:
+            binding = self.registry.get_binding(installation.binding_id)
+        except Exception as exc:
+            raise PermissionError("memory installation binding is unavailable") from exc
+        if (
+            binding.dataset_id != installation.dataset_id
+            or not binding.enabled
+            or not binding.global_enabled
+        ):
+            raise PermissionError("memory installation binding is disabled")
+        if current_head.permission_epoch != binding.permission_epoch:
+            raise PermissionError("memory permission epoch is stale")
+        if any(source.permission_epoch != binding.permission_epoch for source in version.sources):
+            raise PermissionError("memory source permission epoch is stale")
+        if current_head.published_version is None and not (
+            allow_candidate and current_head.state == "unpublished"
+        ):
+            raise PermissionError("memory publication is inactive or revoked")
+        if current_head.state != "published" and not (
+            allow_candidate and current_head.state == "unpublished"
+        ):
+            raise PermissionError("memory publication is inactive or revoked")
+        if require_current and current_head.published_version != version.ref:
+            raise PermissionError("memory version is not currently active")
+        if require_history and not self._compat_history_active(version):
+            raise PermissionError("memory version publication history is inactive")
+        if version.role_ids and not {
+            snapshot.role_id,
+            snapshot.role_name,
+        }.intersection(version.role_ids):
+            raise PermissionError("memory version role restriction does not include this role")
+        if version.agent_ids and (agent_id is None or agent_id not in version.agent_ids):
+            raise PermissionError("memory version requires a trusted agent identity")
+        if not memory_sensitivity_visible(version, MAXIMUM_RECALL_SENSITIVITY):
+            raise PermissionError("memory version sensitivity exceeds the compatibility limit")
+        if condition_context is None and any(
+            (
+                version.conditions.commit_ref,
+                version.conditions.tree_digest,
+                version.conditions.file_fingerprints,
+                version.conditions.environment_digest,
+                version.conditions.tool_versions,
+            )
+        ):
+            from operant.memory_plugins.worktree_knowledge import workspace_facts
+
+            condition_context = workspace_facts(self, project)
+        if not memory_conditions_match(version, condition_context):
+            raise PermissionError("memory version conditions are not currently satisfied")
+        if not self._governance_dependencies_valid(version, project_id=project["project_id"]):
+            raise PermissionError("memory source or governance dependency is no longer valid")
+        result = self._compat(version, workspace, head=current_head)
+        self.service._authorize_memory(
+            snapshot,
+            result.kind,
+            operation="read",
+            memory=result,
+            session_id=session_id,
+            project_scope=workspace,
+        )
+        return result
+
+    def compat_query(
+        self,
+        query: str,
+        workspace: str | None,
+        snapshot: Any,
+        include_candidates: bool,
+        limit: int,
+        *,
+        kinds: Collection[Any] | None = None,
+        session_id: str | None = None,
+    ) -> list[Memory]:
+        requested_kinds = self._compat_requested_kinds(
+            snapshot,
+            workspace,
+            session_id=session_id,
+            kinds=kinds,
+        )
+        if not requested_kinds:
+            return []
+        agent_id = self._compat_agent_id(session_id)
+        for project in self._state["projects"]:
+            initialization = self.store.get_workspace_initialization_by_id(project["workspace_id"])
             if initialization.workspace_ref != workspace:
                 continue
             try:
-                i = self._installation(p)
+                installation = self._installation(project)
             except PluginError:
                 return []
-            self.service._authorize_memory(
-                snapshot, MemoryKind.PROJECT, operation="read", project_scope=workspace
-            )
             versions = self.ledger.query(
-                i.dataset_id,
+                installation.dataset_id,
                 query or None,
-                scope=self._scope(p),
+                scope=self._scope(project),
                 include_candidates=include_candidates,
                 limit=limit,
             )
-            return [
-                self._compat(v, workspace)
-                for v in versions
-                if self._governance_dependencies_valid(v)
-            ]
+            result: list[Memory] = []
+            for value in versions:
+                if value.kind not in {kind.value for kind in requested_kinds}:
+                    continue
+                try:
+                    result.append(
+                        self._compat_authorize_version(
+                            value,
+                            project,
+                            installation,
+                            snapshot,
+                            workspace,
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            head=self.ledger.get_head(installation.dataset_id, value.ref.record_id),
+                            allow_candidate=include_candidates,
+                        )
+                    )
+                except (PermissionError, LookupError, ValueError):
+                    # Search is a set-valued read: silently omit records which
+                    # are no longer visible, preserving fail-closed behavior.
+                    continue
+            return result
         return []
 
     def compat_get(
-        self, record_id: str, workspace: str | None, snapshot: Any, version: int | None
+        self,
+        record_id: str,
+        workspace: str | None,
+        snapshot: Any,
+        version: int | None,
+        *,
+        session_id: str | None = None,
     ) -> Memory:
-        for p in self._state["projects"]:
-            initialization = self.store.get_workspace_initialization_by_id(p["workspace_id"])
+        for project in self._state["projects"]:
+            initialization = self.store.get_workspace_initialization_by_id(project["workspace_id"])
             if initialization.workspace_ref != workspace:
                 continue
-            i = self._installation(p)
-            head = self.ledger.get_head(i.dataset_id, record_id)
+            installation = self._installation(project)
+            head = self.ledger.get_head(installation.dataset_id, record_id)
             if head.state != "published" or not head.published_version:
                 raise PermissionError("memory has no current published version")
             if version is not None and version != head.published_version.version:
                 raise PermissionError("historical memory version is not currently active")
-            value = self.ledger.get_version(i.dataset_id, record_id, head.published_version.version)
-            if value.scope != self._scope(p) or not self._governance_dependencies_valid(value):
-                raise PermissionError("memory scope or source is no longer valid")
-            result = self._compat(value, workspace)
-            self.service._authorize_memory(
-                snapshot, result.kind, operation="read", memory=result, project_scope=workspace
+            value = self.ledger.get_version(
+                installation.dataset_id, record_id, head.published_version.version
             )
+            return self._compat_authorize_version(
+                value,
+                project,
+                installation,
+                snapshot,
+                workspace,
+                session_id=session_id,
+                agent_id=self._compat_agent_id(session_id),
+                head=head,
+                require_current=True,
+            )
+        raise PermissionError("no active memory binding for workspace")
+
+    def compat_list_versions(
+        self,
+        record_id: str,
+        workspace: str | None,
+        snapshot: Any,
+        *,
+        session_id: str | None = None,
+    ) -> list[Memory]:
+        """List plugin history only after authorizing every immutable version."""
+
+        for project in self._state["projects"]:
+            initialization = self.store.get_workspace_initialization_by_id(project["workspace_id"])
+            if initialization.workspace_ref != workspace:
+                continue
+            installation = self._installation(project)
+            head = self.ledger.get_head(installation.dataset_id, record_id)
+            if head.state != "published" or head.published_version is None:
+                raise PermissionError("memory has no active publication history")
+            values = self.ledger.list_versions(installation.dataset_id, record_id)
+            agent_id = self._compat_agent_id(session_id)
+            result: list[Memory] = []
+            for value in values:
+                result.append(
+                    self._compat_authorize_version(
+                        value,
+                        project,
+                        installation,
+                        snapshot,
+                        workspace,
+                        session_id=session_id,
+                        agent_id=agent_id,
+                        head=head,
+                        require_history=True,
+                    )
+                )
             return result
         raise PermissionError("no active memory binding for workspace")
 
-    def _compat(self, version: Any, workspace: str | None) -> Memory:
+    def _compat(self, version: Any, workspace: str | None, *, head: Any | None = None) -> Memory:
+        from operant.contracts.b2_1 import SessionScope
         from operant.domain.memory import Memory
 
-        head = self.ledger.get_head(version.ref.dataset_id, version.ref.record_id)
+        current_head = head or self.ledger.get_head(version.ref.dataset_id, version.ref.record_id)
+        source_session_id = (
+            version.scope.session_id if isinstance(version.scope, SessionScope) else None
+        )
         return Memory(
             id=version.ref.record_id,
             version=version.ref.version,
             kind=version.kind,
             content=version.content,
-            project_scope=workspace,
+            project_scope=workspace if version.kind == "project" else None,
+            role_scope=tuple(version.role_ids),
+            source_session_id=source_session_id,
             confidence=0.0,
-            status=MemoryStatus.ACTIVE if head.state == "published" else MemoryStatus.CANDIDATE,
+            status=(
+                MemoryStatus.ACTIVE if current_head.state == "published" else MemoryStatus.CANDIDATE
+            ),
         )
 
     def _artifacts(self) -> list[dict[str, Any]]:
