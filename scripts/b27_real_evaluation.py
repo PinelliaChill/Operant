@@ -1478,6 +1478,19 @@ async def _cross_task_learning(harness: EvaluationHarness, *, real: bool) -> dic
         from fastapi.testclient import TestClient
 
         client = TestClient(harness.app)
+        detail = client.get(f"/v1/b2-5/projects/{project.project_id}/history/{source_item.id}")
+        if detail.status_code != 200 or not detail.json().get("entry", {}).get("source"):
+            client.close()
+            return {
+                "status": "blocked",
+                "mode": "real",
+                "error_code": "canonical_source_query_failed",
+                "formation_model_calls": formation_model_calls,
+                "formation_usage": formation_usage,
+            }
+        # Agent Items hash their complete typed payload, unlike user text Items.
+        # Use the authoritative source reference returned by Core.
+        source = SourceRef.model_validate(detail.json()["entry"]["source"])
         proposed = client.post(
             "/v1/b2-5/commands",
             json={
