@@ -1,0 +1,876 @@
+{
+  "schema": "operant.b2_7.memory-evaluation-report.v1",
+  "mode": "real_provider",
+  "status": "partial",
+  "evidence_head": "5d41b97563cc2803ac9700d098ced6099b632e2e",
+  "model_discovery": {
+    "command": "uv run --frozen operant model discover",
+    "selected_model_id": "gpt-5.6-luna",
+    "discovered_count": 67,
+    "secret_ref": "OPERANT_API_KEY",
+    "provider_url": "omitted"
+  },
+  "entrypoints": {
+    "application": "ApplicationService.run_session",
+    "memory": "MemoryManager.begin_memory_run -> PluginHost.invoke -> memory-standard",
+    "legacy_control": "script recent selection -> compat_get authorization -> private old-style evidence block"
+  },
+  "fixture": {
+    "dataset_id": "b2_7_memory_evaluation",
+    "version": 1,
+    "memory_count": 29,
+    "fixed_case_count": 43,
+    "sample_case_ids": [
+      "dev-cn-gateway",
+      "dev-cn-uv",
+      "dev-cn-context",
+      "holdout-gamma-uv"
+    ],
+    "development_count": 3,
+    "holdout_count": 1,
+    "sha256": "0bfd8379215faf2f71ce766f3f910436ec1a6944252b0aa0c4cb97144bb13482",
+    "file_sha256": "bb3780b7188da76527601b3ece48783e66474ea6a13102916cfc1177ec8ba677"
+  },
+  "configuration": {
+    "model_id": "gpt-5.6-luna",
+    "model_profile_id": "model_b27_evaluation",
+    "role_id": "role_b27_evaluation_reader",
+    "memory_scope": "read: [project]; write: []",
+    "budget": {
+      "max_turns": 1,
+      "timeout_seconds": 90,
+      "max_output_tokens": 384,
+      "max_tool_calls": 0
+    },
+    "host_mode": "trusted_in_process",
+    "secret_ref": "OPERANT_API_KEY",
+    "provider_url": "omitted",
+    "permissions": "project scope only; no tools; no writes"
+  },
+  "results": {
+    "no_memory": {
+      "strategy": "no_memory",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 3,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 3,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 1,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 1,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": 1.0,
+        "answer_success_rate": 0.0,
+        "correction_count": 4,
+        "correction_rate": 1.0,
+        "answer_order_rate": 0.0
+      },
+      "metrics": {
+        "sample_count": 4,
+        "latency_ms": {
+          "p50": 5908.943,
+          "p95": 8027.7573
+        },
+        "cpu_ms": {
+          "p50": 148.595,
+          "p95": 155.929
+        },
+        "rss_kib_max": 119008.0,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 4,
+        "usage": {
+          "state": "known",
+          "prompt_tokens": 2422,
+          "completion_tokens": 268,
+          "total_tokens": 2690
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 0,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    },
+    "old_recent_entries": {
+      "strategy": "old_recent_entries",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 3,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 15,
+          "missing_id_count": 3,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 1,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 5,
+          "missing_id_count": 1,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": 1.0,
+        "answer_success_rate": 0.5,
+        "correction_count": 2,
+        "correction_rate": 0.5,
+        "answer_order_rate": 0.0
+      },
+      "metrics": {
+        "sample_count": 4,
+        "latency_ms": {
+          "p50": 10658.4586,
+          "p95": 13758.4419
+        },
+        "cpu_ms": {
+          "p50": 166.167,
+          "p95": 203.702
+        },
+        "rss_kib_max": 119008.0,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 4,
+        "usage": {
+          "state": "known",
+          "prompt_tokens": 3023,
+          "completion_tokens": 963,
+          "total_tokens": 3986
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 0,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    },
+    "new_fts": {
+      "strategy": "new_fts",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 3,
+          "macro_precision": 1.0,
+          "macro_recall": 1.0,
+          "macro_relatedness": 1.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 0,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 1,
+          "macro_precision": 1.0,
+          "macro_recall": 1.0,
+          "macro_relatedness": 1.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 0,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": 1.0,
+        "answer_success_rate": 0.75,
+        "correction_count": 1,
+        "correction_rate": 0.25,
+        "answer_order_rate": 0.0
+      },
+      "metrics": {
+        "sample_count": 4,
+        "latency_ms": {
+          "p50": 11432.3912,
+          "p95": 19711.3892
+        },
+        "cpu_ms": {
+          "p50": 587.754,
+          "p95": 1095.635
+        },
+        "rss_kib_max": 119008.0,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 4,
+        "usage": {
+          "state": "known",
+          "prompt_tokens": 4570,
+          "completion_tokens": 621,
+          "total_tokens": 5191
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 4,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    }
+  },
+  "case_results": [
+    {
+      "case_id": "dev-cn-gateway",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "no_memory",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_gateway"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_gateway"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 8027.7573,
+      "cpu_ms": 155.294,
+      "rss_kib": 116128.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 604,
+        "completion_tokens": 79,
+        "total_tokens": 683
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_order_ok": false,
+      "answer_sha256": "a7c4fa14600177685930216f9701c3a5b68c42b4f28ce37394c337ceece8d9f7",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-gateway",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "old_recent_entries",
+      "selected_ids": [
+        "a_recent",
+        "a_current_condition",
+        "a_malicious",
+        "a_frontend",
+        "a_late"
+      ],
+      "expected_ids": [
+        "a_gateway"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_gateway"
+      ],
+      "unrelated_ids": [
+        "a_current_condition",
+        "a_frontend",
+        "a_late",
+        "a_malicious",
+        "a_recent"
+      ],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 13612.3887,
+      "cpu_ms": 139.281,
+      "rss_kib": 118464.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 751,
+        "completion_tokens": 221,
+        "total_tokens": 972,
+        "old_reference_snapshot": [
+          {
+            "record_id": "a_recent",
+            "version": 1,
+            "content_sha256": "d9472132ba310c7559037b3caf98702cdbaa7d03cef14435bf6ec8dab1715f9b"
+          },
+          {
+            "record_id": "a_current_condition",
+            "version": 1,
+            "content_sha256": "d285dbc894d492496a731d1d6e2fe1c29067b2defe3d9aa3c8f4b0732d94ca0f"
+          },
+          {
+            "record_id": "a_malicious",
+            "version": 1,
+            "content_sha256": "815cf68be7344d3cd2c64c9fc3c81b4cb20e24acd2a23665e3c441e49568e2b3"
+          },
+          {
+            "record_id": "a_frontend",
+            "version": 1,
+            "content_sha256": "bb0ad69271874f2ce59f2f303a16376262df2ca1296064ca2c49eab59e680b62"
+          },
+          {
+            "record_id": "a_late",
+            "version": 1,
+            "content_sha256": "8a5b882c4bb2dbc729ab339bab6a67bff82f3dbaddcf8910ac4825f075146ea8"
+          }
+        ]
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_order_ok": false,
+      "answer_sha256": "707a47be5c5b0e98264d0c043852d49b74d0589acbe833e901c1147e95fe66c3",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-gateway",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "new_fts",
+      "selected_ids": [
+        "a_gateway"
+      ],
+      "expected_ids": [
+        "a_gateway"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [],
+      "unrelated_ids": [],
+      "precision": 1.0,
+      "recall": 1.0,
+      "relatedness": 1.0,
+      "condition_misses": [],
+      "elapsed_ms": 9604.451,
+      "cpu_ms": 1089.16,
+      "rss_kib": 119008.0,
+      "host_invokes": 1,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 1150,
+        "completion_tokens": 118,
+        "total_tokens": 1268,
+        "manifest_cutoff": "28"
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": true,
+      "answer_order_ok": false,
+      "answer_sha256": "ee7cfdb339ae9e0f0b495710cfc4eed8399c4262c3d8fdc0055f7c260a053559",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-uv",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "no_memory",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_uv"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 5908.943,
+      "cpu_ms": 155.929,
+      "rss_kib": 119008.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 607,
+        "completion_tokens": 67,
+        "total_tokens": 674
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_order_ok": false,
+      "answer_sha256": "55005ff74d92047fd6e63d05cf0e5dc960b98bfb06f804ece0091d559751d14b",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-uv",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "old_recent_entries",
+      "selected_ids": [
+        "a_recent",
+        "a_current_condition",
+        "a_malicious",
+        "a_frontend",
+        "a_late"
+      ],
+      "expected_ids": [
+        "a_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_uv"
+      ],
+      "unrelated_ids": [
+        "a_current_condition",
+        "a_frontend",
+        "a_late",
+        "a_malicious",
+        "a_recent"
+      ],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 9814.4125,
+      "cpu_ms": 203.702,
+      "rss_kib": 119008.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 753,
+        "completion_tokens": 242,
+        "total_tokens": 995,
+        "old_reference_snapshot": [
+          {
+            "record_id": "a_recent",
+            "version": 1,
+            "content_sha256": "d9472132ba310c7559037b3caf98702cdbaa7d03cef14435bf6ec8dab1715f9b"
+          },
+          {
+            "record_id": "a_current_condition",
+            "version": 1,
+            "content_sha256": "d285dbc894d492496a731d1d6e2fe1c29067b2defe3d9aa3c8f4b0732d94ca0f"
+          },
+          {
+            "record_id": "a_malicious",
+            "version": 1,
+            "content_sha256": "815cf68be7344d3cd2c64c9fc3c81b4cb20e24acd2a23665e3c441e49568e2b3"
+          },
+          {
+            "record_id": "a_frontend",
+            "version": 1,
+            "content_sha256": "bb0ad69271874f2ce59f2f303a16376262df2ca1296064ca2c49eab59e680b62"
+          },
+          {
+            "record_id": "a_late",
+            "version": 1,
+            "content_sha256": "8a5b882c4bb2dbc729ab339bab6a67bff82f3dbaddcf8910ac4825f075146ea8"
+          }
+        ]
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": true,
+      "answer_order_ok": false,
+      "answer_sha256": "02ba55dec0a5b912f09ca86f2c195998f66ffdec4bddfeaf01882142f9e70900",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-uv",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "new_fts",
+      "selected_ids": [
+        "a_uv"
+      ],
+      "expected_ids": [
+        "a_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [],
+      "unrelated_ids": [],
+      "precision": 1.0,
+      "recall": 1.0,
+      "relatedness": 1.0,
+      "condition_misses": [],
+      "elapsed_ms": 19711.3892,
+      "cpu_ms": 1095.635,
+      "rss_kib": 119008.0,
+      "host_invokes": 1,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 1141,
+        "completion_tokens": 218,
+        "total_tokens": 1359,
+        "manifest_cutoff": "28"
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_order_ok": false,
+      "answer_sha256": "fbd5898db8f8de2107190d8edcec6e884cf7c339631be6bc24fc35f0fa098faf",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-context",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "no_memory",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_context"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_context"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 7810.6338,
+      "cpu_ms": 123.61,
+      "rss_kib": 119008.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 606,
+        "completion_tokens": 49,
+        "total_tokens": 655
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_order_ok": false,
+      "answer_sha256": "3870f25d194b1cfd6078bc55ab77a37127fb1701d521afb0dbab7b179e08a5fc",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-context",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "old_recent_entries",
+      "selected_ids": [
+        "a_recent",
+        "a_current_condition",
+        "a_malicious",
+        "a_frontend",
+        "a_late"
+      ],
+      "expected_ids": [
+        "a_context"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_context"
+      ],
+      "unrelated_ids": [
+        "a_current_condition",
+        "a_frontend",
+        "a_late",
+        "a_malicious",
+        "a_recent"
+      ],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 13758.4419,
+      "cpu_ms": 166.167,
+      "rss_kib": 119008.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 754,
+        "completion_tokens": 255,
+        "total_tokens": 1009,
+        "old_reference_snapshot": [
+          {
+            "record_id": "a_recent",
+            "version": 1,
+            "content_sha256": "d9472132ba310c7559037b3caf98702cdbaa7d03cef14435bf6ec8dab1715f9b"
+          },
+          {
+            "record_id": "a_current_condition",
+            "version": 1,
+            "content_sha256": "d285dbc894d492496a731d1d6e2fe1c29067b2defe3d9aa3c8f4b0732d94ca0f"
+          },
+          {
+            "record_id": "a_malicious",
+            "version": 1,
+            "content_sha256": "815cf68be7344d3cd2c64c9fc3c81b4cb20e24acd2a23665e3c441e49568e2b3"
+          },
+          {
+            "record_id": "a_frontend",
+            "version": 1,
+            "content_sha256": "bb0ad69271874f2ce59f2f303a16376262df2ca1296064ca2c49eab59e680b62"
+          },
+          {
+            "record_id": "a_late",
+            "version": 1,
+            "content_sha256": "8a5b882c4bb2dbc729ab339bab6a67bff82f3dbaddcf8910ac4825f075146ea8"
+          }
+        ]
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_order_ok": false,
+      "answer_sha256": "b049cf7020965da77df87b40b70c1f7449e489b4bf0bb0dfea832c499cb41e9f",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-context",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "new_fts",
+      "selected_ids": [
+        "a_context"
+      ],
+      "expected_ids": [
+        "a_context"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [],
+      "unrelated_ids": [],
+      "precision": 1.0,
+      "recall": 1.0,
+      "relatedness": 1.0,
+      "condition_misses": [],
+      "elapsed_ms": 12663.6813,
+      "cpu_ms": 587.754,
+      "rss_kib": 119008.0,
+      "host_invokes": 1,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 1137,
+        "completion_tokens": 147,
+        "total_tokens": 1284,
+        "manifest_cutoff": "28"
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": true,
+      "answer_order_ok": false,
+      "answer_sha256": "096b662d6a6a639644a853ed6ab78c5393c76d8d13fc27e420a923bdac24fceb",
+      "error_code": null
+    },
+    {
+      "case_id": "holdout-gamma-uv",
+      "split": "holdout",
+      "category": "chinese_rewrite",
+      "strategy": "no_memory",
+      "selected_ids": [],
+      "expected_ids": [
+        "g_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "g_uv"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 5686.0008,
+      "cpu_ms": 148.595,
+      "rss_kib": 119008.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 605,
+        "completion_tokens": 73,
+        "total_tokens": 678
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_order_ok": false,
+      "answer_sha256": "1fc1b70bc142e30af4f54e907528c52b54c6a13407f6f9236a1df81a109b44ae",
+      "error_code": null
+    },
+    {
+      "case_id": "holdout-gamma-uv",
+      "split": "holdout",
+      "category": "chinese_rewrite",
+      "strategy": "old_recent_entries",
+      "selected_ids": [
+        "g_malicious",
+        "g_recent",
+        "g_late",
+        "g_branch",
+        "g_gateway"
+      ],
+      "expected_ids": [
+        "g_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "g_uv"
+      ],
+      "unrelated_ids": [
+        "g_branch",
+        "g_gateway",
+        "g_late",
+        "g_malicious",
+        "g_recent"
+      ],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 10658.4586,
+      "cpu_ms": 170.708,
+      "rss_kib": 119008.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 765,
+        "completion_tokens": 245,
+        "total_tokens": 1010,
+        "old_reference_snapshot": [
+          {
+            "record_id": "g_malicious",
+            "version": 1,
+            "content_sha256": "c1a6d51fc82c57191433c8bb7663d76013bb8ce040830b85a4374953d9f135f0"
+          },
+          {
+            "record_id": "g_recent",
+            "version": 1,
+            "content_sha256": "60f86693e1334c8fd110a08d7ca023a2859551bc6d038cf71715b804a29498c4"
+          },
+          {
+            "record_id": "g_late",
+            "version": 1,
+            "content_sha256": "824c0763e0937ea0af36e2d137a81d8796fcdf9251e148679d0b81d044adb2f4"
+          },
+          {
+            "record_id": "g_branch",
+            "version": 1,
+            "content_sha256": "6e876f5f6a61660ac9300ba59397d19093eedfd63996d620bf1cc5e27fdca412"
+          },
+          {
+            "record_id": "g_gateway",
+            "version": 1,
+            "content_sha256": "eb2aefe5eacabb36b2bb60060a789798fdf804254048c9405009035eabc9acc3"
+          }
+        ]
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": true,
+      "answer_order_ok": false,
+      "answer_sha256": "458fe51d608b4cf841f546b852d62cd5404ae9936cf4df22322f520990149dec",
+      "error_code": null
+    },
+    {
+      "case_id": "holdout-gamma-uv",
+      "split": "holdout",
+      "category": "chinese_rewrite",
+      "strategy": "new_fts",
+      "selected_ids": [
+        "g_uv"
+      ],
+      "expected_ids": [
+        "g_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [],
+      "unrelated_ids": [],
+      "precision": 1.0,
+      "recall": 1.0,
+      "relatedness": 1.0,
+      "condition_misses": [],
+      "elapsed_ms": 11432.3912,
+      "cpu_ms": 412.427,
+      "rss_kib": 119008.0,
+      "host_invokes": 1,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 1142,
+        "completion_tokens": 138,
+        "total_tokens": 1280,
+        "manifest_cutoff": "28"
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": true,
+      "answer_order_ok": false,
+      "answer_sha256": "ca1ad16077b7ac59ac437c7317ec435330fb96be8d41c61e2009b75cf7bf2fd4",
+      "error_code": null
+    }
+  ],
+  "cross_task_learning": {
+    "status": "blocked",
+    "mode": "real",
+    "error_code": "governance_proposal_missing",
+    "formation_entry": "B25 /v1/b2-5/commands propose",
+    "formation_model_calls": 2,
+    "formation_usage": {
+      "state": "known",
+      "prompt_tokens": 1239,
+      "completion_tokens": 75,
+      "total_tokens": 1314
+    }
+  },
+  "limitations": [
+    "Provider usage 缺失时保持 unknown；本次 ModelProfile 没有价格配置，因此总成本保持 unknown。",
+    "报告只保存 usage 状态与答案哈希，不保存模型正文、凭据或 Provider URL。",
+    "Host 性能复用 B2-4；本次只记录可得 RPC/调用计数，不优化 Host。",
+    "固定样本是小规模工程验收，不构成统计显著性或收益比例证明。",
+    "只对本次发现的精确模型 ID 和本次隔离数据库有效。"
+  ]
+}

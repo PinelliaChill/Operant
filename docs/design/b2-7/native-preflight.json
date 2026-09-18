@@ -1,0 +1,15 @@
+{
+  "phase": "preflight_only",
+  "evidence_head": "5b7833aa0a9c3d7c1cddc44689654d2c1509297c",
+  "core_source": "B2-7 baseline loaded before implementation",
+  "core_pid": 90334,
+  "database": "/private/tmp/operant-b27-native-preflight/core.sqlite3",
+  "shell_source": "B2-6 existing binary; not final B2-7 acceptance",
+  "shell_sha256": "bf325e3d2cf13d5dabba7e80cc2ded28724976c2678ce12811222bcb21f536fd",
+  "entry": "tauri://localhost#/projects",
+  "checks": [
+    "Core connected",
+    "native project query displayed synthetic workspace and binding"
+  ],
+  "mutations": 0
+}

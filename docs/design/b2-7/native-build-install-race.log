@@ -1,0 +1,13 @@
+
+> operant-desktop@0.1.0 tauri
+> tauri build --debug --bundles app
+
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm --prefix ../gui run build`
+
+> operant-gui@2.0.0 build
+> tsc && vite build && node scripts/check-bundle.mjs
+
+node_modules/lucide-react/dist/lucide-react.d.ts(19692,664): error TS1010: '*/' expected.
+beforeBuildCommand `npm --prefix ../gui run build` failed with exit code 2
+       Error beforeBuildCommand `npm --prefix ../gui run build` failed with exit code 2

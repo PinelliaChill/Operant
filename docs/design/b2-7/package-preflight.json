@@ -1,0 +1,9 @@
+{
+  "entry": "installed wheel / isolated Python -I / public Core commands",
+  "wheel_sha256": "1851e35b256167e187be44971225596e1f805a89d1c2c3f5dfa162d4af68be72",
+  "exit_code": 1,
+  "database": "/private/tmp/operant-b27-package-preflight/core.sqlite3",
+  "model_called": false,
+  "completed": false,
+  "failure": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7/.operant/package-venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n  from starlette.testclient import TestClient as TestClient  # noqa\nTraceback (most recent call last):\n  File \"<string>\", line 21, in <module>\n    assert 'site-packages' in str(manager.catalog_root), str(manager.catalog_root)\n                                  ^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'NoneType' object has no attribute 'catalog_root'\n"
+}

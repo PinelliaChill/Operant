@@ -1,0 +1,761 @@
+{
+  "schema": "operant.b2_7.memory-evaluation-report.v1",
+  "mode": "real_provider",
+  "status": "completed",
+  "evidence_head": "002f98cd5b5f8a5df1a9360ad40bd19d0c5b862d",
+  "model_discovery": {
+    "command": "uv run --frozen operant model discover",
+    "selected_model_id": "gpt-5.6-luna",
+    "discovered_count": 67,
+    "secret_ref": "OPERANT_API_KEY",
+    "provider_url": "omitted"
+  },
+  "entrypoints": {
+    "application": "ApplicationService.run_session",
+    "memory": "MemoryManager.begin_memory_run -> PluginHost.invoke -> memory-standard",
+    "legacy_control": "script recent selection -> ReferenceRequest(memory) -> ApplicationService"
+  },
+  "fixture": {
+    "dataset_id": "b2_7_memory_evaluation",
+    "version": 1,
+    "memory_count": 29,
+    "fixed_case_count": 43,
+    "sample_case_ids": [
+      "dev-cn-gateway",
+      "dev-cn-uv",
+      "dev-cn-context",
+      "holdout-gamma-uv"
+    ],
+    "development_count": 3,
+    "holdout_count": 1,
+    "sha256": "0bfd8379215faf2f71ce766f3f910436ec1a6944252b0aa0c4cb97144bb13482",
+    "file_sha256": "bb3780b7188da76527601b3ece48783e66474ea6a13102916cfc1177ec8ba677"
+  },
+  "configuration": {
+    "model_id": "gpt-5.6-luna",
+    "model_profile_id": "model_b27_evaluation",
+    "role_id": "role_b27_evaluation_reader",
+    "memory_scope": "read: [project]; write: []",
+    "budget": {
+      "max_turns": 1,
+      "timeout_seconds": 90,
+      "max_output_tokens": 384,
+      "max_tool_calls": 0
+    },
+    "host_mode": "trusted_in_process",
+    "secret_ref": "OPERANT_API_KEY",
+    "provider_url": "omitted",
+    "permissions": "project scope only; no tools; no writes"
+  },
+  "results": {
+    "no_memory": {
+      "strategy": "no_memory",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 3,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 3,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 1,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 1,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": 1.0,
+        "answer_success_rate": 0.0,
+        "correction_count": 4,
+        "correction_rate": 1.0
+      },
+      "metrics": {
+        "sample_count": 4,
+        "latency_ms": {
+          "p50": 5766.2476,
+          "p95": 9216.8885
+        },
+        "cpu_ms": {
+          "p50": 152.026,
+          "p95": 161.074
+        },
+        "rss_kib_max": 117344.0,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 4,
+        "usage": {
+          "state": "known",
+          "prompt_tokens": 2423,
+          "completion_tokens": 259,
+          "total_tokens": 2682
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 0,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    },
+    "old_recent_entries": {
+      "strategy": "old_recent_entries",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 3,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 15,
+          "missing_id_count": 3,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 1,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 5,
+          "missing_id_count": 1,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": 0.0,
+        "answer_success_rate": null,
+        "correction_count": 0,
+        "correction_rate": null
+      },
+      "metrics": {
+        "sample_count": 4,
+        "latency_ms": {
+          "p50": 300.0899,
+          "p95": 342.1732
+        },
+        "cpu_ms": {
+          "p50": 278.32,
+          "p95": 295.172
+        },
+        "rss_kib_max": 117344.0,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 0,
+        "usage": {
+          "state": "unknown",
+          "reason": "provider_usage_missing"
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 0,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    },
+    "new_fts": {
+      "strategy": "new_fts",
+      "status": "completed",
+      "quality": {
+        "development": {
+          "case_count": 3,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 3,
+          "forbidden_hit_count": 0
+        },
+        "holdout": {
+          "case_count": 1,
+          "macro_precision": 0.0,
+          "macro_recall": 0.0,
+          "macro_relatedness": 0.0,
+          "condition_miss_count": 0,
+          "unrelated_return_count": 0,
+          "missing_id_count": 1,
+          "forbidden_hit_count": 0
+        },
+        "forbidden_hit_count": 0,
+        "task_success_rate": 1.0,
+        "answer_success_rate": 0.75,
+        "correction_count": 1,
+        "correction_rate": 0.25
+      },
+      "metrics": {
+        "sample_count": 4,
+        "latency_ms": {
+          "p50": 7208.409,
+          "p95": 12741.1329
+        },
+        "cpu_ms": {
+          "p50": 746.669,
+          "p95": 1494.139
+        },
+        "rss_kib_max": 117344.0,
+        "first_model_wait_ms": null
+      },
+      "model": {
+        "calls": 4,
+        "usage": {
+          "state": "known",
+          "prompt_tokens": 4624,
+          "completion_tokens": 544,
+          "total_tokens": 5168
+        },
+        "total_cost_usd": null,
+        "cost_state": "unknown"
+      },
+      "host": {
+        "invokes": 4,
+        "rpc_frames": 0,
+        "rpc_bytes": 0,
+        "rpc_state": "available_zero_for_trusted_in_process"
+      }
+    }
+  },
+  "case_results": [
+    {
+      "case_id": "dev-cn-gateway",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "no_memory",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_gateway"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_gateway"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 5766.2476,
+      "cpu_ms": 161.074,
+      "rss_kib": 115440.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 600,
+        "completion_tokens": 53,
+        "total_tokens": 653
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_sha256": "9c82f7b9fa9e4767be4e7706a8e85be97c7146f23a133ef5598b096c4b2f5eb1",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-gateway",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "old_recent_entries",
+      "selected_ids": [
+        "a_recent",
+        "a_current_condition",
+        "a_malicious",
+        "a_frontend",
+        "a_late"
+      ],
+      "expected_ids": [
+        "a_gateway"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_gateway"
+      ],
+      "unrelated_ids": [
+        "a_current_condition",
+        "a_frontend",
+        "a_late",
+        "a_malicious",
+        "a_recent"
+      ],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 300.0899,
+      "cpu_ms": 274.721,
+      "rss_kib": 115632.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 0,
+      "usage": {
+        "state": "unknown",
+        "reason": "no_model_completed_event"
+      },
+      "cost_usd": null,
+      "task_succeeded": false,
+      "answer_success": null,
+      "answer_sha256": null,
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-gateway",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "new_fts",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_gateway"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_gateway"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 7976.6087,
+      "cpu_ms": 1272.373,
+      "rss_kib": 117280.0,
+      "host_invokes": 1,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 1172,
+        "completion_tokens": 136,
+        "total_tokens": 1308,
+        "manifest_cutoff": "28"
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": true,
+      "answer_sha256": "56dc2c1b03c7c2f623f3d9e3ab349a8b7d183e54e16df97cc99a08f33ef8294b",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-uv",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "no_memory",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_uv"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 6343.2894,
+      "cpu_ms": 144.634,
+      "rss_kib": 117344.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 607,
+        "completion_tokens": 66,
+        "total_tokens": 673
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_sha256": "97aa9d26455e7c4ebd76290e1f75ce8f4cf633abd00e5ad83d12679f535eeda5",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-uv",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "old_recent_entries",
+      "selected_ids": [
+        "a_recent",
+        "a_current_condition",
+        "a_malicious",
+        "a_frontend",
+        "a_late"
+      ],
+      "expected_ids": [
+        "a_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_uv"
+      ],
+      "unrelated_ids": [
+        "a_current_condition",
+        "a_frontend",
+        "a_late",
+        "a_malicious",
+        "a_recent"
+      ],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 313.8209,
+      "cpu_ms": 278.32,
+      "rss_kib": 117344.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 0,
+      "usage": {
+        "state": "unknown",
+        "reason": "no_model_completed_event"
+      },
+      "cost_usd": null,
+      "task_succeeded": false,
+      "answer_success": null,
+      "answer_sha256": null,
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-uv",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "new_fts",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_uv"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 12741.1329,
+      "cpu_ms": 1494.139,
+      "rss_kib": 117344.0,
+      "host_invokes": 1,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 1158,
+        "completion_tokens": 130,
+        "total_tokens": 1288,
+        "manifest_cutoff": "28"
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_sha256": "62c3a7b812a9ca224df3eeb2cbc85bf33b3914474b074d912f7174e8720d0376",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-context",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "no_memory",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_context"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_context"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 4924.2494,
+      "cpu_ms": 156.179,
+      "rss_kib": 117344.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 605,
+        "completion_tokens": 73,
+        "total_tokens": 678
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_sha256": "9299c0a6a1bb102ce2c69094ac5f90a649d9ce5af55c38e74be6d77d5c297ddc",
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-context",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "old_recent_entries",
+      "selected_ids": [
+        "a_recent",
+        "a_current_condition",
+        "a_malicious",
+        "a_frontend",
+        "a_late"
+      ],
+      "expected_ids": [
+        "a_context"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_context"
+      ],
+      "unrelated_ids": [
+        "a_current_condition",
+        "a_frontend",
+        "a_late",
+        "a_malicious",
+        "a_recent"
+      ],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 342.1732,
+      "cpu_ms": 295.172,
+      "rss_kib": 117344.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 0,
+      "usage": {
+        "state": "unknown",
+        "reason": "no_model_completed_event"
+      },
+      "cost_usd": null,
+      "task_succeeded": false,
+      "answer_success": null,
+      "answer_sha256": null,
+      "error_code": null
+    },
+    {
+      "case_id": "dev-cn-context",
+      "split": "development",
+      "category": "chinese_rewrite",
+      "strategy": "new_fts",
+      "selected_ids": [],
+      "expected_ids": [
+        "a_context"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "a_context"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 7208.409,
+      "cpu_ms": 746.669,
+      "rss_kib": 117344.0,
+      "host_invokes": 1,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 1154,
+        "completion_tokens": 133,
+        "total_tokens": 1287,
+        "manifest_cutoff": "28"
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": true,
+      "answer_sha256": "272d2f0b510d861b84a2c185d1d45d4390a335b7caa6fa5c09ead31b7a3fa8de",
+      "error_code": null
+    },
+    {
+      "case_id": "holdout-gamma-uv",
+      "split": "holdout",
+      "category": "chinese_rewrite",
+      "strategy": "no_memory",
+      "selected_ids": [],
+      "expected_ids": [
+        "g_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "g_uv"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 9216.8885,
+      "cpu_ms": 152.026,
+      "rss_kib": 117344.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 611,
+        "completion_tokens": 67,
+        "total_tokens": 678
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": false,
+      "answer_sha256": "7118b0b553dd66c8e70fd408c29d7b1f626dc2280dcbaca7484a5c2286fe145f",
+      "error_code": null
+    },
+    {
+      "case_id": "holdout-gamma-uv",
+      "split": "holdout",
+      "category": "chinese_rewrite",
+      "strategy": "old_recent_entries",
+      "selected_ids": [
+        "g_malicious",
+        "g_recent",
+        "g_late",
+        "g_branch",
+        "g_gateway"
+      ],
+      "expected_ids": [
+        "g_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "g_uv"
+      ],
+      "unrelated_ids": [
+        "g_branch",
+        "g_gateway",
+        "g_late",
+        "g_malicious",
+        "g_recent"
+      ],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 293.6314,
+      "cpu_ms": 280.367,
+      "rss_kib": 117344.0,
+      "host_invokes": 0,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 0,
+      "usage": {
+        "state": "unknown",
+        "reason": "no_model_completed_event"
+      },
+      "cost_usd": null,
+      "task_succeeded": false,
+      "answer_success": null,
+      "answer_sha256": null,
+      "error_code": null
+    },
+    {
+      "case_id": "holdout-gamma-uv",
+      "split": "holdout",
+      "category": "chinese_rewrite",
+      "strategy": "new_fts",
+      "selected_ids": [],
+      "expected_ids": [
+        "g_uv"
+      ],
+      "forbidden_hits": [],
+      "missing_ids": [
+        "g_uv"
+      ],
+      "unrelated_ids": [],
+      "precision": 0.0,
+      "recall": 0.0,
+      "relatedness": 0.0,
+      "condition_misses": [],
+      "elapsed_ms": 6714.8887,
+      "cpu_ms": 461.579,
+      "rss_kib": 117344.0,
+      "host_invokes": 1,
+      "rpc_frames": 0,
+      "rpc_bytes": 0,
+      "model_calls": 1,
+      "usage": {
+        "state": "known",
+        "prompt_tokens": 1140,
+        "completion_tokens": 145,
+        "total_tokens": 1285,
+        "manifest_cutoff": "28"
+      },
+      "cost_usd": null,
+      "task_succeeded": true,
+      "answer_success": true,
+      "answer_sha256": "eb16a0521e4aba9cd8b92323916f8bbbf759c5158f77fb8d41c422874e99f45f",
+      "error_code": null
+    }
+  ],
+  "cross_task_learning": {
+    "status": "partial",
+    "mode": "real",
+    "formation_entry": "ApplicationService.run_session",
+    "formation_model_calls": 1,
+    "source_type": "item",
+    "source_content_sha256": "9a4f83dfac845f642986e00583219a194990e4569f2614792ebdc3208c080f41",
+    "formed_record_id": "b27_cross_task_formed",
+    "formed_content_sha256": "d51b15f9117e33b3a3dc1ecbe01c9889099616e6b1e8d15974df7258166e0b38",
+    "freeze": {
+      "dataset_id": "dataset_c7e55ab4d0f348199c02c8a8a7f5845d",
+      "knowledge_cutoff": "29",
+      "record_id": "b27_cross_task_formed",
+      "frozen_before_reuse": true
+    },
+    "reuse": {
+      "entry": "ApplicationService.run_session",
+      "query_class": "cross_task_learning",
+      "selected_ids": [],
+      "formed_record_selected": false,
+      "manifest_cutoff": "29",
+      "cutoff_matches_freeze": true,
+      "task_succeeded": true,
+      "answer_success": true,
+      "error_code": null
+    },
+    "limitations": [
+      "形成内容仅保存脱敏后的摘要哈希；报告不保存模型回答正文。",
+      "模型形成与复用的实际质量需结合 real 报告中的 Answer 指标解释。"
+    ]
+  },
+  "limitations": [
+    "Provider usage 缺失时保持 unknown；本次 ModelProfile 没有价格配置，因此总成本保持 unknown。",
+    "报告只保存 usage 状态与答案哈希，不保存模型正文、凭据或 Provider URL。",
+    "Host 性能复用 B2-4；本次只记录可得 RPC/调用计数，不优化 Host。",
+    "固定样本是小规模工程验收，不构成统计显著性或收益比例证明。",
+    "只对本次发现的精确模型 ID 和本次隔离数据库有效。"
+  ]
+}

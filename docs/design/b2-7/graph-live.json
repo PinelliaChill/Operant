@@ -1,0 +1,44 @@
+{
+  "phase": "b27_final_graph_team",
+  "provider_errors": [],
+  "model_id": "gpt-5.6-luna",
+  "entry": "BoundedGraphExecutor.run -> ApplicationService.run_session",
+  "workspace": "/private/tmp/operant-b27-graph-final",
+  "database": "/private/tmp/operant-b27-graph-final/core.sqlite3",
+  "graph_run_id": "graph_run_a1a9bd5064a64d5e863294b555312f43",
+  "team_run_id": "team_run_07c7683ad82c4a14a50cc330ef2a3976",
+  "output_budget": 4096,
+  "tool_policy": [
+    "read_file"
+  ],
+  "status": "completed",
+  "output_tokens": 260,
+  "members": [
+    {
+      "member_id": "member_0",
+      "agent_id": "agent_e1e93c427e9243fa9f0458f47671ed92",
+      "session_id": "session_93039a913e7f4602abafbf0d33558178",
+      "status": "completed",
+      "contexts": [
+        "context_345adc0ec1fb3bde829f584a55e6f3cff933e53d97b1d397c128f4a023aad26e",
+        "context_9853dcdc42eeae1717954fdba7b52a046a69ffbfa621d5957c61b3b2e62f2841"
+      ],
+      "memory_sent": true,
+      "private_message_sent": true
+    },
+    {
+      "member_id": "member_1",
+      "agent_id": "agent_ef651214ad2c4779a0f05e7662768f54",
+      "session_id": "session_58350f6194e74f8a95f564424bc7e946",
+      "status": "completed",
+      "contexts": [
+        "context_ce5035e1788d6732d8c6639c9b50618f5311a678119cae9cad16a4105c6d645f",
+        "context_e6556803d4c10c502314f8c67418892e1eb936a619ab59f63f3336c950e99925"
+      ],
+      "memory_sent": true,
+      "private_message_sent": false
+    }
+  ],
+  "private_isolation": true,
+  "same_chain": true
+}

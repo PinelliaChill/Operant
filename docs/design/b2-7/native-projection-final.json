@@ -1,0 +1,46 @@
+{
+  "completed": true,
+  "entry": "actual release Tauri WebView / CUA / final product Core",
+  "evidence_head": "6661ef51f35905747f796da2a30d0f05ee8cca55",
+  "product_head": "b932e30b31e707191417aeb8ab00b1265906c9ae",
+  "core_pid": 40094,
+  "database": "/private/tmp/operant-b27-native-projection/core.sqlite3",
+  "project_id": "project_8e7f804aaea143fb8dc1ef63ed989de1",
+  "installation_id": "plugin_installation_c4a2a954b45d4ac8997638bb307064c3",
+  "record_count": 16,
+  "checks": [
+    "native_B26_procedure_propose_with_16_published_records",
+    "native_B25_exact_proposal_review",
+    "UI_shows_completed_receipt",
+    "UI_proposal_pending_to_published_and_head_0_to_1",
+    "journal_exact_affected_ids_preserved"
+  ],
+  "commands": [
+    {
+      "table": "b26_commands",
+      "command_id": "d499c534-33f6-44ed-a2bd-907b8f47f770",
+      "state": "completed",
+      "affected_ids": [
+        "proposal_da6a8b3830bb41348a42f56dfe813d51"
+      ]
+    },
+    {
+      "table": "b25_commands",
+      "command_id": "4c20f361-0ee0-4daa-bf7b-a6b5042f3b80",
+      "state": "completed",
+      "affected_ids": [
+        "proposal_da6a8b3830bb41348a42f56dfe813d51"
+      ]
+    }
+  ],
+  "model_called": false,
+  "source_hashes": {
+    "src/operant/api.py": "e3a453d84d315cfe80c19f333db8b3d5d9e4292de1a128b6548f7c91990480b7",
+    "src/operant/api_b2_5.py": "c0250c69a2e06fd6b7b242b4ed11f7d9d7ddf66242a9df94eff5877f910f632e",
+    "src/operant/api_b2_6.py": "bd30f7fbb83c8243df539d593b334a938a3b838c5c4bb40415a986c744727f10"
+  },
+  "limitations": [
+    "Targeted final product regression; fresh lifecycle and upgrade evidence retained separately.",
+    "Native acceptance observed in CUA accessibility tree; no screenshot artifact saved."
+  ]
+}

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="11" time="33.250" timestamp="2026-09-18T11:40:46.870872+08:00" hostname="BIGOdeMacBook-Pro.local"><testcase classname="tests.test_b27_command_projection" name="test_large_governed_command_and_replay_preserve_shape_and_redaction[b2-5]" time="6.424" /><testcase classname="tests.test_b27_command_projection" name="test_large_governed_command_and_replay_preserve_shape_and_redaction[b2-6]" time="6.699" /><testcase classname="tests.test_b25_api" name="test_public_proposal_exact_review_and_replay" time="1.444" /><testcase classname="tests.test_b25_api" name="test_v17_migration_preserves_frozen_history" time="2.519" /><testcase classname="tests.test_b25_api" name="test_governance_cannot_be_confirmed_through_old_command_and_source_revocation" time="1.493" /><testcase classname="tests.test_b25_api" name="test_history_rejects_cross_project_expansion" time="1.383" /><testcase classname="tests.test_b25_api" name="test_committed_mutation_with_lost_receipt_recovers_as_unknown_without_replay" time="1.921"><failure message="AssertionError: assert 'manual_reconcile_required' == 'command_outcome_unknown'&#10;  &#10;  - command_outcome_unknown&#10;  + manual_reconcile_required">tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-317/test_committed_mutation_with_l0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x108e13490&gt;
+
+    def test_committed_mutation_with_lost_receipt_recovers_as_unknown_without_replay(
+        tmp_path, monkeypatch
+    ):
+        import operant.api_b2_5 as api
+    
+        database = tmp_path / "crash.sqlite3"
+        app = create_app(database)
+        original = api._record_completion
+        with TestClient(app, raise_server_exceptions=False) as client:
+            project = setup_project(client, tmp_path)
+    
+            def crash(*args, **kwargs):
+                raise RuntimeError("injected crash after business commit")
+    
+            monkeypatch.setattr(api, "_record_completion", crash)
+            request = {
+                "action": "propose",
+                "project_id": project,
+                "content": "已提交但回执丢失的合成事实",
+            }
+            headers = {"Idempotency-Key": "unknown-command"}
+            response = client.post("/v1/b2-5/commands", json=request, headers=headers)
+            assert response.status_code == 500
+            state = client.get(f"/v1/b2-5/projects/{project}/governance").json()
+            assert len(state["proposals"]) == 1
+            assert state["unresolved_command_ids"] == ["unknown-command"]
+            monkeypatch.setattr(api, "_record_completion", original)
+        with TestClient(create_app(database)) as client:
+            state = client.get(f"/v1/b2-5/projects/{project}/governance").json()
+            assert len(state["proposals"]) == 1
+            assert state["unresolved_command_ids"] == ["unknown-command"]
+            events = client.get(f"/v1/b2-5/projects/{project}/events").json()["events"]
+            assert len(events) == 1
+            assert events[0]["action"] == "outcome_unknown"
+            assert events[0]["affected_ids"] == ["unknown-command"]
+            response = client.post("/v1/b2-5/commands", json=request, headers=headers)
+            assert response.status_code == 409
+&gt;           assert response.json()["error"]["code"] == "command_outcome_unknown"
+E           AssertionError: assert 'manual_reconcile_required' == 'command_outcome_unknown'
+E             
+E             - command_outcome_unknown
+E             + manual_reconcile_required
+
+tests/test_b25_api.py:206: AssertionError</failure></testcase><testcase classname="tests.test_b26_api" name="test_v18_preserves_prior_checksums_and_protects_unresolved_commands" time="4.020" /><testcase classname="tests.test_b26_api" name="test_experience_projection_and_protocol" time="1.329" /><testcase classname="tests.test_b26_api" name="test_project_projection_excludes_foreign_dataset_ownership" time="1.811" /><testcase classname="tests.test_b26_api" name="test_procedure_candidate_then_skill_validation_and_publish" time="2.567" /></testsuite></testsuites>

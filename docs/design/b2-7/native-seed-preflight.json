@@ -1,0 +1,16 @@
+{
+  "database": "/private/tmp/operant-b27-native-preflight/core.sqlite3",
+  "workspace": "/private/tmp/operant-b27-native-preflight/workspace",
+  "project_id": "project_01713a08803c43f1b7d8be6981245b4f",
+  "skill_id": "skill_ca9b4e84d617c00104c66322e6fcb58a059bbe0e2514a9f0f912d4dee02b40c6",
+  "initial_head": {
+    "skill_id": "skill_ca9b4e84d617c00104c66322e6fcb58a059bbe0e2514a9f0f912d4dee02b40c6",
+    "head_revision": 0,
+    "published_version": null,
+    "state": "draft",
+    "permission_epoch": 0,
+    "updated_at": "2026-09-17T14:43:16.582328Z"
+  },
+  "kind": "synthetic_public_api_seed",
+  "model_called": false
+}

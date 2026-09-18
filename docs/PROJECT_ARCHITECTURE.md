@@ -65,11 +65,12 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
-### B2-7 / MP-6 综合验收与候选交付（验收中）
+### B2-7 / MP-6 综合验收与候选交付（候选范围验收完成）
 
 本批从已合并的 B2-6 `5b7833a` 开始；范围、冻结版本与逐项结果见
-[B2-7 任务包](design/b2-7/task-package.md)。在最终模型、桌面、门禁及独立审查齐备前，
-不把候选构建成功标为 Beta 2.0 工程完成。B2-4 Host 性能限制继续保留。
+[B2-7 任务包](design/b2-7/task-package.md)。联合故障、隔离迁移、真实三组对照、形成后带条件复用、
+原生新库/升级库及最终治理回执、TUI 与安装包验证已完成；独立签审状态以任务包为准。
+这是范围明确的候选交付，不是正式发布。B2-4 Host 性能限制继续保留。
 
 `ApplicationService` 的旧 Memory 写入口统一返回 `schema_upgrade_required`；旧查询通过
 `MemoryManager` 的授权与正式发布头。未接入 Manager 的显式历史版本读取仅保留只读兼容，
@@ -81,6 +82,10 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 角色、Agent、条件、敏感级别和来源依赖。Agent 限制只能使用 Core 当前有效 Session lease 解析出的
 实际 Agent；普通历史查询不能自报身份绕过。无 Manager 的旧历史读取也逐版本授权，不能用当前版本
 的可见性放行更早的私有内容。
+
+B2-5/B2-6 命令保留自己的 Action Gateway 与持久命令日志，避免被通用 M0 回复条目上限
+截断精确对象 ID；首次及重放回执统一经过类型校验、敏感值脱敏和大小上限。未知写结果仍返回
+`command_outcome_unknown` / `manual_reconcile`，不自动重放。
 
 Python wheel 与 sdist 现在包含两个内置插件、生成协议 Schema 与摘要；协议协商和插件目录
 优先读取包内资源，源码开发保留仓库路径。候选使用独立 wheel 安装环境验证，不能用源码目录

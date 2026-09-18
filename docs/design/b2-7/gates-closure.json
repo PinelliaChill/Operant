@@ -1,0 +1,103 @@
+{
+  "schema": "operant.b2-7.gates-closure.v1",
+  "record_identity": "Codex",
+  "worktree_head": "684bea1",
+  "product_freeze": "b932e30",
+  "raw_report": "gates.json",
+  "status": "conditional",
+  "raw_gate": {
+    "evidence_head": "b932e30",
+    "passed": false,
+    "source_unchanged": false,
+    "source_hash_entries_compared": 554,
+    "changed_paths_during_gate": [
+      "scripts/b27_real_evaluation.py"
+    ],
+    "unchanged_scopes": [
+      "src",
+      "tests",
+      "sdk",
+      "plugins",
+      "clients"
+    ],
+    "all_steps_exit_code_zero": true,
+    "steps": [
+      {
+        "name": "ruff-format",
+        "exit_code": 0
+      },
+      {
+        "name": "ruff-check",
+        "exit_code": 0
+      },
+      {
+        "name": "mypy",
+        "exit_code": 0
+      },
+      {
+        "name": "lock",
+        "exit_code": 0
+      },
+      {
+        "name": "pytest",
+        "exit_code": 0
+      },
+      {
+        "name": "diff",
+        "exit_code": 0
+      }
+    ],
+    "pytest": {
+      "junit": "pytest-final.xml",
+      "tests": 1071,
+      "passed": 1070,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 1,
+      "skip_classification": "Docker conditional skip"
+    },
+    "interpretation": "raw passed=false 仅反映评测脚本在门禁运行期间发生源差；不篡改 gates.json。"
+  },
+  "bounded_followup_checks": {
+    "script_checks": [
+      {
+        "path": "scripts/b27_real_evaluation.py",
+        "ruff_format_check_exit_code": 0,
+        "ruff_check_exit_code": 0
+      },
+      {
+        "path": "scripts/b27_learning_retry.py",
+        "ruff_format_check_exit_code": 0,
+        "ruff_check_exit_code": 0
+      }
+    ],
+    "evaluator_tests": {
+      "junit": "pytest-evaluator-final.xml",
+      "tests": 5,
+      "passed": 5,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "test_names": [
+        "test_b27_fixture_is_fixed_and_split",
+        "test_b27_deterministic_comparison_uses_real_host_and_freezes_learning",
+        "test_b27_real_without_provider_is_explicitly_blocked",
+        "test_b27_measurement_reads_actual_pack_when_convenience_refs_are_empty",
+        "test_b27_missing_learning_usage_is_not_counted_as_zero"
+      ]
+    }
+  },
+  "evidence_reuse": {
+    "usable": true,
+    "scope": "六个门禁步骤均有 exit 0；pytest 的 1070 passed 可复用，Docker skip 不算容器验收。",
+    "not_a_final_signed_gate": true,
+    "reason": "门禁运行期间 b27_real_evaluation.py 发生变化，source_unchanged=false；raw passed=false 保留。"
+  },
+  "claims": {
+    "full_current_source_gate_passed": false,
+    "all_recorded_gate_steps_exit_zero": true,
+    "docker_acceptance": false,
+    "raw_report_modified": false,
+    "full_hash_dump_in_this_file": false
+  }
+}

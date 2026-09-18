@@ -1,0 +1,36 @@
+{
+  "entry": "installed wheel / isolated Python -I / public Core commands",
+  "wheel_sha256": "b5ec636b231a9507200ab25cf2527ba4779733f9852f711fdab3864aedb2e0ab",
+  "exit_code": 0,
+  "database": "/private/tmp/operant-b27-package-final-02/core.sqlite3",
+  "model_called": false,
+  "completed": true,
+  "module": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7/.operant/package-venv/lib/python3.13/site-packages/operant/__init__.py",
+  "catalog_root": "/Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-7/.operant/package-venv/lib/python3.13/site-packages/operant/bundled_plugins",
+  "checks": [
+    {
+      "plugin": "memory-standard",
+      "installed": true,
+      "saved_and_recalled": true,
+      "keep_uninstalled": true
+    },
+    {
+      "plugin": "memory-notebook",
+      "installed": true,
+      "saved_and_recalled": true,
+      "keep_uninstalled": true
+    }
+  ],
+  "protocols": [
+    "",
+    "phase23",
+    "phase45",
+    "phase56",
+    "beta",
+    "b2",
+    "b2-3",
+    "b2-4",
+    "b2-5",
+    "b2-6"
+  ]
+}

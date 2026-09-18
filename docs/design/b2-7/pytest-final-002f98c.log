@@ -1,0 +1,294 @@
+.............................FF..F...................................... [  6%]
+........................................................................ [ 13%]
+.................................................FF..................... [ 20%]
+........................................................................ [ 27%]
+.........................................s.............................. [ 33%]
+........................................................................ [ 40%]
+........................................................................ [ 47%]
+........................................................................ [ 54%]
+........................................................................ [ 61%]
+........................................................................ [ 67%]
+........................................................................ [ 74%]
+........................................................................ [ 81%]
+........................................................................ [ 88%]
+........................................................................ [ 94%]
+......................................................                   [100%]
+=================================== FAILURES ===================================
+____ test_b24_direct_report_has_quality_safety_and_real_manager_entrypoint _____
+
+    def test_b24_direct_report_has_quality_safety_and_real_manager_entrypoint() -> None:
+        benchmark = _benchmark_module()
+>       report = benchmark.run_benchmark(modes=("direct",), repetitions=1)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_b24_benchmark.py:46: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/benchmark_b24_memory.py:1411: in run_benchmark
+    old_report = _old_baseline(fixture_path, repetitions)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/benchmark_b24_memory.py:634: in _old_baseline
+    dict[str, Any], old.run_benchmark(fixture_path=fixture_path, repetitions=repetitions)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/benchmark_memory_baseline.py:693: in run_benchmark
+    strategy: _run_strategy(
+scripts/benchmark_memory_baseline.py:506: in _run_strategy
+    timing_pass = _run_strategy_pass(
+scripts/benchmark_memory_baseline.py:476: in _run_strategy_pass
+    measure(
+scripts/benchmark_memory_baseline.py:357: in _measure_timing
+    values = call()
+             ^^^^^^
+scripts/benchmark_memory_baseline.py:477: in <lambda>
+    lambda case=case: _invoke_strategy(
+scripts/benchmark_memory_baseline.py:335: in _invoke_strategy
+    return service.query_memories(
+src/operant/application/service.py:2753: in query_memories
+    return self._memory_manager_for_compat().compat_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.application.service.ApplicationService object at 0x11a5c7570>
+
+    def _memory_manager_for_compat(self) -> MemoryManager:
+        """Return the selected manager used by compatibility reads.
+    
+        The legacy Core memory tables remain available to migration tooling,
+        but application reads must go through the selected plugin so scope,
+        publication, provenance, and revocation checks stay authoritative.
+        """
+    
+        manager = self.memory_manager
+        if manager is None and self.memory_manager_factory is not None:
+            manager = self.memory_manager_factory()
+            self.memory_manager = manager
+        if manager is None:
+>           raise PermissionError("memory plugin is not installed or selected")
+E           PermissionError: memory plugin is not installed or selected
+
+src/operant/application/service.py:2644: PermissionError
+________ test_b24_trusted_stage_timing_exposes_package_validation_cost _________
+
+    def test_b24_trusted_stage_timing_exposes_package_validation_cost() -> None:
+        benchmark = _benchmark_module()
+>       report = benchmark.run_benchmark(modes=("trusted_in_process",), repetitions=1)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_b24_benchmark.py:69: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/benchmark_b24_memory.py:1411: in run_benchmark
+    old_report = _old_baseline(fixture_path, repetitions)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/benchmark_b24_memory.py:634: in _old_baseline
+    dict[str, Any], old.run_benchmark(fixture_path=fixture_path, repetitions=repetitions)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/benchmark_memory_baseline.py:693: in run_benchmark
+    strategy: _run_strategy(
+scripts/benchmark_memory_baseline.py:506: in _run_strategy
+    timing_pass = _run_strategy_pass(
+scripts/benchmark_memory_baseline.py:476: in _run_strategy_pass
+    measure(
+scripts/benchmark_memory_baseline.py:357: in _measure_timing
+    values = call()
+             ^^^^^^
+scripts/benchmark_memory_baseline.py:477: in <lambda>
+    lambda case=case: _invoke_strategy(
+scripts/benchmark_memory_baseline.py:335: in _invoke_strategy
+    return service.query_memories(
+src/operant/application/service.py:2753: in query_memories
+    return self._memory_manager_for_compat().compat_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.application.service.ApplicationService object at 0x11b0c8f30>
+
+    def _memory_manager_for_compat(self) -> MemoryManager:
+        """Return the selected manager used by compatibility reads.
+    
+        The legacy Core memory tables remain available to migration tooling,
+        but application reads must go through the selected plugin so scope,
+        publication, provenance, and revocation checks stay authoritative.
+        """
+    
+        manager = self.memory_manager
+        if manager is None and self.memory_manager_factory is not None:
+            manager = self.memory_manager_factory()
+            self.memory_manager = manager
+        if manager is None:
+>           raise PermissionError("memory plugin is not installed or selected")
+E           PermissionError: memory plugin is not installed or selected
+
+src/operant/application/service.py:2644: PermissionError
+_____________________ test_b24_report_is_json_serializable _____________________
+
+    def test_b24_report_is_json_serializable() -> None:
+        benchmark = _benchmark_module()
+>       report = benchmark.run_benchmark(modes=("direct",), repetitions=1)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_b24_benchmark.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/benchmark_b24_memory.py:1411: in run_benchmark
+    old_report = _old_baseline(fixture_path, repetitions)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/benchmark_b24_memory.py:634: in _old_baseline
+    dict[str, Any], old.run_benchmark(fixture_path=fixture_path, repetitions=repetitions)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/benchmark_memory_baseline.py:693: in run_benchmark
+    strategy: _run_strategy(
+scripts/benchmark_memory_baseline.py:506: in _run_strategy
+    timing_pass = _run_strategy_pass(
+scripts/benchmark_memory_baseline.py:476: in _run_strategy_pass
+    measure(
+scripts/benchmark_memory_baseline.py:357: in _measure_timing
+    values = call()
+             ^^^^^^
+scripts/benchmark_memory_baseline.py:477: in <lambda>
+    lambda case=case: _invoke_strategy(
+scripts/benchmark_memory_baseline.py:335: in _invoke_strategy
+    return service.query_memories(
+src/operant/application/service.py:2753: in query_memories
+    return self._memory_manager_for_compat().compat_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.application.service.ApplicationService object at 0x10d8748d0>
+
+    def _memory_manager_for_compat(self) -> MemoryManager:
+        """Return the selected manager used by compatibility reads.
+    
+        The legacy Core memory tables remain available to migration tooling,
+        but application reads must go through the selected plugin so scope,
+        publication, provenance, and revocation checks stay authoritative.
+        """
+    
+        manager = self.memory_manager
+        if manager is None and self.memory_manager_factory is not None:
+            manager = self.memory_manager_factory()
+            self.memory_manager = manager
+        if manager is None:
+>           raise PermissionError("memory plugin is not installed or selected")
+E           PermissionError: memory plugin is not installed or selected
+
+src/operant/application/service.py:2644: PermissionError
+___________ test_b2_1_benchmark_uses_isolated_old_paths_and_no_model ___________
+
+tmp_path = PosixPath('/private/var/folders/kz/f81xd4cd5c1g683d6frwhwt40000gn/T/pytest-of-bigo/pytest-280/test_b2_1_benchmark_uses_isola0')
+
+    def test_b2_1_benchmark_uses_isolated_old_paths_and_no_model(tmp_path: Path) -> None:
+>       report = run_benchmark(fixture_path=DEFAULT_FIXTURE, repetitions=2)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_b2_1_benchmark.py:71: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/benchmark_memory_baseline.py:693: in run_benchmark
+    strategy: _run_strategy(
+scripts/benchmark_memory_baseline.py:506: in _run_strategy
+    timing_pass = _run_strategy_pass(
+scripts/benchmark_memory_baseline.py:476: in _run_strategy_pass
+    measure(
+scripts/benchmark_memory_baseline.py:357: in _measure_timing
+    values = call()
+             ^^^^^^
+scripts/benchmark_memory_baseline.py:477: in <lambda>
+    lambda case=case: _invoke_strategy(
+scripts/benchmark_memory_baseline.py:335: in _invoke_strategy
+    return service.query_memories(
+src/operant/application/service.py:2753: in query_memories
+    return self._memory_manager_for_compat().compat_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.application.service.ApplicationService object at 0x11b531f20>
+
+    def _memory_manager_for_compat(self) -> MemoryManager:
+        """Return the selected manager used by compatibility reads.
+    
+        The legacy Core memory tables remain available to migration tooling,
+        but application reads must go through the selected plugin so scope,
+        publication, provenance, and revocation checks stay authoritative.
+        """
+    
+        manager = self.memory_manager
+        if manager is None and self.memory_manager_factory is not None:
+            manager = self.memory_manager_factory()
+            self.memory_manager = manager
+        if manager is None:
+>           raise PermissionError("memory plugin is not installed or selected")
+E           PermissionError: memory plugin is not installed or selected
+
+src/operant/application/service.py:2644: PermissionError
+__________ test_b2_1_hard_gate_and_performance_tolerances_are_frozen ___________
+
+    def test_b2_1_hard_gate_and_performance_tolerances_are_frozen() -> None:
+        assert TASK_PERFORMANCE_GATES["warm_wall_p95_max_regression_ratio"] == 1.25
+        assert TASK_PERFORMANCE_GATES["first_query_wall_max_regression_ratio"] == 1.50
+        assert TASK_PERFORMANCE_GATES["warm_cpu_p95_max_regression_ratio"] == 1.25
+        assert TASK_PERFORMANCE_GATES["warm_peak_alloc_p95_max_regression_ratio"] == 1.50
+        assert (
+            HOST_PERFORMANCE_GATES["future_host_in_process"]["warm_wall_p95_max_regression_ratio"]
+            == 1.25
+        )
+        assert (
+            HOST_PERFORMANCE_GATES["future_host_in_process"]["bootstrap_wall_max_regression_ratio"]
+            == 1.50
+        )
+        assert (
+            HOST_PERFORMANCE_GATES["future_host_isolated"]["bootstrap_wall_max_regression_ratio"]
+            == 3.00
+        )
+    
+>       report = run_benchmark(repetitions=1)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_b2_1_benchmark.py:157: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/benchmark_memory_baseline.py:693: in run_benchmark
+    strategy: _run_strategy(
+scripts/benchmark_memory_baseline.py:506: in _run_strategy
+    timing_pass = _run_strategy_pass(
+scripts/benchmark_memory_baseline.py:476: in _run_strategy_pass
+    measure(
+scripts/benchmark_memory_baseline.py:357: in _measure_timing
+    values = call()
+             ^^^^^^
+scripts/benchmark_memory_baseline.py:477: in <lambda>
+    lambda case=case: _invoke_strategy(
+scripts/benchmark_memory_baseline.py:335: in _invoke_strategy
+    return service.query_memories(
+src/operant/application/service.py:2753: in query_memories
+    return self._memory_manager_for_compat().compat_query(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <operant.application.service.ApplicationService object at 0x11b533ac0>
+
+    def _memory_manager_for_compat(self) -> MemoryManager:
+        """Return the selected manager used by compatibility reads.
+    
+        The legacy Core memory tables remain available to migration tooling,
+        but application reads must go through the selected plugin so scope,
+        publication, provenance, and revocation checks stay authoritative.
+        """
+    
+        manager = self.memory_manager
+        if manager is None and self.memory_manager_factory is not None:
+            manager = self.memory_manager_factory()
+            self.memory_manager = manager
+        if manager is None:
+>           raise PermissionError("memory plugin is not installed or selected")
+E           PermissionError: memory plugin is not installed or selected
+
+src/operant/application/service.py:2644: PermissionError
+=============================== warnings summary ===============================
+../b2-6/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1
+  /Users/bigo/agentworkspace/codexworkspace/operant/.worktrees/b2-6/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_b24_benchmark.py::test_b24_direct_report_has_quality_safety_and_real_manager_entrypoint
+FAILED tests/test_b24_benchmark.py::test_b24_trusted_stage_timing_exposes_package_validation_cost
+FAILED tests/test_b24_benchmark.py::test_b24_report_is_json_serializable - Pe...
+FAILED tests/test_b2_1_benchmark.py::test_b2_1_benchmark_uses_isolated_old_paths_and_no_model
+FAILED tests/test_b2_1_benchmark.py::test_b2_1_hard_gate_and_performance_tolerances_are_frozen
+5 failed, 1056 passed, 1 skipped, 1 warning in 836.52s (0:13:56)

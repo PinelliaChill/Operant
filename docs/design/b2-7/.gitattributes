@@ -1,0 +1,3 @@
+# Preserve raw tool output, including whitespace emitted by test/build runners.
+*.log -whitespace
+*.xml -whitespace
