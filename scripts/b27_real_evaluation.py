@@ -1499,8 +1499,9 @@ async def _cross_task_learning(harness: EvaluationHarness, *, real: bool) -> dic
                 "formation_usage": formation_usage,
             }
         proposal_id = proposed.json().get("affected_ids", [None])[0]
-        governance_state = client.get(f"/v1/b2-5/projects/{project.project_id}/governance")
-        entries = governance_state.json().get("proposals", [])
+        # The Command returns the exact committed projection. Use that response
+        # to prepare the review instead of issuing a second, unrelated read.
+        entries = proposed.json().get("state", {}).get("proposals", [])
         entry = next(
             (
                 value
@@ -1515,6 +1516,10 @@ async def _cross_task_learning(harness: EvaluationHarness, *, real: bool) -> dic
                 "status": "blocked",
                 "mode": "real",
                 "error_code": "governance_proposal_missing",
+                "proposal_id": proposal_id,
+                "returned_proposal_ids": [
+                    value.get("proposal", {}).get("proposal_id") for value in entries
+                ],
                 "formation_entry": "B25 /v1/b2-5/commands propose",
                 "formation_model_calls": formation_model_calls,
                 "formation_usage": formation_usage,
@@ -1739,7 +1744,7 @@ async def _run_real(
     )
     results: list[CaseResult] = []
     try:
-        cases = _select_real_cases(fixture, sample_case_count)
+        cases = () if sample_case_count == 0 else _select_real_cases(fixture, sample_case_count)
         for case in cases:
             for strategy in STRATEGIES:
                 results.append(await _run_service_case(harness, case, strategy))
@@ -1761,7 +1766,8 @@ async def _run_real(
             "mode": "real_provider",
             "status": (
                 "completed"
-                if not any(item.error_code for item in results) and learning_complete
+                if not any(item.error_code or item.forbidden_hits for item in results)
+                and learning_complete
                 else "partial"
             ),
             "evidence_head": _safe_git_head(),
@@ -2012,6 +2018,7 @@ def write_report(path: Path, report: Mapping[str, Any]) -> None:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="B2-7 MP-6.2 memory evaluation")
     parser.add_argument("--real", action="store_true", help="run discovered-provider comparison")
+    parser.add_argument("--learning-only", action="store_true", help="rerun only real learning")
     parser.add_argument(
         "--preflight", action="store_true", help="run one controlled read_file preflight"
     )
@@ -2038,13 +2045,13 @@ async def _main(args: argparse.Namespace) -> dict[str, Any]:
             host_mode=args.host_mode,
         )
         output = args.output or ROOT / "docs/design/b2-7/evaluation-preflight.json"
-    elif args.real:
+    elif args.real or args.learning_only:
         report = await run_real_evaluation(
             fixture_path=args.fixture,
             run_root=args.run_root,
             requested_model_id=args.model_id,
             secret_ref=args.secret_ref,
-            sample_case_count=args.sample_case_count,
+            sample_case_count=0 if args.learning_only else args.sample_case_count,
             host_mode=args.host_mode,
             include_learning=not args.skip_learning,
         )
