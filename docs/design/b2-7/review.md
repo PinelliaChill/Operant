@@ -140,3 +140,29 @@ Projection 回执修复已由上文记录的独立定向回归覆盖，本次没
 
 本签审结论为：B2-7/MP-6 在已授权范围内可进入普通工作分支推送和可审阅 PR，属于带限制的候选交付；不授权 merge、deploy、正式发布或真实用户库迁移。本轮候选 ZIP 已按使用说明变更重新核对为
 `2a92aa27d2a8f978ddefe975eaae7baf396dd6dc34a0126dbe46130c0b27b0ca`（3,785,659 bytes）。交付摘要必须继续标明：原始门禁是 conditional、Docker 未验、候选未签名/未公证、Remote/生产 Target/Host 性能和外部擦除未验、模型 cost 与 first-token 未测，以及补充复用问题采集时的 dirty-ref 事实。
+
+## CI 可移植性修复增量复核（待提交工作树 `da01a12bca269aea2d8b80b68732979ad9986649`）
+
+记录身份：Codex 独立 Reviewer；适用对象：B2-7 执行者与 root。本节只复核
+`tests/test_b27_fault_migration.py`、`tests/test_beta_auth.py`、`tests/test_cli_week3.py` 和
+`tests/test_phase0_reliability.py` 的未提交差异，不改产品、候选包或协议。`ci-portability.json`
+记录这四个文件的源摘要，产品路径相对 `da01a12` 无差异；定向 XML/log 显示相关 27 项通过，Ruff
+格式、Ruff 检查和 diff 检查均通过。本次 Reviewer 未重跑测试。
+
+四项差异均为 CI 时序/输出可移植性修复，没有发现安全、取消语义或断言覆盖的弱化：
+
+- `test_b27_isolated_worker_crash_requires_explicit_respawn` 先确认首个 `Process` 存在，再以 5 秒上限等待子进程被回收，随后仍要求首进程有非空 `returncode`、第二次调用返回 `ready`、进程对象不同且新进程仍运行。等待只同步 asyncio 的 reap 状态，不触发业务重放或绕过 Host/lease；原始崩溃、失败和显式新进程断言都保留。
+- `test_id_token_rejects_invalid_time_claims` 把 `nbf`/`iat` 的 `now + 600` 从收集期移到每个用例执行时计算，保留 `exp=inf`、外部 `azp` 和每例 `401` 断言。产品 `auth.py` 仍按当前时间、60 秒 skew、有限数值和客户端 `azp` 校验；没有放宽鉴权。
+- `test_legacy_memory_commands_require_formal_management` 只对 Rich 输出调用 `unstyle`，仍匹配完整 `allow-conservative-activation` 选项名，并保留旧命令的退出码和正式管理升级拒绝断言；没有改 CLI 行为。
+- `test_cross_instance_workflow_cancel_stops_all_parallel_explorers` 移除本用例的 1 秒 TTL，使用默认 15 秒活跃租约并保留 0.01 秒 heartbeat，以避免第二实例同步初始化造成合法过期。它仍断言工作流为 `RUNNING`、取消幂等、消费者结束、最终 `CANCELLED`、活动租约为 0、Coder 未启动且两个 Explorer 已取消。相邻的租约过期、未知写入和其他取消用例仍保留短 TTL 覆盖，因此没有把租约过期安全边界改成通过。
+
+工作树四个文件 hash（提交后应与 `ci-portability.json` 和新提交内容一致）为：
+
+```text
+tests/test_b27_fault_migration.py  70ece7c89c8149211a8226dd694f0d1d9e28d8ecb682592cb59cf30addd85f65
+tests/test_beta_auth.py            51995834d4e0b985511315d78d2c010fb68d21b8aa7d5c80f1468cd69b56fead
+tests/test_cli_week3.py            78159227a138c03c6bb378bbbcb3841fa23467f67977c0d6ead9f4d3ae7b23e0
+tests/test_phase0_reliability.py   b226c81100ca6a8cdc4f141b79fa9c267c5b622aca0d26876cdf290a0a2ed6df
+```
+
+增量结论：未发现 P1/P2、实际产品 bug 或安全/取消断言弱化；这是可接受的测试-only CI 修复。提交后需以精确新 HEAD 回读上述四个 hash，并等待该 HEAD 的远端必需 CI 通过；产品候选 hash、模型、桌面和其他真实证据可按产品路径未变复用，不因本修复重建或重跑。

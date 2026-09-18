@@ -451,15 +451,19 @@ async def test_b27_isolated_worker_crash_requires_explicit_respawn(
             await host.lifecycle(lease, operation="health")
         assert error.value.code in {"package_unavailable", "cancelled"}
         first_process = host._engines[installation.installation_id].engine.process  # noqa: SLF001
+        assert first_process is not None
+        # The worker exits asynchronously after closing its pipes.  Wait for
+        # the child to be reaped before retrying so the engine can observe the
+        # dead process and explicitly respawn it on the second invocation.
+        await asyncio.wait_for(first_process.wait(), timeout=5)
         assert marker.read_text(encoding="utf-8") == "crashed"
 
         result = await host.lifecycle(lease, operation="health")
         second_process = host._engines[installation.installation_id].engine.process  # noqa: SLF001
         assert result.state == "ready"
         assert second_process is not None
-        if first_process is not None:
-            assert first_process.returncode is not None
-            assert second_process is not first_process
+        assert first_process.returncode is not None
+        assert second_process is not first_process
         assert second_process.returncode is None
     finally:
         await host.close()

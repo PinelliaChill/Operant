@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from click import unstyle
 from typer.testing import CliRunner
 
 import operant.cli as cli
@@ -205,7 +206,8 @@ def test_legacy_memory_commands_require_formal_management(tmp_path: Path, monkey
         ],
     )
     assert removed_option.exit_code == 2
-    assert "allow-conservative-activation" in removed_option.output
+    # Rich may insert ANSI styles within the option name on CI.
+    assert "allow-conservative-activation" in unstyle(removed_option.output)
 
     confirmed = runner.invoke(
         cli.app,

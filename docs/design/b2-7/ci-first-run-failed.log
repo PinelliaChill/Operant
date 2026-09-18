@@ -1,0 +1,664 @@
+quality (3.12)	Python检查与测试	﻿2026-09-18T05:06:34.2780933Z ##[group]Run uv run --no-sync ruff format --check .
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2781374Z ^[[36;1muv run --no-sync ruff format --check .^[[0m
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2781706Z ^[[36;1muv run --no-sync ruff check .^[[0m
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2781995Z ^[[36;1muv run --no-sync mypy src^[[0m
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2782309Z ^[[36;1muv lock --check --offline --python "3.12"^[[0m
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2782633Z ^[[36;1muv run --no-sync pytest^[[0m
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2808387Z shell: /usr/bin/bash -e {0}
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2808692Z env:
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2808998Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.14/x64
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2809462Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.14/x64/lib/pkgconfig
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2809905Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.14/x64
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2810333Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.14/x64
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2810742Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.14/x64
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2811162Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.14/x64/lib
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2811622Z   UV_CACHE_DIR: /home/runner/work/_temp/setup-uv-cache
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.2811950Z ##[endgroup]
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.3398605Z warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13.3`)
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.4548102Z 394 files already formatted
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.4685505Z warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13.3`)
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.5763820Z All checks passed!
+quality (3.12)	Python检查与测试	2026-09-18T05:06:34.5914215Z warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13.3`)
+quality (3.12)	Python检查与测试	2026-09-18T05:06:45.0740388Z Success: no issues found in 135 source files
+quality (3.12)	Python检查与测试	2026-09-18T05:06:45.1050976Z Resolved 42 packages in 0.62ms
+quality (3.12)	Python检查与测试	2026-09-18T05:06:45.1274744Z warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13.3`)
+quality (3.12)	Python检查与测试	2026-09-18T05:09:27.6705671Z .....................................s.s................................ [  6%]
+quality (3.12)	Python检查与测试	2026-09-18T05:11:22.5056436Z ........................................................................ [ 13%]
+quality (3.12)	Python检查与测试	2026-09-18T05:15:08.7476429Z ........................................................................ [ 20%]
+quality (3.12)	Python检查与测试	2026-09-18T05:16:35.3323353Z .................................F...................................... [ 26%]
+quality (3.12)	Python检查与测试	2026-09-18T05:18:52.6810115Z .........F........................................s..................... [ 33%]
+quality (3.12)	Python检查与测试	2026-09-18T05:20:04.8581380Z ........................................................................ [ 40%]
+quality (3.12)	Python检查与测试	2026-09-18T05:21:54.1265550Z ........................................................................ [ 47%]
+quality (3.12)	Python检查与测试	2026-09-18T05:24:16.7133079Z ........................................................................ [ 53%]
+quality (3.12)	Python检查与测试	2026-09-18T05:26:51.9387660Z ........................................................................ [ 60%]
+quality (3.12)	Python检查与测试	2026-09-18T05:27:16.6802312Z ........................................................................ [ 67%]
+quality (3.12)	Python检查与测试	2026-09-18T05:28:51.5836710Z ........................................................................ [ 73%]
+quality (3.12)	Python检查与测试	2026-09-18T05:30:04.0312948Z ........................................................................ [ 80%]
+quality (3.12)	Python检查与测试	2026-09-18T05:30:23.4861111Z ........................................................................ [ 87%]
+quality (3.12)	Python检查与测试	2026-09-18T05:30:38.1001711Z ........................................................................ [ 94%]
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4729096Z ...............................................................          [100%]
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4730401Z =================================== FAILURES ===================================
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4731119Z ___________ test_id_token_rejects_invalid_time_claims[extra_claims1] ___________
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4731755Z 
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4732175Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_id_token_rejects_invalid_1')
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4733503Z extra_claims = {'iat': 1789708611}
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4733708Z 
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4735253Z     @pytest.mark.parametrize(
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4735672Z         "extra_claims",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4736053Z         [
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4736434Z             {"nbf": int(time.time()) + 600},
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4736938Z             {"iat": int(time.time()) + 600},
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4737625Z             {"exp": float("inf")},
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4738082Z             {"azp": "foreign-client"},
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4738546Z         ],
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4738919Z     )
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4739568Z     def test_id_token_rejects_invalid_time_claims(tmp_path: Path, extra_claims: dict[str, Any]) -> None:
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4740463Z         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4741196Z         state: dict[str, Any] = {"extra_claims": extra_claims}
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4741854Z         app = create_app(
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4742349Z             tmp_path / "operant.sqlite3",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4742859Z             oauth_config=_config(tmp_path),
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4743496Z             oauth_http_client=httpx.AsyncClient(transport=_oauth_transport(private_key, state)),
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4744069Z         )
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4744682Z         with TestClient(app, base_url="https://operant.example") as client:
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4745246Z             login = client.get("/internal/auth/login", follow_redirects=False)
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4745760Z             query = parse_qs(urlsplit(login.headers["location"]).query)
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4746184Z             state["nonce"] = query["nonce"][0]
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4746586Z             callback = client.get(
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4746942Z                 "/internal/auth/callback",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4747714Z                 params={"state": query["state"][0], "code": "code"},
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4748117Z             )
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4748484Z >           assert callback.status_code == 401
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4748846Z E           assert 200 == 401
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4749282Z E            +  where 200 = <Response [200 OK]>.status_code
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4749572Z 
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4749732Z tests/test_beta_auth.py:370: AssertionError
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4750222Z ____________ test_legacy_memory_commands_require_formal_management _____________
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4750523Z 
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4750817Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_legacy_memory_commands_re0')
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4751409Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fb01ad59910>
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4751754Z 
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4752101Z     def test_legacy_memory_commands_require_formal_management(tmp_path: Path, monkeypatch) -> None:
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4752617Z         service = make_service(tmp_path)
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4753038Z         session = service.create_session("role_memory_cli")
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4753518Z         monkeypatch.setattr(cli, "_service", lambda: service)
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4753917Z     
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4754224Z         added = runner.invoke(
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4754531Z             cli.app,
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4754904Z             [
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4755186Z                 "memory",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4755499Z                 "add",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4755820Z                 "--kind",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4756156Z                 "project",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4756476Z                 "--content",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4756824Z                 "Run pytest tests/test_calculator.py.",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4757473Z                 "--session-id",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4757854Z                 session.id,
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4758178Z                 "--project-scope",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4758521Z                 "calculator",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4758847Z                 "--source-task",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4759232Z                 "Task A",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4759533Z                 "--confidence",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4760188Z                 "0.96",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4760490Z             ],
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4760763Z         )
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4761128Z         assert added.exit_code == 2
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4761487Z         assert "Proposal/CAS" in added.output
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4761852Z     
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4762145Z         searched = runner.invoke(
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4762540Z             cli.app,
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4762952Z             [
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4763229Z                 "memory",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4763571Z                 "search",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4763866Z                 "pytest",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4764302Z                 "--session-id",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4764651Z                 session.id,
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4765002Z                 "--project-scope",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4765351Z                 "calculator",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4765652Z             ],
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4765932Z         )
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4766284Z         assert searched.exit_code == 2
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4766913Z         assert "插件未安装或未选择" in searched.output
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4767519Z     
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4767816Z         removed_option = runner.invoke(
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4768453Z             cli.app,
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4768820Z             [
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4769164Z                 "memory",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4769571Z                 "add",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4770037Z                 "--kind",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4770460Z                 "project",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4770867Z                 "--content",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4771299Z                 "legacy option",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4771677Z                 "--session-id",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4772017Z                 session.id,
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4772361Z                 "--allow-conservative-activation",
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4772737Z             ],
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4773030Z         )
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4773352Z         assert removed_option.exit_code == 2
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4773833Z >       assert "allow-conservative-activation" in removed_option.output
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4775653Z E       assert 'allow-conservative-activation' in "\x1b[1;33mUsage: \x1b[0m\x1b[1mroot memory add [OPTIONS]\x1b[0m\n\x1b[2mTry \x1b[0m\x1b[2;34m'root memory add \x1b[0m...   \x1b[31m│\x1b[0m\n\x1b[31m╰──────────────────────────────────────────────────────────────────────────────╯\x1b[0m\n"
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4778308Z E        +  where "\x1b[1;33mUsage: \x1b[0m\x1b[1mroot memory add [OPTIONS]\x1b[0m\n\x1b[2mTry \x1b[0m\x1b[2;34m'root memory add \x1b[0m...   \x1b[31m│\x1b[0m\n\x1b[31m╰──────────────────────────────────────────────────────────────────────────────╯\x1b[0m\n" = <Result SystemExit(2)>.output
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4779543Z 
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4779750Z tests/test_cli_week3.py:208: AssertionError
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4780502Z =============================== warnings summary ===============================
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4781150Z .venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4782106Z   /home/runner/work/Operant/Operant/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4783111Z     from starlette.testclient import TestClient as TestClient  # noqa
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4783402Z 
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4783683Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4784225Z =========================== short test summary info ============================
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4784902Z FAILED tests/test_beta_auth.py::test_id_token_rejects_invalid_time_claims[extra_claims1] - assert 200 == 401
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4785524Z  +  where 200 = <Response [200 OK]>.status_code
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4787399Z FAILED tests/test_cli_week3.py::test_legacy_memory_commands_require_formal_management - assert 'allow-conservative-activation' in "\x1b[1;33mUsage: \x1b[0m\x1b[1mroot memory add [OPTIONS]\x1b[0m\n\x1b[2mTry \x1b[0m\x1b[2;34m'root memory add \x1b[0m...   \x1b[31m│\x1b[0m\n\x1b[31m╰──────────────────────────────────────────────────────────────────────────────╯\x1b[0m\n"
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4789707Z  +  where "\x1b[1;33mUsage: \x1b[0m\x1b[1mroot memory add [OPTIONS]\x1b[0m\n\x1b[2mTry \x1b[0m\x1b[2;34m'root memory add \x1b[0m...   \x1b[31m│\x1b[0m\n\x1b[31m╰──────────────────────────────────────────────────────────────────────────────╯\x1b[0m\n" = <Result SystemExit(2)>.output
+quality (3.12)	Python检查与测试	2026-09-18T05:31:57.4790635Z 2 failed, 1066 passed, 3 skipped, 1 warning in 1511.01s (0:25:11)
+quality (3.12)	Python检查与测试	2026-09-18T05:31:58.6305454Z ##[error]Process completed with exit code 1.
+quality (3.10)	Python检查与测试	﻿2026-09-18T05:06:35.8016655Z ##[group]Run uv run --no-sync ruff format --check .
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8017101Z ^[[36;1muv run --no-sync ruff format --check .^[[0m
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8017423Z ^[[36;1muv run --no-sync ruff check .^[[0m
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8017702Z ^[[36;1muv run --no-sync mypy src^[[0m
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8018000Z ^[[36;1muv lock --check --offline --python "3.10"^[[0m
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8018311Z ^[[36;1muv run --no-sync pytest^[[0m
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8054616Z shell: /usr/bin/bash -e {0}
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8054869Z env:
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8055138Z   pythonLocation: /opt/hostedtoolcache/Python/3.10.21/x64
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8055875Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.10.21/x64/lib/pkgconfig
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8056344Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.10.21/x64
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8056752Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.10.21/x64
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8057142Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.10.21/x64
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8057541Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.10.21/x64/lib
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8057945Z   UV_CACHE_DIR: /home/runner/work/_temp/setup-uv-cache
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8058246Z ##[endgroup]
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.8240596Z warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13.3`)
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.9306404Z 394 files already formatted
+quality (3.10)	Python检查与测试	2026-09-18T05:06:35.9441807Z warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13.3`)
+quality (3.10)	Python检查与测试	2026-09-18T05:06:36.0555206Z All checks passed!
+quality (3.10)	Python检查与测试	2026-09-18T05:06:36.0682844Z warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13.3`)
+quality (3.10)	Python检查与测试	2026-09-18T05:06:47.5042189Z Success: no issues found in 135 source files
+quality (3.10)	Python检查与测试	2026-09-18T05:06:47.5446454Z Resolved 42 packages in 0.55ms
+quality (3.10)	Python检查与测试	2026-09-18T05:06:47.5620213Z warning: Using incompatible environment (`.venv`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13.3`)
+quality (3.10)	Python检查与测试	2026-09-18T05:09:23.9263367Z .....................................s.s................................ [  6%]
+quality (3.10)	Python检查与测试	2026-09-18T05:11:15.4675945Z ........................................................................ [ 13%]
+quality (3.10)	Python检查与测试	2026-09-18T05:14:46.0540544Z ......................................................F................. [ 20%]
+quality (3.10)	Python检查与测试	2026-09-18T05:16:14.1071536Z ........................................................................ [ 26%]
+quality (3.10)	Python检查与测试	2026-09-18T05:18:37.3909257Z .........F........................................s..................... [ 33%]
+quality (3.10)	Python检查与测试	2026-09-18T05:19:53.9284317Z ........................................................................ [ 40%]
+quality (3.10)	Python检查与测试	2026-09-18T05:21:47.4591614Z ................F....................................................... [ 47%]
+quality (3.10)	Python检查与测试	2026-09-18T05:24:12.5577158Z ........................................................................ [ 53%]
+quality (3.10)	Python检查与测试	2026-09-18T05:26:54.1568664Z ........................................................................ [ 60%]
+quality (3.10)	Python检查与测试	2026-09-18T05:27:20.3779972Z ........................................................................ [ 67%]
+quality (3.10)	Python检查与测试	2026-09-18T05:29:05.6720199Z ........................................................................ [ 73%]
+quality (3.10)	Python检查与测试	2026-09-18T05:30:25.4217729Z ........................................................................ [ 80%]
+quality (3.10)	Python检查与测试	2026-09-18T05:30:45.3391709Z ........................................................................ [ 87%]
+quality (3.10)	Python检查与测试	2026-09-18T05:31:00.3209254Z ........................................................................ [ 94%]
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7318124Z ...............................................................          [100%]
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7319191Z =================================== FAILURES ===================================
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7320644Z ___________ test_b27_isolated_worker_crash_requires_explicit_respawn ___________
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7321336Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7321749Z self = <operant.plugins.host.PluginHost object at 0x7fcb5210f910>
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7324131Z lease = RunLease(lease_id='plugin_lease_428926c542214b2bb283a5c88a765b18', run_id='crash-run', binding_id='plugin_binding_d848...fencing=1, expires_at=datetime.datetime(2026, 9, 18, 5, 19, 17, 793970, tzinfo=datetime.timezone.utc), status='active')
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7325258Z operation = 'lifecycle'
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7326592Z request = LifecycleRequest(context=RpcContext(sdk_version='operant-memory-sdk.v1', request_id='plugin_request_1534dc2c690b44a7b8...db315c215d9e3b69c179e', binding_epoch=1, permission_epoch=0, lease_fencing=1), operation='health', checkpoint_ref=None)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7327646Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7327957Z     async def invoke(self, lease: RunLease, operation: str, request: BaseModel) -> BaseModel:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7328602Z         """Invoke one typed engine operation through the active Host boundary."""
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7329036Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7329250Z         if self._closed:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7329630Z             raise PluginError("package_unavailable", "PluginHost is closed")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7330111Z         request_type = ENGINE_REQUEST_TYPES.get(operation)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7330472Z         if request_type is None:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7330854Z             raise PluginProtocolError("unsupported plugin operation")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7331279Z         if not isinstance(request, request_type):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7331597Z             try:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7331884Z                 request = request_type.model_validate(request)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7332245Z             except Exception as exc:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7332713Z                 raise PluginProtocolError("plugin request failed schema validation") from exc
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7333234Z         context = self._request_context(request)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7333618Z         self._assert_active(lease, context)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7333972Z         slot = self._engines.get(lease.installation_id)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7334309Z         if slot is None:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7334699Z             raise PackageUnavailableError("plugin engine has not been started")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7335132Z         if operation != "lifecycle":
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7335570Z             manifest_capability = operation
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7335983Z             manifest = self.registry.get_installation(lease.installation_id).manifest
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7336451Z             if manifest_capability not in manifest.capabilities:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7336783Z                 raise PluginError(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7337155Z                     "permission_denied", "plugin operation is not declared by its manifest"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7337538Z                 )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7337823Z             config = self.registry.get_binding(lease.binding_id).config
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7338257Z             if operation == "maintain" and not config.maintenance_enabled:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7338730Z                 raise PermissionDeniedError("maintenance is disabled in the binding")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7339115Z             if (
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7339339Z                 isinstance(request, RecallRequest)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7339684Z                 and request.token_budget > config.recall_token_budget
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7339995Z             ):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7340304Z                 raise BudgetExceededError("recall exceeds the binding token budget")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7340955Z         request_bytes = len(canonical_json(request.model_dump(mode="json")))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7341699Z         if request_bytes > slot.limits.max_request_bytes:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7342252Z             raise BudgetExceededError()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7342712Z         if utc_now() >= context.deadline:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7343004Z             raise DeadlineExceededError()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7343459Z         if operation != "lifecycle":
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7343831Z             authorize_engine_request(operation, request, context, self.callbacks)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7344235Z         if context.request_id in self._calls:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7344765Z             raise PluginError("revision_conflict", "request is already active")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7345126Z         if (
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7345672Z             sum(call.installation_id == lease.installation_id for call in self._calls.values())
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7346121Z             >= slot.limits.max_concurrency
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7346383Z         ):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7346716Z             raise PluginError("concurrency_limit", "plugin concurrency budget is exhausted")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7347234Z         host = self._host_api(lease, context, slot.limits, operation=operation)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7347624Z         call = self._calls[context.request_id]
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7347889Z         try:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7348195Z             task = asyncio.create_task(slot.engine.invoke(operation, request, host))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7348592Z             call.task = task
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7348828Z             timeout = min(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7349075Z                 slot.limits.timeout_seconds,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7349430Z                 max(0.001, (context.deadline - utc_now()).total_seconds()),
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7349756Z             )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7350020Z             done, pending = await asyncio.wait({task}, timeout=timeout)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7350364Z             if pending:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7350672Z                 call.event.set()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7350994Z                 cancel_finished = await self._cancel_engine(call)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7351318Z                 if not task.done():
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7351565Z                     task.cancel()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7351845Z                     _done, still_pending = await asyncio.wait(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7352201Z                         {task}, timeout=self._CALL_QUIESCE_TIMEOUT_SECONDS
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7352526Z                     )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7352725Z                 else:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7352936Z                     still_pending = set()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7353205Z                 if not still_pending:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7353529Z                     await asyncio.gather(task, return_exceptions=True)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7353913Z                 if isinstance(slot.engine, InProcessPluginEngine):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7354353Z                     self.registry.mark_failed(lease.installation_id, "restart_required")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7354770Z                 if not cancel_finished or still_pending:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7355142Z                     # Keep the call in the Host registry until its task really
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7355758Z                     # finishes.  Its completion callback removes it and
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7356111Z                     # consumes any late exception.
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7356412Z                     raise RestartRequiredError(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7356795Z                         "in-process plugin call did not quiesce before its deadline"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7357145Z                     )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7357372Z                 raise DeadlineExceededError()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7357664Z >           result = task.result()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7357836Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7357939Z src/operant/plugins/host.py:575: 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7358242Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7358598Z src/operant/plugins/protocol.py:1323: in invoke
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7358962Z     await self._write(payload, deadline=host.context.deadline)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7359324Z src/operant/plugins/protocol.py:1366: in _write
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7359765Z     await asyncio.wait_for(process.stdin.drain(), timeout=self._request_timeout(deadline))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7360345Z /opt/hostedtoolcache/Python/3.10.21/x64/lib/python3.10/asyncio/tasks.py:445: in wait_for
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7360771Z     return fut.result()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7361284Z /opt/hostedtoolcache/Python/3.10.21/x64/lib/python3.10/asyncio/streams.py:371: in drain
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7361710Z     await self._protocol._drain_helper()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7362151Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7362398Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7363220Z self = <SubprocessStreamProtocol stdin=<StreamWriter transport=<_UnixWritePipeTransport closed fd=16 closed>> stdout=<StreamR...rt closed fd=17 closed>> stderr=<StreamReader eof limit=128001 transport=<_UnixReadPipeTransport closed fd=19 closed>>>
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7364132Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7364241Z     async def _drain_helper(self):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7364511Z         if self._connection_lost:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7364809Z >           raise ConnectionResetError('Connection lost')
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7365149Z E           ConnectionResetError: Connection lost
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7365645Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7366084Z /opt/hostedtoolcache/Python/3.10.21/x64/lib/python3.10/asyncio/streams.py:167: ConnectionResetError
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7366509Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7366690Z The above exception was the direct cause of the following exception:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7367020Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7367452Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_b27_isolated_worker_crash0')
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7368395Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fcb5210ef50>
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7368845Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7368941Z     @pytest.mark.asyncio
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7369272Z     async def test_b27_isolated_worker_crash_requires_explicit_respawn(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7369679Z         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7369981Z     ) -> None:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7370297Z         """A crashed stdio worker is fenced, then explicitly respawned on retry."""
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7370675Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7370865Z         _patch_ps(monkeypatch)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7371152Z         package, manifest = _package(tmp_path / "source")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7371504Z         worker = tmp_path / "crash-once-worker.py"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7371800Z         worker.write_text(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7372044Z             "import json, os, pathlib, sys\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7372353Z             "marker = pathlib.Path(sys.argv[1])\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7372641Z             "for line in sys.stdin:\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7372919Z             "    request = json.loads(line)\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7373201Z             "    if not marker.exists():\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7373528Z             "        marker.write_text('crashed', encoding='utf-8')\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7373855Z             "        os._exit(47)\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7374144Z             "    context = request['params']['context']\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7374494Z             "    result = {'request_id': context['request_id'],\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7374851Z             "              'sdk_version': 'operant-memory-sdk.v1',\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7375214Z             "              'state': 'ready', 'checkpoint_ref': None}\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7375918Z             "    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'],\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7376323Z             "                      'result': result}), flush=True)\n",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7376634Z             encoding="utf-8",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7376856Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7377050Z         runner = tmp_path / "runner"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7377300Z         runner.write_text(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7377535Z             "#!/usr/bin/env python3\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7377787Z             "import os, sys\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7378029Z             "args = sys.argv\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7378275Z             "index = args.index('-p')\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7378579Z             "os.execv(args[index + 2], args[index + 3:])\n",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7378880Z             encoding="utf-8",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7379101Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7379290Z         runner.chmod(0o755)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7379507Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7379921Z         class DeterministicProbe(SandboxProbe):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7380234Z             def check(self, **kwargs):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7380510Z                 return SandboxEvidence(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7381105Z                     evidence_ref="b27-test-runner-shim",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7381522Z                     profile="(version 1)\n(deny default)\n",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7381831Z                     runner=str(runner),
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7382085Z                 )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7382273Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7382597Z         registry = PluginRegistry(tmp_path / "managed", trusted_issuers={"issuer.local"})
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7383161Z         installation = registry.install(manifest, package, certification=_cert(manifest))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7383728Z         marker = registry.state_path_for(installation.installation_id) / "crash-once"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7384133Z         host = PluginHost(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7384355Z             registry,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7384575Z             stdio_commands={
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7384834Z                 installation.installation_id: (
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7385121Z                     sys.executable,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7385522Z                     "-I",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7385748Z                     "-S",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7385971Z                     str(worker),
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7386204Z                     str(marker),
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7386422Z                 )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7386607Z             },
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7386880Z             budget=HostBudget(timeout_seconds=5, max_idle_seconds=5),
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7387245Z             sandbox_probe=DeterministicProbe(),
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7387512Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7387742Z         binding = host.bind(installation.installation_id)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7388086Z         host.enable(binding.binding_id)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7388431Z         await host.start(installation.installation_id, mode="isolated")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7388959Z         lease = host.start_run(binding.binding_id, run_id="crash-run", scope=_scope("crash-run"))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7389393Z         try:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7389621Z             with pytest.raises(PluginError) as error:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7389973Z                 await host.lifecycle(lease, operation="health")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7390389Z             assert error.value.code in {"package_unavailable", "cancelled"}
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7390937Z             first_process = host._engines[installation.installation_id].engine.process  # noqa: SLF001
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7391456Z             assert marker.read_text(encoding="utf-8") == "crashed"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7391768Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7392022Z >           result = await host.lifecycle(lease, operation="health")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7392266Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7392374Z tests/test_b27_fault_migration.py:456: 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7392689Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7393039Z src/operant/plugins/host.py:786: in lifecycle
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7393390Z     result = await self.invoke(lease, "lifecycle", request)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7393758Z _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7393998Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7394177Z self = <operant.plugins.host.PluginHost object at 0x7fcb5210f910>
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7395194Z lease = RunLease(lease_id='plugin_lease_428926c542214b2bb283a5c88a765b18', run_id='crash-run', binding_id='plugin_binding_d848...fencing=1, expires_at=datetime.datetime(2026, 9, 18, 5, 19, 17, 793970, tzinfo=datetime.timezone.utc), status='active')
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7396243Z operation = 'lifecycle'
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7397175Z request = LifecycleRequest(context=RpcContext(sdk_version='operant-memory-sdk.v1', request_id='plugin_request_1534dc2c690b44a7b8...db315c215d9e3b69c179e', binding_epoch=1, permission_epoch=0, lease_fencing=1), operation='health', checkpoint_ref=None)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7398061Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7398312Z     async def invoke(self, lease: RunLease, operation: str, request: BaseModel) -> BaseModel:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7399183Z         """Invoke one typed engine operation through the active Host boundary."""
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7399706Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7399885Z         if self._closed:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7400236Z             raise PluginError("package_unavailable", "PluginHost is closed")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7400650Z         request_type = ENGINE_REQUEST_TYPES.get(operation)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7400967Z         if request_type is None:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7401290Z             raise PluginProtocolError("unsupported plugin operation")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7401662Z         if not isinstance(request, request_type):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7401937Z             try:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7402187Z                 request = request_type.model_validate(request)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7402505Z             except Exception as exc:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7402908Z                 raise PluginProtocolError("plugin request failed schema validation") from exc
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7403354Z         context = self._request_context(request)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7403654Z         self._assert_active(lease, context)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7403962Z         slot = self._engines.get(lease.installation_id)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7404265Z         if slot is None:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7404596Z             raise PackageUnavailableError("plugin engine has not been started")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7404994Z         if operation != "lifecycle":
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7405264Z             manifest_capability = operation
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7406091Z             manifest = self.registry.get_installation(lease.installation_id).manifest
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7406566Z             if manifest_capability not in manifest.capabilities:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7406907Z                 raise PluginError(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7407286Z                     "permission_denied", "plugin operation is not declared by its manifest"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7407670Z                 )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7407960Z             config = self.registry.get_binding(lease.binding_id).config
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7408396Z             if operation == "maintain" and not config.maintenance_enabled:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7408867Z                 raise PermissionDeniedError("maintenance is disabled in the binding")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7409251Z             if (
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7409475Z                 isinstance(request, RecallRequest)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7409823Z                 and request.token_budget > config.recall_token_budget
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7410138Z             ):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7410445Z                 raise BudgetExceededError("recall exceeds the binding token budget")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7410934Z         request_bytes = len(canonical_json(request.model_dump(mode="json")))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7411345Z         if request_bytes > slot.limits.max_request_bytes:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7411668Z             raise BudgetExceededError()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7411947Z         if utc_now() >= context.deadline:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7412238Z             raise DeadlineExceededError()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7412510Z         if operation != "lifecycle":
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7412877Z             authorize_engine_request(operation, request, context, self.callbacks)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7413281Z         if context.request_id in self._calls:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7413667Z             raise PluginError("revision_conflict", "request is already active")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7414028Z         if (
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7414372Z             sum(call.installation_id == lease.installation_id for call in self._calls.values())
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7414806Z             >= slot.limits.max_concurrency
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7415064Z         ):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7415652Z             raise PluginError("concurrency_limit", "plugin concurrency budget is exhausted")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7416221Z         host = self._host_api(lease, context, slot.limits, operation=operation)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7416611Z         call = self._calls[context.request_id]
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7417032Z         try:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7417339Z             task = asyncio.create_task(slot.engine.invoke(operation, request, host))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7417731Z             call.task = task
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7418085Z             timeout = min(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7418334Z                 slot.limits.timeout_seconds,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7418679Z                 max(0.001, (context.deadline - utc_now()).total_seconds()),
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7419008Z             )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7419272Z             done, pending = await asyncio.wait({task}, timeout=timeout)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7419613Z             if pending:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7419833Z                 call.event.set()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7420127Z                 cancel_finished = await self._cancel_engine(call)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7420448Z                 if not task.done():
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7420701Z                     task.cancel()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7420986Z                     _done, still_pending = await asyncio.wait(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7421347Z                         {task}, timeout=self._CALL_QUIESCE_TIMEOUT_SECONDS
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7421663Z                     )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7421863Z                 else:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7422083Z                     still_pending = set()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7422363Z                 if not still_pending:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7422673Z                     await asyncio.gather(task, return_exceptions=True)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7423061Z                 if isinstance(slot.engine, InProcessPluginEngine):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7423508Z                     self.registry.mark_failed(lease.installation_id, "restart_required")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7423931Z                 if not cancel_finished or still_pending:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7424301Z                     # Keep the call in the Host registry until its task really
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7424708Z                     # finishes.  Its completion callback removes it and
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7425051Z                     # consumes any late exception.
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7425517Z                     raise RestartRequiredError(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7425896Z                         "in-process plugin call did not quiesce before its deadline"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7426252Z                     )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7426483Z                 raise DeadlineExceededError()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7426764Z             result = task.result()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7427020Z             if call.event.is_set():
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7427284Z                 raise CancellationError()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7427566Z             self._assert_active(lease, context)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7427910Z             result = self._validate_result(operation, request, result)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7428258Z             if operation != "lifecycle":
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7428668Z                 authorize_engine_result(operation, request, result, context, self.callbacks)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7429183Z             response_bytes = len(canonical_json(result.model_dump(mode="json")))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7429617Z             if response_bytes > slot.limits.max_response_bytes:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7429956Z                 raise BudgetExceededError()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7430229Z             return result
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7430461Z         except PluginError as exc:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7430753Z             if call.event.is_set() and exc.code not in {
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7431050Z                 "stale_epoch",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7431291Z                 "lease_expired",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7431532Z                 "restart_required",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7431764Z             }:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7431982Z                 raise CancellationError() from exc
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7432259Z             raise
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7432463Z         except Exception as exc:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7432820Z >           raise PluginError("plugin_failed", "plugin invocation failed") from exc
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7433312Z E           operant.plugins.protocol.PluginError: plugin invocation failed
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7433649Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7433899Z src/operant/plugins/host.py:595: PluginError
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7434292Z ____________ test_legacy_memory_commands_require_formal_management _____________
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7434587Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7434941Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_legacy_memory_commands_re0')
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7435611Z monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fcb4a689990>
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7435914Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7436201Z     def test_legacy_memory_commands_require_formal_management(tmp_path: Path, monkeypatch) -> None:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7436679Z         service = make_service(tmp_path)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7436995Z         session = service.create_session("role_memory_cli")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7437366Z         monkeypatch.setattr(cli, "_service", lambda: service)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7437679Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7437868Z         added = runner.invoke(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7438097Z             cli.app,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7438293Z             [
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7438495Z                 "memory",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7438704Z                 "add",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7438905Z                 "--kind",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7439120Z                 "project",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7439356Z                 "--content",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7439615Z                 "Run pytest tests/test_calculator.py.",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7439912Z                 "--session-id",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7440144Z                 session.id,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7440378Z                 "--project-scope",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7440621Z                 "calculator",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7440849Z                 "--source-task",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7441078Z                 "Task A",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7441292Z                 "--confidence",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7441525Z                 "0.96",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7441721Z             ],
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7441904Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7442098Z         assert added.exit_code == 2
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7442377Z         assert "Proposal/CAS" in added.output
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7442648Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7442835Z         searched = runner.invoke(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7443073Z             cli.app,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7443272Z             [
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7443460Z                 "memory",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7443676Z                 "search",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7443882Z                 "pytest",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7444094Z                 "--session-id",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7444326Z                 session.id,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7444560Z                 "--project-scope",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7444805Z                 "calculator",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7445020Z             ],
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7445203Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7445530Z         assert searched.exit_code == 2
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7446259Z         assert "插件未安装或未选择" in searched.output
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7446531Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7446728Z         removed_option = runner.invoke(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7446982Z             cli.app,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7447178Z             [
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7447371Z                 "memory",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7447577Z                 "add",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7447781Z                 "--kind",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7447990Z                 "project",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7448212Z                 "--content",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7448438Z                 "legacy option",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7448679Z                 "--session-id",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7448906Z                 session.id,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7449159Z                 "--allow-conservative-activation",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7449439Z             ],
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7449621Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7449820Z         assert removed_option.exit_code == 2
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7450191Z >       assert "allow-conservative-activation" in removed_option.output
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7451520Z E       assert 'allow-conservative-activation' in "\x1b[1;33mUsage: \x1b[0m\x1b[1mroot memory add [OPTIONS]\x1b[0m\n\x1b[2mTry \x1b[0m\x1b[2;34m'root memory add \x1b[0m...   \x1b[31m│\x1b[0m\n\x1b[31m╰──────────────────────────────────────────────────────────────────────────────╯\x1b[0m\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7453526Z E        +  where "\x1b[1;33mUsage: \x1b[0m\x1b[1mroot memory add [OPTIONS]\x1b[0m\n\x1b[2mTry \x1b[0m\x1b[2;34m'root memory add \x1b[0m...   \x1b[31m│\x1b[0m\n\x1b[31m╰──────────────────────────────────────────────────────────────────────────────╯\x1b[0m\n" = <Result SystemExit(2)>.output
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7454500Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7454616Z tests/test_cli_week3.py:208: AssertionError
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7455028Z _______ test_cross_instance_workflow_cancel_stops_all_parallel_explorers _______
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7455611Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7455888Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_cross_instance_workflow_c0')
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7456518Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7456722Z     @pytest.mark.asyncio
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7457284Z     async def test_cross_instance_workflow_cancel_stops_all_parallel_explorers(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7457926Z         tmp_path: Path,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7458319Z     ) -> None:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7458742Z         store = SQLiteStore(tmp_path / "workflow-cancel.sqlite3")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7459315Z         provider = RoleAwareBlockingProvider()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7459845Z         service = ApplicationService(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7460319Z             store,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7460694Z             provider,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7461110Z             session_lease_ttl_seconds=1,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7461650Z             session_lease_heartbeat_seconds=0.01,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7462149Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7462493Z         service.initialize()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7462976Z         profile = service.add_model_profile(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7463486Z             ModelProfile(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7463906Z                 name="workflow",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7464358Z                 model_id="workflow",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7464883Z                 base_url="https://example.invalid/v1",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7465751Z                 secret_ref="OPERANT_WORKFLOW_KEY",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7466259Z             )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7466592Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7466898Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7467314Z         def role(name: str, *, writable: bool = False) -> str:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7467874Z             policy = (
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7468206Z                 ToolPolicy(allowed_tools=("apply_patch",), workspace_write=True)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7468587Z                 if writable
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7468828Z                 else ToolPolicy()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7469065Z             )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7469276Z             return service.create_role(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7469547Z                 RolePreset(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7469773Z                     name=name,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7470012Z                     system_prompt=name,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7470294Z                     model_profile_id=profile.id,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7470589Z                     tool_policy=policy,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7470834Z                 )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7471035Z             ).id
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7471226Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7471416Z         planner = role("planner")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7471730Z         explorers = (role("explorer-1"), role("explorer-2"))
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7472069Z         coder = role("coder", writable=True)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7472355Z         reviewer = role("reviewer")
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7472650Z         workflow = SequentialCodingWorkflow(service)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7472964Z         streamed = workflow.run(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7473215Z             task="cancel explorers",
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7473473Z             workspace=tmp_path,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7473718Z             planner_role_id=planner,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7473988Z             explorer_role_ids=explorers,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7474255Z             coder_role_id=coder,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7474512Z             reviewer_role_id=reviewer,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7474777Z             max_parallel_explorers=2,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7475030Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7475209Z         events = []
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7475903Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7476111Z         async def consume() -> None:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7476393Z             async for event in streamed:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7476804Z                 events.append(event)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7477048Z     
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7477259Z         consumer = asyncio.create_task(consume())
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7477554Z         for _ in range(200):
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7477828Z             if provider.explorer_started == 2:
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7478104Z                 break
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7478325Z             await asyncio.sleep(0.005)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7478611Z         assert provider.explorer_started == 2
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7478922Z         workflow_id = events[0].workflow_run_id
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7479221Z         other = ApplicationService(
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7479491Z             SQLiteStore(store.path),
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7479747Z             provider,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7479974Z             session_lease_ttl_seconds=1,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7480267Z             session_lease_heartbeat_seconds=0.01,
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7480539Z         )
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7480731Z         other.initialize()
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7481109Z >       assert other.get_workflow_run(workflow_id).status is WorkflowRunStatus.RUNNING
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7481814Z E       AssertionError: assert <WorkflowRunStatus.INTERRUPTED: 'interrupted'> is <WorkflowRunStatus.RUNNING: 'running'>
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7483236Z E        +  where <WorkflowRunStatus.INTERRUPTED: 'interrupted'> = WorkflowRun(id='workflow_2ab22119405c44a49000579b5a7ad49a', task='cancel explorers', workspace='/tmp/pytest-of-runner/...8, 5, 20, 24, 64471, tzinfo=TzInfo(0)), updated_at=datetime.datetime(2026, 9, 18, 5, 20, 25, 997416, tzinfo=TzInfo(0))).status
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7485214Z E        +    where WorkflowRun(id='workflow_2ab22119405c44a49000579b5a7ad49a', task='cancel explorers', workspace='/tmp/pytest-of-runner/...8, 5, 20, 24, 64471, tzinfo=TzInfo(0)), updated_at=datetime.datetime(2026, 9, 18, 5, 20, 25, 997416, tzinfo=TzInfo(0))) = get_workflow_run('workflow_2ab22119405c44a49000579b5a7ad49a')
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7486849Z E        +      where get_workflow_run = <operant.application.service.ApplicationService object at 0x7fcb509d5b40>.get_workflow_run
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7487555Z E        +  and   <WorkflowRunStatus.RUNNING: 'running'> = WorkflowRunStatus.RUNNING
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7487874Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7488016Z tests/test_phase0_reliability.py:1302: AssertionError
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7488384Z =============================== warnings summary ===============================
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7488786Z .venv/lib/python3.10/site-packages/fastapi/testclient.py:1
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7489714Z   /home/runner/work/Operant/Operant/.venv/lib/python3.10/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7490666Z     from starlette.testclient import TestClient as TestClient  # noqa
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7490950Z 
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7491157Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7491599Z =========================== short test summary info ============================
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7492416Z FAILED tests/test_b27_fault_migration.py::test_b27_isolated_worker_crash_requires_explicit_respawn - operant.plugins.protocol.PluginError: plugin invocation failed
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7494448Z FAILED tests/test_cli_week3.py::test_legacy_memory_commands_require_formal_management - assert 'allow-conservative-activation' in "\x1b[1;33mUsage: \x1b[0m\x1b[1mroot memory add [OPTIONS]\x1b[0m\n\x1b[2mTry \x1b[0m\x1b[2;34m'root memory add \x1b[0m...   \x1b[31m│\x1b[0m\n\x1b[31m╰──────────────────────────────────────────────────────────────────────────────╯\x1b[0m\n"
+quality (3.10)	Python检查与测试	2026-09-18T05:32:20.7496684Z  +  where "\x1b[1;33mUsage: \x1b[0m\x1b[1mroot memory add [OPTIONS]\x1b[0m\n\x1b[2mTry \x1b[0m\x1b[2;34m'root memory add \x1b[0m...   \x1b[31m│\x1b[0m\n\x1b[31m╰──────────────────────────────────────────────────────────────────────────────╯\x1b[0m\n" = <Result SystemExit(2)>.output
+quality (3.10)	Python检查与测试	2026-09-18T05:32:21.4811023Z FAILED tests/test_phase0_reliability.py::test_cross_instance_workflow_cancel_stops_all_parallel_explorers - AssertionError: assert <WorkflowRunStatus.INTERRUPTED: 'interrupted'> is <WorkflowRunStatus.RUNNING: 'running'>
+quality (3.10)	Python检查与测试	2026-09-18T05:32:21.4814543Z  +  where <WorkflowRunStatus.INTERRUPTED: 'interrupted'> = WorkflowRun(id='workflow_2ab22119405c44a49000579b5a7ad49a', task='cancel explorers', workspace='/tmp/pytest-of-runner/...8, 5, 20, 24, 64471, tzinfo=TzInfo(0)), updated_at=datetime.datetime(2026, 9, 18, 5, 20, 25, 997416, tzinfo=TzInfo(0))).status
+quality (3.10)	Python检查与测试	2026-09-18T05:32:21.4818394Z  +    where WorkflowRun(id='workflow_2ab22119405c44a49000579b5a7ad49a', task='cancel explorers', workspace='/tmp/pytest-of-runner/...8, 5, 20, 24, 64471, tzinfo=TzInfo(0)), updated_at=datetime.datetime(2026, 9, 18, 5, 20, 25, 997416, tzinfo=TzInfo(0))) = get_workflow_run('workflow_2ab22119405c44a49000579b5a7ad49a')
+quality (3.10)	Python检查与测试	2026-09-18T05:32:21.4820610Z  +      where get_workflow_run = <operant.application.service.ApplicationService object at 0x7fcb509d5b40>.get_workflow_run
+quality (3.10)	Python检查与测试	2026-09-18T05:32:21.4821703Z  +  and   <WorkflowRunStatus.RUNNING: 'running'> = WorkflowRunStatus.RUNNING
+quality (3.10)	Python检查与测试	2026-09-18T05:32:21.4822432Z 3 failed, 1065 passed, 3 skipped, 1 warning in 1532.51s (0:25:32)
+quality (3.10)	Python检查与测试	2026-09-18T05:32:23.2385070Z ##[error]Process completed with exit code 1.
