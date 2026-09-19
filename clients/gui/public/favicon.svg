@@ -1,4 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0f766e"/>
-  <circle cx="32" cy="32" r="14" fill="none" stroke="#fff" stroke-width="7"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Operant">
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="#fff"/>
+  <g fill="#123d2c">
+    <path d="M340 109A170 170 0 1 0 398 163L355 205A112 112 0 1 1 295 153Z"/>
+    <path d="M372 108H405Q410 108 410 113V148Q410 153 405 153H330Z"/>
+  </g>
 </svg>

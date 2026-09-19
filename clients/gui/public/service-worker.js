@@ -1,4 +1,4 @@
-const SHELL_CACHE = 'operant-shell-v3';
+const SHELL_CACHE = 'operant-shell-v4';
 const SHELL_FILES = ['/', '/manifest.webmanifest', '/app-icon.svg', '/favicon.svg'];
 
 async function cacheAnonymousShell(cache, paths) {

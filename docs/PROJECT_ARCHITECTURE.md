@@ -23,6 +23,9 @@ GitHub Beta 源码预发布固定 Git 标签，不代表签名、公证、自动
 
 ## 1. 项目定位
 
+客户端品牌图标采用白底深绿开口 O；网页/PWA 的 SVG 与桌面 PNG/ICNS 使用相同图形源，
+桌面打包显式引用图标文件。资源与更新边界见 [图标说明](design/icon-white/README.md)。
+
 Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 用户可以创建 Model Profile 和 Role Preset，再用指定角色创建 Session。Session 创建时会
