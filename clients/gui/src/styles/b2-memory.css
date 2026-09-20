@@ -863,7 +863,8 @@
 
   .b2-memory-card-header h2,
   .b2-memory-card-header h3,
-  .b2-memory-card-title {
+  .b2-memory-card-title,
+  .b2-memory-card-header > div {
     flex: 0 0 auto;
     width: 100%;
   }
