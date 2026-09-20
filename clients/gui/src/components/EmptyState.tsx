@@ -24,9 +24,9 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '48px 24px',
+        padding: 'var(--space-6) var(--space-4)',
         textAlign: 'center',
-        color: 'var(--text-muted)',
+        color: 'var(--text-secondary)',
       }}
     >
       <div
@@ -39,16 +39,34 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
           alignItems: 'center',
           justifyContent: 'center',
           color: 'var(--accent-action)',
-          marginBottom: 16,
+          marginBottom: 'var(--space-4)',
         }}
       >
         <Icon size={24} />
       </div>
-      <TitleTag style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>
+      <TitleTag
+        style={{
+          margin: 0,
+          marginBottom: 'var(--space-2)',
+          fontSize: TitleTag === 'h1' ? 'var(--font-size-title)' : 'var(--font-size-body)',
+          fontWeight: 600,
+          lineHeight: 'var(--line-height-heading)',
+          color: 'var(--text-primary)',
+        }}
+      >
         {title}
       </TitleTag>
       {description && (
-        <p style={{ fontSize: '13px', maxWidth: 360, lineHeight: 1.5, marginBottom: action ? 16 : 0 }}>
+        <p
+          style={{
+            maxWidth: 360,
+            margin: 0,
+            marginBottom: action ? 'var(--space-4)' : 0,
+            fontSize: 'var(--font-size-sm)',
+            lineHeight: 'var(--line-height-body)',
+            color: 'var(--text-secondary)',
+          }}
+        >
           {description}
         </p>
       )}

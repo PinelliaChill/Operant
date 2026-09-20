@@ -46,8 +46,8 @@ const fieldLabel: React.CSSProperties = {
   display: 'block',
   marginBottom: 4,
   color: 'var(--text-secondary)',
-  fontSize: 11,
-  fontWeight: 600,
+  fontSize: 'var(--font-size-sm)',
+  fontWeight: 500,
 };
 
 function positiveNumber(value: string): number | undefined {

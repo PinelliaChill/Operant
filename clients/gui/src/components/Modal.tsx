@@ -70,7 +70,7 @@ export const Modal: React.FC<ModalProps> = ({
         <div
           className={portal ? "b2-modal-heading" : undefined}
           style={{
-            padding: '14px 18px',
+            padding: 'var(--space-4) var(--space-6)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -78,7 +78,7 @@ export const Modal: React.FC<ModalProps> = ({
             backgroundColor: 'var(--bg-surface)',
           }}
         >
-          <h3 id={titleId} style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</h3>
+          <h3 id={titleId} style={{ fontSize: 'var(--font-size-section)', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</h3>
           <button
             onClick={onClose}
             className="btn btn-ghost btn-icon"
@@ -89,16 +89,17 @@ export const Modal: React.FC<ModalProps> = ({
           </button>
         </div>
 
-        <div className={portal ? "b2-modal-body" : undefined} style={{ padding: '18px', overflowY: 'auto', flex: 1 }}>{children}</div>
+        <div className={portal ? "b2-modal-body" : undefined} style={{ padding: 'var(--space-6)', overflowY: 'auto', flex: 1 }}>{children}</div>
 
         {footer && (
           <div
             className={portal ? "b2-modal-footer" : undefined}
             style={{
-              padding: '12px 18px',
+              padding: 'var(--space-4) var(--space-6)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'flex-end',
+              flexWrap: 'wrap',
               gap: 8,
               borderTop: '1px solid var(--border-subtle)',
               backgroundColor: 'var(--bg-surface)',
