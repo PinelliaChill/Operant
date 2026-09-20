@@ -117,7 +117,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索项目或会话"
-            aria-label="搜索 Core Thread"
+            aria-label="搜索项目或会话"
             className="rail-sidebar-search-input"
           />
         </div>

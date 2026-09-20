@@ -86,7 +86,7 @@ const SECTION_TITLES: Record<string, string> = {
   approvals: '审批',
   schedules: '调度',
   projects: '项目',
-  agents: 'Agent',
+  agents: '模型与角色',
   extensions: '插件与MCP',
   skills: '技能',
   settings: '设置',
