@@ -1,6 +1,8 @@
 import { B24ContextInspector } from "./B24ContextInspector";
 import './b2-chat-layout.css';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import './ui-refine-chat.css';
+import { chatEmptyPresentation, historyItemLabel } from './chatPresentation';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -268,10 +270,16 @@ export const CanonicalHistoryItem: React.FC<{ item: B2.Item; index: number }> = 
     body = <pre>{safeJson(payload)}</pre>;
   }
   const itemKey = item.id || `${item.thread_id}:${item.turn_id}:${item.position ?? index}`;
+  if (type === 'system_event') {
+    return <details className="ui-chat-system-event" data-payload-type={type}>
+      <summary>运行记录 <span>{item.cursor == null ? 'canonical' : `Cursor ${String(item.cursor)}`}</span></summary>
+      {body}
+    </details>;
+  }
   return (
     <article className="live-message b2-history-item" data-payload-type={type} key={itemKey}>
       <div className="live-message-meta">
-        <strong>{type}</strong>
+        <strong>{historyItemLabel(type)}</strong>
         <span>{item.cursor === null || item.cursor === undefined ? 'canonical' : `Cursor ${String(item.cursor)}`}</span>
       </div>
       {body}
@@ -331,6 +339,7 @@ export const LiveChatView: React.FC = () => {
     clearError,
   } = useLive();
   const [draft, setDraft] = useState('');
+  const projectSelectRef = useRef<HTMLSelectElement>(null);
   const [showFiles, setShowFiles] = useState(false);
   const [showEvents, setShowEvents] = useState(false);
   const [filePath, setFilePath] = useState('');
@@ -391,6 +400,21 @@ export const LiveChatView: React.FC = () => {
     }
   };
 
+  const emptyPresentation = chatEmptyPresentation({
+    failed: phase === 'error' || connectionStatus === 'disconnected',
+    deepLinkNotFound,
+    hasProjects: projects.some((project) => project.readable),
+    hasProject: Boolean(selectedProject),
+  });
+  const handleEmptyAction = () => {
+    switch (emptyPresentation.action) {
+      case 'projects': navigate('/projects'); break;
+      case 'select-project': projectSelectRef.current?.focus(); break;
+      case 'create-thread': if (canCreateThread) void createThread(); break;
+      case 'reconnect': void reconnect(); break;
+    }
+  };
+
   const topError = lastError || stream.error || (command.status === 'awaiting_projection' ? command.error : undefined);
   const connectionMessage = phase === 'ready'
     ? manualReconcileRequired
@@ -413,7 +437,7 @@ export const LiveChatView: React.FC = () => {
   }
 
   return (
-    <div className="live-chat-view" data-client-mode="live">
+    <div className="live-chat-view ui-chat" data-client-mode="live">
       <header className="live-chat-header">
         <div className="live-header-leading">
           {showSidebarOpenBtn && (
@@ -422,8 +446,8 @@ export const LiveChatView: React.FC = () => {
             </button>
           )}
           <div>
-            <div className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时 Core · phase1e.v1</div>
-            <h1>{liveThreadTitle(selectedThread)}</h1>
+            <div className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />对话</div>
+            <h1>{selectedThread ? (selectedThread.title && selectedThread.title !== selectedThread.id ? selectedThread.title : '项目会话') : '开始新任务'}</h1>
           </div>
         </div>
         <div className="live-header-actions">
@@ -457,28 +481,37 @@ export const LiveChatView: React.FC = () => {
             <span>{manualReconcileReason || 'Core 返回了 manual_reconcile_required / outcome_unknown。GUI 不会自动重放或猜测运行终态。'}</span>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={phase !== 'ready'}>
-            重新查询 Projection
+            刷新并核对状态
           </button>
         </div>
       )}
 
-      <div className="live-chat-toolbar">
+      <div className="live-chat-toolbar ui-chat-project-bar">
         <label className="live-select-label">
-          <span>Project / Workspace</span>
+          <span>工作项目</span>
           <select
             className="select"
+            ref={projectSelectRef}
             value={selectedProjectId ?? ''}
             onChange={(event) => selectProject(event.target.value || null)}
             aria-label="选择 Core Project Workspace"
           >
-            <option value="">未选择 Project</option>
+            <option value="">选择项目</option>
             {projects.filter((project) => project.readable).map((project) => (
               <option key={project.id} value={project.id}>{project.name} · {project.workspaceRef}</option>
             ))}
           </select>
         </label>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void createThread()}
+          disabled={!canCreateThread} title={createThreadUnavailableReason}>
+          <PlusIcon />{threadCreationStatus === 'sending' ? '创建中…' : '新建会话'}
+        </button>
+      </div>
+      <details className="ui-chat-setup" open={Boolean(selectedThread && !selectedThread.sessionId)}>
+        <summary>会话与运行设置<span>{selectedSession?.role_snapshot.role_name || history?.session.role_snapshot?.role_name || '选择会话与角色'}</span></summary>
+        <div className="ui-chat-setup-fields">
         <label className="live-select-label">
-          <span>Thread</span>
+          <span>当前会话</span>
           <select
             className="select"
             value={selectedThreadId ?? ''}
@@ -488,19 +521,19 @@ export const LiveChatView: React.FC = () => {
             }}
             aria-label="选择 Core Thread"
           >
-            <option value="">未选择 Thread</option>
+            <option value="">选择已有会话</option>
             {threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title || thread.id}</option>)}
           </select>
         </label>
         <label className="live-select-label live-session-select">
-          <span>Session</span>
+          <span>绑定运行</span>
           <select
             className="select"
             value={selectedSessionId ?? ''}
             onChange={(event) => selectSession(event.target.value || null)}
             aria-label="选择 Core Session"
           >
-            <option value="" disabled={Boolean(selectedThread?.sessionId)}>未绑定 Session</option>
+            <option value="" disabled={Boolean(selectedThread?.sessionId)}>尚未绑定运行</option>
             {sessionOptions.map((option) => (
               <option key={option.id} value={option.id} disabled={option.boundThreadId === null}>
                 {history?.session.id === option.id ? `${history.session.role_snapshot?.role_name || option.id} · ${option.id.slice(0, 12)}` : sessionLabel(option)}
@@ -509,7 +542,7 @@ export const LiveChatView: React.FC = () => {
           </select>
         </label>
         <label className="live-select-label">
-          <span>RolePreset</span>
+          <span>角色预设</span>
           <select
             className="select"
             value={selectedRoleId}
@@ -517,21 +550,19 @@ export const LiveChatView: React.FC = () => {
             aria-label="选择 Core RolePreset"
             disabled={roles.length === 0}
           >
-            <option value="">未选择 RolePreset</option>
+            <option value="">选择角色</option>
             {roles.filter((role) => role.status !== 'inactive' && role.id).map((role) => (
               <option key={role.id} value={role.id}>{role.name} · {role.id}</option>
             ))}
           </select>
         </label>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void createThread()}
-          disabled={!canCreateThread} title={createThreadUnavailableReason}>
-          <PlusIcon />{threadCreationStatus === 'sending' ? '创建中…' : '新建会话'}
-        </button>
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedRoleId || creatingSession} title={createSessionUnavailableReason || '需要一个明确的 RolePreset'}>
           <PlusIcon />
-          {creatingSession ? '创建中…' : '创建 Session'}
+          {creatingSession ? '正在准备…' : '使用此角色'}
         </button>
-      </div>
+        </div>
+        {roles.length === 0 && <p className="ui-chat-setup-note">还没有可用角色。<button type="button" className="ui-text-action" onClick={() => navigate('/agents')}>配置模型与角色</button></p>}
+      </details>
 
       {projectionStale && (
         <div className="live-projection-note" role="status">
@@ -544,39 +575,26 @@ export const LiveChatView: React.FC = () => {
           <EmptyState
             icon={MessageSquare}
             titleAs="h4"
-            title={deepLinkNotFound ? '未找到该 Core Thread' : phase === 'error' ? '无法显示 Core Thread' : '选择一个 Core Thread'}
-            description={deepLinkNotFound ? `Core Projection 中不存在 Thread ${conversationId}。Live 不会用第一条或演示数据替代它。` : phase === 'error' ? '连接失败不会回退为演示数据。请修复 Core 或协议协商后重试。' : '从侧栏或上方选择服务端 Projection 中的 Thread。'}
-            action={(
-              <div className="live-empty-actions">
-                <button type="button" className="btn btn-primary" onClick={() => void reconnect()}>
-                  <RefreshCw size={14} aria-hidden="true" />重连 Core
-                </button>
-                <button type="button" className="btn btn-secondary" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedRoleId || creatingSession}>
-                  创建 Session
-                </button>
-              </div>
+            title={emptyPresentation.title}
+            description={emptyPresentation.description}
+            action={emptyPresentation.action === 'none' ? undefined : (
+              <button type="button" className="btn btn-primary" onClick={handleEmptyAction}
+                disabled={emptyPresentation.action === 'create-thread' && !canCreateThread}>
+                {emptyPresentation.label}
+              </button>
             )}
           />
         </div>
       ) : (
         <>
-          <section className="live-thread-summary" aria-label="Core Thread Projection">
-            <div className="live-thread-summary-main">
-              <span className="live-thread-icon" aria-hidden="true"><MessageSquare size={16} /></span>
-              <div>
-                <strong>{liveThreadTitle(selectedThread)}</strong>
-                <span>{selectedThread.workspaceRef || '未绑定 Workspace'} · {selectedThread.id}</span>
-              </div>
-            </div>
-            <StatusBadge status={selectedThread.status} label={statusLabel(selectedThread.status)} size="sm" />
-          </section>
+
 
           {!selectedThread.sessionId && (
             <div className="live-alert live-alert-warn" role="alert">
               <AlertTriangle size={17} aria-hidden="true" />
               <div className="live-alert-content">
-                <strong>Thread 未绑定 Session</strong>
-                <span>该 Thread 的 legacy_refs 没有 source_type=session。Live 不会按 workspace 或第一条 Session 猜测，运行命令已禁用。</span>
+                <strong>选择角色以开始工作</strong>
+                <span>当前会话尚未绑定运行。请在“会话与运行设置”中选择角色并确认；绑定完成前不能发送消息。</span>
               </div>
             </div>
           )}
@@ -584,8 +602,8 @@ export const LiveChatView: React.FC = () => {
           {visibleApprovals.length > 0 && (
             <section className="live-approvals-section" aria-labelledby="live-approvals-title">
               <div className="live-section-heading">
-                <h2 id="live-approvals-title"><ShieldCheck size={16} aria-hidden="true" />待处理 Approval</h2>
-                <span>{visibleApprovals.length} 项 · 由 Core Projection 提供</span>
+                <h2 id="live-approvals-title"><ShieldCheck size={16} aria-hidden="true" />待处理审批</h2>
+                <span>{visibleApprovals.length} 项 · 等待你的决定</span>
               </div>
               <div className="live-approval-list">
                 {visibleApprovals.map((approval) => (
@@ -610,8 +628,8 @@ export const LiveChatView: React.FC = () => {
             <section className="live-messages-panel" aria-labelledby="live-messages-title">
               <div className="live-panel-heading">
                 <div>
-                  <h2 id="live-messages-title">Session History</h2>
-                  <p>B2 返回 canonical Item.payload；运行状态来自 Projection / SSE。</p>
+                  <h2 id="live-messages-title">对话记录</h2>
+                  <p>任务内容与执行结果保存在当前会话中。</p>
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refreshHistory()} disabled={historyLoading || phase !== 'ready' || !selectedThread.sessionId} aria-label="刷新 Session history">
@@ -619,12 +637,12 @@ export const LiveChatView: React.FC = () => {
                   </button>
                 {selectedThread.sessionId && (
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelSession()} disabled={!cancelCommandAvailable || manualReconcileRequired || phase !== 'ready' || connectionStatus !== 'connected'} title="取消由 Core B2 Command 接收，按钮状态等待服务端 Projection 校正">
-                    <Square size={12} aria-hidden="true" />取消 Session
+                    <Square size={12} aria-hidden="true" />取消运行
                   </button>
                 )}
                 </div>
               </div>
-              {selectedThread.sessionId && <B24ContextInspector sessionId={selectedThread.sessionId} busy={busy} />}
+
               <div className="live-message-list" aria-live="polite">
                 {historyError && (
                   <div className="live-alert live-alert-error" role="alert">
@@ -633,11 +651,11 @@ export const LiveChatView: React.FC = () => {
                   </div>
                 )}
                 {historyLoading ? (
-                  <div className="live-panel-loading" role="status"><Loader2 size={15} className="animate-spin" />正在读取 Core canonical history…</div>
+                  <div className="live-panel-loading" role="status"><Loader2 size={15} className="animate-spin" />正在读取历史记录…</div>
                 ) : history?.items.length ? (
                   history.items.map((item, index) => <CanonicalHistoryItem item={item} index={index} key={item.id || `${item.thread_id}:${item.turn_id}:${item.position ?? index}`} />)
                 ) : (
-                  <p className="live-panel-empty">Core 尚未返回该 Session 的 canonical history。</p>
+                  <p className="live-panel-empty">还没有消息，在下方描述你想完成的工作。</p>
                 )}
               </div>
               <div className="live-composer">
@@ -650,7 +668,7 @@ export const LiveChatView: React.FC = () => {
                       void handleSubmit();
                     }
                   }}
-                  placeholder={manualReconcileRequired ? '需要人工核对，完成 Projection 校正后才能发送' : selectedThread?.sessionId ? '向当前 Session 发送消息，Enter 发送' : '该 Thread 没有 Session legacy ref，不能运行'}
+                  placeholder={manualReconcileRequired ? '需要人工核对，完成 Projection 校正后才能发送' : selectedThread?.sessionId ? '描述你想完成的工作，Enter 发送，Shift+Enter 换行' : '请先选择角色并绑定运行'}
                   aria-label="向 Core Session 发送消息"
                   disabled={!selectedThread?.sessionId || !selectedThread.workspaceRef || busy || phase !== 'ready'}
                   rows={2}
@@ -659,14 +677,25 @@ export const LiveChatView: React.FC = () => {
                   {command.status === 'sending' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <SendHorizontal size={16} aria-hidden="true" />}
                 </button>
               </div>
-              <p className="live-composer-note">发送请求只表示命令已提交；GUI 等待 Core 的 Receipt / Projection，不把网络送达当成完成。断线、回放或错误期间会禁用命令。</p>
+              <p className="live-composer-note">运行结果以本地服务确认为准；断线、恢复或结果未知时暂停发送。</p>
             {history && history.next_cursor !== null && <button type="button" className="btn btn-secondary" disabled={historyLoading} onClick={() => void loadMoreHistory()}>加载更多历史</button>}
               </section>
 
-            <aside className="live-inspector-column" aria-label="Core 实时检查器">
+            <details className="live-inspector-column ui-chat-inspector"><summary>运行详情与文件</summary><div className="ui-chat-inspector-body" aria-label="Core 实时检查器">
+          <details className="live-thread-summary ui-thread-details"><summary>会话信息 <StatusBadge status={selectedThread.status} label={statusLabel(selectedThread.status)} size="sm" /></summary><div className="ui-thread-detail-body" aria-label="Core Thread Projection">
+            <div className="live-thread-summary-main">
+              <span className="live-thread-icon" aria-hidden="true"><MessageSquare size={16} /></span>
+              <div>
+                <strong>{liveThreadTitle(selectedThread)}</strong>
+                <span>{selectedThread.workspaceRef || '未绑定 Workspace'} · {selectedThread.id}</span>
+              </div>
+            </div>
+            </div>
+          </details>
+              {selectedThread.sessionId && <B24ContextInspector sessionId={selectedThread.sessionId} busy={busy} />}
               <div className="live-inspector-actions">
                 <button type="button" className={`btn btn-secondary btn-sm${showEvents ? ' active' : ''}`} onClick={() => setShowEvents((current) => !current)}>
-                  <Wifi size={13} aria-hidden="true" />{showEvents ? '隐藏 SSE' : '查看 SSE'}
+                  <Wifi size={13} aria-hidden="true" />{showEvents ? '隐藏事件' : '运行事件'}
                 </button>
                 <button type="button" className={`btn btn-secondary btn-sm${showFiles ? ' active' : ''}`} onClick={() => {
                   const next = !showFiles;
@@ -688,11 +717,11 @@ export const LiveChatView: React.FC = () => {
                 />
               )}
               <section className="live-panel live-scope-panel">
-                <div className="live-panel-heading"><h2>本阶段边界</h2><ChevronRight size={15} aria-hidden="true" /></div>
-                <p>Live 已接入 Core 连接、Workspace/Project、Thread、Session/Run、SSE Cursor 回放、Approval 与类型化错误。</p>
+                <div className="live-panel-heading"><h2>连接与协议</h2><ChevronRight size={15} aria-hidden="true" /></div>
+                <p>当前使用本地 Core 的真实状态。会话、运行、审批和事件记录均由服务端提供，协议为 phase1e.v1 / B2。</p>
                 <p className="live-not-connected">OAuth PKCE 由 Core 部署配置启用；PWA、TUI 与 Tauri 均复用生成 Client，远程连接仍以服务端验收状态为准。</p>
               </section>
-            </aside>
+            </div></details>
           </div>
         </>
       )}

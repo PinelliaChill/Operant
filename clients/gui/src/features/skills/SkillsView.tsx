@@ -199,7 +199,7 @@ const DemoSkillsView: React.FC = () => {
                 width: 'auto',
                 minWidth: 180,
                 height: 30,
-                padding: '2px 8px',
+                padding: '2px 32px 2px 8px',
                 fontSize: '13px',
                 fontWeight: 600,
               }}

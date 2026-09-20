@@ -1,0 +1,473 @@
+/**
+ * 模型与角色页的局部视觉规则。
+ * 只作用于 LiveAgentsView 的页面和弹窗内容，不覆盖共享样式或其他页面。
+ */
+
+.b2-agents-page[data-client-mode="live"] {
+  color: var(--text-primary);
+}
+
+.b2-agents-page .b2-agents-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.b2-agents-page .b2-agents-header-copy {
+  min-width: 0;
+}
+
+.b2-agents-page .b2-agents-kicker,
+.b2-agents-page .b2-agents-card-kicker {
+  display: block;
+  color: var(--accent-on-subtle);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.b2-agents-page .b2-agents-kicker {
+  margin-bottom: var(--space-1);
+}
+
+.b2-agents-page .b2-agents-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.b2-agents-page .b2-agents-inner {
+  width: min(100%, 1120px);
+  max-width: 1120px;
+  padding-top: 20px;
+  gap: 20px;
+}
+
+.b2-agents-page .b2-agents-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.b2-agents-page .b2-agents-section + .b2-agents-section {
+  margin-top: var(--space-2);
+}
+
+.b2-agents-page .b2-agents-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.b2-agents-page .b2-agents-section-title {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.b2-agents-page .b2-agents-section-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  color: var(--accent-on-subtle);
+  background: var(--accent-subtle);
+}
+
+.b2-agents-page .b2-agents-section-title h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-section);
+  line-height: var(--line-height-heading);
+}
+
+.b2-agents-page .b2-agents-section-title p,
+.b2-agents-page .b2-agents-section-meta {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.b2-agents-page .b2-agents-section-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: 0;
+  text-align: right;
+}
+
+.b2-agents-page .b2-agents-count {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.b2-agents-page .b2-agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: var(--space-3);
+}
+
+.b2-agents-page .b2-agents-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.b2-agents-page .b2-agents-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.b2-agents-page .b2-agents-card-heading {
+  min-width: 0;
+}
+
+.b2-agents-page .b2-agents-card-kicker {
+  margin-bottom: 2px;
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+
+.b2-agents-page .b2-agents-card-heading h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-heading);
+  overflow-wrap: anywhere;
+}
+
+.b2-agents-page .b2-agents-card-subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.b2-agents-page .b2-agents-card-summary,
+.b2-agents-page .b2-agents-detail-grid {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.b2-agents-page .b2-agents-card-summary > div,
+.b2-agents-page .b2-agents-detail-grid > div {
+  display: grid;
+  grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.b2-agents-page .b2-agents-card-summary dt,
+.b2-agents-page .b2-agents-detail-grid dt {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.b2-agents-page .b2-agents-card-summary dd,
+.b2-agents-page .b2-agents-detail-grid dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.b2-agents-page .b2-agents-card-summary code,
+.b2-agents-page .b2-agents-detail-grid code,
+.b2-agents-modal-content .b2-agents-form code {
+  color: var(--accent-on-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.b2-agents-page .b2-agents-details {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-2);
+}
+
+.b2-agents-page .b2-agents-details summary {
+  width: fit-content;
+  max-width: 100%;
+  color: var(--accent-on-subtle);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.b2-agents-page .b2-agents-details summary:focus-visible,
+.b2-agents-page .b2-agents-discovery-id:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b2-agents-page .b2-agents-details[open] summary {
+  margin-bottom: var(--space-3);
+}
+
+.b2-agents-page .b2-agents-detail-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.b2-agents-page .b2-agents-detail-wide {
+  grid-column: 1 / -1;
+}
+
+.b2-agents-page .b2-agents-long-copy {
+  white-space: pre-wrap;
+}
+
+.b2-agents-page .b2-agents-card-action {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.b2-agents-page .b2-agents-empty-shell {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+/* EmptyState owns inline spacing; these scoped overrides keep the two empty states compact. */
+.b2-agents-page .b2-agents-empty-shell > div {
+  padding: var(--space-4) var(--space-3) !important;
+}
+
+.b2-agents-page .b2-agents-empty-shell > div > div:first-child {
+  width: 36px !important;
+  height: 36px !important;
+  margin-bottom: var(--space-2) !important;
+}
+
+.b2-agents-page .b2-agents-empty-shell > div > div:first-child svg {
+  width: 18px;
+  height: 18px;
+}
+
+.b2-agents-page .b2-agents-empty-shell h4 {
+  margin-bottom: var(--space-1) !important;
+}
+
+.b2-agents-page .b2-agents-empty-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 56px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+}
+
+.b2-agents-page .b2-agents-empty-inline > svg {
+  flex-shrink: 0;
+  color: var(--accent-action);
+}
+
+.b2-agents-page .b2-agents-empty-inline > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.b2-agents-page .b2-agents-empty-inline strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.b2-agents-page .b2-agents-empty-inline span {
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.b2-agents-page .b2-agents-pagination {
+  margin-top: 0;
+  justify-content: flex-start;
+}
+
+/* The portaled Modal is outside the page node, so its own content root stays namespaced. */
+.b2-agents-modal-content.b2-agents-form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.b2-agents-modal-content .b2-agents-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.b2-agents-modal-content .b2-agents-fieldset legend {
+  padding: 0 var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.b2-agents-modal-content .b2-agents-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.b2-agents-modal-content .b2-agents-field-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.b2-agents-modal-content .b2-agents-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.b2-agents-modal-content .b2-agents-field > label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.b2-agents-modal-content .b2-agents-field > p,
+.b2-agents-modal-content .b2-agents-form-note,
+.b2-agents-modal-content .b2-agents-discovery p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.b2-agents-modal-content .b2-agents-field .input,
+.b2-agents-modal-content .b2-agents-field .select,
+.b2-agents-modal-content .b2-agents-field .textarea {
+  margin: 0;
+}
+
+.b2-agents-modal-content .b2-agents-field .textarea {
+  min-height: 132px;
+  resize: vertical;
+}
+
+.b2-agents-modal-content .b2-agents-discovery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.b2-agents-modal-content .b2-agents-discovery-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.b2-agents-modal-content .b2-agents-discovery-head h3 {
+  margin: 0 0 var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.b2-agents-modal-content .b2-agents-discovery-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.b2-agents-modal-content .b2-agents-discovery-result > strong {
+  width: 100%;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.b2-agents-modal-content .b2-agents-discovery-result > span {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.b2-agents-modal-content .b2-agents-discovery-id {
+  max-width: 100%;
+  min-height: var(--control-height-sm);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--accent-on-subtle);
+  background: var(--bg-card);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.b2-agents-modal-content .b2-agents-discovery-id:hover {
+  border-color: var(--accent-action);
+  background: var(--accent-subtle);
+}
+
+.b2-agents-modal-content .b2-agents-form-note {
+  padding-top: var(--space-1);
+}
+
+@media (max-width: 760px) {
+  .b2-agents-page .b2-agents-header,
+  .b2-agents-page .b2-agents-section-heading,
+  .b2-agents-modal-content .b2-agents-discovery-head {
+    flex-direction: column;
+  }
+
+  .b2-agents-page .b2-agents-header-actions,
+  .b2-agents-page .b2-agents-section-meta {
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .b2-agents-page .b2-agents-detail-grid,
+  .b2-agents-modal-content .b2-agents-field-grid,
+  .b2-agents-modal-content .b2-agents-field-grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .b2-agents-page .b2-agents-detail-wide {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .b2-agents-page .b2-agents-card,
+  .b2-agents-page .b2-agents-details,
+  .b2-agents-modal-content .b2-agents-discovery-id {
+    transition: none;
+  }
+}

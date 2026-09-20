@@ -76,9 +76,32 @@ html, body, #root {
   width: 100%;
   overflow: hidden;
   font-family: var(--font-sans);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
   background-color: var(--bg-app);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Keep default HTML and native controls on the same type scale as components. */
+:where(button, input, select, textarea) {
+  font: inherit;
+}
+
+:where(h1, h2, h3, h4) {
+  font-weight: 600;
+  line-height: var(--line-height-heading);
+  overflow-wrap: anywhere;
+}
+
+:where(h1) { font-size: var(--font-size-title); }
+:where(h2) { font-size: var(--font-size-section); }
+:where(h3, h4) { font-size: var(--font-size-body); }
+:where(code, pre, kbd, samp) { font-family: var(--font-mono); }
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
 }
 
 .offline-boundary {
@@ -247,13 +270,16 @@ body.no-scroll {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--font-size-sm);
+  font-family: var(--font-sans);
+  line-height: 1.4;
+  min-height: var(--control-height);
   font-weight: 500;
   padding: 6px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: all var(--dur-1) var(--ease-standard);
+  transition: background-color var(--dur-1) var(--ease-standard), border-color var(--dur-1) var(--ease-standard), color var(--dur-1) var(--ease-standard);
   background: transparent;
   color: var(--text-primary);
   user-select: none;
@@ -284,7 +310,7 @@ body.no-scroll {
 }
 
 .btn-secondary {
-  background-color: var(--bg-subtle);
+  background-color: var(--bg-card);
   color: var(--text-primary);
   border-color: var(--border-subtle);
 }
@@ -314,10 +340,12 @@ body.no-scroll {
 
 .btn-sm {
   padding: 4px 8px;
-  font-size: 12px;
+  min-height: var(--control-height-sm);
+  font-size: var(--font-size-xs);
 }
 
 .btn-icon {
+  min-width: var(--control-height);
   padding: 6px;
   border-radius: var(--radius-sm);
 }
@@ -325,9 +353,12 @@ body.no-scroll {
 /* ========== 表单控件 ========== */
 .input, .textarea, .select {
   width: 100%;
+  min-width: 0;
+  min-height: var(--control-height);
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-family: inherit;
+  line-height: 1.5;
   color: var(--text-primary);
   background-color: var(--bg-card);
   border: 1px solid var(--border-subtle);
@@ -338,7 +369,34 @@ body.no-scroll {
 .input:focus, .textarea:focus, .select:focus {
   border-color: var(--border-focus);
   box-shadow: 0 0 0 1px var(--border-focus);
-  outline: none;
+}
+
+/* Native select behavior, with consistent WebKit/Chromium field chrome. */
+.select:not([multiple]):not([size]),
+.b2-memory-form-select:not([multiple]):not([size]) {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 32px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.input:disabled, .textarea:disabled, .select:disabled {
+  background-color: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+@media (forced-colors: active) {
+  .select:not([multiple]):not([size]),
+  .b2-memory-form-select:not([multiple]):not([size]) {
+    -webkit-appearance: auto;
+    appearance: auto;
+    background-image: none;
+  }
 }
 
 .badge {
@@ -2381,14 +2439,15 @@ body.no-scroll {
 }
 
 .section-title {
-  font-size: 18px;
+  font-size: var(--font-size-title);
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .section-sub {
-  margin-top: 4px;
-  font-size: 13px;
+  margin-top: var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
   color: var(--text-secondary);
 }
 
@@ -2752,7 +2811,7 @@ body.no-scroll {
   margin-top: auto;
   padding-top: 8px;
   text-align: center;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--text-muted);
 }
 
@@ -3679,6 +3738,103 @@ body.no-scroll {
   }
 }
 
+/* B2 model/role views already emit these classes; keep their structure intact. */
+.b2-config-section + .b2-config-section {
+  margin-top: var(--space-6);
+}
+
+.b2-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: var(--space-4);
+}
+
+.b2-config-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.b2-config-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.b2-config-card-head > div {
+  min-width: 0;
+}
+
+.b2-config-card p, .b2-config-meta dd {
+  overflow-wrap: anywhere;
+}
+
+.b2-config-meta {
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.b2-config-meta > div {
+  display: grid;
+  grid-template-columns: minmax(64px, 1fr) minmax(0, 3fr);
+  gap: var(--space-3);
+}
+
+.b2-config-meta dt { color: var(--text-secondary); }
+
+.b2-config-form {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.b2-config-form > label:not(:first-child),
+.b2-config-form > div {
+  margin-top: var(--space-2);
+}
+
+.b2-config-form > label {
+  margin-bottom: 0;
+}
+
+.b2-config-form > div > div {
+  min-width: 0;
+}
+
+.b2-config-discovery, .b2-discovery-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.b2-discovery-result {
+  width: 100%;
+  font-size: var(--font-size-sm);
+}
+
+.b2-discovery-result > strong { width: 100%; }
+
+.b2-discovery-id {
+  max-width: 100%;
+  min-height: var(--control-height-sm);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--accent-on-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+  text-align: left;
+  cursor: pointer;
+}
+
+.b2-discovery-id:hover { background: var(--accent-subtle); }
+
 /* ========== v4 Coder-C：协作模式（工作流目录 / 工作流界面 / 群聊界面 / Agent 个人界面） ========== */
 
 /* ---- 目录/详情徽章（语义色 tokens，无新增色相） ---- */
@@ -4139,7 +4295,7 @@ body.no-scroll {
 .approval-rule-select {
   width: 148px;
   flex-shrink: 0;
-  padding: 4px 8px;
+  padding: 4px 32px 4px 8px;
   font-size: 12px;
 }
 
@@ -4357,9 +4513,9 @@ body.no-scroll {
 .live-route-header h1 {
   margin: 3px 0 0;
   color: var(--text-primary);
-  font-size: 18px;
-  font-weight: 650;
-  line-height: 1.25;
+  font-size: var(--font-size-title);
+  font-weight: 600;
+  line-height: var(--line-height-heading);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4370,7 +4526,7 @@ body.no-scroll {
   align-items: center;
   gap: 6px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   letter-spacing: .02em;
 }
 
@@ -4454,8 +4610,8 @@ body.no-scroll {
   flex-direction: column;
   gap: 4px;
   color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
 }
 
 .live-select-label .select {
@@ -4558,8 +4714,8 @@ body.no-scroll {
   align-items: center;
   gap: 6px;
   color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--font-size-body);
+  font-weight: 600;
 }
 
 .live-section-heading span,

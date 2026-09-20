@@ -116,8 +116,8 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索 Core Thread"
-            aria-label="搜索 Core Thread"
+            placeholder="搜索项目或会话"
+            aria-label="搜索项目或会话"
             className="rail-sidebar-search-input"
           />
         </div>
@@ -126,7 +126,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
           className="btn btn-ghost btn-icon"
           onClick={() => setNewSessionOpen(true)}
           aria-label="创建 Core Session"
-          title="创建 Core Session"
+          title="为当前会话创建运行"
           disabled={!canCreateSession || creatingSession}
         >
           <Plus size={16} aria-hidden="true" />
@@ -144,15 +144,15 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
         )}
       </div>
 
-      <div className="live-sidebar-status" role="status" aria-live="polite">
+      {(phase !== 'ready' || projectionStale) && <div className="live-sidebar-status" role="status" aria-live="polite">
         <StatusBadge
           status={phase === 'ready' ? 'connected' : phase === 'error' ? 'disconnected' : 'pending'}
           label={phaseLabel}
           size="sm"
           pulse={phase === 'connecting'}
         />
-        {projectionStale && <span className="live-sidebar-stale">Projection 待校正</span>}
-      </div>
+        {projectionStale && <span className="live-sidebar-stale">正在同步最新状态</span>}
+      </div>}
 
       <div className="rail-sidebar-scroll">
         {lastError && (
@@ -164,7 +164,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
 
         {phase === 'ready' && filteredProjects.length === 0 && (
           <div className="rail-sidebar-empty live-sidebar-empty">
-            {normalizedQuery ? '没有匹配的 Core Project/Thread' : 'Core 暂无可读 Workspace Project'}
+            {normalizedQuery ? '没有匹配的项目或会话' : '尚未添加可访问的项目'}
           </div>
         )}
 
@@ -219,7 +219,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                       <span className="rail-sidebar-time">{formatRelativeDay(thread.updatedAt)}</span>
                     </button>
                   )) : (
-                    <div className="rail-sidebar-empty">{normalizedQuery ? '无匹配 Thread' : '暂无 Thread'}</div>
+                    <div className="rail-sidebar-empty">{normalizedQuery ? '没有匹配的会话' : '暂无会话'}</div>
                   )}
                 </div>
               )}

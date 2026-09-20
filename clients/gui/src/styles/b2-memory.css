@@ -40,7 +40,7 @@
 }
 
 .b2-memory-title {
-  font-size: 18px;
+  font-size: var(--font-size-title);
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
@@ -219,6 +219,19 @@
   flex-wrap: wrap;
 }
 
+.b2-memory-card-header > div {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.b2-memory-card-header p {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+  overflow-wrap: anywhere;
+}
+
 .b2-memory-card-header h2,
 .b2-memory-card-header h3,
 .b2-memory-card-title {
@@ -249,7 +262,7 @@
 }
 
 .b2-memory-card-desc {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--text-secondary);
   line-height: 1.45;
   margin: 0;
@@ -282,6 +295,18 @@
   box-sizing: border-box;
 }
 
+.b2-memory-form > label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.b2-memory-form > small {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-body);
+}
+
 .b2-memory-form-group {
   display: flex;
   flex-direction: column;
@@ -303,8 +328,10 @@
 .b2-memory-form-select,
 .b2-memory-form-textarea {
   width: 100%;
+  min-height: var(--control-height);
+  min-width: 0;
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-family: inherit;
   color: var(--text-primary);
   background: var(--bg-app);
@@ -836,7 +863,8 @@
 
   .b2-memory-card-header h2,
   .b2-memory-card-header h3,
-  .b2-memory-card-title {
+  .b2-memory-card-title,
+  .b2-memory-card-header > div {
     flex: 0 0 auto;
     width: 100%;
   }
