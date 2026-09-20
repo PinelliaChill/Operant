@@ -12,4 +12,6 @@
 
 验收范围：图标视觉回读，GUI 构建及现有客户端测试，PNG/ICNS 格式与尺寸，diff 检查。无需重跑后端或真实模型链路。本次不代表已安装桌面应用的实机验收。
 
-实际结果：GUI `npm run build`（含 TypeScript 与 bundle 预算检查）通过，`npm test` 121 项通过；512px 与 32px PNG 已视觉回读，PNG 带透明边缘；macOS `iconutil` 成功解析 ICNS；favicon 与主 SVG 字节一致，`git diff --check` 通过。未重构建或安装桌面应用，未合并、推送或发布。
+本地验收时的结果：GUI `npm run build`（含 TypeScript 与 bundle 预算检查）通过，`npm test` 121 项通过；512px 与 32px PNG 已视觉回读，PNG 带透明边缘；macOS `iconutil` 成功解析 ICNS；favicon 与主 SVG 字节一致，`git diff --check` 通过。当时未重构建或安装桌面应用，未合并、推送或发布。
+
+合并续接：本会话执行者登记为 Agent1（此前署名 Codex），继续负责本批交付；会话入口为本图标设计与合并任务。现采用主目录 `AGENTS.md` 的 workflow-20260920.1，历史署名保留；变化仅为编号身份，不改变图标范围与验收要求。User 已授权合并，先前登录阻塞解除后继续；基线已快进到 `main@d8311f3`，与原 B2-7 基线源码内容相同，复用上述产品验证。
