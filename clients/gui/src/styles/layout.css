@@ -4295,7 +4295,7 @@ body.no-scroll {
 .approval-rule-select {
   width: 148px;
   flex-shrink: 0;
-  padding: 4px 8px;
+  padding: 4px 32px 4px 8px;
   font-size: 12px;
 }
 

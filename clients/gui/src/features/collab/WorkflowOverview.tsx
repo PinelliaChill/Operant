@@ -175,7 +175,7 @@ export const WorkflowOverview: React.FC = () => {
                 <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>当前模板:</span>
                 <select
                   className="select"
-                  style={{ maxWidth: 240, fontSize: '12px', padding: '3px 8px', height: 28 }}
+                  style={{ maxWidth: 240, fontSize: '12px', padding: '3px 32px 3px 8px', height: 28 }}
                   value={selected.id}
                   onChange={(e) => {
                     setManualSelectedId(e.target.value);
