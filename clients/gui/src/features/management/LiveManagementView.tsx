@@ -48,6 +48,7 @@ import {
 import type { RailOutletContext } from '../../app/RailLayout';
 import { B25GovernancePanel } from './B25GovernancePanel';
 import type { B25ClientLike, B2ModelClientLike } from './b25-state';
+import './ui-refine-management.css';
 
 export type ManagementTab = 'projects' | 'knowledge' | 'plugins' | 'settings' | 'skills' | 'retention';
 
@@ -58,6 +59,15 @@ const TAB_LABELS: Record<ManagementTab, string> = {
   settings: '记忆设置',
   skills: '技能',
   retention: '保留与审计',
+};
+
+const TAB_DESCRIPTIONS: Record<ManagementTab, string> = {
+  projects: '登记工作区并管理项目生命周期。',
+  knowledge: '保存、检索和审阅项目知识。',
+  plugins: '安装插件并管理运行模式、项目绑定与数据集。',
+  settings: '控制记忆范围并核对配置来源。',
+  skills: '发现受信 Skill，按项目启用和管理安装副本。',
+  retention: '管理 Artifact 保留状态并查看审计结果。',
 };
 
 const TABS: ManagementTab[] = ['projects', 'knowledge', 'plugins', 'settings', 'skills', 'retention'];
@@ -800,17 +810,84 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
   };
 
   return (
-    <div className="b2-memory" data-panel="skills">
-      <section className="b2-memory-card">
-        <div className="b2-memory-card-header"><div><h2>Skill 基础管理</h2><p>发现服务端受信目录中的已有 Skill，安装、项目启停和卸载都由用户明确操作；执行权限仍由 Action Gateway 管理。</p></div><Sparkles size={18} aria-hidden="true" /><ActionButton label="发现已有技能" onClick={() => void execute({ action: 'skill_discover' }, '发现已有技能')} disabled={busy} icon={<Search size={13} aria-hidden="true" />} /></div>
-        {state.skill_catalog.length === 0 ? <EmptyState icon={Sparkles} title="没有可安装 Skill" description="Live 模式不会显示演示 Skill；请先发现服务端已配置的受信目录。" /> : <div className="b2-memory-grid">{state.skill_catalog.map((entry) => <article className="b2-memory-card" key={entry.package_ref}><div className="b2-memory-card-header"><div><h3>{entry.name}</h3><p><code>{entry.package_ref}</code></p></div><ActionButton label="安装" tone="primary" onClick={() => void execute({ action: 'skill_install', package_ref: entry.package_ref, confirmed: true }, '安装 Skill')} disabled={busy} icon={<Plus size={13} aria-hidden="true" />} /></div></article>)}</div>}
+    <div className="b2-memory ui-refine-management-panel ui-refine-skills" data-panel="skills">
+      <section className="ui-refine-skill-section" aria-labelledby="skills-catalog-title">
+        <div className="ui-refine-skill-section-heading">
+          <div className="ui-refine-skill-heading-line">
+            <span className="ui-refine-skill-icon" aria-hidden="true"><Sparkles size={16} /></span>
+            <div>
+              <h2 id="skills-catalog-title">Skill 目录</h2>
+              <p>服务端受信目录中的可用 Skill。安装、项目启停和卸载均需明确操作，权限仍由 Action Gateway 管理。</p>
+            </div>
+          </div>
+          <ActionButton label="发现技能" onClick={() => void execute({ action: 'skill_discover' }, '发现已有技能')} disabled={busy} icon={<Search size={13} aria-hidden="true" />} />
+        </div>
+        {state.skill_catalog.length === 0 ? (
+          <div className="ui-refine-skill-empty">
+            <EmptyState icon={Sparkles} title="没有可安装 Skill" description="Live 模式不会显示演示数据；请点击“发现技能”重新查询服务端目录。" />
+          </div>
+        ) : (
+          <div className="ui-refine-skill-list" role="list" aria-label="可安装 Skill">
+            {state.skill_catalog.map((entry) => (
+              <article className="ui-refine-skill-row" key={entry.package_ref} role="listitem">
+                <div className="ui-refine-skill-row-main">
+                  <div className="ui-refine-skill-row-title"><h3>{entry.name}</h3><span className="ui-refine-skill-source">服务端目录</span></div>
+                  <code>{entry.package_ref}</code>
+                </div>
+                <ActionButton label="安装" tone="primary" onClick={() => void execute({ action: 'skill_install', package_ref: entry.package_ref, confirmed: true }, '安装 Skill')} disabled={busy} icon={<Plus size={13} aria-hidden="true" />} />
+              </article>
+            ))}
+          </div>
+        )}
       </section>
-      <section aria-labelledby="skills-installed-title">
-        <div className="b2-memory-card-header"><div><h2 id="skills-installed-title">已安装 Skill</h2><p>{skills.length} 个 Skill；可按项目启用、停用或卸载安装副本。</p></div></div>
-        <div className="b2-memory-form"><label htmlFor="skills-project">项目范围</label><ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="skills-project" /><small>项目级启停会提交 project_id；卸载安装副本不会删除独立来源。</small></div>
-        {skills.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Sparkles} title="暂无已安装 Skill" description="从上方目录选择安装。" /></div> : <div className="b2-memory-grid">{skills.map((skill) => { const projectIds = skill.project_ids ?? []; const enabled = Boolean(projectId && projectIds.includes(projectId)); return <article className="b2-memory-card" key={skill.skill_id} data-state={skill.state}><div className="b2-memory-card-header"><div><h3>{skill.name}</h3><p><code>{skill.package_ref}</code></p></div><StatusBadge status={statusKind(skill.state)} label={statusLabel(skill.state)} size="sm" /></div><div className="b2-memory-meta"><span>信任：{skill.trust_status ?? '未提供'}</span><span>已启用项目：{projectIds.length ? projectIds.join('、') : '无'}</span></div><div className="b2-memory-actions"><ActionButton label={enabled ? '停用当前项目' : '启用当前项目'} onClick={() => void toggleProjectSkill(skill)} disabled={busy || !projectId || skill.package_ref.startsWith('experience:') || ['disabled', 'deactivated', 'uninstalled'].includes(skill.state)} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label={uninstallId === skill.skill_id ? '再次点击确认卸载' : '卸载 Skill'} tone={uninstallId === skill.skill_id ? 'primary' : 'ghost'} onClick={() => void uninstall(skill)} disabled={busy || skill.package_ref.startsWith('experience:')} icon={<Trash2 size={13} aria-hidden="true" />} /></div>{uninstallId === skill.skill_id && <p className="b2-memory-warning" role="status">卸载只删除当前安装副本并保留来源；再次点击按钮才提交。</p>}</article>; })}</div>}
+      <section className="ui-refine-skill-section" aria-labelledby="skills-installed-title">
+        <div className="ui-refine-skill-section-heading">
+          <div>
+            <h2 id="skills-installed-title">已安装 Skill</h2>
+            <p>{skills.length} 个安装副本；可按项目启用、停用或卸载。</p>
+          </div>
+          <span className="ui-refine-skill-count">{skills.length} 个</span>
+        </div>
+        <div className="ui-refine-skill-scope">
+          <div className="ui-refine-skill-scope-copy">
+            <label htmlFor="skills-project">启用范围</label>
+            <small>项目级启停只提交所选 project_id；卸载安装副本不会删除独立来源。</small>
+          </div>
+          <ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="skills-project" />
+        </div>
+        {skills.length === 0 ? (
+          <div className="ui-refine-skill-empty">
+            <EmptyState icon={Sparkles} title="暂无已安装 Skill" description="从上方目录选择安装，安装副本会出现在这里。" />
+          </div>
+        ) : (
+          <div className="ui-refine-skill-list" role="list" aria-label="已安装 Skill">
+            {skills.map((skill) => {
+              const projectIds = skill.project_ids ?? [];
+              const enabled = Boolean(projectId && projectIds.includes(projectId));
+              const isExperienceSkill = skill.package_ref.startsWith('experience:');
+              const controlsDisabled = busy || !projectId || isExperienceSkill || ['disabled', 'deactivated', 'uninstalled'].includes(skill.state);
+              return (
+                <article className="ui-refine-skill-row ui-refine-skill-installed" key={skill.skill_id} data-state={skill.state} role="listitem">
+                  <div className="ui-refine-skill-row-main">
+                    <div className="ui-refine-skill-row-title"><h3>{skill.name}</h3><StatusBadge status={statusKind(skill.state)} label={statusLabel(skill.state)} size="sm" /></div>
+                    <code>{skill.package_ref}</code>
+                    <div className="ui-refine-skill-meta"><span>信任：{skill.trust_status ?? '未提供'}</span><span>已启用项目：{projectIds.length ? projectIds.join('、') : '无'}</span></div>
+                    {isExperienceSkill && <p className="ui-refine-skill-permission" role="note">经验 Skill 的启停与卸载由下方“经验与授权”区域管理。</p>}
+                  </div>
+                  <div className="ui-refine-skill-actions">
+                    <ActionButton label={enabled ? '停用当前项目' : '启用当前项目'} onClick={() => void toggleProjectSkill(skill)} disabled={controlsDisabled} icon={<Power size={13} aria-hidden="true" />} />
+                    <ActionButton label={uninstallId === skill.skill_id ? '再次点击确认卸载' : '卸载 Skill'} tone={uninstallId === skill.skill_id ? 'primary' : 'ghost'} onClick={() => void uninstall(skill)} disabled={busy || isExperienceSkill} icon={<Trash2 size={13} aria-hidden="true" />} />
+                  </div>
+                  {uninstallId === skill.skill_id && <p className="b2-memory-warning ui-refine-skill-warning" role="status">卸载只删除当前安装副本并保留来源；再次点击按钮才提交。</p>}
+                </article>
+              );
+            })}
+          </div>
+        )}
       </section>
-      <B26ExperiencePanel management={state} projectId={projectId} connectionStatus={connectionStatus} onMutation={refresh} />
+      <section className="ui-refine-skills-advanced" aria-label="经验与授权">
+        <B26ExperiencePanel management={state} projectId={projectId} connectionStatus={connectionStatus} onMutation={refresh} />
+      </section>
     </div>
   );
 };
@@ -921,8 +998,8 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
 
   if (!state && phase !== 'ready') {
     return (
-      <div className="section-view" data-client-mode="live">
-        <header className="section-header b2-memory-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开服务侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时服务</span><h1>管理中心</h1></div></div><ActionButton label="刷新" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={14} aria-hidden="true" />} /></header>
+      <div className="section-view ui-refine-management" data-client-mode="live">
+        <header className="section-header b2-memory-header ui-refine-management-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开服务侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时服务</span><h1>{TAB_LABELS[tab]}</h1><p className="section-sub ui-refine-management-subtitle">{TAB_DESCRIPTIONS[tab]}</p></div></div><ActionButton label="刷新" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={14} aria-hidden="true" />} /></header>
         <div className="section-scroll"><div className="section-inner"><div className="b2-memory-card b2-memory-empty" role={error ? 'alert' : 'status'}>{phase === 'loading' && <Loader2 size={22} className="animate-spin" aria-hidden="true" />}{error ? <><AlertTriangle size={22} aria-hidden="true" /><h2>{error.code}</h2><p>{error.message}</p>{error.code === 'b2_3_client_unavailable' && <p>请在生成 `b2_3.generated.ts` 出现后把它注入 ClientContext；页面不会回退到 Demo。</p>}{error.outcomeUnknown && <p>当前写操作结果未知，请刷新后核对状态。</p>}</> : <><h2>{phase === 'loading' ? '正在读取管理 Projection…' : '管理页面未就绪'}</h2><p>Live 模式只显示服务端返回的项目、知识、插件、设置和 Skill。</p></>}{error && <ActionButton label="重新查询" tone="primary" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={13} aria-hidden="true" />} />}</div></div></div>
       </div>
     );
@@ -943,14 +1020,14 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
   };
 
   return (
-    <div className="section-view" data-client-mode="live">
-      <header className="section-header b2-memory-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开 Core 侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时服务</span><h1>管理中心</h1><p className="section-sub">项目、知识、插件、设置与 Skill 在这里统一管理。</p></div></div><div className="b2-memory-actions"><StatusBadge status={phase === 'ready' && connectionStatus === 'connected' ? 'connected' : 'pending'} label={phase === 'ready' && connectionStatus === 'connected' ? '已连接' : '未就绪'} size="sm" /><ActionButton label="刷新" onClick={() => void refresh()} disabled={Boolean(actionLabel)} icon={<RefreshCw size={14} aria-hidden="true" />} /></div></header>
+    <div className="section-view ui-refine-management" data-client-mode="live">
+      <header className="section-header b2-memory-header ui-refine-management-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开 Core 侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时服务</span><h1>{TAB_LABELS[tab]}</h1><p className="section-sub ui-refine-management-subtitle">{TAB_DESCRIPTIONS[tab]}</p></div></div><div className="b2-memory-actions"><StatusBadge status={phase === 'ready' && connectionStatus === 'connected' ? 'connected' : 'pending'} label={phase === 'ready' && connectionStatus === 'connected' ? '已连接' : '未就绪'} size="sm" /><ActionButton label="刷新" onClick={() => void refresh()} disabled={Boolean(actionLabel)} icon={<RefreshCw size={14} aria-hidden="true" />} /></div></header>
       <div className="section-scroll"><div className="section-inner">
+        <nav className="b2-memory-tabs ui-refine-management-nav" aria-label="管理分区" role="tablist">{TABS.map((entry) => <button key={entry} type="button" role="tab" aria-selected={entry === tab} className={`b2-memory-tab ui-refine-management-tab${entry === tab ? ' active' : ''}`} onClick={() => setTab(entry)}>{TAB_LABELS[entry]}</button>)}</nav>
         {connectionStatus !== 'connected' && <FormError message="Core 连接已断开；管理写操作已禁用。" id="b2-connection-error" />}
         {error && <FormError message={`${error.code}：${error.message}${error.outcomeUnknown ? ' 写操作结果未知，请刷新后人工核对，客户端不会自动重放。' : ''}`} id="b2-management-error" />}
         {actionLabel && <div className="b2-memory-status" role="status" aria-live="polite"><Loader2 size={14} className="animate-spin" aria-hidden="true" />{actionLabel}处理中，请等待 Core 返回确认。</div>}
         {lastResult && <div className="b2-memory-status" data-status={lastResult.status} role={['blocked', 'failed'].includes(lastResult.status) ? 'alert' : 'status'} aria-live="polite">服务端返回：{statusLabel(lastResult.status)} · {lastResult.message}</div>}
-        <nav className="b2-memory-tabs" aria-label="管理中心分区" role="tablist">{TABS.map((entry) => <button key={entry} type="button" role="tab" aria-selected={entry === tab} className={`b2-memory-tab${entry === tab ? ' active' : ''}`} onClick={() => setTab(entry)}>{TAB_LABELS[entry]}</button>)}</nav>
         {tab === 'projects' && <ProjectsPanel {...panelProps} />}
         {tab === 'knowledge' && <KnowledgePanel {...panelProps} />}
         {tab === 'plugins' && <PluginPanel {...panelProps} />}

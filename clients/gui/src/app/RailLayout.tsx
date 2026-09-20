@@ -11,6 +11,7 @@
  */
 
 import React, { useState } from 'react';
+import '../styles/ui-refine-shell.css';
 import { NavLink, Outlet, useLocation, useMatch } from 'react-router-dom';
 import {
   MessageSquare,
@@ -62,7 +63,7 @@ const RAIL_SECTIONS = [
   { to: '/approvals', label: '审批', icon: ShieldCheck },
   { to: '/schedules', label: '调度', icon: CalendarClock },
   { to: '/projects', label: '项目', icon: FolderKanban },
-  { to: '/agents', label: 'Agent', icon: Bot },
+  { to: '/agents', label: '模型与角色', icon: Bot },
   { to: '/extensions', label: '插件与MCP', icon: Puzzle },
   { to: '/skills', label: '技能', icon: Sparkles },
 ] as const;
@@ -480,7 +481,7 @@ export const RailLayout: React.FC = () => {
   );
 
   return (
-    <div className="rail-container">
+    <div className="rail-container ui-refined-shell">
       {/* 跳转链接：仅键盘焦点时可见 */}
       <a href="#main-content" className="skip-link">
         跳到主内容
@@ -502,6 +503,7 @@ export const RailLayout: React.FC = () => {
                 title={item.label}
               >
                 <Icon size={20} />
+                <span className="rail-nav-caption">{item.label}</span>
               </NavLink>
             );
           })}
@@ -515,6 +517,7 @@ export const RailLayout: React.FC = () => {
             title={theme === 'light' ? '切换到深色主题' : '切换到浅色主题'}
           >
             {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
+            <span className="rail-nav-caption">外观</span>
           </button>
           <NavLink
             to="/settings"
@@ -523,6 +526,7 @@ export const RailLayout: React.FC = () => {
             title="设置"
           >
             <Settings size={20} />
+            <span className="rail-nav-caption">设置</span>
           </NavLink>
         </nav>
 

@@ -1,0 +1,305 @@
+/*
+ * UI-REFINE-20260920：管理页与技能页的局部视觉层。
+ * 所有选择器都以 .ui-refine-management 或 .ui-refine-skills 为根，
+ * 不改变其他页面的公共管理样式和业务状态语义。
+ */
+
+.ui-refine-management .ui-refine-management-header {
+  align-items: flex-start;
+}
+
+.ui-refine-management .ui-refine-management-header h1 {
+  margin: 0;
+  font-size: var(--font-size-title, 24px);
+  line-height: var(--line-height-heading, 1.35);
+}
+
+.ui-refine-management .ui-refine-management-subtitle {
+  max-width: 68ch;
+  margin-top: var(--space-2, 8px);
+}
+
+/* 页面级导航保持轻量，使用底部指示器表达当前位置。 */
+.ui-refine-management .ui-refine-management-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1, 4px);
+  margin: 0 0 var(--space-4, 16px);
+  padding: 0 0 var(--space-2, 8px);
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+}
+
+.ui-refine-management .ui-refine-management-nav .ui-refine-management-tab {
+  min-height: var(--control-height-sm, 32px);
+  padding: var(--space-1, 4px) var(--space-3, 12px);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm, 6px) var(--radius-sm, 6px) 0 0;
+  color: var(--text-secondary);
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--font-size-sm, 13px);
+  font-weight: 500;
+}
+
+.ui-refine-management .ui-refine-management-nav .ui-refine-management-tab:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.ui-refine-management .ui-refine-management-nav .ui-refine-management-tab.active,
+.ui-refine-management .ui-refine-management-nav .ui-refine-management-tab[aria-selected="true"] {
+  border-color: transparent;
+  border-bottom-color: var(--accent-action);
+  background: var(--accent-subtle);
+  color: var(--accent-on-subtle);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.ui-refine-management .ui-refine-management-nav .ui-refine-management-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* 技能目录与安装列表：单列紧凑行保留来源、状态和可用操作。 */
+.ui-refine-skills .ui-refine-skill-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4, 16px);
+  padding: var(--space-4, 16px) var(--space-6, 24px);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-sm);
+}
+
+.ui-refine-skills .ui-refine-skill-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3, 12px);
+  flex-wrap: wrap;
+}
+
+.ui-refine-skills .ui-refine-skill-heading-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3, 12px);
+  min-width: 0;
+}
+
+.ui-refine-skills .ui-refine-skill-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--accent-subtle);
+  color: var(--accent-action);
+}
+
+.ui-refine-skills .ui-refine-skill-section-heading h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-section, 18px);
+  line-height: var(--line-height-heading, 1.35);
+}
+
+.ui-refine-skills .ui-refine-skill-section-heading p {
+  max-width: 70ch;
+  margin: var(--space-1, 4px) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm, 13px);
+  line-height: var(--line-height-body, 1.6);
+}
+
+.ui-refine-skills .ui-refine-skill-count,
+.ui-refine-skills .ui-refine-skill-source {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 24px;
+  padding: 2px var(--space-2, 8px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full, 9999px);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs, 12px);
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.ui-refine-skills .ui-refine-skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  min-width: 0;
+}
+
+.ui-refine-skills .ui-refine-skill-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4, 16px);
+  min-width: 0;
+  padding: var(--space-3, 12px) var(--space-4, 16px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 8px);
+  transition: background-color var(--dur-1, 150ms) var(--ease-standard, ease), border-color var(--dur-1, 150ms) var(--ease-standard, ease);
+}
+
+.ui-refine-skills .ui-refine-skill-row:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-strong);
+}
+
+.ui-refine-skills .ui-refine-skill-row:focus-within {
+  border-color: var(--border-focus);
+}
+
+.ui-refine-skills .ui-refine-skill-row-main {
+  min-width: 0;
+}
+
+.ui-refine-skills .ui-refine-skill-row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2, 8px);
+  min-width: 0;
+}
+
+.ui-refine-skills .ui-refine-skill-row-title h3 {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-body, 14px);
+  font-weight: 600;
+  line-height: var(--line-height-heading, 1.35);
+  overflow-wrap: anywhere;
+}
+
+.ui-refine-skills .ui-refine-skill-row-main > code {
+  display: block;
+  max-width: 100%;
+  margin-top: var(--space-1, 4px);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs, 12px);
+  overflow-wrap: anywhere;
+}
+
+.ui-refine-skills .ui-refine-skill-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1, 4px) var(--space-3, 12px);
+  margin-top: var(--space-2, 8px);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm, 13px);
+  line-height: var(--line-height-body, 1.6);
+}
+
+.ui-refine-skills .ui-refine-skill-meta span {
+  overflow-wrap: anywhere;
+}
+
+.ui-refine-skills .ui-refine-skill-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2, 8px);
+}
+
+.ui-refine-skills .ui-refine-skill-actions .btn {
+  flex: 0 0 auto;
+}
+
+.ui-refine-skills .ui-refine-skill-permission {
+  margin: var(--space-2, 8px) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm, 13px);
+  line-height: var(--line-height-body, 1.6);
+}
+
+.ui-refine-skills .ui-refine-skill-scope {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  align-items: end;
+  gap: var(--space-3, 12px);
+  padding: var(--space-3, 12px) var(--space-4, 16px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 8px);
+}
+
+.ui-refine-skills .ui-refine-skill-scope-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1, 4px);
+  min-width: 0;
+}
+
+.ui-refine-skills .ui-refine-skill-scope-copy label {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm, 13px);
+  font-weight: 600;
+}
+
+.ui-refine-skills .ui-refine-skill-scope-copy small {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs, 12px);
+  line-height: var(--line-height-body, 1.6);
+}
+
+.ui-refine-skills .ui-refine-skill-empty {
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md, 8px);
+}
+
+.ui-refine-skills .ui-refine-skill-warning {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.ui-refine-skills .ui-refine-skills-advanced {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .ui-refine-skills .ui-refine-skill-section {
+    padding: var(--space-4, 16px);
+  }
+
+  .ui-refine-skills .ui-refine-skill-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: var(--space-3, 12px);
+  }
+
+  .ui-refine-skills .ui-refine-skill-actions {
+    justify-content: flex-start;
+  }
+
+  .ui-refine-skills .ui-refine-skill-scope {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-refine-skills .ui-refine-skill-row {
+    transition: none;
+  }
+}

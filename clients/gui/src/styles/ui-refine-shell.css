@@ -1,0 +1,19 @@
+.ui-refined-shell { --rail-w: 80px; }
+.ui-refined-shell .rail-icon-rail { gap: 4px; padding-top: 12px; }
+.ui-refined-shell .rail-nav-item { width: 64px; height: auto; min-height: 48px; flex-direction: column; gap: 5px; padding: 7px 3px; border-radius: var(--radius-sm); }
+.ui-refined-shell .rail-nav-caption { display: block; font-size: 11px; line-height: 1.2; font-weight: 500; white-space: nowrap; }
+.ui-refined-shell .rail-sidebar-header { gap: 4px; }
+.ui-refined-shell .rail-sidebar-header .btn-icon { min-width: 30px; padding: 5px; }
+.ui-refined-shell .rail-sidebar-search { min-width: 0; }
+.ui-refined-shell .rail-sidebar-search-input { min-width: 0; }
+.ui-refined-shell .rail-sidebar-empty { font-size: var(--font-size-sm); line-height: 1.6; }
+.ui-refined-shell .rail-statusbar-text { font-size: var(--font-size-xs); }
+.ui-refined-shell .section-header { padding: 24px 28px 20px; }
+.ui-refined-shell .section-inner { max-width: 1080px; }
+@media (max-height: 700px) and (min-width: 960px) {
+  .ui-refined-shell .rail-nav-item { min-height: 42px; gap: 3px; padding: 5px 3px; }
+  .ui-refined-shell .rail-icon-rail { gap: 2px; }
+}
+@media (max-width: 959px) {
+  .ui-refined-shell .section-header { padding: 20px 16px 16px; }
+}
