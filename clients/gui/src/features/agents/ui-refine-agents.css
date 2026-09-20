@@ -310,7 +310,7 @@
 }
 
 /* The portaled Modal is outside the page node, so its own content root stays namespaced. */
-.b2-agents-modal-content .b2-agents-form {
+.b2-agents-modal-content.b2-agents-form {
   display: grid;
   gap: var(--space-4);
 }

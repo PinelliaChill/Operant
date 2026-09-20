@@ -281,7 +281,7 @@ export const LiveAgentsView: React.FC = () => {
                     <span className="b2-agents-section-icon"><Database size={17} aria-hidden="true" /></span>
                     <div>
                       <h2 id="b2-models-title">模型配置</h2>
-                      <p>ModelProfile 负责连接 Provider，并提供模型能力与默认预算。</p>
+                      <p>配置模型连接、能力和默认预算。</p>
                     </div>
                   </div>
                   <div className="b2-agents-section-meta"><span className="b2-agents-count">{models.length} 个</span><span>凭据仅显示引用名</span></div>
@@ -335,7 +335,7 @@ export const LiveAgentsView: React.FC = () => {
                     <span className="b2-agents-section-icon"><Bot size={17} aria-hidden="true" /></span>
                     <div>
                       <h2 id="b2-roles-title">角色预设</h2>
-                      <p>RolePreset 可编辑；创建运行后会由 Core 固化为不可变快照。</p>
+                      <p>编辑可复用的角色；每次运行保留创建时的角色快照。</p>
                     </div>
                   </div>
                   <div className="b2-agents-section-meta"><span className="b2-agents-count">{roles.length} 个</span><span>版本由 Core 维护</span></div>
@@ -391,7 +391,7 @@ export const LiveAgentsView: React.FC = () => {
                     <span className="b2-agents-section-icon"><Bot size={17} aria-hidden="true" /></span>
                     <div>
                       <h2 id="b2-instances-title">运行实例</h2>
-                      <p>AgentInstance 只读展示；每次运行使用创建时保存的 RoleSnapshot。</p>
+                      <p>查看已创建的运行实例及当时使用的模型与角色。</p>
                     </div>
                   </div>
                   <div className="b2-agents-section-meta"><span className="b2-agents-count">{instances.length} 条</span><span>按创建时间倒序</span></div>
@@ -466,7 +466,7 @@ export const LiveAgentsView: React.FC = () => {
       <Modal portal isOpen={modelModalOpen} onClose={() => setModelModalOpen(false)} title={editingModel ? '编辑模型配置' : '添加模型配置'} footer={(
         <><button type="button" className="btn btn-ghost" onClick={() => setModelModalOpen(false)}>取消</button><button type="button" className="btn btn-primary" onClick={() => void saveModel()} disabled={saving || !modelForm.name.trim() || !modelForm.modelId.trim() || !modelForm.baseUrl.trim() || !modelForm.secretRef.trim()}>{saving ? '保存中…' : '保存配置'}</button></>
       )}>
-        <div className="b2-agents-form">
+        <div className="b2-agents-modal-content b2-agents-form">
           <fieldset className="b2-agents-fieldset">
             <legend>连接信息</legend>
             <div className="b2-agents-field-grid">
@@ -498,7 +498,7 @@ export const LiveAgentsView: React.FC = () => {
               <div className="b2-agents-field">
                 <label htmlFor="b2-model-context">上下文窗口</label>
                 <input id="b2-model-context" className="input" type="number" min={1} value={modelForm.contextWindow} onChange={(event) => setModelForm((current) => ({ ...current, contextWindow: event.target.value }))} />
-                <p>留空表示使用 Core 的默认值。</p>
+                <p>留空表示不指定上下文窗口。</p>
               </div>
               <div className="b2-agents-field">
                 <label htmlFor="b2-model-budget">默认 Token 预算</label>
@@ -524,7 +524,7 @@ export const LiveAgentsView: React.FC = () => {
       <Modal portal isOpen={roleModalOpen} onClose={() => setRoleModalOpen(false)} title={editingRole ? '编辑角色预设' : '新建角色预设'} footer={(
         <><button type="button" className="btn btn-ghost" onClick={() => setRoleModalOpen(false)}>取消</button><button type="button" className="btn btn-primary" onClick={() => void saveRole()} disabled={saving || !roleForm.name.trim() || !roleForm.systemPrompt.trim() || !roleForm.modelProfileId.trim()}>{saving ? '保存中…' : '保存预设'}</button></>
       )}>
-        <div className="b2-agents-form">
+        <div className="b2-agents-modal-content b2-agents-form">
           <fieldset className="b2-agents-fieldset">
             <legend>角色身份</legend>
             <div className="b2-agents-field-grid">
