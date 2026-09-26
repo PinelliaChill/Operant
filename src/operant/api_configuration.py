@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
@@ -61,10 +60,8 @@ def install_configuration_routes(app: FastAPI, service: ApplicationService) -> C
         try:
             if project_id is not None:
                 project = service.store.get_workspace_initialization_by_id(project_id)
-                project_workspace = str(Path(project.workspace_ref).resolve(strict=True))
-                if workspace_ref is not None and (
-                    str(Path(workspace_ref).resolve(strict=True)) != project_workspace
-                ):
+                project_workspace = project.workspace_ref
+                if workspace_ref is not None and workspace_ref != project_workspace:
                     raise ValueError("project and workspace configuration scopes differ")
                 workspace_ref = project_workspace
             result: EffectiveConfig = config.effective(

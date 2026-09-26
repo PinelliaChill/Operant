@@ -752,28 +752,25 @@ class ApplicationService:
         if new_role is not None:
             role_id = self.create_role(new_role).id
         assert role_id is not None
-        from operant.application.configuration import ConfigPatch, ConfigService
+        from operant.application.configuration import (
+            ConfigPatch,
+            ConfigService,
+            workspace_scope_id,
+        )
 
         if project_id is not None:
             project = self.store.get_workspace_initialization_by_id(project_id)
-            project_workspace = str(Path(project.workspace_ref).resolve(strict=True))
-            if workspace_ref is not None and (
-                str(Path(workspace_ref).resolve(strict=True)) != project_workspace
-            ):
+            project_workspace = project.workspace_ref
+            if workspace_ref is not None and workspace_ref != project_workspace:
                 raise ValueError("project and workspace configuration scopes differ")
             workspace_ref = project_workspace
         if thread_id is not None:
             thread = self.get_thread(thread_id)
-            if workspace_ref is not None and (
-                thread.workspace_ref is None
-                or str(Path(thread.workspace_ref).resolve(strict=True))
-                != str(Path(workspace_ref).resolve(strict=True))
-            ):
+            if workspace_ref is not None and thread.workspace_ref != workspace_ref:
                 raise ValueError("workspace_ref differs from the bound Thread workspace")
             workspace_ref = thread.workspace_ref
         if project_id is None and workspace_ref is not None:
-            resolved_workspace = str(Path(workspace_ref).resolve(strict=True))
-            workspace_hash = hashlib.sha256(resolved_workspace.encode("utf-8")).hexdigest()
+            workspace_hash = workspace_scope_id(workspace_ref)
             # A Thread can be bound to a workspace before it is registered as a Project.
             with suppress(NotFoundError):
                 project_id = self.store.get_workspace_initialization(workspace_hash).id
@@ -790,9 +787,7 @@ class ApplicationService:
             workspace_ref=workspace_ref,
             run_overrides=ConfigPatch.model_validate(run_patch),
         )
-        normalized_workspace_ref = (
-            None if workspace_ref is None else str(Path(workspace_ref).resolve(strict=True))
-        )
+        normalized_workspace_ref = workspace_ref
         return self.factory.create_session(
             role_id,
             model_profile_id=model_profile_id,

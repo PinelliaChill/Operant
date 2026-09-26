@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+import posixpath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -88,10 +88,15 @@ class EffectiveConfig(BaseModel):
 
 
 def workspace_scope_id(workspace_ref: str) -> str:
-    root = Path(workspace_ref).resolve(strict=True)
-    if not root.is_dir():
-        raise ValueError("workspace_ref must be a directory")
-    return hashlib.sha256(str(root).encode("utf-8")).hexdigest()
+    # Callers use the canonical reference recorded by Project/Thread creation.
+    # Configuration lookup must not open an arbitrary client-supplied path.
+    if (
+        not workspace_ref.startswith("/")
+        or "\x00" in workspace_ref
+        or posixpath.normpath(workspace_ref) != workspace_ref
+    ):
+        raise ValueError("workspace_ref must be a canonical absolute path")
+    return hashlib.sha256(workspace_ref.encode("utf-8")).hexdigest()
 
 
 def _narrow_policy(base: ToolPolicy, requested: ToolPolicy) -> ToolPolicy:

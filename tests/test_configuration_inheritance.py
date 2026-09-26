@@ -133,6 +133,8 @@ def test_config_sources_freeze_new_session_and_preserve_policy(tmp_path: Path) -
 
 
 def test_config_reset_cas_and_temperature_capability(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="canonical absolute path"):
+        workspace_scope_id(f"{tmp_path}/../{tmp_path.name}")
     app = create_app(tmp_path / "config-unsupported.sqlite3")
     service = app.state.operant_service
     service.add_model_profile(
