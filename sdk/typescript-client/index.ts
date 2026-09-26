@@ -14,6 +14,8 @@ export * from './event-reducer';
 // the GUI line switches its provider explicitly.
 export { Phase1EClient, ProtocolNegotiationError } from './phase1e.generated';
 export * as Phase1E from './phase1e.generated';
+export { WorkbenchClient } from './workbench.generated';
+export * as Workbench from './workbench.generated';
 export {
   MAX_SSE_DATA_BYTES,
   MAX_SSE_FRAME_BYTES,

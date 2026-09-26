@@ -22,6 +22,7 @@ from test_plugin_host import _cert, _package, _recall, _scope
 from test_plugin_host_stdio import _patch_ps
 
 from operant.contracts.b2_1 import CandidateBatch, LifecycleResult
+from operant.domain.threads import ConversationThread
 from operant.memory_plugins.b26_schema import schema_contracts as b26_schema_contracts
 from operant.persistence.sqlite import MigrationError, SQLiteStore
 from operant.plugins import (
@@ -495,12 +496,12 @@ def test_b27_v18_upgrade_failure_is_atomic(tmp_path: Path) -> None:
 
 def test_b27_v18_rollback_requires_isolated_empty_b2_6_database(tmp_path: Path) -> None:
     non_isolated = SQLiteStore(tmp_path / "non-isolated.sqlite3")
-    non_isolated.initialize()
+    non_isolated.migrate(18)
     with pytest.raises(MigrationError, match="explicitly isolated"):
         non_isolated.rollback(17)
 
     empty = SQLiteStore(tmp_path / "empty.sqlite3")
-    empty.initialize()
+    empty.migrate(18)
     assert empty.rollback(17, isolated=True) == 17
     assert empty.schema_version() == 17
     with sqlite3.connect(empty.path) as connection:
@@ -511,7 +512,7 @@ def test_b27_v18_rollback_requires_isolated_empty_b2_6_database(tmp_path: Path) 
     assert B26_TABLES.isdisjoint(remaining)
 
     populated = SQLiteStore(tmp_path / "populated.sqlite3")
-    populated.initialize()
+    populated.migrate(18)
     with populated._connect() as connection:  # noqa: SLF001 - isolated fixture readback
         connection.execute(
             "INSERT INTO b26_commands(command_id, project_id, request_digest, state, result) "
@@ -521,3 +522,42 @@ def test_b27_v18_rollback_requires_isolated_empty_b2_6_database(tmp_path: Path) 
     with pytest.raises(MigrationError, match="B2-6"):
         populated.rollback(17, isolated=True)
     assert populated.schema_version() == 18
+
+
+def test_v19_failed_v18_rollback_preserves_workbench_schema_and_ledger(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "v19-failed-rollback.sqlite3")
+    store.initialize()
+    with store._connect() as connection:
+        connection.execute(
+            "INSERT INTO b26_commands(command_id, project_id, request_digest, state, result) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("b27-command", "b27-project", "a" * 64, "completed", json.dumps({})),
+        )
+    with pytest.raises(MigrationError, match="B2-6"):
+        store.rollback(17, isolated=True)
+    assert store.schema_version() == 19
+    with store._connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_children'"
+            ).fetchone()
+            is not None
+        )
+        assert connection.execute("SELECT COUNT(*) FROM b26_commands").fetchone()[0] == 1
+
+
+def test_v19_nonempty_workbench_rejects_rollback_without_data_loss(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "v19-nonempty.sqlite3")
+    store.initialize()
+    thread = store.create_thread(ConversationThread())
+    assert store.reserve_workbench_wake(thread.id, limit=1)
+    with pytest.raises(MigrationError, match="workbench v19 contains data"):
+        store.rollback(18, isolated=True)
+    assert store.schema_version() == 19
+    with store._connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT wake_count FROM workbench_wake_counts WHERE thread_id=?", (thread.id,)
+            ).fetchone()[0]
+            == 1
+        )

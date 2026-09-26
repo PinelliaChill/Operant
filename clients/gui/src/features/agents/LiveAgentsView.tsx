@@ -7,6 +7,8 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { B2LiveAdapter, normalizeB2Error } from '../../live/b2Adapter';
 import { createIdempotencyKey } from '../../live/liveState';
+import { policyWithRoleTools, ROLE_TOOL_GROUPS, selectedRoleTools } from './roleTools';
+import type { SelectableRoleTool } from './roleTools';
 import './ui-refine-agents.css';
 
 type ModelForm = {
@@ -24,6 +26,7 @@ type RoleForm = {
   modelProfileId: string;
   effort: B2.Effort;
   maxTurns: string;
+  selectedTools: SelectableRoleTool[];
 };
 
 const DEFAULT_MODEL_FORM: ModelForm = {
@@ -41,6 +44,7 @@ const DEFAULT_ROLE_FORM: RoleForm = {
   modelProfileId: '',
   effort: 'medium',
   maxTurns: '10',
+  selectedTools: [],
 };
 
 function positiveNumber(value: string): number | undefined {
@@ -66,6 +70,7 @@ function roleToForm(role: B2.RolePreset): RoleForm {
     modelProfileId: role.model_profile_id,
     effort: role.effort || 'medium',
     maxTurns: role.budget?.max_turns ? String(role.budget.max_turns) : '10',
+    selectedTools: selectedRoleTools(role.tool_policy),
   };
 }
 
@@ -224,15 +229,12 @@ export const LiveAgentsView: React.FC = () => {
         model_profile_id: roleForm.modelProfileId.trim(),
         effort: roleForm.effort,
         budget: { ...(editingRole?.budget ?? {}), ...(maxTurns ? { max_turns: maxTurns } : {}) },
+        tool_policy: policyWithRoleTools(editingRole?.tool_policy, roleForm.selectedTools),
       } satisfies B2.CreateRoleRequest;
       const key = createIdempotencyKey();
       const saved = editingRole?.id
         ? await adapter.updateRole(editingRole.id, base, key)
-        : await adapter.createRole({
-          ...base,
-          // New roles start with no tools and no workspace/process authority.
-          tool_policy: { allowed_tools: [], workspace_write: false, command_execution: false },
-        }, key);
+        : await adapter.createRole(base, key);
       loadEpoch.current += 1;
       setRoles((current) => editingRole?.id
         ? current.map((role) => role.id === saved.id ? saved : role)
@@ -563,7 +565,23 @@ export const LiveAgentsView: React.FC = () => {
               </div>
             </div>
           </fieldset>
-          <p className="b2-agents-form-note">新建角色默认没有工具、Workspace 写入或命令执行权限；编辑既有角色只提交名称、提示词、模型、Effort 和预算，已有 ToolPolicy 保持由 Core 管理。</p>
+          <fieldset className="b2-agents-fieldset b2-agents-tools-fieldset">
+            <legend>允许的工具</legend>
+            <p>默认不授予工具。只勾选此角色需要的能力；文件工具为只读，协作工具可创建和联系子 Agent。</p>
+            {ROLE_TOOL_GROUPS.map((group) => <div className="b2-agents-tool-group" key={group.title}>
+              <h3>{group.title}</h3>
+              <div className="b2-agents-tool-options">{group.tools.map((tool) => <label key={tool.id}>
+                <input type="checkbox" checked={roleForm.selectedTools.includes(tool.id)} onChange={(event) => setRoleForm((current) => ({
+                  ...current,
+                  selectedTools: event.target.checked
+                    ? [...current.selectedTools, tool.id]
+                    : current.selectedTools.filter((value) => value !== tool.id),
+                }))} />
+                <span>{tool.label} <code>{tool.id}</code></span>
+              </label>)}</div>
+            </div>)}
+          </fieldset>
+          <p className="b2-agents-form-note">权限变更只进入新建 Session 的不可变快照；已有运行不会改变。编辑时其他工具、Workspace 写入、命令执行、审批和执行器设置保持原值。</p>
         </div>
       </Modal>
     </div>

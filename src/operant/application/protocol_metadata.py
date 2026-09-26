@@ -69,6 +69,13 @@ BETA_CAPABILITIES: tuple[str, ...] = (
     "container_writer_lifecycle",
     "generated_client",
 )
+WORKBENCH_PROTOCOL_VERSION = "workbench.v1"
+WORKBENCH_CAPABILITIES: tuple[str, ...] = (
+    "child_agents",
+    "directed_mailbox",
+    "context_references",
+    "conversation_commands",
+)
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -100,6 +107,16 @@ def phase1e_protocol_metadata() -> dict[str, Any]:
         "min_client_version": PHASE1E_MIN_CLIENT_VERSION,
         "capabilities": list(PHASE1E_CAPABILITIES),
     }
+
+
+def workbench_protocol_metadata() -> dict[str, Any]:
+    return _protocol_metadata(
+        digest_path=protocol_schema_path("operant-workbench.openapi.sha256"),
+        protocol_version=WORKBENCH_PROTOCOL_VERSION,
+        min_client_version=WORKBENCH_PROTOCOL_VERSION,
+        capabilities=WORKBENCH_CAPABILITIES,
+        label="Workbench",
+    )
 
 
 def phase23_protocol_metadata() -> dict[str, Any]:

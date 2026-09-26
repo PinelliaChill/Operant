@@ -1,7 +1,8 @@
 # Operant 终端客户端
 
 TUI 是可选的 Textual 界面，通过生成的 Python Client 访问 Core，不直接读写数据库或运行工具。
-当前主线提供会话审批、Graph 运行状态与事件订阅、恢复/取消，以及经验与授权页面。
+当前主线默认进入会话工作台，提供新建会话、父子历史、输入、子任务、定向消息和上下文操作；
+也保留 Graph 监控、审批、恢复/取消与经验授权页面。
 
 ## 从源码运行
 
@@ -24,9 +25,18 @@ uv run --project clients/tui --no-sync operant-tui --core-url http://127.0.0.1:8
 
 ## 常用操作
 
+启动后展开“新建会话”，选择已注册工作区和角色。会话工作台中：
+
+- `Enter` 打开会话，`Space` 折叠历史树。
+- `Ctrl+L` 聚焦输入，`Ctrl+R` 刷新；`Esc` 返回 Graph 监控。
+- 输入 `/` 查看 Core 提供的正式命令。引用与上下文操作在折叠面板中；清理需要确认且保留历史，活动运行中不能改上下文基线。
+- 子 Agent 默认继承模型、权限、预算和工作区；定向消息需选择收件人。断线或未知写结果需刷新核对，不自动重放。
+
+Graph 监控与其他页面的快捷键：
+
 - `Tab` / `Shift+Tab`：移动焦点。
 - `Alt+1/2/3`：切换会话、运行和检查器区域。
-- `Alt+4`：打开经验与授权页面。
+- `Alt+4`：打开经验与授权页面；`Alt+5`：返回会话工作台。
 - `?`：查看帮助；`Esc`：关闭当前操作；`q`：退出。
 
 按页面输入对应 Session 或 Graph Run ID，读取审批、刷新状态或订阅事件。取消需要再次确认；
@@ -38,5 +48,5 @@ uv run --project clients/tui --no-sync operant-tui --core-url http://127.0.0.1:8
 uv run --project clients/tui --no-sync python -m unittest discover -s clients/tui/test
 ```
 
-当前说明对应根 README 标注的主线范围，不包含尚未合并的会话式工作台操作。
+当前说明对应已合并会话工作台的主线；旧 Beta 标签不包含这些新增操作。
 安装、版本和安全说明见 [根 README](../../README.md) 与 [SECURITY](../../SECURITY.md)。
