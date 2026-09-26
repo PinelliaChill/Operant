@@ -4,7 +4,7 @@
 >
 > 最后更新：2026-09-26（会话工作台交付；记录身份：Codex，保留原历史署名）
 >
-> 对应源码：`codex/session-workbench`，基线 `74a0251`；SQLite v19。增量集成与验收状态见 §2.1；已安装版本未改变。
+> 对应源码：主线 `f1011f5`，包含 B2-7、UI 更新与会话式多 Agent 工作台；SQLite v19。验收范围见 §2.1；已安装版本未改变。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -12,6 +12,23 @@
 `docs/项目架构.md` 描述中长期 Harness Kernel 目标，`docs/UI_UX_DESIGN_SPECIFICATION.md`
 描述目标客户端设计。两者都是规划文档，不代表对应能力已经实现；如与本文、源码或测试冲突，
 当前实现以本文、源码和测试为准。
+
+## 当前版本速览
+
+- **当前源码**：B2-1～B2-7、图标与 UI 更新、会话式多 Agent 工作台均已合并。
+- **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
+- **会话工作台**：[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 提供会话内子 Agent、定向消息、历史树，以及 GUI/TUI 引用、命令和上下文入口，详见 §2.1。
+- **交付边界**：本机候选安装不等于正式签名、公证或自动更新发布；主线合并也不会自动更新已安装 App。历史批次的失败与验收范围仍保留。
+
+| 当前模块 | 主要源码入口 | 职责 |
+| --- | --- | --- |
+| 会话工作台 | `api_workbench_agents.py`、`api_workbench_context.py` | 子 Agent、定向消息、正式引用与命令 |
+| 协作与实际记忆使用 | `api_b2_4.py`、`memory_plugins/recall.py`、`retrieval.py` | 角色编排、消息与记忆召回，记录实际上下文引用 |
+| 整理与治理 | `memory_plugins/governance.py`、`maintenance.py` | 来源、冲突、时效、候选审阅与受控后台整理 |
+| 经验与授权 | `memory_plugins/experience_skills.py`、`experience_runtime.py`、`sharing.py` | 经验 Skill、上下文使用、共享、晋级与撤销 |
+| 远程记忆边界 | `memory_plugins/remote_memory.py`、`remote_query.py` | 最小传递包与授权投影；不代表生产远程部署已验收 |
+
+源码入口相对 `src/operant/`。安装与能力概览见 [README](../README.md)，版本变化见 [更新记录](../CHANGELOG.md)。
 
 ## 仓库检查与源码发布
 
@@ -68,19 +85,19 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
-本节对应产品源码 `74a0251`（含 B2-7 与 UI 优化），不表示本轮重新运行验收。原阶段详情、失败与旧状态
+本节概览主线 `f1011f5`（含 B2-7、UI 优化与会话工作台），不表示本次文档更新重新运行了产品验收。原阶段详情、失败与旧状态
 已移至[阶段与验收原记录](history/PROJECT_ARCHITECTURE-history-20260922.md)，按阶段保留新增能力与证据。
 
 | 范围 | 当前已实现 | 仍需区分的边界 |
 | --- | --- | --- |
-| Core/会话/历史 | Python Runtime、正式模型工具链、Thread/Session、追加事件与历史、取消/审批和状态恢复边界 | 父子Thread字段不等于完整会话式子Agent产品；未知写入不自动重放 |
-| Context | 版本化Context、引用、预算、水位、自动压缩和手动API，Live记忆检查器 | GUI的`@`、统一命令和压缩入口仍不完整，不能把Demo当Live |
+| Core/会话/历史 | Python Runtime、正式模型工具链、Thread/Session、追加事件与历史、取消/审批和状态恢复边界 | 会话子 Agent 与定向消息已接入，权限/预算受继承边界约束；未知写入不自动重放 |
+| Context | 版本化Context、引用、预算、水位、自动压缩和手动API，Live记忆检查器 | GUI/TUI 已接入文件/同工作区会话引用及正式命令、压缩/清理；不代表任意资源引用或通用命令注册 |
 | Memory/PluginHost | 两个真实引擎、可信/隔离Host、Ledger/Proposal/CAS、来源权限、迁移、开关及keep/delete | 认证进程内是信任边界；插件SDK目前面向记忆，不是通用扩展平台 |
 | 召回/治理 | 中文及标识符检索、Memory Pack、预算、刷新/撤销；历史搜索、冲突/时效、维护任务与失败处理 | B2-4 Host性能原指标未达；自动治理不等于模型自证或任意冲突自动合并 |
 | 经验与共享 | 经验Skill验证发布/回退、Writer晋级、授权共享/撤销、数据集移交与Remote最小包 | 跨项目共享须显式授权，未合并知识不自动晋级；生产Remote未因此验收 |
-| Graph/Team | 正式Agent节点执行、定义编译/发布、Team消息、Mailbox及任务/工件板、隔离Writer | 当前正式执行器仅支持Agent节点；完整画布、动态子Agent工具、Hook/Timer及智能创建仍有缺口 |
+| Graph/Team | 正式Agent节点执行、定义编译/发布、Team消息、Mailbox及任务/工件板、隔离Writer | 当前正式执行器仅支持Agent节点；完整画布、Hook/Timer及智能创建仍有缺口；会话式委派使用独立工作台运行时 |
 | 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理、Scheduler队列与租约 | 默认审批模型未装配；动态Slash、通用插件驱动、通用定时到实际Agent执行链仍需补齐/验证 |
-| 客户端 | 一套React Live GUI、Tauri壳、TUI运行/审批及必要管理入口；聊天、模型/角色、管理页已优化 | TUI不是完整会话前端；文件正文/终端、配置继承等缺口不能由已完成UI优化推定消失 |
+| 客户端 | 一套React Live GUI、Tauri壳、TUI运行/审批及必要管理入口；聊天、模型/角色、管理页已优化 | TUI已有会话工作台；交互终端、完整配置继承等缺口仍保留 |
 | Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | Browser/Computer不是完整内置驱动；公网、容器联合流程与完整跨设备产品不外推 |
 | 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证 | 非正式签名/公证发布，无完整安装向导、DMG或自动更新；本机启动适配另有安装记录 |
 
@@ -91,11 +108,11 @@ UI关键页面与集中验收见[任务包](design/ui-refine-2-3/task-package.md
 当前仍缺的用户能力统一由[Harness待实现目标](design/Operant-Harness待实现目标.md)维护 H-01～H-18；
 它是目标附件，不能代替本版本源码与测试。安全、数据、恢复及未验收限制见第18节。
 
-## 2.1 会话工作台增量（开发分支）
+## 2.1 会话工作台增量（已合并 PR #28）
 
-本节描述本分支已完成的第一部分。范围、真实 GUI/TUI 模型链路与限制见
+本节描述已合并的第一部分。范围、真实 GUI/TUI 模型链路与限制见
 [独立验收记录](design/session-workbench/acceptance.md)。完整基础测试 1094 项、GUI 131 项、TUI 18 项通过，
-Docker 检查有 1 项跳过。上表保留基线状态，历史结论不改写；本地实现完成不代表已安装 App 已更新。
+Docker 检查有 1 项跳过。上述为原实现批次的验证结果，历史结论不改写；合并源码不代表已安装 App 已更新。
 
 - **会话协作**：`api_workbench_agents.py` 的 `WorkbenchRuntime` 在 ApplicationService 中装配，
   复用正式 Session/AgentLoop、Thread、冻结 RoleSnapshot、Action Gateway 和运行租约。
