@@ -336,11 +336,11 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
             raise DispatchError(
                 f"scheduler.workflow_invalid.{type(exc).__name__}", outcome_unknown=False
             ) from exc
+        authorized = self.security.authorize(action)
         try:
             workspace = self.workspace_resolver(action)
         except (OSError, ValueError, TypeError) as exc:
             raise DispatchError("scheduler.workspace_invalid", outcome_unknown=False) from exc
-        authorized = self.security.authorize(action)
         graph_run_id = self._graph_run_id(
             action.source_run_request_id, authorized.action.action_hash
         )

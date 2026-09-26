@@ -844,6 +844,8 @@ lease 过期或结果未知时直接 `manual_reconcile_required`，不自动 ret
 使用同一个 Graph Run 接管，不因 `max_attempts=1` 重建运行；Graph Attempt 决定未知副作用边界。
 Worker 绑定后调度正式 Graph executor，等待终态再结清 RunRequest；取消请求会传播到 Graph，Core 正常
 关停则 interrupt 并允许安全恢复。Schedule 的 `workflow_input.workspace_or_target` 可绑定绝对工作区；
+创建/更新时只校验绝对路径语法，调度执行先通过 Policy/Capability，再解析和检查工作区是否存在，
+避免未经授权的请求探测主机路径；无效工作区以可确定的派发失败处理。
 未绑定工作区且 Definition 也未固定唯一工作区的 Agent Graph 无法执行。FastAPI lifespan
 运行有界 Coordinator，停机时只释放它持有的精确租约；多 Core 可候选接管，但同时只允许一个
 Leader 和一个 Writer，不是通用多 Writer 或高可用集群。

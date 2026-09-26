@@ -378,6 +378,7 @@ def test_policy_deny_and_ask_fail_closed_before_graph_creation(
     tmp_path: Path, decision: PolicyDecision
 ) -> None:
     gateway, graph_repository, _security_repository = _graph_gateway(tmp_path, decision=decision)
+    gateway.workspace_resolver = lambda _action: pytest.fail("workspace accessed before policy")
 
     with pytest.raises(DispatchError) as raised:
         gateway.dispatch_workflow(_dispatch())

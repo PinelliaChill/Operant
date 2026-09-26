@@ -240,14 +240,11 @@ class TriggerService:
         if schedule.trigger_kind is TriggerKind.CRON:
             CronExpression(schedule.cron_expression or "")
         workspace = schedule.workflow_input.get("workspace_or_target")
-        if workspace is not None:
-            if not isinstance(workspace, str) or not Path(workspace).is_absolute():
-                raise SchedulerValidationError("scheduled workspace must be an absolute path")
-            try:
-                if not Path(workspace).resolve(strict=True).is_dir():
-                    raise SchedulerValidationError("scheduled workspace must be a directory")
-            except OSError as exc:
-                raise SchedulerValidationError("scheduled workspace does not exist") from exc
+        # Filesystem access belongs to the authorized dispatch, not API validation.
+        if workspace is not None and (
+            not isinstance(workspace, str) or not Path(workspace).is_absolute()
+        ):
+            raise SchedulerValidationError("scheduled workspace must be an absolute path")
         if self._workflow_repository is not None:
             try:
                 definition = self._workflow_repository.get_definition(
