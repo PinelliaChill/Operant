@@ -112,6 +112,15 @@ from operant.memory_plugins.b25_schema import schema_contracts as b25_schema_con
 from operant.memory_plugins.b26_schema import schema_contracts as b26_schema_contracts
 from operant.memory_plugins.management_schema import schema_contracts as b23_schema_contracts
 from operant.memory_plugins.recall_schema import schema_contracts as b24_schema_contracts
+from operant.persistence.workbench_schema import (
+    downgrade as downgrade_workbench,
+)
+from operant.persistence.workbench_schema import (
+    schema_contracts as workbench_schema_contracts,
+)
+from operant.persistence.workbench_schema import (
+    upgrade as upgrade_workbench,
+)
 
 
 def _sha256_text(value: Any) -> str | None:
@@ -232,6 +241,7 @@ class WorkflowExecutionLease:
 
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
+        19: "658d0732a8e13f06b09192329e93d7590c07bb35b06721ab8cd2a620618a2d6a",
         18: "245c61b8481bfd920dd7679f32b48cdc5c197e451a8b3e60385a4486e1059432",
         17: "e0a12d556cf758d9d7aede3d5f903dfbcf75dffd469b85ce018e3fe7688085c2",
         16: "baaf8c7d8521550dbce5ec90bb41289868759041a7d1543244bf0204ca577637",
@@ -252,6 +262,7 @@ class SQLiteStore:
         14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
+        19: "3f071878abbe04dd52be28b86ccbbfe7043fe3102e27fa62bb4dc2e448dc7c1b",
         18: "3b9c6f033068b85d15f5d1291ca70d472fd7b69e25140319dc5a53fab2a654fb",
         17: "fb1c720e6e3460285af0eb0c4443b5f3f9a16a5f3d7633a5caf014eccbb7aeb6",
         16: "6a63ee9b30dec7099e55537e18afbc99a6f86cb0061b92088e80e3a5bcaec14d",
@@ -611,6 +622,7 @@ class SQLiteStore:
             build(16, "b24_memory_recall", self._upgrade_v16, self._downgrade_v16),
             build(17, "b25_memory_governance", self._upgrade_v17, self._downgrade_v17),
             build(18, "b26_experience_sharing", self._upgrade_v18, self._downgrade_v18),
+            build(19, "session_workbench", upgrade_workbench, downgrade_workbench),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -2130,6 +2142,8 @@ class SQLiteStore:
             tables.update(b25_schema_contracts()[0])
         if version >= 18:
             tables.update(b26_schema_contracts()[0])
+        if version >= 19:
+            tables.update(workbench_schema_contracts()[0])
         return tables
 
     @staticmethod
@@ -2401,6 +2415,8 @@ class SQLiteStore:
             contract.update(b25_schema_contracts()[1])
         if version >= 18:
             contract.update(b26_schema_contracts()[1])
+        if version >= 19:
+            contract.update(workbench_schema_contracts()[1])
         return contract
 
     @classmethod
@@ -2669,6 +2685,8 @@ class SQLiteStore:
                 store._upgrade_v17(connection)
             if version >= 18:
                 store._upgrade_v18(connection)
+            if version >= 19:
+                upgrade_workbench(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2873,6 +2891,8 @@ class SQLiteStore:
             contract.update(b25_schema_contracts()[2])
         if version >= 18:
             contract.update(b26_schema_contracts()[2])
+        if version >= 19:
+            contract.update(workbench_schema_contracts()[2])
         return contract
 
     @staticmethod
@@ -3086,6 +3106,8 @@ class SQLiteStore:
             contract.update(b25_schema_contracts()[3])
         if version >= 18:
             contract.update(b26_schema_contracts()[3])
+        if version >= 19:
+            contract.update(workbench_schema_contracts()[3])
         return contract
 
     @staticmethod
@@ -3513,6 +3535,8 @@ class SQLiteStore:
                     ),
                 }
             )
+        if version >= 19:
+            contract.update(workbench_schema_contracts()[5])
         return contract
 
     @staticmethod
@@ -3769,6 +3793,8 @@ class SQLiteStore:
             indexes.update(b25_schema_contracts()[4])
         if version >= 18:
             indexes.update(b26_schema_contracts()[4])
+        if version >= 19:
+            indexes.update(workbench_schema_contracts()[4])
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -9888,6 +9914,117 @@ class SQLiteStore:
         if row is None:
             raise NotFoundError(f"session not found: {session_id}")
         return Session.model_validate_json(row["body"])
+
+    def create_session_from_snapshot(self, snapshot: RoleSnapshot, *, thread_id: str) -> Session:
+        """Bind a frozen, already narrowed child identity to one active Thread."""
+
+        session = Session(role_snapshot=snapshot)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_active_thread(connection, thread_id)
+            if (
+                connection.execute(
+                    "SELECT 1 FROM thread_legacy_refs WHERE thread_id=? AND source_type='session'",
+                    (thread_id,),
+                ).fetchone()
+                is not None
+            ):
+                raise ConflictError("thread is already bound to a session")
+            connection.execute(
+                "INSERT INTO sessions(id, body, created_at) VALUES (?, ?, ?)",
+                (session.id, session.model_dump_json(), session.created_at.isoformat()),
+            )
+            connection.execute(
+                "INSERT INTO thread_legacy_refs(thread_id,source_type,source_id,created_at) "
+                "VALUES (?,'session',?,?)",
+                (thread_id, session.id, session.created_at.isoformat()),
+            )
+        return session
+
+    def create_workbench_child(
+        self,
+        *,
+        parent_thread_id: str,
+        workspace_ref: str,
+        snapshot: RoleSnapshot,
+        task: str,
+        limit: int,
+    ) -> tuple[ConversationThread, Session]:
+        """Commit child identity, frozen Session and admission bound atomically."""
+
+        thread = ConversationThread(parent_thread_id=parent_thread_id, workspace_ref=workspace_ref)
+        session = Session(role_snapshot=snapshot)
+        now = utc_now().isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_active_thread(connection, parent_thread_id)
+            parent = connection.execute(
+                "SELECT workspace_ref FROM threads WHERE id=?", (parent_thread_id,)
+            ).fetchone()
+            if parent is None or parent["workspace_ref"] != workspace_ref:
+                raise ConflictError("parent workspace changed")
+            count = connection.execute(
+                "SELECT COUNT(*) FROM workbench_children WHERE parent_thread_id=?",
+                (parent_thread_id,),
+            ).fetchone()[0]
+            if int(count) >= limit:
+                raise ConflictError("child agent count limit reached")
+            body = thread.model_dump_json()
+            cursor = connection.execute(
+                "INSERT INTO threads("
+                "id,parent_thread_id,workspace_ref,status,body,body_hash,"
+                "created_at,updated_at,archived_at) "
+                "VALUES (?,?,?,?,?,?,?,?,NULL)",
+                (
+                    thread.id,
+                    parent_thread_id,
+                    workspace_ref,
+                    thread.status.value,
+                    body,
+                    hashlib.sha256(body.encode()).hexdigest(),
+                    now,
+                    now,
+                ),
+            ).lastrowid
+            connection.execute(
+                "INSERT INTO sessions(id,body,created_at) VALUES (?,?,?)",
+                (session.id, session.model_dump_json(), now),
+            )
+            connection.execute(
+                "INSERT INTO thread_legacy_refs(thread_id,source_type,source_id,created_at) "
+                "VALUES (?,'session',?,?)",
+                (thread.id, session.id, now),
+            )
+            connection.execute(
+                "INSERT INTO workbench_children("
+                "thread_id,parent_thread_id,session_id,task,status,created_at,updated_at) "
+                "VALUES (?,?,?,?,'queued',?,?)",
+                (thread.id, parent_thread_id, session.id, task, now, now),
+            )
+        return thread.model_copy(update={"cursor": cursor}), session
+
+    def reserve_workbench_wake(self, thread_id: str, *, limit: int) -> bool:
+        """Bound automatic message turns durably across Core restarts."""
+
+        if limit < 1:
+            return False
+        now = utc_now().isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT wake_count FROM workbench_wake_counts WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            count = 0 if row is None else int(row["wake_count"])
+            if count >= limit:
+                return False
+            connection.execute(
+                "INSERT INTO workbench_wake_counts(thread_id,wake_count,updated_at) "
+                "VALUES (?,?,?) ON CONFLICT(thread_id) DO UPDATE SET "
+                "wake_count=excluded.wake_count,updated_at=excluded.updated_at",
+                (thread_id, count + 1, now),
+            )
+            return True
 
     def create_agent(
         self, session_id: str, *, budget_overrides: dict[str, Any] | None = None

@@ -47,6 +47,8 @@ export interface LiveWorkspaceFile {
 export interface LiveThread {
   /** Exact generated `ThreadProjection.id`. */
   id: string;
+  /** Exact generated parent_thread_id; null for a root Thread. */
+  parentThreadId: string | null;
   /** Phase 1E has no title field; the ID is the only honest label. */
   title: string;
   workspaceRef: string | null;

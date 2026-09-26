@@ -45,6 +45,7 @@ class OperantTui(App[None]):
         Binding("alt+3", "focus_pane('inspector')", "检查器"),
         Binding("?", "help", "帮助"),
         Binding("alt+4", "experience", "经验与授权"),
+        Binding("alt+5", "conversation", "会话工作台"),
         Binding("/", "command", "命令"),
         Binding("escape", "dismiss_layer", "关闭"),
         Binding("q", "quit", "退出", show=False),
@@ -91,6 +92,7 @@ class OperantTui(App[None]):
         else:
             self.query_one("#connection", Static).update("[已连接] 协议与 Schema digest 已协商")
             self._set_mutations_enabled(True)
+            self.action_conversation()
 
     def on_resize(self) -> None:
         self._apply_layout(self.size.width)
@@ -275,6 +277,11 @@ class OperantTui(App[None]):
         from .experience import ExperienceScreen
 
         self.push_screen(ExperienceScreen(self.controller))
+
+    def action_conversation(self) -> None:
+        from .conversation_screen import ConversationScreen
+
+        self.push_screen(ConversationScreen(self.controller))
 
     def action_help(self) -> None:
         self.query_one("#error", Static).update(

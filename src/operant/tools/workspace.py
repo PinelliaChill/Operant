@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from operant.domain.messages import ToolDefinition
 from operant.domain.models import CommandRunnerType, ToolPolicy
@@ -32,6 +32,21 @@ class ApprovalRequired(ToolError):
 ApprovalCallback = Callable[[str, str, str], Awaitable[bool]]
 
 
+class CollaborationTools(Protocol):
+    def delegate_options(self) -> dict[str, list[tuple[str, str]]]: ...
+
+    def message_scope(self) -> dict[str, Any]: ...
+
+    async def delegate(self, arguments: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def send(self, arguments: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def wait(self, arguments: dict[str, Any]) -> dict[str, Any]: ...
+
+
+ReferenceReader = Callable[[str], dict[str, Any]]
+
+
 class WorkspaceTools:
     def __init__(
         self,
@@ -40,6 +55,8 @@ class WorkspaceTools:
         policy: ToolPolicy | None = None,
         output_limit: int = 20_000,
         runner: CommandRunner | None = None,
+        collaboration: CollaborationTools | None = None,
+        reference_reader: ReferenceReader | None = None,
     ) -> None:
         if output_limit < 1:
             raise ValueError("output_limit must be positive")
@@ -47,8 +64,32 @@ class WorkspaceTools:
         self.policy = policy or ToolPolicy()
         self.output_limit = output_limit
         self.runner = runner or self._runner_for_policy()
+        self.collaboration = collaboration
+        self.reference_reader = reference_reader
 
     def definitions(self) -> tuple[ToolDefinition, ...]:
+        delegate_options = (
+            self.collaboration.delegate_options() if self.collaboration is not None else {}
+        )
+        model_profiles = delegate_options.get("model_profile_id", [])
+        roles = delegate_options.get("role_id", [])
+        message_scope = self.collaboration.message_scope() if self.collaboration is not None else {}
+        current_thread_id = str(message_scope.get("current_thread_id", ""))
+        parent_thread_id = message_scope.get("parent_thread_id")
+        targets = message_scope.get("targets", [])
+        recipient_hint = ", ".join(f"{identity} ({label})" for identity, label in targets)
+        model_description = (
+            "Configured model_profile_id values: "
+            + ", ".join(f"{identity} ({label})" for identity, label in model_profiles)
+            if model_profiles
+            else "No compatible configured model profiles are available."
+        )
+        role_description = (
+            "Compatible role_id values: "
+            + ", ".join(f"{identity} ({label})" for identity, label in roles)
+            if roles
+            else "No compatible explicit roles are available."
+        )
         definitions = (
             ToolDefinition(
                 name="read_file",
@@ -123,8 +164,123 @@ class WorkspaceTools:
                 },
             ),
         )
+        collaboration_definitions = (
+            (
+                ToolDefinition(
+                    name="delegate_agent",
+                    description=(
+                        "Create an isolated child Agent for one bounded task. "
+                        "role_id and model_profile_id are configured Registry IDs. "
+                        "They are not model names. "
+                        "Omit either optional field to inherit the parent's frozen setting. "
+                        f"{model_description} {role_description}"
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "task": {"type": "string"},
+                            "role_id": {
+                                "type": "string",
+                                "description": "Configured Role ID; omit to inherit parent role.",
+                                **({"enum": [identity for identity, _ in roles]} if roles else {}),
+                            },
+                            "model_profile_id": {
+                                "type": "string",
+                                "description": (
+                                    "Configured ModelProfile ID, not a provider model name; "
+                                    "omit to inherit parent model."
+                                ),
+                                **(
+                                    {"enum": [identity for identity, _ in model_profiles]}
+                                    if model_profiles
+                                    else {}
+                                ),
+                            },
+                        },
+                        "required": ["task"],
+                        "additionalProperties": False,
+                    },
+                ),
+                ToolDefinition(
+                    name="send_agent_message",
+                    description=(
+                        "Send a private message to another related Agent Thread. "
+                        f"Your current Thread ID is {current_thread_id}; never send to yourself. "
+                        + (
+                            f"Your parent Thread ID is {parent_thread_id}. "
+                            if parent_thread_id is not None
+                            else ""
+                        )
+                        + f"Available recipient Thread IDs: {recipient_hint or 'none yet'}. "
+                        "Omit reply_to for a new message; reply_to accepts only an existing "
+                        "message_id, never a Thread ID."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "recipient_thread_id": {
+                                "type": "string",
+                                "description": "Another related Thread ID; never your own.",
+                                **(
+                                    {"enum": [identity for identity, _ in targets]}
+                                    if targets
+                                    else {}
+                                ),
+                            },
+                            "body": {"type": "string"},
+                            "reply_to": {
+                                "type": "string",
+                                "description": (
+                                    "Optional existing message_id exchanged by these Threads. "
+                                    "Omit for a new message; do not use a Thread ID."
+                                ),
+                            },
+                            "idempotency_key": {"type": "string"},
+                        },
+                        "required": ["recipient_thread_id", "body", "idempotency_key"],
+                        "additionalProperties": False,
+                    },
+                ),
+                ToolDefinition(
+                    name="wait_for_agent",
+                    description="Wait for a child Agent result or a private message.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "child_thread_id": {"type": "string"},
+                            "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+                        },
+                        "required": ["child_thread_id"],
+                        "additionalProperties": False,
+                    },
+                ),
+            )
+            if self.collaboration is not None
+            else ()
+        )
+        reference_definitions = (
+            (
+                ToolDefinition(
+                    name="read_context_reference",
+                    description="Read the bounded snapshot of an explicitly attached reference.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "artifact_id": {"type": "string"},
+                        },
+                        "required": ["artifact_id"],
+                        "additionalProperties": False,
+                    },
+                ),
+            )
+            if self.reference_reader is not None and "read_file" in self.policy.allowed_tools
+            else ()
+        )
         return tuple(
-            definition for definition in definitions if definition.name in self.policy.allowed_tools
+            definition
+            for definition in (*definitions, *collaboration_definitions, *reference_definitions)
+            if definition.name in self.policy.allowed_tools
+            or definition.name == "read_context_reference"
         )
 
     async def execute(
@@ -134,7 +290,11 @@ class WorkspaceTools:
         *,
         approved_categories: frozenset[str] = frozenset(),
     ) -> str:
-        if name not in self.policy.allowed_tools:
+        if name not in self.policy.allowed_tools and not (
+            name == "read_context_reference"
+            and self.reference_reader is not None
+            and "read_file" in self.policy.allowed_tools
+        ):
             raise ToolError(f"tool is not allowed by this role: {name}")
         if name == "read_file":
             result: Any = self.read_file(str(arguments["path"]))
@@ -164,6 +324,19 @@ class WorkspaceTools:
                 timeout_seconds=int(arguments.get("timeout_seconds", 60)),
                 approved_categories=approved_categories,
             )
+        elif name in {"delegate_agent", "send_agent_message", "wait_for_agent"}:
+            if self.collaboration is None:
+                raise ToolError("collaboration is unavailable for this session")
+            method = {
+                "delegate_agent": self.collaboration.delegate,
+                "send_agent_message": self.collaboration.send,
+                "wait_for_agent": self.collaboration.wait,
+            }[name]
+            result = await method(arguments)
+        elif name == "read_context_reference":
+            if self.reference_reader is None:
+                raise ToolError("no explicit reference is attached to this run")
+            result = self.reference_reader(str(arguments["artifact_id"]))
         else:
             raise ToolError(f"unknown tool: {name}")
         return json.dumps(
@@ -173,7 +346,7 @@ class WorkspaceTools:
 
     @staticmethod
     def is_side_effecting(name: str) -> bool:
-        return name in {"apply_patch", "run_command"}
+        return name in {"apply_patch", "run_command", "delegate_agent", "send_agent_message"}
 
     def action_hash(self, name: str, arguments: dict[str, Any]) -> str:
         """Hash the fully normalized action; callers persist only the digest."""
@@ -186,6 +359,8 @@ class WorkspaceTools:
                 "old_text": str(arguments["old_text"]),
                 "new_text": str(arguments["new_text"]),
             }
+        elif name in {"delegate_agent", "send_agent_message"}:
+            normalized_arguments = dict(sorted(arguments.items()))
         else:
             raw_argv = arguments["argv"]
             if not isinstance(raw_argv, list) or not all(

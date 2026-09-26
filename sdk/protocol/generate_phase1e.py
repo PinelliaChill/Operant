@@ -1464,7 +1464,7 @@ def _python_package_init() -> str:
         '    "BETA_SCHEMA_DIGEST",\n',
         1,
     )
-    return source.replace(
+    source = source.replace(
         '    "Phase45ProtocolNegotiationError",\n',
         '    "Phase45ProtocolNegotiationError",\n'
         '    "Phase56Client",\n'
@@ -1472,6 +1472,14 @@ def _python_package_init() -> str:
         '    "BetaClient",\n'
         '    "BetaProtocolNegotiationError",\n',
         1,
+    )
+    source = source.replace(
+        "from .transport import Phase23Error\n",
+        "from .transport import Phase23Error\nfrom .workbench_generated import WorkbenchClient\n",
+        1,
+    )
+    return source.replace(
+        '    "PHASE1E_MAX_CURSOR",\n', '    "WorkbenchClient",\n    "PHASE1E_MAX_CURSOR",\n', 1
     )
 
 

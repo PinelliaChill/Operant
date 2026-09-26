@@ -116,7 +116,7 @@ export interface LiveContextValue {
   createSession: (input: LiveCreateSessionInput) => Promise<LiveSession | undefined>;
   /** Create a Core Thread for the selected readable Project/Workspace. */
   createThread: () => Promise<B2.ConversationThread | undefined>;
-  sendMessage: (message: string) => Promise<void>;
+  sendMessage: (message: string, references?: Phase1E.ReferenceRequest[]) => Promise<boolean>;
   cancelSession: () => Promise<void>;
   decideApproval: (approval: LiveApproval, decision: LiveApprovalDecision) => Promise<void>;
   loadFiles: (workspaceId: string, relativePath?: string) => Promise<void>;
@@ -130,6 +130,7 @@ interface PendingRun {
   threadId: string;
   workspace: string;
   message: string;
+  references: Phase1E.ReferenceRequest[];
   idempotencyKey: string;
 }
 
@@ -847,6 +848,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         message: run.message,
         workspace: run.workspace,
         thread_id: run.threadId,
+        references: run.references,
       },
       {
         idempotencyKey: run.idempotencyKey,
@@ -1137,12 +1139,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [adapter, applyError, clientMode, command.status, connectionStatus, manualReconcileRequired, phase, refresh, stream.status, threads]);
 
-  const sendMessage = useCallback(async (message: string) => {
+  const sendMessage = useCallback(async (message: string, references: Phase1E.ReferenceRequest[] = []) => {
     const trimmed = message.trim();
     const thread = selectedThreadIdRef.current ? threads.find((item) => item.id === selectedThreadIdRef.current) : undefined;
-    if (!trimmed || clientMode !== 'live' || phase !== 'ready' || !thread?.sessionId || !thread.workspaceRef) return;
-    if (manualReconcileRequired || command.status !== 'idle' || connectionStatus !== 'connected' || stream.status !== 'connected') return;
-    if (commandDispatchingRef.current) return;
+    if (!trimmed || clientMode !== 'live' || phase !== 'ready' || !thread?.sessionId || !thread.workspaceRef) return false;
+    if (manualReconcileRequired || command.status !== 'idle' || connectionStatus !== 'connected' || stream.status !== 'connected') return false;
+    if (commandDispatchingRef.current) return false;
     commandDispatchingRef.current = true;
     terminalErrorRef.current = undefined;
     setLastError(undefined);
@@ -1152,6 +1154,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       && previousRun.sessionId === thread.sessionId
       && previousRun.threadId === thread.id
       && previousRun.message === trimmed
+      && JSON.stringify(previousRun.references) === JSON.stringify(references)
       ? previousRun.idempotencyKey
       : createIdempotencyKey();
     const run: PendingRun = {
@@ -1159,6 +1162,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       threadId: thread.id,
       workspace: thread.workspaceRef,
       message: trimmed,
+      references,
       idempotencyKey: commandKey,
     };
     pendingRunRef.current = run;
@@ -1166,6 +1170,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const streamCompleted = await consumeRunStream(run, false, lifecycleRef.current);
       if (clientMode === 'live' && streamCompleted) await refresh();
+      return streamCompleted;
     } catch (error: unknown) {
       const detail = applyError(error, false);
       if (!detail.retryable && !errorNeedsManualReconcile(detail)) {
@@ -1176,6 +1181,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       setStream((current) => ({ ...current, status: 'error', error: detail }));
       setCommand({ status: 'error', error: detail, idempotencyKey: commandKey });
+      return false;
     } finally {
       commandDispatchingRef.current = false;
     }

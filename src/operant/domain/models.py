@@ -80,6 +80,9 @@ class ToolPolicy(BaseModel):
             "apply_patch",
             "run_command",
             "git_diff",
+            "delegate_agent",
+            "send_agent_message",
+            "wait_for_agent",
         }
         unknown = set(value).difference(known)
         if unknown:

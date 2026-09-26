@@ -191,6 +191,8 @@ class _PersistentActionGateway:
     def _capabilities_for(self, name: str, arguments: dict[str, Any]) -> tuple[Capability, ...]:
         if name == "apply_patch":
             return (Capability.WORKSPACE_WRITE,)
+        if name in {"delegate_agent", "send_agent_message"}:
+            return (Capability.WORKSPACE_WRITE,)
         category = self.tools.required_approval_category(name, arguments)
         if category == "privileged":
             return (Capability.POLICY_MODIFY, Capability.PROCESS_EXEC)
@@ -522,6 +524,7 @@ class ApplicationService:
         self.factory = AgentFactory(store)
         self.slash_commands = SlashCommandRegistry()
         self._cancellations: dict[str, asyncio.Event] = {}
+        self.workbench: Any | None = None
         self._sidecar_cancellations: dict[str, asyncio.Event] = {}
         self._approval_futures: dict[tuple[str, str], asyncio.Future[bool]] = {}
         self._approval_details: dict[tuple[str, str], dict[str, str]] = {}
@@ -568,6 +571,10 @@ class ApplicationService:
 
     def initialize(self) -> None:
         self.store.initialize()
+        if self.workbench is None:
+            from operant.api_workbench_agents import WorkbenchRuntime
+
+            self.workbench = WorkbenchRuntime(self)
 
     def close(self) -> None:
         """Release long-lived storage descriptors owned by this service."""
@@ -3156,6 +3163,7 @@ class ApplicationService:
         agent = None
         cancellation: asyncio.Event | None = None
         run_lease: SessionRunLease | None = None
+        bound_history = False
 
         def release_plugin_runs() -> None:
             if self.memory_manager is None or agent is None:
@@ -3209,9 +3217,23 @@ class ApplicationService:
             self.store.update_agent_status(agent.id, AgentStatus.RUNNING)
             cancellation = asyncio.Event()
             self._cancellations[session.id] = cancellation
+            collaboration = (
+                self.workbench.tools_for(thread_id)
+                if self.workbench is not None and bound_history and thread_id is not None
+                else None
+            )
+            reference_reader = None
+            if thread_id is not None and references:
+                from operant.api_workbench_context import read_context_reference
+
+                def reference_reader(artifact_id: str) -> dict[str, Any]:
+                    return read_context_reference(self, thread_id, tuple(references), artifact_id)
+
             tools = WorkspaceTools(
                 workspace,
                 policy=session.role_snapshot.tool_policy,
+                collaboration=collaboration,
+                reference_reader=reference_reader,
             )
             normalized_workspace = str(Path(workspace).resolve())
             manager = self.memory_manager
@@ -3254,7 +3276,27 @@ class ApplicationService:
                     references=tuple(references),
                 )
             context_composer = PersistentContextComposer(
-                collaboration_context=_collaboration_context,
+                collaboration_context=(
+                    (
+                        lambda: "\n".join(
+                            filter(
+                                None,
+                                (
+                                    _collaboration_context()
+                                    if _collaboration_context is not None
+                                    else "",
+                                    self.workbench.peek_inbox(thread_id)
+                                    if self.workbench is not None
+                                    and bound_history
+                                    and thread_id is not None
+                                    else "",
+                                ),
+                            )
+                        )
+                    )
+                    if self.workbench is not None and bound_history and thread_id is not None
+                    else _collaboration_context
+                ),
                 before_compose=experience_run.guard if experience_run is not None else None,
                 memory_run=memory_run,
                 count_provider_tokens=manager is not None,
@@ -3481,6 +3523,8 @@ class ApplicationService:
                 )
                 yield runtime_event
                 if runtime_event.event_type == "model.completed":
+                    if self.workbench is not None and bound_history and thread_id is not None:
+                        self.workbench.acknowledge_inbox(thread_id)
                     try:
                         self._record_runtime_cache_observation(session, runtime_event)
                     except Exception as exc:
@@ -3535,11 +3579,22 @@ class ApplicationService:
                 self.store.update_agent_status(agent.id, final_status)
                 if self._cancellations.get(session.id) is cancellation:
                     self._cancellations.pop(session.id, None)
+                if self.workbench is not None and bound_history and thread_id is not None:
+                    self.workbench.clear_run_inbox(thread_id)
                 self._clear_session_approvals(session.id)
                 self.release_session_run(session.id, run_lease)
+                if (
+                    final_status is AgentStatus.COMPLETED
+                    and self.workbench is not None
+                    and bound_history
+                    and thread_id is not None
+                ):
+                    self.workbench.schedule_pending_wake(thread_id)
 
     def cancel_session(self, session_id: str) -> bool:
         self.get_session(session_id)
+        if self.workbench is not None:
+            self.workbench.cancel_session_children(session_id)
         accepted = self.store.cancel_session_run_lease(session_id)
         cancellation = self._cancellations.get(session_id)
         if cancellation is not None:

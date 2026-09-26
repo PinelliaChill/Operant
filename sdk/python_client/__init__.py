@@ -44,8 +44,10 @@ from .phase56_generated import (
     ProtocolNegotiationError as Phase56ProtocolNegotiationError,
 )
 from .transport import Phase23Error
+from .workbench_generated import WorkbenchClient
 
 __all__ = [
+    "WorkbenchClient",
     "PHASE1E_MAX_CURSOR",
     "PHASE1E_PROTOCOL_VERSION",
     "PHASE1E_SCHEMA_DIGEST",
