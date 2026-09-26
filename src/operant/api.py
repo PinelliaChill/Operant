@@ -37,6 +37,8 @@ from operant.api_phase45 import install_phase45_routes
 from operant.api_phase56_control import Authorizer, install_phase56_control_routes
 from operant.api_phase56_target import install_phase56_target_routes
 from operant.api_phase56_writer import install_phase56_writer_routes
+from operant.api_workbench_agents import install_workbench_agent_routes
+from operant.api_workbench_context import install_workbench_context_routes
 from operant.application.client_projection import (
     ProjectProjectionCursorError,
     ProjectProjectionError,
@@ -50,6 +52,7 @@ from operant.application.protocol_metadata import (
     phase23_protocol_metadata,
     phase45_protocol_metadata,
     phase56_protocol_metadata,
+    workbench_protocol_metadata,
 )
 from operant.application.service import ApplicationService
 from operant.application.workflow import SequentialCodingWorkflow, WorkflowEvent
@@ -1831,6 +1834,21 @@ def create_app(
                 ),
             )
 
+    @app.get("/v1/protocol/workbench", response_model=None, operation_id="negotiateWorkbench")
+    async def get_workbench_protocol() -> dict[str, Any] | JSONResponse:
+        try:
+            return workbench_protocol_metadata()
+        except ProtocolSchemaUnavailable:
+            return JSONResponse(
+                status_code=503,
+                content=error_payload(
+                    code="protocol_schema_unavailable",
+                    message="generated Workbench protocol Schema digest is unavailable",
+                    recovery=RecoveryAction.RETRY_LATER,
+                    retryable=True,
+                ),
+            )
+
     @app.get("/v1/protocol/phase23", response_model=None)
     async def get_phase23_protocol() -> dict[str, Any] | JSONResponse:
         try:
@@ -3567,6 +3585,8 @@ def create_app(
 
     install_b2_routes(app, service)
     install_b2_3_routes(app, service)
+    install_workbench_context_routes(app, service)
+    install_workbench_agent_routes(app, service)
     install_phase23_routes(app, store)
     install_phase45_routes(
         app,

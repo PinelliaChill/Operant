@@ -7,6 +7,7 @@ import { useOperant } from '../../context/ClientContext';
 import { useLive } from '../../live/LiveContext';
 import type { LiveProjectProjection } from '../../live/liveState';
 import { formatRelativeDay } from '../../lib/format';
+import { visibleThreadTree } from './liveThreadTree';
 
 interface LiveSidebarProps {
   onNavigate?: () => void;
@@ -46,6 +47,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   } = useLive();
   const [query, setQuery] = useState('');
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
+  const [collapsedThreads, setCollapsedThreads] = useState<string[]>([]);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
   const [newRoleName, setNewRoleName] = useState('');
@@ -71,6 +73,11 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
     setCollapsedProjects((current) => current.includes(projectId)
       ? current.filter((id) => id !== projectId)
       : [...current, projectId]);
+  };
+  const toggleThread = (threadId: string) => {
+    setCollapsedThreads((current) => current.includes(threadId)
+      ? current.filter((id) => id !== threadId)
+      : [...current, threadId]);
   };
 
   const goThread = (threadId: string) => {
@@ -170,9 +177,8 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
 
         {filteredProjects.map((project) => {
           const isCollapsed = collapsedProjects.includes(project.id);
-          const projectThreadList = projectThreads(project, threads).filter((thread) => (
-            !normalizedQuery || thread.title.toLowerCase().includes(normalizedQuery)
-          ));
+          const allProjectThreads = projectThreads(project, threads);
+          const projectThreadList = visibleThreadTree(allProjectThreads, normalizedQuery, collapsedThreads);
           const isSelectedProject = project.id === selectedProjectId;
           return (
             <section key={project.id} className="rail-sidebar-project-group">
@@ -204,20 +210,30 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
               </div>
               {!isCollapsed && (
                 <div className="rail-sidebar-project-children">
-                  {projectThreadList.length > 0 ? projectThreadList.map((thread) => (
-                    <button
-                      type="button"
-                      key={thread.id}
-                      className={`rail-sidebar-row${thread.id === (selectedThreadId || activeThreadId) ? ' active' : ''}`}
-                      onClick={() => goThread(thread.id)}
-                      aria-current={thread.id === (selectedThreadId || activeThreadId) ? 'page' : undefined}
-                    >
-                      <span className="rail-sidebar-row-main">
-                        <span className="rail-sidebar-row-title">{thread.title || thread.id}</span>
-                        <span className="rail-sidebar-row-sub">{thread.status}</span>
-                      </span>
-                      <span className="rail-sidebar-time">{formatRelativeDay(thread.updatedAt)}</span>
-                    </button>
+                  {projectThreadList.length > 0 ? projectThreadList.map(({ thread, depth, hasChildren }) => (
+                    <div key={thread.id} className="live-thread-tree-row" style={{ paddingInlineStart: `${depth * 14}px` }}>
+                      {hasChildren ? <button
+                        type="button"
+                        className="live-thread-tree-toggle"
+                        onClick={() => toggleThread(thread.id)}
+                        aria-expanded={normalizedQuery ? true : !collapsedThreads.includes(thread.id)}
+                        aria-label={`${normalizedQuery || !collapsedThreads.includes(thread.id) ? '折叠' : '展开'} ${thread.title || thread.id} 的子会话`}
+                      ><ChevronRight size={13} aria-hidden="true" className={normalizedQuery || !collapsedThreads.includes(thread.id) ? 'expanded' : ''} /></button>
+                        : <span className="live-thread-tree-spacer" aria-hidden="true" />}
+                      <button
+                        type="button"
+                        className={`rail-sidebar-row${thread.id === (selectedThreadId || activeThreadId) ? ' active' : ''}`}
+                        onClick={() => goThread(thread.id)}
+                        aria-current={thread.id === (selectedThreadId || activeThreadId) ? 'page' : undefined}
+                        aria-label={`${depth > 0 ? `第 ${depth} 层子会话，` : ''}${thread.title || thread.id}，${thread.status}`}
+                      >
+                        <span className="rail-sidebar-row-main">
+                          <span className="rail-sidebar-row-title">{thread.title || thread.id}</span>
+                          <span className="rail-sidebar-row-sub">{thread.status}</span>
+                        </span>
+                        <span className="rail-sidebar-time">{formatRelativeDay(thread.updatedAt)}</span>
+                      </button>
+                    </div>
                   )) : (
                     <div className="rail-sidebar-empty">{normalizedQuery ? '没有匹配的会话' : '暂无会话'}</div>
                   )}

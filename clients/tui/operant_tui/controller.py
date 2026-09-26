@@ -103,6 +103,7 @@ class ClientController:
         b26: Any | None = None,
     ) -> None:
         base_url = validate_core_url(core_url)
+        self.core_url = base_url
         self.phase1e = phase1e or Phase1EClient(base_url)
         self.phase23 = phase23 or Phase23Client(base_url)
         self.phase45 = phase45 or Phase45Client(base_url)

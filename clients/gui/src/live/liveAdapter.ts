@@ -102,6 +102,7 @@ function legacyId(
 export function mapThreadProjection(thread: Phase1E.ThreadProjection): LiveThread {
   return {
     id: thread.id,
+    parentThreadId: thread.parent_thread_id,
     title: thread.id,
     workspaceRef: thread.workspace_ref,
     workspace: thread.workspace_ref || '',

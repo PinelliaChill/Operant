@@ -521,6 +521,8 @@ class PersistentContextComposer:
                 "size_bytes": artifact.size_bytes,
                 "sensitivity": artifact.sensitivity.value,
             }
+            if request.user_text:
+                rendered["source_summary"] = redact_public_text(request.user_text, max_chars=500)
             if request.include_mode is ReferenceIncludeMode.INLINE:
                 try:
                     rendered["content"] = self.artifact_reader(artifact.id).decode("utf-8")

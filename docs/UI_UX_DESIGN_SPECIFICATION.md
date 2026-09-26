@@ -1,31 +1,40 @@
 # Operant 多 Agent Harness 客户端设计与实现规范
 
-> 文档状态：目标客户端设计 v0.3；Beta/RC 实现状态以当前架构文档为准
+> 文档状态：目标客户端设计；GUI 真实接入范围与验收约束见第 16.1 节
+> 旧版本修订、GUI demo v6–v10 与旧客户端对接需求已移入[历史归档](history/UI_UX_DESIGN-history-20260922.md)；历史内容不作当前实现依据
 >
-> 最后更新：2026-09-04
+> 原版本记录：2026-09-09；记录身份：Codex；适用对象：所有 Agent
+>
+> 本次整理：2026-09-22；记录身份：Agent4；仅做历史归档、措辞收敛和链接保全，不改产品实现
 >
 > 仓库内权威路径：`docs/UI_UX_DESIGN_SPECIFICATION.md`
 >
-> 当前实现权威：`docs/PROJECT_ARCHITECTURE.md`、源码与测试
+> 当前实现核对（本次版本）：主线 `74a0251` 对应的 [PROJECT_ARCHITECTURE.md](../.worktrees/ui-install-main/docs/PROJECT_ARCHITECTURE.md)、该实施树源码与测试；根目录旧 Phase 1B 文档编辑 checkout 不作为此次版本证据
 >
 > 目标内核契约：`docs/项目架构.md`
+>
+> 当前协作与文件归属以[AGENTS.md](../AGENTS.md)为准；后续目标补充：2026-09-21；记录身份：Agent1。会话/子Agent、Live画布、引用/命令、配置及TUI等尚缺入口统一见[Harness 待实现目标](design/Operant-Harness待实现目标.md)。
+>
+> 当前状态提示：主线 `74a0251` 对应的本机安装与 GUI/Live/退出重开核对、UI-REFINE-20260920 三阶段结果见[memory/current.md](../memory/current.md)和[UI-REFINE-2-3 任务包](../.worktrees/ui-install-main/docs/design/ui-refine-2-3/task-package.md)；这不表示所有目标模块已接入，也不表示已签名、公证、正式发布或迁移真实用户库。
 
 ## 1. 文档定位
 
 本文定义 Operant 下一阶段 GUI、桌面壳和 TUI 的产品结构、技术边界、状态来源、交互规则、
-安全要求与实施顺序。它用于指导 Antigravity、OpenCode 和后续实现 Agent 设计客户端，但不改变当前代码状态。
+安全要求与实施顺序。它用于指导本批承担客户端职责的 Agent 设计客户端，但不改变当前代码状态。
 
-Beta/RC 已交付 React PWA、Textual TUI、Tauri 薄壳、WSS/Host Connector 和生成 Client 接入；其精确
-能力、限制与验收只以源码、测试和 `docs/PROJECT_ARCHITECTURE.md` 为准。本文仍描述目标交互，不把
-未完成的智能创建、多 Host 运维、移动推送、签名/公证或公网部署套件宣称为已实现。
+当前实现必须按具体 branch/HEAD 与实际运行工件核对，不能用旧工作区或 Demo 代替后续版本的事实。
+当前参考实施树为 `.worktrees/ui-install-main` 的主线 `74a0251`；原 2026-09-08 Beta/RC `708b341` 仅是历史基线，不能混为当前实现，也不是完整桌面验收。
+任何目标能力完成后，必须以源码、测试和对应版本 `docs/PROJECT_ARCHITECTURE.md` 的更新为准，
+不能仅凭本设计文档宣称已经实现。
 
 本设计遵循以下原则：
 
-1. GUI 和 TUI 是两个独立客户端，但共用同一套类型化协议与状态语义。
+1. 最终保留 React + Tauri 桌面 GUI 与 TUI，共用同一套类型化协议与状态语义；React 只维护一套
+   图形界面，浏览器用于开发调试，真实 Tauri WebView 随阶段验收。
 2. Operant Core 是运行、权限、恢复和审计的唯一权威；客户端只是命令入口和状态投影。
 3. REST 加 SSE 是默认通信方式；只有 PTY 输入、运行中 steering 等真实双向场景使用 WebSocket。
 4. Tauri 是薄桌面壳，不执行 Agent 动作，不裁决权限，也不绕过 Action Gateway。
-5. 工作流“定义编辑”和“运行监控”是两个界面、两套状态，不把画布草稿当成执行状态。
+5. 工作流“定义编辑”和“运行进度”是两个界面、两套状态，不把画布草稿当成执行状态。
 6. 不展示或承诺暴露模型隐藏思维链。界面只展示结构化摘要、动作、证据、决策、工件和状态。
 7. 智能创建只生成 Draft 或 Patch Proposal；发布定义和启动运行必须经过校验与显式确认。
 8. 视觉原型只证明方向，不证明响应式、键盘、无障碍、安全、真实协议或运行恢复已经可用。
@@ -156,8 +165,8 @@ Capability 和 Action Gateway 控制。
 
 | 层 | 选型 | 约束 |
 |---|---|---|
-| Web UI | React 19.x + TypeScript | 使用实施时受支持的稳定小版本 |
-| 移动远程端 | 同一 React 应用的响应式 PWA | 不为 2.0 复制一套 iOS/Android 业务客户端 |
+| 共享 GUI | React 19.x + TypeScript | 使用实施时受支持的稳定小版本，桌面产品与浏览器调试共用 |
+| 移动远程端 | 既有响应式 PWA | 暂停新增投入，不复制移动业务客户端 |
 | 构建 | Vite 当前受支持稳定版 | 不把旧主版本写死为长期要求 |
 | 路由 | React Router | 页面 URL 可恢复、可深链 |
 | 远程状态 | TanStack Query | 不复制服务端权威状态 |
@@ -166,7 +175,7 @@ Capability 和 Action Gateway 控制。
 | 代码/Diff | Monaco，按需懒加载 | 普通页面不预加载重资源 |
 | 终端 | xterm.js，按需懒加载 | 只连接受控 PTY Capability |
 | 基础组件 | Radix Primitives 或同级无障碍组件 | 保留语义、焦点和键盘支持 |
-| 桌面壳 | Tauri v2 | 最后接入，保持薄壳 |
+| 桌面壳 | Tauri v2 | 随 GUI 阶段持续验收，保持薄壳 |
 
 不把“安装包固定小于 15 MB”“闲置内存固定为某个数字”“Web 与桌面 100% 零差异”写成承诺。
 这些值受 WebView、平台、资源、字体和打包策略影响，必须以实施后的多平台基准为准。
@@ -211,17 +220,26 @@ sdk/
 
 ## 5. 信息架构
 
-GUI 的一级入口建议为：
+GUI 应提供“对话 / 协作”双模式壳层：模式由可恢复的 URL 路径派生（对话 `/chat`、协作 `/collab`），
+最左 64px 图标 rail 顶部放置唯一切换钮，恒显当前模式（对话=气泡图标、协作=双人图标，当前模式
+高亮）；点击弹出模式菜单选择「对话/协作」，当前项勾选，遵循 WAI-ARIA menu 语义（方向键与
+Home/End 移焦，Enter/Space 激活，Esc、点击外部或 Tab 关闭并把焦点归还按钮）。rail 不再设独立
+「会话」项；`< 960px` 移动端底部 tab 保留会话入口，侧栏抽屉顶部复用同一模式切换钮。
 
-1. **会话**：Thread、父子 Agent、上下文、Artifact 和即时任务；
-2. **协作**：正在运行的 Agent/Team/Workflow、历史记录和创建入口；
-3. **工作流**：Definition 编辑、校验、版本、发布和 Run 监控；
-4. **群聊**：Team Message 的可见性投影、事件时间线和任务板；
-5. **自动化**：Trigger、Schedule、Hook、Loop、历史运行和 Dead Letter；
-6. **远程**：Host、配对设备、Relay、连接状态、撤销和远程安全审计；
-7. **设置**：模型、角色、权限、插件、Skill、工作区、缓存与保留策略。
+GUI 的一级入口为：
 
-“协作面板”负责概览和跳转，“工作流编辑器”负责 Definition，“Run 详情”负责运行状态。三个页面
+1. **对话模式（/chat）**：Thread、父子 Agent、上下文、Artifact 和即时任务；
+2. **协作模式（/collab）**：工作流模板与实例、编排画布、运行进度和群聊深链；原独立「工作流」
+   入口并入协作模式；
+3. **审批**：审批收件箱——待处理审批富卡片与近期决定历史（见 8.3）；
+4. **Agent**：单一 Agent 体系的卡片网格与详情抽屉（见 7.10）；角色预设与运行时 Agent 实例应分开呈现，
+   旧深链迁移规则须纳入正式路由契约；
+5. **设置**：模型配置 → 审批与权限 → 记忆治理 → 保留策略 → 远程与设备（见 7.8）；
+6. **群聊（目标）**：Team Message 的可见性投影、事件时间线和任务板；
+7. **自动化（目标）**：Trigger、Schedule、Hook、Loop、历史运行和 Dead Letter；
+8. **远程（目标）**：Host、配对设备、Relay、连接状态、撤销和远程安全审计。
+
+“协作总览”负责模板与实例管理，“编排画布”负责 Definition，“运行进度”负责运行状态。三个视图
 不能合并为一张同时可编辑又可执行的无限画布。
 
 ## 6. GUI 全局布局与响应式
@@ -231,20 +249,29 @@ GUI 的一级入口建议为：
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 顶部：工作区 / 模式 / 全局状态 / 命令面板                           │
-├──────────────┬───────────────────────────────────┬───────────────────┤
-│ 左侧导航     │ 中央主视图                        │ 右侧检查器        │
-│ 240—260 px   │ 最小 520 px                       │ 340—380 px        │
-│ 会话/对象树  │ 会话、画布、群聊、设置            │ Diff/终端/证据    │
-├──────────────┴───────────────────────────────────┴───────────────────┤
-│ 底部：连接、运行、预算、隔离与审批状态                              │
+├─────┬──────────┬───────────────────────────────────┬───────────────────┤
+│Rail │ 情境侧栏 │ 中央主视图                        │ 右侧检查器        │
+│64 px│ 280 px   │ 最小 520 px                       │ 340—380 px        │
+│ 图标│ 会话/对象│ 会话、画布、群聊、设置            │ Diff/终端/证据    │
+├─────┴──────────┴───────────────────────────────────┴───────────────────┤
+│ 底部：连接、运行进度、预算、隔离与审批状态                              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+64px 图标 rail 固定不折叠，顶部为唯一模式切换钮（见第 5 章）；280px 情境侧栏随当前模式显示
+会话或协作对象树，可在所有 ≥960px 桌面宽度收起（见 6.2）。
+
 ### 6.2 断点规则
 
-- `>= 1280px`：三栏布局，左右栏可调宽、可折叠；
-- `960—1279px`：中央主视图固定保留，左右栏变成互斥抽屉；
-- `< 960px`：单主视图，导航、检查器、终端和详情都使用全高抽屉或独立路由；
+- `>= 960px`：三栏布局；会话/协作情境侧栏在所有桌面宽度内联且可折叠——收起时完全隐藏，左缘
+  只留细竖把手，把手带「展开侧栏」`aria-label`，点击或 Enter 展开；
+- `>= 1280px`：左右栏可调宽；
+- `< 960px`：单主视图，导航、检查器、终端和详情都使用全高抽屉或独立路由；会话/协作侧栏维持
+  覆盖抽屉（遮罩、Esc 与焦点管理），底部 tab 保留会话入口；
+- 协作编排画布的节点面板与节点配置面板各自独立可折叠，收起后画布对应侧缘留细把手，画布表面
+  宽度自适应；
+- 情境侧栏与画布面板的折叠状态按 `localStorage`（`operant.panel.*`）持久化，默认展开，缺失或
+  非法值按展开处理；
 - `< 600px`：优先保留任务状态、Queue/Steer、Approval、Diff 摘要和关键决策；复杂 Graph 编辑与
   长代码审查转为只读概览、分步详情或提示切换大屏；
 - 不允许简单等比压缩三栏，导致代码、审批和按钮不可读；
@@ -293,17 +320,29 @@ Provider 返回可信 usage 字段时才显示；不能用估算值伪装成真�
 手动压缩应创建新的 `ContextRevision`，并允许查看摘要、被替换片段的引用和压缩原因；Canonical
 History 不因压缩而删除。
 
-### 7.3 协作面板
+### 7.3 协作模式：工作流模板与实例
 
-协作首页显示：
+协作模块采用“模板 → 实例”模型：工作流模板（Published Revision）可创建
+多个实例；实例是一对一的群聊会话，创建时自动命名为「{模板名} · 实例 N」，会话重命名即实例重命名。
 
-- 当前运行的 Agent、Team 和 Workflow Run；
-- 等待审批、等待输入、失败、人工核对和预算告警；
-- 历史 Team/Run；
-- 新建 Agent、Team、Workflow 和智能创建入口；
-- 每个对象的工作区、模型快照、权限摘要和最近事件。
+- 协作总览为模板为主的双栏视图：左栏是模板列表（名称、版本徽章、活跃实例数）；右栏是选中模板
+  详情——节点/连线数、活跃实例数、活跃实例列表、默认收起的「已归档实例」折叠区（只读行：
+  恢复/删除），以及「打开画布」（只读）与「+ 新建实例」入口；
+- 协作情境侧栏分三组：草稿、实例、运行进度；实例组跨模板平铺活跃实例（按更新时间倒序），
+  组底部提供默认收起的「已归档 (N)」可折叠子组；
+- 实例行 hover 显示「···」菜单：活跃实例可重命名、归档、删除，已归档实例可恢复、删除。
+  归档是只读保留且可恢复；删除连同实例会话的消息、过程日志、文件、任务与知识条目彻底移除；
+- 运行中的实例禁止归档、删除与重命名，提示先到运行进度取消运行；
+- 模板封锁：模板存在活跃实例时禁止发布新版本；草稿编辑不受限，发布被拦截并提示当前活跃实例数，
+  从未发布过的新草稿不受封锁；
+- 「运行」概念统一命名为「运行进度」，用于侧栏分组、总览 chips（总览/编排画布/运行进度）、
+  监控面板、状态栏与页面标题。
 
-Agent 群组可使用紧凑关系图展示成员与通信边，但概览图不是 Workflow Definition 编辑器。
+Team/Run 的等待审批、预算告警、历史归档与智能创建入口等协作概览能力仍是目标扩展，具体实现状态
+必须以当前架构文档、正式协议、源码和测试为准。
+
+Beta 2.0 对接以正式 Core 契约为准：上述交互要求不能直接当作已实现的数据契约。实例、Run、Thread、
+Task 和插件数据集保留各自身份，归档/删除与发布守卫须由正式契约冻结；历史与数据删除须列明范围和保留例外。
 
 ### 7.4 Workflow Definition 编辑器
 
@@ -322,7 +361,7 @@ Agent 群组可使用紧凑关系图展示成员与通信边，但概览图不�
 修改后显示 Override。模型必须来自 Provider Discovery 与 ModelProfile，不能在界面中硬编码不存在的
 模型 ID。
 
-### 7.5 Workflow Run 监控
+### 7.5 运行进度（Workflow Run 监控）
 
 Run 页面使用发布时固定的 Definition Revision，只读展示：
 
@@ -385,8 +424,13 @@ Agent 通信采用“单条权威消息 + 收件箱投影”，不是为每个�
 - 修改何时生效：立即、下个 Agent、下个 Run 或重新启动；
 - 对历史 Snapshot 是否无影响。
 
-至少包括 ModelProfile、Role、默认 Prompt、预算、reasoning effort、权限、审批策略、Workspace、
-Plugin、Skill、缓存和保留策略。温度、max token、reasoning effort 等字段要根据 Provider Capability
+设置入口应将模型配置、审批与权限、记忆治理、保留策略、远程与设备分开表达，具体分组可以随正式
+信息架构演进。审批与权限配置应支持 `ask` / `workspace-write` / `full-open` / `auto-approve`
+等策略模式、文件写入/命令执行/网络访问规则，以及完整的 radio 语义和键盘焦点行为；策略持久化与
+裁决仍由 Core 负责，演示分组不代表正式设置契约已接入。
+
+设置内容至少覆盖 ModelProfile、默认 Prompt、预算、reasoning effort、权限与审批策略、记忆治理、
+缓存与保留策略、远程与设备。温度、max token、reasoning effort 等字段要根据 Provider Capability
 动态显示，不能假设所有模型都支持同样参数。
 
 ### 7.9 Remote Control
@@ -412,6 +456,16 @@ Agent 的决策：查看进度、发出精确指令、审批、审查 Diff、提
 
 Relay 只显示连接和路由元数据，页面不能从 Relay 缓存推断 Run、Approval 或动作结果。远程客户端不
 展示 Secret；敏感路径、命令和 Action 参数按 Device Scope 使用脱敏摘要或受控引用。
+
+### 7.10 Agent 管理
+
+Agent 管理应采用单一 Agent 体系，并清楚区分可编辑的 RolePreset 与运行时 AgentInstance：
+
+- Agent 页为卡片网格：首字彩色头像、名称、模型、职责简述、在线/忙碌/离线状态徽章与能力 chips；
+- 点击卡片打开详情抽屉：只读展示完整描述、能力清单、模型与状态，底部「编辑」切入编辑态表单，
+  可修改名称、模型、职责简述、系统提示词与最大轮次；工具权限包含文件写入、命令执行开关、
+  可用工具清单与需审批动作类别；
+- 页头「+ 新建 Agent」弹出表单弹窗，复用编辑表单同一套字段；保存统一走同一 upsert 入口。
 
 ## 8. Approval 与安全交互
 
@@ -447,6 +501,19 @@ Action Normalizer
 
 参数、Target、Policy Version 或 Action Hash 变化后，旧批准自动失效。DENY 不显示“仍然批准”按钮。
 用户关闭人工审批时，未通过的高风险动作应失败关闭并要求 Agent 寻找合规替代方案。
+
+### 8.3 审批收件箱
+
+审批收件箱应与策略配置分开：rail「审批」页（`/approvals`）承载待处理审批与决定历史，策略配置
+放在设置治理入口。正式路由和字段仍以 Core Projection 与 Command 契约为准。
+
+- 待处理审批使用富卡片：标题、详情、动作分类徽章、批准/拒绝，卡片带可点击的来源会话深链——
+  工作流实例跳 `/workflow/{workflowId}/s/{conversationId}`，普通会话跳 `/chat/{conversationId}`；
+- 「近期决定」历史区展示已批准/已拒绝、决定时间、来源会话与备注；批准或拒绝后即时从待处理
+  移入历史。
+
+8.2 列出的完整卡片字段（Run、Node、Action Hash、Policy Rule、Lease 等）仍是目标形态；任何演示卡片
+只覆盖其中子集时，都不能视为正式字段已接入。
 
 ## 9. 缓存、历史与保留策略
 
@@ -660,6 +727,85 @@ RemoteSession、待使用凭据和未消费 Capability Lease 必须失效。
 
 ## 16. 实施顺序
 
+<a id="gui-live-integration-plan"></a>
+
+### 16.1 Beta 2.0 GUI 接入范围（GUI-LIVE-20260909）
+
+记录身份：Codex。适用对象：所有 Agent。GUI-L0 已随 B2-1 交付，后续实际状态见 memory/current.md。
+User 要求接入现有模块，并与新记忆系统协同形成 Beta 2.0 更新。本节保留唯一 GUI 模块范围与验收表；
+批次、跨模块依赖和联合门统一在
+[Operant Beta 2.0 更新计划](design/Operant-Beta-2.0更新计划.md)，取代原先 GUI 全部优先于 MP 后续阶段的排期。
+GUI-L 编号和下文 UI 编号保留，不重新编号已交付的后端阶段。
+
+**版本与范围**：本次整理参考主线 `74a0251` 对应的实施树 `.worktrees/ui-install-main`；原 2026-09-08
+Beta/RC `708b341` 源码检查只保留为历史基线。文档编辑目录仍在旧 Phase 1B `2b54b07`，不能将两份
+checkout 混为当前实现。
+开始工程前必须重新核对实施主线、GUI 构建与 Core 版本，保留当前未提交设计和客户端改动。
+下表“基线缺口”保留当时检查依据；B2-1 后的完成状态以对应实施树和 memory/current.md 为准，不要求重做已交付项。
+
+**客户端范围**：只优化一套面向桌面的 React GUI，并持续在 Tauri 内验收；浏览器保留开发入口。
+暂停独立 Web/PWA 发布、手机交互和新增移动端矩阵投入，保留已有能力与协议；本次不删除客户端。
+TUI 保持现有兼容性，公共协议变更同步生成 Python Client；必要记忆/插件操作在契约稳定后按统一计划补齐。
+签名、公证、自动更新仍属发布工作，不作为日常功能接入的前置阻塞。
+
+| 模块 / 编号 | 基线缺口 | 交付范围与完成条件 |
+| --- | --- | --- |
+| 0 / GUI-L0 Live 隔离 | 一级路由白名单拦截任务、Agent、运行详情、工作流深链；旧 `/collab/:wfId/canvas` 却仍读取 Mock | 按实际路由和能力验证所有入口；Live 无法读取 DemoContext/MockClient。覆盖直接深链、刷新、Mock→Live 切换与残留缓存；未实现操作显式标注，不能仅删除拦截器冒充接入 |
+| 1 / GUI-L1 日常任务闭环 | 任务/Agent 页面未接入；聊天缺历史 Query，Session 取消固定禁用 | 联动接入 ModelProfile、RolePreset 配置与运行 Agent 状态；任务列表/详情、创建与启动、Thread 消息分页/回读、运行详情、取消、审批和恢复入口。使用选择器与明确名称完成操作；真实模型任务可在 GUI 从创建走到结果，刷新后仍能回读 |
+| 2 / GUI-L2 项目与设置 | 项目只有只读投影；Live 设置仅 Policy 检查/审计及 Remote，缺模型、记忆和保留治理 | 补项目注册/编辑/归档与解除关联、模型配置与发现、有效设置及来源；按 MP 新契约实现 Memory 搜索、来源/版本、候选确认、修改提议与停用，旧数据由 Core 兼容迁移；接入已有 Artifact 保留/审计能力。缺失的 Query/Command 由 Core 补齐，权限与数据范围由服务端裁决 |
+| 3 / GUI-L3 协作使用闭环 | Graph/Team 只有部分接口界面，需手填 ID；群聊和 Agent 个人页被禁用 | 用模板/Team/Run/成员选择器完成定义读取、受支持节点的编辑校验与发布、启动和监控；接入定向消息、Mailbox、任务/工件板和 Agent 个人页。任务板操作由 Core 持久化，消息不冒充执行状态；单次真实协作任务能从分派走到结果汇总 |
+| 4 / GUI-L4 技能与插件 | Skill 仅发现候选；MCP 已接入，通用插件生命周期未完成 | 保留 MCP 配置/启停/工具调用；补 Skill 信任、安装、项目启停/装载和卸载，补插件安装/配置/启停/卸载界面及 Host 实现。插件 keep/delete 与认证/隔离复用 MP-0 至 MP-2；安装和授权有独立记录，不以发现成功代替 |
+| 随各阶段 / GUI-LR 既有能力回归 | 审批、调度、Remote 有真实调用路径，未证明全部 GUI 流程已验收 | 保留并验证实际受支持的审批决定、调度操作、MCP 生命周期与 Remote 控制；按共享契约的实际影响做回归，不重做已交付 Runtime，也不静默删去已有入口 |
+
+GUI-L0 与 MP-0 同批推进；GUI-L1 对应 B2-2，L2 的基础管理和 L4 的通用生命周期对应 B2-3，
+L3 与 MP-3 对应 B2-4，治理和经验技能随 MP-4/5 对应 B2-5/6，最终回归为 B2-7。
+L3 依赖任务/Agent/项目身份，L4 的 Host 来自 [MP 专项](项目架构.md#memory-plugin-plan)，不重复建设。
+MP-3～MP-6 不等待整个 GUI 专项完成；未完成 L4 生命周期与经验发布时不能整体宣称“所有模块已接入”。
+
+**实现前需冻结的语义与依赖**：
+
+- Task 不直接等同于 Session、WorkflowRun 或 TeamTask；先定义任务页的统一投影及来源类型、
+  稳定 ID 和可用动作，避免另建客户端任务状态机。Agent 页区分可编辑 RolePreset 与运行时 AgentInstance。
+- 后端已有能力优先补正式协议和 GUI；协议缺失先补单一 Schema，再生成 TypeScript/Python Client，
+  不把旧 Demo SDK 当成正式 Client，不硬编码 Provider 模型或内部 ID。
+- 项目解除关联不删除工作区源码；默认行为与影响范围由 Core 明确。文件正文、写入和导出只在
+  有正式授权契约时开放，不能用“浏览目录”充当完整文件管理。
+- Memory 基础管理直接消费新契约，兼容既有来源、版本和 Scope；不先写旧 CRUD 页面或另建永久内置引擎。
+  插件方向、关闭停止活动、卸载 keep/delete 均按既有 MP 计划保留。当前没有全局保留清理执行器，
+  不把可编辑设置、Artifact 清理或本地开关描述为全局自动治理。
+- Graph Pause、智能创建、任意第三方节点及其他未支持动作分别列为后续能力，界面说明限制；
+  GUI-L3 完成的是明确支持的编排与协作流程，不是全部目标 Runtime 扩展。
+- Skill 信任安装不能只建立软链接；[历史归档第 28 节](history/UI_UX_DESIGN-history-20260922.md#history-v10-client-backend)的历史路径方案须经 Host 的来源、权限、目录与资源
+  所有权校验后形成正式契约。通用 Plugin 与 MCP Server 是不同对象，不共用含糊的“已安装”状态。
+  GUI-L4 只前置用户显式安装和管理已有 Skill 包的基础生命周期；经验记忆自动生成 procedure/Skill、
+  验证发布与来源撤销传播仍按 MP-5 执行，复用前置契约，不重复建设或提前标记 MP-5 完成。
+
+**逐模块验收与交付记录**：
+
+1. 分别记录“Core 已有/待补、正式协议已覆盖/待补、GUI 已接入/部分/未接入、真实验收通过/未验收”，
+   绑定实际 HEAD、入口和证据。上表在没有新增实现证据前保持待实现，不沿用历史 Beta 门禁充当通过。
+2. 在真实 Tauri + Core 中完成操作、持久化、刷新和安全重启后的回读；允许后端按既有边界返回
+   interrupted/manual_reconcile_required，不要求自动续传任意模型流。包含空状态、错误、审批、取消、
+   断线重连、重复提交和权限拒绝；只读页面按其实际操作范围验证。
+3. Live 路由与旧深链接不得读取或回退演示数据；消息历史、任务和运行结果来自权威 Query/Event。
+   审批决定或请求 Ack 不能直接显示为执行成功，未知写入不得自动重放。
+4. 修改正式模型链路时先 discover，使用精确模型 ID、正式 ModelProfile 与明确绝对 workspace，
+   经真实 GUI 完成范围受控的单 Agent/多 Agent 流程，记录结果、预算、外部副作用与限制。
+   静态检查、Mock、普通单测和浏览器截图不能替代该项。
+5. 按 AGENTS.md 执行与代码改动相符的完整基础门禁、Client 确定生成及现有 GUI 测试/类型检查/构建；
+   检查桌面宽窄窗口、键盘焦点和对比度。保留已有性能预算，仅对实际改动或未解决风险增加测试。
+6. 当前职责、编号身份、文件归属和交接规则以 [AGENTS.md](../AGENTS.md) 与本批任务包为准；通常由
+   Agent1 负责 Core、公共契约、真实接入、业务交互、客户端测试和集成交付，Agent2 负责分配的 UI
+   呈现与视觉优化，其他编号按任务包承担明确范围。实际验收由负责人完成后同步对应实现文档。
+
+基线证据入口（均须在主线 `74a0251` 或实际实施版本中定位，不以旧 checkout 同名文件代替）：
+`clients/gui/src/app/RailLayout.tsx`、`context/ClientContext.tsx`、`live/LiveContext.tsx`、
+`features/chat/LiveChatView.tsx`、`features/settings/SettingsView.tsx`、`features/projects/LiveProjectsView.tsx`、
+`features/collab/LiveGraphTeamView.tsx`、`features/collab/CollabWorkflowCanvas.tsx` 与 `features/skills/SkillsView.tsx`；
+除首项外路径均相对 `clients/gui/src/`。Mock 深链问题为源码确认，尚未桌面复现。
+
+以下 UI-0 至 UI-6 保留能力划分；当前执行次序以 Beta 2.0 统一计划为准，新增 PWA 扩展不阻塞本专项。
+
 ### UI-0：规范与协议基线
 
 - 固化本文、目标架构和当前实现文档的权威关系；
@@ -669,11 +815,10 @@ RemoteSession、待使用凭据和未消费 Capability Lease 必须失效。
 - 为现有 API/SSE 补齐 Cursor、错误和 Projection 约束；
 - 固化直连/Relay 的加密 Envelope、Device Scope、幂等、过期、签名、Host Ack 与撤销语义。
 
-### UI-1：Web GUI 会话模式
+### UI-1：共享 React GUI 会话模式
 
 - 在现有 REST/SSE 上实现会话、任务、事件、审批和右侧检查器；
-- 将同一 React 应用做成响应式 PWA；Host Connector/Relay MVP 可用后，交付单 Host 的远程查看、
-  Queue/Steer、审批、Diff、Artifact、取消与重连；
+- 同一 React 界面在浏览器开发、Tauri 验收；独立 PWA/手机扩展暂停新增投入，已有远程接口保留；
 - 旧的原生 Web 工作台保留到功能对等和迁移验收完成；
 - Monaco、xterm.js 懒加载；
 - 完成宽屏、平板宽度、窄屏和键盘验收。
@@ -707,12 +852,15 @@ RemoteSession、待使用凭据和未消费 Capability Lease 必须失效。
 
 ### UI-6：Tauri 桌面壳
 
-- Web GUI 稳定后接入 Tauri；
+- Tauri 随 GUI 接入阶段持续验收，复用同一 React 构建，不再等 Web GUI 全部稳定后才验证桌面；
 - 只实现桌面集成能力；
 - 不把执行、PTY、权限或恢复逻辑迁入 Rust 壳；
 - 提供本地 Remote Control 开关、设备配对、连接状态、撤销和紧急断开入口。
 
 ## 17. 验收标准
+
+本节保留整体目标。当前 GUI-LIVE 专项以第 16.1 节的桌面范围和逐模块门禁为准；PWA/手机及
+新增跨平台矩阵暂不作为本专项前置条件，已有能力仍按实际改动影响做回归。
 
 ### 17.1 协议与状态
 
@@ -771,28 +919,90 @@ Antigravity 目录中的：
 
 后续原型修改必须先从本文选择一个明确验收目标，不能把所有页面同时做成无法验证的“大而全”演示。
 
+## 历史章节入口
+
+第 19–28 节原文已整体移至[客户端设计历史归档](history/UI_UX_DESIGN-history-20260922.md)。以下保留原章节标题作为锚点短路由；历史正文中的署名、状态、阶段能力与失败限制均以归档为准，不作为当前实现、协议或排期依据。
+
 ## 19. v0.2 相对初版的关键修订
 
-1. GUI/TUI 改为“物理解耦、协议统一”，删除 TUI 直读内部 Event Bus 的设计。
-2. REST/SSE 成为默认协议，WebSocket 只用于真实双向场景。
-3. Tauri 降为薄壳，PTY、命令、权限和安全裁决回到 Operant Core。
-4. 远程状态、事件流状态和本地 UI 状态分层，不再全部交给 Zustand。
-5. Graph 明确区分 Draft Definition、Published Revision 和 Workflow Run。
-6. 智能创建只生成可审查的 Draft/Patch Proposal。
-7. Agent 通信采用 Canonical Message + Mailbox Projection，避免其他 Agent 上下文污染。
-8. 删除“展示内部思考”，改为可审计的结构化摘要和证据。
-9. 审批模型改为动态 ModelProfile，不硬编码示例模型；LLM 不能覆盖 Policy DENY。
-10. 缓存清理改为显式生命周期，不再解析用户自然语言自动删除。
-11. 补充响应式、无障碍、对比度、真实焦点、深色与减少动画要求。
-12. 调整实施顺序：协议与现有会话 GUI 优先，Graph Runtime 先于画布，Tauri 最后。
+历史正文：[查看归档第 19 节](history/UI_UX_DESIGN-history-20260922.md#history-v02)。
 
 ## 20. v0.3 Remote Control 修订
 
-1. 将响应式 Web GUI 同时定义为可安装 PWA，不为 2.0 复制 iOS/Android 业务客户端。
-2. 将 Remote Control 与 Remote Execution Target 分离，Remote PWA 只控制同一用户的本地 Core。
-3. 增加 HostInstance、RemoteDevice、RemoteSession、RemoteCommandReceipt、Device Scope 与撤销状态。
-4. 采用局域网/VPN 直连优先、用户自托管 Relay 回退；Relay 只路由端到端加密 Envelope。
-5. 明确 Relay Ack 与 Host Ack 不同，Queue、Steer、Approval、Cancel 在 Core 确认前保持未确认。
-6. Remote Control MVP 提前到 UI-0/UI-1，随后随 Graph、Team、TUI 和 Tauri 增量扩展。
-7. 增加手机宽度、Host/Client/Relay 分别断线、重复 Command、Ack 丢失、设备撤销和传输切换验收。
-8. 明确 Operant 2.0 保持单用户、单 Core、本地 SQLite 权威，不建设 SaaS、多用户或分布式控制面。
+历史正文：[查看归档第 20 节](history/UI_UX_DESIGN-history-20260922.md#history-v03-remote)。
+
+## 21. 客户端 Agent 身份路由更新
+
+历史正文：[查看归档第 21 节](history/UI_UX_DESIGN-history-20260922.md#history-agent-routing)。当前编号身份、工具职责和文件归属以 [AGENTS.md](../AGENTS.md) 为准。
+
+## 22. v0.4 GUI demo v6 改版修订（2026-08-30）
+
+历史正文：[查看归档第 22 节](history/UI_UX_DESIGN-history-20260922.md#history-demo-v6)。Demo 仅作历史视觉与交互记录。
+
+## 23. v0.5 GUI demo v7 改版修订（2026-08-31）
+
+历史正文：[查看归档第 23 节](history/UI_UX_DESIGN-history-20260922.md#history-demo-v7)。Demo 仅作历史视觉与交互记录。
+
+## 24. v0.6 GUI demo v8 改版修订（2026-08-31）
+
+历史正文：[查看归档第 24 节](history/UI_UX_DESIGN-history-20260922.md#history-demo-v8)。Demo 仅作历史视觉与交互记录。
+
+## 25. v0.7 GUI demo v9 改版修订（2026-08-31）
+
+历史正文：[查看归档第 25 节](history/UI_UX_DESIGN-history-20260922.md#history-demo-v9)。Demo 仅作历史视觉与交互记录。
+
+## 26. v0.8 GUI demo v10 改版修订（2026-08-31）
+
+历史正文：[查看归档第 26 节](history/UI_UX_DESIGN-history-20260922.md#history-demo-v10)。Demo 仅作历史视觉与交互记录。
+
+## 27. v0.9 客户端-后端对接需求清单（2026-09-01）
+
+历史正文：[查看归档第 27 节](history/UI_UX_DESIGN-history-20260922.md#history-v09-client-backend)。A/B/C 状态、缺口和建议均为当日快照；正式语义以当前架构、Schema、源码、测试及任务包为准。
+
+### 27.1 会话、消息与上下文
+
+历史正文：[查看归档 §27.1](history/UI_UX_DESIGN-history-20260922.md#history-v09-session)。
+
+### 27.2 工作流（模板 → 实例）
+
+历史正文：[查看归档 §27.2](history/UI_UX_DESIGN-history-20260922.md#history-v09-workflow)。
+
+### 27.3 项目与工作区
+
+历史正文：[查看归档 §27.3](history/UI_UX_DESIGN-history-20260922.md#history-v09-project)。
+
+### 27.4 审批
+
+历史正文：[查看归档 §27.4](history/UI_UX_DESIGN-history-20260922.md#history-v09-approval)。
+
+### 27.5 模型与提供商
+
+历史正文：[查看归档 §27.5](history/UI_UX_DESIGN-history-20260922.md#history-v09-provider)。
+
+### 27.6 技能与插件 (MCP)
+
+历史正文：[查看归档 §27.6](history/UI_UX_DESIGN-history-20260922.md#history-v09-skills)。
+
+### 27.7 调度
+
+历史正文：[查看归档 §27.7](history/UI_UX_DESIGN-history-20260922.md#history-v09-scheduling)。
+
+### 27.8 安全与治理
+
+历史正文：[查看归档 §27.8](history/UI_UX_DESIGN-history-20260922.md#history-v09-governance)。
+
+### 27.9 远程与设备
+
+历史正文：[查看归档 §27.9](history/UI_UX_DESIGN-history-20260922.md#history-v09-remote)。
+
+### 27.10 纯客户端能力（无需后端对接）
+
+历史正文：[查看归档 §27.10](history/UI_UX_DESIGN-history-20260922.md#history-v09-client-only)。
+
+### 27.11 对接顺序建议（供排期参考，非决策）
+
+历史正文：[查看归档 §27.11](history/UI_UX_DESIGN-history-20260922.md#history-v09-order)。
+
+## 28. v1.0 客户端-后端对接历史修订（2026-09-01）
+
+历史正文：[查看归档第 28 节](history/UI_UX_DESIGN-history-20260922.md#history-v10-client-backend)。其中路径/软链接和 API 方案仍须按当前 Host、所有权与安全边界重新核定。

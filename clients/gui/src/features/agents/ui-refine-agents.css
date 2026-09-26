@@ -440,6 +440,49 @@
   padding-top: var(--space-1);
 }
 
+.b2-agents-modal-content .b2-agents-tools-fieldset > p {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.b2-agents-modal-content .b2-agents-tool-group + .b2-agents-tool-group {
+  margin-top: var(--space-3);
+}
+
+.b2-agents-modal-content .b2-agents-tool-group h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.b2-agents-modal-content .b2-agents-tool-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: var(--space-2);
+}
+
+.b2-agents-modal-content .b2-agents-tool-options label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.b2-agents-modal-content .b2-agents-tool-options label:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.b2-agents-modal-content .b2-agents-tool-options input { flex: 0 0 auto; }
+.b2-agents-modal-content .b2-agents-tool-options code { display: block; }
+
 @media (max-width: 760px) {
   .b2-agents-page .b2-agents-header,
   .b2-agents-page .b2-agents-section-heading,
