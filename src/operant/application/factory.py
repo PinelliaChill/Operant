@@ -20,6 +20,7 @@ class AgentFactory:
         effort: str | None = None,
         budget_overrides: dict[str, Any] | None = None,
         thread_id: str | None = None,
+        effective_config: dict[str, Any] | None = None,
     ) -> Session:
         return self.store.create_session(
             role_id,
@@ -27,6 +28,7 @@ class AgentFactory:
             effort=effort,
             budget_overrides=budget_overrides,
             thread_id=thread_id,
+            effective_config=effective_config,
         )
 
     def create_agent(

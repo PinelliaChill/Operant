@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-26（可操作编排系统实施树；记录身份：Codex，保留原历史署名）
+> 最后更新：2026-09-26（配置、审批与任务控制实施树；记录身份：Codex，保留原历史署名）
 >
-> 对应源码：`codex/orchestration-system-work` 基于主线 `cf25546` 的交付增量；包含会话工作台与 H-03～H-06，SQLite 仍为 v19。合并状态以 Git/PR 为准；本机已安装 App 尚未更新。
+> 对应源码：`codex/config-approval-task-control` 基于主线 `47ebe36` 的交付增量；包含会话工作台、H-03～H-06 与 H-08/H-09/H-12，SQLite 为 v20。合并状态以 Git/PR 为准；本机已安装 App 尚未更新。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -15,7 +15,7 @@
 
 ## 当前版本速览
 
-- **当前源码**：在 B2-1～B2-7、图标、UI 与会话式多 Agent 工作台基础上，加入 H-03～H-06 可操作编排系统；是否进入主线以对应提交和 PR 状态核对。
+- **当前源码**：在会话工作台与 H-03～H-06 可操作编排系统基础上，加入 H-08/H-09/H-12 的配置继承、审批 Reviewer 和 Goal/Plan/BTW 入口；是否进入主线以对应提交和 PR 状态核对。
 - **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
 - **会话工作台**：[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 提供会话内子 Agent、定向消息、历史树，以及 GUI/TUI 引用、命令和上下文入口，详见 §2.1。
 - **交付边界**：本机候选安装不等于正式签名、公证或自动更新发布；主线合并也不会自动更新已安装 App。历史批次的失败与验收范围仍保留。
@@ -85,7 +85,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
-本节概览主线 `cf25546` 加本实施树的改动，不表示本文列出的每项能力均在本次重跑了产品验收。原阶段详情、失败与旧状态
+本节概览主线 `47ebe36` 加本实施树的改动，不表示本文列出的每项能力均在本次重跑了产品验收。原阶段详情、失败与旧状态
 已移至[阶段与验收原记录](history/PROJECT_ARCHITECTURE-history-20260922.md)，按阶段保留新增能力与证据。
 
 | 范围 | 当前已实现 | 仍需区分的边界 |
@@ -96,14 +96,15 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 | 召回/治理 | 中文及标识符检索、Memory Pack、预算、刷新/撤销；历史搜索、冲突/时效、维护任务与失败处理 | B2-4 Host性能原指标未达；自动治理不等于模型自证或任意冲突自动合并 |
 | 经验与共享 | 经验Skill验证发布/回退、Writer晋级、授权共享/撤销、数据集移交与Remote最小包 | 跨项目共享须显式授权，未合并知识不自动晋级；生产Remote未因此验收 |
 | Graph/Team | 正式 Agent、Tool、Script、Condition、Fan-out、Join、Loop、Timer 执行；Live 画布编辑/连线/版本差异/运行投影；Team消息、Mailbox及任务/工件板、隔离Writer | 混合图至少含一个 Agent 且锁定 Team；Human Input/Approval/Wait/Subworkflow/Artifact/Merge 尚未接入此正式执行器；会话式委派使用独立工作台运行时 |
-| 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；Cron/Timer/本地 application.signal Hook 经持久队列派发到正式 Graph Agent，支持取消与重启接管 | Hook 暂无文件/Git watcher；默认审批模型未装配；动态Slash、通用插件驱动仍有缺口 |
-| 客户端 | React Live GUI 的会话、编排画布、调度与管理入口；Tauri壳、TUI运行/审批；模型可建议 Workflow 草稿，用户再保存/编译/发布 | 智能建议是受控单轮生成及版本迭代，非持久聊天记录；TUI暂无图形画布，交互终端、完整配置继承等缺口仍保留 |
+| 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile，ASK 自动审核并留审计，模型不可用转人工；Cron/Timer/本地 application.signal Hook 派发正式 Graph Agent | 审批模型默认仍为人工模式；硬 DENY 始终优先。Hook 暂无文件/Git watcher；动态Slash、通用插件驱动仍有缺口 |
+| 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Phase3 GUI 入口已接 Core；新配置只作用于新 Session 的冻结快照。TUI 尚无相同的配置/Goal/Plan 管理界面，交互终端未实现 |
 | Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | Browser/Computer不是完整内置驱动；公网、容器联合流程与完整跨设备产品不外推 |
 | 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证 | 非正式签名/公证发布，无完整安装向导、DMG或自动更新；本机启动适配另有安装记录 |
 
 可复用的最近证据：B2-7范围与负结果见[任务包](design/b2-7/task-package.md)；
 UI关键页面与集中验收见[任务包](design/ui-refine-2-3/task-package.md)。
 本实施树的 H-03～H-06 范围、真实链路与限制见[可操作编排验收记录](design/orchestration-system/acceptance.md)。
+H-08/H-09/H-12 的实现与验收见[配置、审批与任务控制记录](design/config-approval-task-control/acceptance.md)。
 本机最新安装状态、授权合并事实与后续目标以治理根进度入口核对，不从旧阶段的“未合并”文字推断。
 
 当前仍缺的用户能力统一由[Harness待实现目标](design/Operant-Harness待实现目标.md)维护 H-01～H-18；
@@ -146,6 +147,13 @@ Docker 检查有 1 项跳过。上述为原实现批次的验证结果，历史�
 
 范围限于[本部分](design/session-workbench/scope.md)。完整图编辑、混合执行/调度、配置继承、
 插件驱动、交互终端及发布部署仍属于后续部分；没有迁移真实用户数据库或更新已安装 App。
+
+## 2.2 配置、审批与任务控制增量
+
+- `scope_configs` 在 SQLite v20 中保存 global/project/workspace/role 覆盖及修订号。`ConfigService` 合成有效值和逐字段来源；提示词按层追加，权限与预算在继承层及 Run 覆盖中只能收窄。普通 Live Session 从 Thread 工作区推导已注册 Project，Workflow 建 Session 时传入工作区；Core 将结果、来源、工作区绑定写入不可变 `RoleSnapshot`，旧 Session 不随配置修改。温度仅在 ModelProfile 声明支持时发送给 Provider。Skill 绑定限制该 Session 装载的已安装项目 Skill；MCP 绑定在有 Session ID 的工具调用中校验，普通管理调用继续走独立 Action Gateway。
+- 全局 `approval_reviewer` 可在 `off/human/auto` 间切换。auto 要求 Discovery 找到独立 Profile 的精确模型 ID；Phase45 Gateway 和正式 Agent Session 的非 dry-run、非硬 DENY ASK 均可触发模型审核。输入是脱敏、去路径/URL/参数的有限事实；严格度控制可自动处理的风险范围，critical 始终转人工。结果与延期原因留审计；批准后仍需再次计算 Policy 并一次性消费原 Action 的 Approval。
+- v20 的 `Goal`、`PlanArtifact` 和 `ExecutionChecklistItem` 使用持久状态与修订号，清单完成要有证据且前置项完成。`/plan <goal_id>` 或 Goal 的生成接口通过零工具、只读 Planner Sidecar 建立可编辑草稿，不直接发布或执行；普通 BTW 在 Live 会话里可只读提问并显式提升结果。默认能力包按可信根发现、校验、安装并按项目启用六个 Skill；`disable-model-invocation` 的 Skill 默认不自动注入。
+- Phase3 的配置与任务控制路由使用 `phase3.v1` Schema、digest 与生成的 Python/TypeScript Client；模型、Phase45 与 Workbench 变动从各自单一 Schema 重生成。具体已验收范围见上方记录。
 
 ## 3. 总体架构
 
@@ -1307,6 +1315,9 @@ SQLiteStore 当前创建以下表：
     v1—v13 manifest/checksum 不变。
 
 15. v15：B2-3 dataset Ledger、管理状态、来源与命令 journal；旧迁移原样保留。只有全部新增业务表为空的显式隔离测试库才允许 downgrade。
+16. v16～v18：B2-4 召回、B2-5 治理及 B2-6 经验共享；各版冻结 manifest/checksum。
+17. v19：会话子 Agent、定向消息及唤醒计数，继续使用冻结角色快照。
+18. v20：配置层、Goal、Plan 与执行清单。覆盖更新和任务状态使用 revision CAS；已有 v1～v19 manifest/checksum 不变。回退仅在新增表为空的隔离库允许。
 
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
@@ -1857,11 +1868,11 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 3. **未知副作用**：Coder/Writer/外部动作结果未知须人工核对。Git已提交而SQLite回执未落盘的窗口可能进入outcome_unknown；既有租约、锁与工作树证据保留，不猜测或自动重放。
 4. **Graph与协作**：正式执行器已有八类混合节点与 Live 画布，但尚未覆盖 Human Input/Approval/Wait/Subworkflow/Artifact/Merge 的直接执行；混合图需至少一个 Agent 与匹配的 Team。智能建议尚无持久对话历史；Hook 限本地 application.signal，文件/Git watcher 未接入。会话委派/消息与 Graph Team 是不同运行时，不能混作一个状态权威。
 5. **记忆效果与清理**：召回、治理、共享和小样本质量评测已实现，但不证明普遍收益。原固定复用问题失败与补充条件化成功分开；尚无一般化自动冲突合并或完整容量淘汰。插件专属数据delete与全局历史/缓存治理不同。
-6. **数据与迁移**：当前SQLite v19，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
-7. **客户端入口**：已有会话父子树、规范历史、模型/角色、技能、管理和编排画布；文件正文/PTY、完整配置继承、任意对象`@`、动态`/`注册、Goal/Plan产品操作仍有缺口。TUI已有普通会话入口，但图形画布未要求终端等效。Phase1E冻结协议本身的查询缺口需与后续入口区分，不能笼统称整个产品没有历史。
+6. **数据与迁移**：当前SQLite v20，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
+7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布；TUI 尚未提供本次配置/Goal/Plan 的等效管理界面。文件正文/PTY、任意对象`@`和动态`/`注册仍有缺口。Phase1E冻结协议本身的查询缺口需与后续入口区分。
 8. **权限与公网**：OAuth面向单用户私网，不是多租户或通用公网CSRF方案；loopback仍可无OAuth。Remote配对/E2E不替代所有API鉴权，Gateway/Relay不属于已审计公网托管产品。面向非可信HTTP客户端的Artifact capability签发仍未完成；跨项目操作必须走已实现的显式共享授权，不能由路径推定权限。
 9. **外部能力与隔离**：Browser/Computer当前主要是协议与受控动作边界，缺完整内置驱动；MCP Streamable HTTP、真实第三方Server长时验证、多Host发现/通知与移动推送仍有缺口。历史Docker隔离测试与真实Host模型任务是不同证据，不能相加冒充真实模型+Docker Coder/Container联合验收；候选中的Docker skip及生产HTTPS Target限制继续保留。
-10. **扩展与审批**：四个固定Slash命令、独立Skill/MCP/Scheduler API和记忆SDK已存在；通用扩展注册与完整默认能力包未完成。审批Reviewer入口默认未配置实际模型，严格度与自定义规则的完整用户流程尚缺；运行时不能通过模型修改Policy。
+10. **扩展与审批**：现有命令加上 `/plan`，仍缺通用扩展注册。六项默认 Skill 能从配置的可信根安装，但运行依赖相应 Skill 包与工具环境，不能把安装读回当成文档/幻灯片/PDF 内容质量验收。审批模型默认不开启，启用后失联或重启中的审核保持人工待审；模型不能修改 Policy。
 11. **保留策略与缓存**：Artifact可Pin/归档/计划删除/Trash/Restore/显式孤儿修复，物理删除另行启用；其他事件、规范历史、回执、审计及Context/Compaction缺统一保留执行器，Artifact亦非全自动清扫。Provider缓存目前只做观测，不复制或裁决Provider内部缓存；不得按临时TTL删除长期知识/审计/恢复证据。
 12. **评测与发布**：价格/首次模型等待等部分遥测未知；缺自动价格发现、一般化统计显著性、Evaluation Run逐Result续跑等，历史Exp19—24学习验收未完成。候选已测本机macOS arm64，不代表Windows/Linux/浏览器矩阵或正式签名WebView。仓库仍缺完整安装向导、Developer ID/公证、DMG和自动更新；本机launcher适配不等于跨设备安装产品。历史安全扫描事项未全部清零。
 

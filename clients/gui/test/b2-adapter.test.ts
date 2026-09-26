@@ -55,9 +55,10 @@ function fakeClient(overrides: Record<string, unknown> = {}) {
 test('B2 adapter validates model and role projections without exposing credential values', () => {
   const model = mapModelProfile({
     id: 'profile-a', name: 'Primary', provider: 'openai-compatible', model_id: 'gpt-exact',
-    base_url: 'https://provider.test/v1', secret_ref: 'OPERANT_API_KEY', enabled: true,
+    base_url: 'https://provider.test/v1', secret_ref: 'OPERANT_API_KEY', enabled: true, supports_temperature: true,
   });
   assert.equal(model.model_id, 'gpt-exact');
+  assert.equal(model.supports_temperature, true);
   assert.equal(model.secret_ref, 'OPERANT_API_KEY');
   assert.equal('api_key' in model, false);
 

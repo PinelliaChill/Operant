@@ -63,6 +63,7 @@ import { RemoteView } from '../remote/RemoteView';
 import { PolicySettings } from '../approvals/PolicySettings';
 import { formatNumber } from '../../lib/format';
 import { LiveManagementView, type ManagementTab } from '../management/LiveManagementView';
+import { LiveConfigSettings } from './LiveConfigSettings';
 
 type MainCategory = 'general' | 'models' | 'security' | 'system';
 
@@ -2673,6 +2674,7 @@ const LiveSettingsView: React.FC = () => {
   }
 
   if (searchParams.get('cat') === 'security') return <LiveSecuritySettingsView />;
+  if (searchParams.get('cat') === 'config' || tabParam === 'config') return <LiveConfigSettings />;
   return <LiveManagementView initialTab="settings" />;
 };
 

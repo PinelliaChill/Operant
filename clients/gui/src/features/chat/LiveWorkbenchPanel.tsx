@@ -6,6 +6,8 @@ import { workbenchClient } from '../../live/workbenchClient';
 import type { ChildAgentView, WorkbenchContext, WorkbenchMessage } from '../../live/workbenchClient';
 import { StatusBadge } from '../../components/StatusBadge';
 import { messageDeliveryLabel } from './workbenchPresentation';
+import { LiveBtwPanel } from './LiveBtwPanel';
+import './live-btw.css';
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Core 工作台请求失败';
@@ -220,5 +222,6 @@ export const LiveWorkbenchPanel: React.FC<{ threadId: string; connected: boolean
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void runContextCommand('/clear-context')} disabled={!connected || contextCommandBusy}>清理上下文</button></div>
       </> : <p className="live-panel-empty">{loading ? '正在读取上下文…' : '暂无上下文详情'}</p>}
     </div>
+    {selectedThread?.sessionId && selectedThread.workspaceRef && <LiveBtwPanel sessionId={selectedThread.sessionId} threadId={threadId} workspace={selectedThread.workspaceRef} connected={connected} onPromoted={onChanged} />}
   </section>;
 };

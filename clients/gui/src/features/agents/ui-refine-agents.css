@@ -514,3 +514,4 @@
     transition: none;
   }
 }
+.b2-agents-checkbox { display: inline-flex; align-items: center; gap: 8px; font-weight: 400; }

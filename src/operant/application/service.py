@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
+from operant.application.approval_review import ApprovalModelReviewer, ReviewerConfig
 from operant.application.client_projection import (
     get_workspace_initialization,
     list_project_projections,
@@ -386,12 +387,67 @@ class _PersistentActionGateway:
                 detail_summary=redact_public_text(detail, max_chars=500),
             )
         )
+        bound = self._security_claims.get(claim.receipt_id)
+        if bound is not None:
+            self._audit(
+                bound[0],
+                "approval.requested",
+                evaluation=bound[1],
+                detail={
+                    "approval_id": approval.id,
+                    "policy_version": bound[0].policy_version,
+                    "expires_at": approval.expires_at.isoformat(),
+                },
+            )
         return {
             "approval_id": approval.id,
             "action_hash": approval.action_hash,
             "expires_at": approval.expires_at.isoformat(),
             "continuation_available": True,
         }
+
+    def review_context(
+        self, approval: ApprovalRequest
+    ) -> tuple[ActionRequest, PolicyEvaluation] | None:
+        """Rebind a pending approval to its original action and current ASK policy."""
+
+        if (
+            approval.session_id != self.session_id
+            or approval.agent_id != self.agent_id
+            or approval.status is not ApprovalStatus.PENDING
+        ):
+            return None
+        bound = self._security_claims.get(approval.tool_action_receipt_id)
+        if bound is None:
+            return None
+        action, original = bound
+        try:
+            receipt = self.store.get_tool_action_receipt(approval.tool_action_receipt_id)
+            persisted = self.security_repository.get_security_action(action.action_hash)
+        except (KeyError, NotFoundError):
+            return None
+        if (
+            receipt.session_id != self.session_id
+            or receipt.agent_id != self.agent_id
+            or receipt.idempotency_key != approval.tool_call_id
+            or receipt.action_hash != approval.action_hash
+            or receipt.command_name != action.tool
+            or receipt.status is not ToolActionReceiptStatus.IN_PROGRESS
+            or persisted != action
+            or original.action_hash != action.action_hash
+            or original.policy_version != action.policy_version
+            or original.decision is not PolicyDecision.ASK
+        ):
+            return None
+        current = self.policy_engine.evaluate(action)
+        if (
+            current.decision is not PolicyDecision.ASK
+            or current.hard_deny
+            or not current.reviewer_eligible
+            or current.policy_version != action.policy_version
+        ):
+            return None
+        return action, current
 
     def verify_approval(
         self,
@@ -434,9 +490,18 @@ class _PersistentActionGateway:
         if bound is None or bound[1].decision is PolicyDecision.DENY:
             raise ToolError("security policy approval binding is unavailable")
         action, evaluation = bound
-        allowed = evaluation
-        if evaluation.decision is PolicyDecision.ASK:
-            allowed = evaluation.model_copy(
+        current = self.policy_engine.evaluate(action)
+        if (
+            current.decision is PolicyDecision.DENY
+            or current.hard_deny
+            or current.policy_version != action.policy_version
+        ):
+            raise ToolError("current security policy does not permit this approved action")
+        allowed = current
+        if current.decision is PolicyDecision.ASK:
+            if evaluation.decision is not PolicyDecision.ASK or not current.reviewer_eligible:
+                raise ToolError("approval does not match the current ASK policy")
+            allowed = current.model_copy(
                 update={
                     "decision": PolicyDecision.ALLOW,
                     "reviewer_eligible": False,
@@ -678,18 +743,71 @@ class ApplicationService:
         effort: str | None = None,
         budget_overrides: dict[str, Any] | None = None,
         thread_id: str | None = None,
+        project_id: str | None = None,
+        workspace_ref: str | None = None,
+        config_overrides: dict[str, Any] | None = None,
     ) -> Session:
         if (role_id is None) == (new_role is None):
             raise ValueError("provide exactly one of role_id or new_role")
         if new_role is not None:
             role_id = self.create_role(new_role).id
         assert role_id is not None
+        from operant.application.configuration import ConfigPatch, ConfigService
+
+        if project_id is not None:
+            project = self.store.get_workspace_initialization_by_id(project_id)
+            project_workspace = str(Path(project.workspace_ref).resolve(strict=True))
+            if workspace_ref is not None and (
+                str(Path(workspace_ref).resolve(strict=True)) != project_workspace
+            ):
+                raise ValueError("project and workspace configuration scopes differ")
+            workspace_ref = project_workspace
+        if thread_id is not None:
+            thread = self.get_thread(thread_id)
+            if workspace_ref is not None and (
+                thread.workspace_ref is None
+                or str(Path(thread.workspace_ref).resolve(strict=True))
+                != str(Path(workspace_ref).resolve(strict=True))
+            ):
+                raise ValueError("workspace_ref differs from the bound Thread workspace")
+            workspace_ref = thread.workspace_ref
+        if project_id is None and workspace_ref is not None:
+            resolved_workspace = str(Path(workspace_ref).resolve(strict=True))
+            workspace_hash = hashlib.sha256(resolved_workspace.encode("utf-8")).hexdigest()
+            # A Thread can be bound to a workspace before it is registered as a Project.
+            with suppress(NotFoundError):
+                project_id = self.store.get_workspace_initialization(workspace_hash).id
+        run_patch = dict(config_overrides or {})
+        if model_profile_id is not None:
+            run_patch["model_profile_id"] = model_profile_id
+        if effort is not None:
+            run_patch["effort"] = effort
+        if budget_overrides is not None:
+            run_patch["budget"] = {**run_patch.get("budget", {}), **budget_overrides}
+        config = ConfigService(self.store).effective(
+            self.get_role(role_id),
+            project_id=project_id,
+            workspace_ref=workspace_ref,
+            run_overrides=ConfigPatch.model_validate(run_patch),
+        )
+        normalized_workspace_ref = (
+            None if workspace_ref is None else str(Path(workspace_ref).resolve(strict=True))
+        )
         return self.factory.create_session(
             role_id,
             model_profile_id=model_profile_id,
             effort=effort,
             budget_overrides=budget_overrides,
             thread_id=thread_id,
+            effective_config={
+                **config.values,
+                "config_sources": {
+                    key: f"{source.scope_type}:{source.scope_id}"
+                    for key, source in config.sources.items()
+                },
+                "config_workspace_ref": normalized_workspace_ref,
+                "config_project_id": project_id,
+            },
         )
 
     def get_session(self, session_id: str) -> Session:
@@ -3097,6 +3215,93 @@ class ApplicationService:
         self._session_run_leases.pop(session_id, None)
         self.store.release_session_run_lease(expected_lease or lease)
 
+    async def _review_session_approval(
+        self,
+        gateway: _PersistentActionGateway,
+        approval: ApprovalRequest,
+    ) -> None:
+        """Try configured model review; every failure leaves the human queue intact."""
+
+        context = gateway.review_context(approval)
+        if context is None:
+            return
+        action, evaluation = context
+        try:
+            from operant.application.configuration import ConfigService
+
+            config = (
+                ConfigService(self.store).get_scope("global", "default").patch.approval_reviewer
+                or ReviewerConfig()
+            )
+            if config.mode != "auto":
+                return
+            attempt = await ApprovalModelReviewer(
+                provider=self.provider,
+                get_profile=self.get_model_profile,
+            ).review(action, evaluation, config)
+            if attempt.decision is None:
+                gateway._audit(
+                    action,
+                    "approval.review_deferred",
+                    evaluation=evaluation,
+                    detail={
+                        "approval_id": approval.id,
+                        "reason_code": attempt.reason_code,
+                        **({"model_profile_id": attempt.profile_id} if attempt.profile_id else {}),
+                    },
+                )
+                return
+            latest = self.store.get_approval_request(approval.session_id, approval.tool_call_id)
+            if latest.id != approval.id or gateway.review_context(latest) is None:
+                return
+            try:
+                result = self.decide_approval(
+                    approval.session_id,
+                    approval.tool_call_id,
+                    approved=attempt.decision.decision is PolicyDecision.ALLOW,
+                    decided_by="reviewer",
+                    reason_code=attempt.decision.reason_code,
+                )
+            except ConflictError:
+                return  # Human decision or expiry won the race.
+            if result["changed"]:
+                decided_evaluation = evaluation.model_copy(
+                    update={
+                        "decision": attempt.decision.decision,
+                        "reason_code": attempt.decision.reason_code,
+                        "reviewer_eligible": False,
+                    }
+                )
+                # The approval decision and its own audit row are committed together.
+                # A secondary security-audit failure must not label it pending again.
+                with suppress(Exception):
+                    gateway._audit(
+                        action,
+                        "approval.decided",
+                        evaluation=decided_evaluation,
+                        detail={
+                            "approval_id": approval.id,
+                            "decided_by": "reviewer",
+                            "reason_code": attempt.decision.reason_code,
+                            "review_summary": attempt.decision.summary,
+                            "model_profile_id": attempt.profile_id,
+                            "model_id": attempt.model_id,
+                        },
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            with suppress(Exception):
+                gateway._audit(
+                    action,
+                    "approval.review_deferred",
+                    evaluation=evaluation,
+                    detail={
+                        "approval_id": approval.id,
+                        "reason_code": "review_internal_error",
+                    },
+                )
+
     async def run_session(
         self,
         session_id: str,
@@ -3115,6 +3320,10 @@ class ApplicationService:
         _collaboration_context: Callable[[], str] | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         session = self.get_session(session_id)
+        if session.role_snapshot.config_workspace_ref is not None and (
+            str(Path(workspace).resolve(strict=True)) != session.role_snapshot.config_workspace_ref
+        ):
+            raise ValueError("run workspace differs from the frozen Session configuration")
         if not _admission_granted:
             try:
                 admitted = self.admit_session_run(
@@ -3241,7 +3450,17 @@ class ApplicationService:
                 manager = self.memory_manager_factory()
                 self.memory_manager = manager
             skill_context = (
-                manager.begin_skill_run(normalized_workspace, agent.id)
+                manager.begin_skill_run(
+                    normalized_workspace,
+                    agent.id,
+                    selected_ids=(
+                        session.role_snapshot.skill_ids
+                        if session.role_snapshot.config_sources.get("skill_ids")
+                        and session.role_snapshot.config_sources.get("skill_ids")
+                        != f"role_base:{session.role_snapshot.role_id}"
+                        else None
+                    ),
+                )
                 if manager is not None and memory_enabled
                 else ""
             )
@@ -3316,16 +3535,17 @@ class ApplicationService:
                 artifact_reader=self._read_artifact_for_context,
                 artifact_writer=lambda content: self._write_tool_result_artifact(content=content),
             )
+            action_gateway = _PersistentActionGateway(
+                store=self.store,
+                session_id=session.id,
+                agent_id=agent.id,
+                tools=tools,
+                lease=lease,
+            )
             loop = AgentLoop(
                 self.provider,
                 tools,
-                action_gateway=_PersistentActionGateway(
-                    store=self.store,
-                    session_id=session.id,
-                    agent_id=agent.id,
-                    tools=tools,
-                    lease=lease,
-                ),
+                action_gateway=action_gateway,
                 context_composer=context_composer,
             )
         except Exception as exc:
@@ -3398,6 +3618,9 @@ class ApplicationService:
                     "detail": detail,
                 }
             durable = self.store.get_approval_request(session.id, tool_call_id)
+            if durable.status is ApprovalStatus.PENDING and not future.done():
+                await self._review_session_approval(action_gateway, durable)
+                durable = self.store.get_approval_request(session.id, tool_call_id)
             if durable.status is not ApprovalStatus.PENDING and not future.done():
                 future.set_result(durable.status is ApprovalStatus.APPROVED)
             return await future
@@ -3615,12 +3838,16 @@ class ApplicationService:
         tool_call_id: str,
         *,
         approved: bool,
+        decided_by: str = "user",
+        reason_code: str | None = None,
     ) -> dict[str, object]:
         self.get_session(session_id)
         request, decision, changed = self.store.decide_approval(
             session_id,
             tool_call_id,
             approved=approved,
+            decided_by=decided_by,
+            reason_code=reason_code,
         )
         key = (session_id, tool_call_id)
         future = self._approval_futures.get(key)

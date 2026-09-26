@@ -1859,7 +1859,9 @@ class MemoryManager:
         elif cmd.action == "artifact_restore":
             self.service.restore_artifact(artifact_id, capability=token)
 
-    def begin_skill_run(self, workspace: str, run_id: str) -> str:
+    def begin_skill_run(
+        self, workspace: str, run_id: str, selected_ids: Collection[str] | None = None
+    ) -> str:
         from operant.plugins.protocol import compute_package_digest
         from operant.skills import SkillDiscovery
 
@@ -1880,6 +1882,14 @@ class MemoryManager:
             for s in self._state["skills"]
             if s["state"] == "installed" and project["project_id"] in s.get("project_ids", [])
         ]
+        if selected_ids is not None:
+            requested = set(selected_ids)
+            available = {skill["skill_id"] for skill in selected}
+            if requested - available:
+                raise PluginError(
+                    "package_unavailable", "bound Skill is not enabled for this project"
+                )
+            selected = [skill for skill in selected if skill["skill_id"] in requested]
         content = []
         snapshot_ids = set()
         for skill in selected:
@@ -1893,6 +1903,11 @@ class MemoryManager:
             )
             if candidate is None:
                 raise PluginError("package_unavailable", "installed Skill snapshot unavailable")
+            if (
+                candidate.frontmatter.get("disable-model-invocation") == "true"
+                and selected_ids is None
+            ):
+                continue
             content.append(f"技能 {candidate.name} ({candidate.manifest_sha256})\n{candidate.body}")
             snapshot_ids.add(skill["skill_id"])
         self._active_skill_runs[run_id] = snapshot_ids

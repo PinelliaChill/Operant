@@ -46,6 +46,7 @@ class WorkbenchCommandRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2100)
     registry_version: str | None = None
     reviewer_role_id: str | None = None
+    planner_role_id: str | None = None
 
 
 class WorkbenchCommandResult(BaseModel):
@@ -310,7 +311,10 @@ def install_workbench_context_routes(app: FastAPI, service: ApplicationService) 
             resolved = service.resolve_slash_command(
                 body.text, registry_version=body.registry_version
             )
-            if resolved.command_kind is not SlashCommandKind.REVIEW and resolved.arguments:
+            if (
+                resolved.command_kind not in {SlashCommandKind.REVIEW, SlashCommandKind.PLAN}
+                and resolved.arguments
+            ):
                 raise ValueError("this command does not accept arguments")
             execution_id = request.state.command_execution_id
             if resolved.command_kind in {
@@ -364,6 +368,28 @@ def install_workbench_context_routes(app: FastAPI, service: ApplicationService) 
                     status="completed",
                     message="当前工作区已注册",
                     resource_id=workspace.id,
+                )
+            if resolved.command_kind is SlashCommandKind.PLAN:
+                from operant.application.plan_generation import generate_plan_draft
+
+                goal_id = resolved.arguments.strip()
+                if not goal_id or any(char.isspace() for char in goal_id):
+                    raise ValueError("/plan requires exactly one Goal ID")
+                if not thread.workspace_ref:
+                    raise ValueError("thread has no bound workspace")
+                generated = await generate_plan_draft(
+                    service,
+                    goal_id=goal_id,
+                    source_session_id=session.id,
+                    thread_id=thread_id,
+                    workspace=thread.workspace_ref,
+                    planner_role_id=body.planner_role_id or "role_planner",
+                )
+                return WorkbenchCommandResult(
+                    command=resolved.canonical_name,
+                    status="completed",
+                    message="只读 Plan 草稿已保存，请审阅后再执行",
+                    resource_id=generated.plan.id,
                 )
             if not thread.workspace_ref:
                 raise ValueError("thread has no bound workspace")

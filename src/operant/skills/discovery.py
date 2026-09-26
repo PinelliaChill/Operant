@@ -12,10 +12,18 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 _SAFE_FRONTMATTER_KEYS = frozenset(
-    {"name", "description", "license", "compatibility", "metadata", "allowed-tools"}
+    {
+        "name",
+        "description",
+        "license",
+        "compatibility",
+        "metadata",
+        "allowed-tools",
+        "disable-model-invocation",
+    }
 )
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
-_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DANGEROUS_YAML_RE = re.compile(r"(?:^|[\s\[{,:])(?:!!|![A-Za-z]|&[A-Za-z]|\*[A-Za-z])")
 
 
@@ -263,8 +271,25 @@ class SkillDiscovery:
         if len(encoded_frontmatter) > self.limits.max_frontmatter_bytes:
             raise ValueError("SKILL.md frontmatter exceeds the configured byte limit")
         parsed: dict[str, str | list[str]] = {}
+        metadata_open = False
         for raw_line in text[4:boundary].splitlines():
             if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+                continue
+            if metadata_open and raw_line.startswith("  ") and not raw_line.startswith("   "):
+                if "\t" in raw_line or ":" not in raw_line:
+                    raise ValueError("metadata frontmatter is malformed")
+                nested_key, nested_value = raw_line[2:].split(":", 1)
+                if nested_key != "short-description":
+                    raise ValueError("metadata frontmatter contains an unsupported key")
+                nested_value = nested_value.strip()
+                if (
+                    _DANGEROUS_YAML_RE.search(nested_value)
+                    or "${" in nested_value
+                    or "<(" in nested_value
+                ):
+                    raise ValueError("metadata frontmatter contains an unsafe YAML construct")
+                self._parse_scalar_or_list(nested_value)
+                metadata_open = False
                 continue
             if "\t" in raw_line or raw_line[:1].isspace() or ":" not in raw_line:
                 raise ValueError("nested, tabbed, or malformed frontmatter is rejected")
@@ -277,7 +302,10 @@ class SkillDiscovery:
                 raise ValueError("frontmatter contains a duplicate key")
             if _DANGEROUS_YAML_RE.search(value) or "${" in value or "<(" in value:
                 raise ValueError("frontmatter contains an unsafe YAML construct")
+            if key == "disable-model-invocation" and value not in {"true", "false"}:
+                raise ValueError("disable-model-invocation must be true or false")
             parsed[key] = self._parse_scalar_or_list(value)
+            metadata_open = key == "metadata" and not value
         return parsed, text[boundary + 5 :]
 
     @staticmethod

@@ -32,13 +32,16 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from operant.api_b2 import B2Cancellation, B2Discovery, install_b2_routes
 from operant.api_b2_3 import install_b2_3_routes
 from operant.api_beta import install_beta_container_routes, install_beta_gateway_routes
+from operant.api_configuration import install_configuration_routes
 from operant.api_phase23 import install_phase23_routes
 from operant.api_phase45 import install_phase45_routes
 from operant.api_phase56_control import Authorizer, install_phase56_control_routes
 from operant.api_phase56_target import install_phase56_target_routes
 from operant.api_phase56_writer import install_phase56_writer_routes
+from operant.api_task_control import install_task_control_routes
 from operant.api_workbench_agents import install_workbench_agent_routes
 from operant.api_workbench_context import install_workbench_context_routes
+from operant.application.approval_review import ApprovalModelReviewer, ReviewerConfig
 from operant.application.client_projection import (
     ProjectProjectionCursorError,
     ProjectProjectionError,
@@ -234,6 +237,7 @@ class CreateModelProfileRequest(BaseModel):
     secret_ref: str = "OPERANT_API_KEY"
     context_window: int | None = None
     default_token_budget: int | None = None
+    supports_temperature: bool = False
     input_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     output_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     supported_efforts: tuple[Effort, ...] = (
@@ -262,6 +266,7 @@ class UpdateModelProfileRequest(BaseModel):
     secret_ref: str | None = None
     context_window: int | None = None
     default_token_budget: int | None = None
+    supports_temperature: bool | None = None
     input_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     output_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     supported_efforts: tuple[Effort, ...] | None = None
@@ -329,6 +334,9 @@ class CreateSessionRequest(BaseModel):
     effort: Effort | None = None
     budget_overrides: dict[str, Any] | None = None
     thread_id: str | None = Field(default=None, min_length=1, max_length=300)
+    project_id: str | None = Field(default=None, min_length=1, max_length=300)
+    workspace_ref: str | None = Field(default=None, min_length=1, max_length=2048)
+    config_overrides: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_role_source(self) -> CreateSessionRequest:
@@ -2902,6 +2910,9 @@ def create_app(
                 effort=(None if request.effort is None else request.effort.value),
                 budget_overrides=request.budget_overrides,
                 thread_id=request.thread_id,
+                project_id=request.project_id,
+                workspace_ref=request.workspace_ref,
+                config_overrides=request.config_overrides,
             )
         except NotFoundError as exc:
             if request.thread_id is not None and str(exc).startswith("thread not found:"):
@@ -3593,6 +3604,8 @@ def create_app(
 
     install_b2_routes(app, service)
     install_b2_3_routes(app, service)
+    config_service = install_configuration_routes(app, service)
+    install_task_control_routes(app, service)
     install_workbench_context_routes(app, service)
     install_workbench_agent_routes(app, service)
     install_phase23_routes(app, store)
@@ -3603,6 +3616,14 @@ def create_app(
         mcp_workspace_roots=phase45_mcp_workspace_roots,
         policy_engine=phase45_policy_engine,
         approval_reviewer=phase45_approval_reviewer,
+        approval_model_reviewer=ApprovalModelReviewer(
+            provider=service.provider,
+            get_profile=service.get_model_profile,
+        ),
+        approval_reviewer_config=lambda: (
+            config_service.get_scope("global", "default").patch.approval_reviewer
+            or ReviewerConfig()
+        ),
     )
     from operant.api_b2_4 import install_b2_4_routes
 

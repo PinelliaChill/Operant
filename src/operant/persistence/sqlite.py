@@ -78,6 +78,7 @@ from operant.domain.messages import Message, ToolDefinition
 from operant.domain.models import (
     AgentInstance,
     AgentStatus,
+    Budget,
     Event,
     ModelProfile,
     RolePreset,
@@ -85,6 +86,7 @@ from operant.domain.models import (
     RoleStatus,
     Session,
     SnapshotOverrides,
+    ToolPolicy,
     new_id,
     utc_now,
 )
@@ -112,6 +114,15 @@ from operant.memory_plugins.b25_schema import schema_contracts as b25_schema_con
 from operant.memory_plugins.b26_schema import schema_contracts as b26_schema_contracts
 from operant.memory_plugins.management_schema import schema_contracts as b23_schema_contracts
 from operant.memory_plugins.recall_schema import schema_contracts as b24_schema_contracts
+from operant.persistence.task_control_schema import (
+    downgrade as downgrade_task_control,
+)
+from operant.persistence.task_control_schema import (
+    schema_contracts as task_control_schema_contracts,
+)
+from operant.persistence.task_control_schema import (
+    upgrade as upgrade_task_control,
+)
 from operant.persistence.workbench_schema import (
     downgrade as downgrade_workbench,
 )
@@ -241,6 +252,7 @@ class WorkflowExecutionLease:
 
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
+        20: "c4a8218693db68e469c7bb9e33617d6ef6187e2a8ce11360c145d5498c5f9948",
         19: "658d0732a8e13f06b09192329e93d7590c07bb35b06721ab8cd2a620618a2d6a",
         18: "245c61b8481bfd920dd7679f32b48cdc5c197e451a8b3e60385a4486e1059432",
         17: "e0a12d556cf758d9d7aede3d5f903dfbcf75dffd469b85ce018e3fe7688085c2",
@@ -262,6 +274,7 @@ class SQLiteStore:
         14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
+        20: "2a0db4224e32f0968e6aae795c28e33a885722c35cc9948aca9195830f55e571",
         19: "3f071878abbe04dd52be28b86ccbbfe7043fe3102e27fa62bb4dc2e448dc7c1b",
         18: "3b9c6f033068b85d15f5d1291ca70d472fd7b69e25140319dc5a53fab2a654fb",
         17: "fb1c720e6e3460285af0eb0c4443b5f3f9a16a5f3d7633a5caf014eccbb7aeb6",
@@ -623,6 +636,7 @@ class SQLiteStore:
             build(17, "b25_memory_governance", self._upgrade_v17, self._downgrade_v17),
             build(18, "b26_experience_sharing", self._upgrade_v18, self._downgrade_v18),
             build(19, "session_workbench", upgrade_workbench, downgrade_workbench),
+            build(20, "task_control_scoped_config", upgrade_task_control, downgrade_task_control),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -2144,6 +2158,8 @@ class SQLiteStore:
             tables.update(b26_schema_contracts()[0])
         if version >= 19:
             tables.update(workbench_schema_contracts()[0])
+        if version >= 20:
+            tables.update(task_control_schema_contracts()[0])
         return tables
 
     @staticmethod
@@ -2417,6 +2433,8 @@ class SQLiteStore:
             contract.update(b26_schema_contracts()[1])
         if version >= 19:
             contract.update(workbench_schema_contracts()[1])
+        if version >= 20:
+            contract.update(task_control_schema_contracts()[1])
         return contract
 
     @classmethod
@@ -2687,6 +2705,8 @@ class SQLiteStore:
                 store._upgrade_v18(connection)
             if version >= 19:
                 upgrade_workbench(connection)
+            if version >= 20:
+                upgrade_task_control(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2893,6 +2913,8 @@ class SQLiteStore:
             contract.update(b26_schema_contracts()[2])
         if version >= 19:
             contract.update(workbench_schema_contracts()[2])
+        if version >= 20:
+            contract.update(task_control_schema_contracts()[2])
         return contract
 
     @staticmethod
@@ -3108,6 +3130,8 @@ class SQLiteStore:
             contract.update(b26_schema_contracts()[3])
         if version >= 19:
             contract.update(workbench_schema_contracts()[3])
+        if version >= 20:
+            contract.update(task_control_schema_contracts()[3])
         return contract
 
     @staticmethod
@@ -3537,6 +3561,8 @@ class SQLiteStore:
             )
         if version >= 19:
             contract.update(workbench_schema_contracts()[5])
+        if version >= 20:
+            contract.update(task_control_schema_contracts()[5])
         return contract
 
     @staticmethod
@@ -3795,6 +3821,8 @@ class SQLiteStore:
             indexes.update(b26_schema_contracts()[4])
         if version >= 19:
             indexes.update(workbench_schema_contracts()[4])
+        if version >= 20:
+            indexes.update(task_control_schema_contracts()[4])
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -9821,34 +9849,63 @@ class SQLiteStore:
         effort: str | None = None,
         budget_overrides: dict[str, Any] | None = None,
         thread_id: str | None = None,
+        effective_config: dict[str, Any] | None = None,
     ) -> Session:
         role = self.get_role(role_id)
         if role.status is RoleStatus.INACTIVE:
             raise ValueError("cannot create a session from an inactive role")
-        selected_profile_id = model_profile_id or role.model_profile_id
+        selected_profile_id = (
+            str(effective_config["model_profile_id"])
+            if effective_config is not None
+            else model_profile_id or role.model_profile_id
+        )
         profile = self.get_model_profile(selected_profile_id)
         if not profile.enabled:
             raise ValueError(f"model profile is inactive: {profile.id}")
 
-        selected_effort = role.effort if effort is None else type(role.effort)(effort)
+        selected_effort = (
+            type(role.effort)(effective_config["effort"])
+            if effective_config is not None
+            else role.effort
+            if effort is None
+            else type(role.effort)(effort)
+        )
         if selected_effort not in profile.supported_efforts:
             raise ValueError(
                 f"effort {selected_effort.value!r} is not supported by {profile.name!r}"
             )
 
-        budget = role.budget
+        budget = (
+            Budget.model_validate(effective_config["budget"])
+            if effective_config is not None
+            else role.budget
+        )
         if budget.max_output_tokens is None and profile.default_token_budget is not None:
             budget = budget.model_copy(update={"max_output_tokens": profile.default_token_budget})
         overridden_budget_fields: tuple[str, ...] = ()
         if budget_overrides:
-            budget = type(role.budget).model_validate({**budget.model_dump(), **budget_overrides})
+            budget = budget.narrowed(**budget_overrides)
             overridden_budget_fields = tuple(sorted(budget_overrides))
+
+        selected_prompt = (
+            str(effective_config["system_prompt"])
+            if effective_config is not None
+            else role.system_prompt
+        )
+        selected_policy = (
+            ToolPolicy.model_validate(effective_config["tool_policy"])
+            if effective_config is not None
+            else role.tool_policy
+        )
+        temperature = None if effective_config is None else effective_config.get("temperature")
+        if temperature is not None and not profile.supports_temperature:
+            raise ValueError("selected model profile does not support temperature")
 
         snapshot = RoleSnapshot(
             role_id=role.id,
             role_version=role.version,
             role_name=role.name,
-            system_prompt=role.system_prompt,
+            system_prompt=selected_prompt,
             model_profile_id=profile.id,
             model_profile_name=profile.name,
             provider=profile.provider,
@@ -9861,9 +9918,21 @@ class SQLiteStore:
             effort=selected_effort,
             provider_effort_parameter=profile.effort_parameter,
             provider_effort_value=profile.provider_effort_value(selected_effort),
-            tool_policy=role.tool_policy,
+            tool_policy=selected_policy,
             budget=budget,
             memory_scope=role.memory_scope,
+            temperature=temperature,
+            skill_ids=tuple(effective_config.get("skill_ids", ())) if effective_config else (),
+            mcp_server_ids=(
+                tuple(effective_config.get("mcp_server_ids", ())) if effective_config else ()
+            ),
+            config_sources=(effective_config.get("config_sources", {}) if effective_config else {}),
+            config_workspace_ref=(
+                effective_config.get("config_workspace_ref") if effective_config else None
+            ),
+            config_project_id=(
+                effective_config.get("config_project_id") if effective_config else None
+            ),
             overrides=SnapshotOverrides(
                 effort_overridden=effort is not None,
                 model_profile_overridden=model_profile_id is not None,
