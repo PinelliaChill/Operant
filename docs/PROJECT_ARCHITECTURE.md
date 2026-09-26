@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-17
+> 最后更新：2026-09-26（文档核对；未修改产品实现）
 >
-> 对应版本：B2-6 / MP-5 已完成本批验收（SQLite v18；additive `b2-6.v1`；J3范围内通过；保留B2-4 Host性能限制）
+> 对应版本：主线 B2-7 / MP-6 与三阶段 UI 更新（源码基线 `74a0251`；SQLite v18；保留 B2-4 Host 性能及分发限制）
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -12,6 +12,22 @@
 `docs/项目架构.md` 描述中长期 Harness Kernel 目标，`docs/UI_UX_DESIGN_SPECIFICATION.md`
 描述目标客户端设计。两者都是规划文档，不代表对应能力已经实现；如与本文、源码或测试冲突，
 当前实现以本文、源码和测试为准。
+
+## 当前版本速览
+
+- **当前源码**：B2-1～B2-7 已合并，包含记忆插件生命周期、召回、治理、经验 Skill、显式共享与撤销，以及后续图标和 UI 更新。
+- **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
+- **尚未合并**：截至本次核对，会话式多 Agent 工作台在 [PR #28](https://github.com/PinelliaChill/Operant/pull/28)。其独立分支实现与验收不计为本文基线能力。
+- **交付边界**：B2-7 与 UI 各有范围明确的验收记录；本机候选安装不等于正式签名、公证或自动更新发布。后面的历史批次说明保留当时版本与验证范围。
+
+| 当前模块 | 主要源码入口 | 职责 |
+| --- | --- | --- |
+| 协作与实际记忆使用 | `api_b2_4.py`、`memory_plugins/recall.py`、`retrieval.py` | 角色编排、消息与记忆召回，记录实际上下文引用 |
+| 整理与治理 | `memory_plugins/governance.py`、`maintenance.py` | 来源、冲突、时效、候选审阅与受控后台整理 |
+| 经验与授权 | `memory_plugins/experience_skills.py`、`experience_runtime.py`、`sharing.py` | 经验 Skill、上下文使用、共享、晋级与撤销 |
+| 远程记忆边界 | `memory_plugins/remote_memory.py`、`remote_query.py` | 最小传递包与授权投影；不代表生产远程部署已验收 |
+
+源码入口相对 `src/operant/`。面向使用者的安装与能力概览见 [README](../README.md)，版本变化见 [更新记录](../CHANGELOG.md)。
 
 ## 仓库检查与源码发布
 
@@ -90,7 +106,7 @@ Live 对话页保留常驻项目选择，把 Thread、Session 和角色选择收
 
 GUI 测试、构建、独立 Tauri Debug 壳、隔离 Core 的真实模型发送、技能启停和断线恢复证据见
 [第二、三阶段任务包](design/ui-refine-2-3/task-package.md)与[验收记录](design/ui-refine-2-3/acceptance.md)。
-这是工作分支中的 UI 交付，未合并主线、替换安装应用或正式发布。
+上述 UI 更新已通过 PR #24 / #25 合并主线。原验收记录仍对应各自冻结版本；合并源码本身不代表替换了用户安装应用或完成正式桌面发布。
 
 ### B2-7 / MP-6 综合验收与候选交付（候选范围验收完成）
 
@@ -174,9 +190,9 @@ Additive `b2-5.v1` 由 `api_b2_5.py` / `contracts/b2_5.py` 生成 OpenAPI、dige
 
 真实 `gpt-5.6-luna` 验收已证明后台候选、人工确认、正式 Session 召回、无新来源零调用和撤销下一发送阻断；当前证据 `live-07.json` 固定全部src摘要，原始失败与脚本误判仍保留。原生治理、实际上下文及精确替代批量差异走查见 `native-acceptance.json`、`native-review-acceptance.json`；完整门禁1017通过、1 Docker条件跳过，见`gates-final.json`。初审3项P1/4项P2已修复，原Luna/max差异复审确认闭环且无新增P1/P2，见`review-final.md`；后续改动按输入摘要核对证据适用范围。
 
-### B2-4 / MP-3 本地交付（含明确性能限制）
+### B2-4 / MP-3 已合并交付（含明确性能限制）
 
-唯一状态与验收入口为 [B2-4任务包](design/b2-4/task-package.md)。B2-3的已完成事实保留；下述是当前源码，不能替代最终J2、性能门及独立审查。
+本批状态与验收入口为 [B2-4任务包](design/b2-4/task-package.md)，源码已随 PR #20 合并。下述为实现说明；J2、独立审查与未解决的 Host 性能限制仍按原证据区分，不因后续合并改写历史结果。
 
 SQLite v16 在原v15之上增加发布事件历史、trigram FTS索引、Run Manifest和Context Memory使用附表，保留v1—15的冻结校验值。旧库导入时只将当前head作为迁移截止点可知事实，不推断更早发布历史。Memory Ledger每次发布/停用由同事务trigger保存序号；Run按截止点选版本，但当前停用、删除、撤销与权限仍阻断。
 
