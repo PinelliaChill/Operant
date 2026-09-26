@@ -1,4 +1,4 @@
-export type TriggerKind = 'cron' | 'timer';
+export type TriggerKind = 'cron' | 'timer' | 'hook';
 export type ScheduleStatus = 'enabled' | 'paused' | 'cancelled';
 export type DispatchIdempotency = 'idempotent' | 'non_idempotent';
 export type RunRequestStatus = 'queued' | 'leased' | 'retry_wait' | 'succeeded' | 'cancelled' | 'dead_letter' | 'manual_reconcile_required';
@@ -66,7 +66,7 @@ function pageItems(value: unknown, label: string): Record<string, unknown>[] {
 }
 
 const scheduleStatuses = new Set<ScheduleStatus>(['enabled', 'paused', 'cancelled']);
-const triggerKinds = new Set<TriggerKind>(['cron', 'timer']);
+const triggerKinds = new Set<TriggerKind>(['cron', 'timer', 'hook']);
 const requestStatuses = new Set<RunRequestStatus>([
   'queued', 'leased', 'retry_wait', 'succeeded', 'cancelled', 'dead_letter',
   'manual_reconcile_required',
@@ -78,6 +78,9 @@ export function mapSchedule(value: unknown): LiveSchedule {
   const triggerKind = string(item.trigger_kind, 'schedule.trigger_kind') as TriggerKind;
   if (!scheduleStatuses.has(status)) throw new TypeError(`unsupported schedule.status: ${status}`);
   if (!triggerKinds.has(triggerKind)) throw new TypeError(`unsupported schedule.trigger_kind: ${triggerKind}`);
+  if (triggerKind === 'hook' && item.hook_event_type !== 'application.signal') {
+    throw new TypeError('unsupported schedule.hook_event_type');
+  }
   const dispatchIdempotency = string(
     item.dispatch_idempotency,
     'schedule.dispatch_idempotency',

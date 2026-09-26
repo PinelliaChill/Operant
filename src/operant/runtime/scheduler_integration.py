@@ -306,6 +306,8 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
         security: SchedulerSecurityService,
         dispatch_registry: GraphDispatchRegistry,
         workspace_resolver: Callable[[WorkflowDispatch], str | None] | None = None,
+        execution_scheduler: Callable[[str], None] | None = None,
+        execution_canceller: Callable[[str], None] | None = None,
     ) -> None:
         if graph_runtime.repository is not graph_repository:
             raise ValueError("graph runtime and repository must share one authority")
@@ -313,7 +315,9 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
         self.graph_runtime = graph_runtime
         self.security = security
         self.dispatch_registry = dispatch_registry
-        self.workspace_resolver = workspace_resolver or (lambda _dispatch: None)
+        self.workspace_resolver = workspace_resolver or self._workspace_from_input
+        self.execution_scheduler = execution_scheduler
+        self.execution_canceller = execution_canceller
 
     def dispatch_workflow(self, action: WorkflowDispatch) -> str:
         # Definition existence, publication, compilation/input validity and policy
@@ -333,6 +337,10 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
                 f"scheduler.workflow_invalid.{type(exc).__name__}", outcome_unknown=False
             ) from exc
         authorized = self.security.authorize(action)
+        try:
+            workspace = self.workspace_resolver(action)
+        except (OSError, ValueError, TypeError) as exc:
+            raise DispatchError("scheduler.workspace_invalid", outcome_unknown=False) from exc
         graph_run_id = self._graph_run_id(
             action.source_run_request_id, authorized.action.action_hash
         )
@@ -374,7 +382,7 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
             run = self.graph_runtime.create_run(
                 definition,
                 input=dict(action.workflow_input),
-                workspace_or_target=self.workspace_resolver(action),
+                workspace_or_target=workspace,
                 run_id=graph_run_id,
             )
             started = self.graph_runtime.start_run(run.id)
@@ -408,6 +416,28 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
 
     def workflow_status(self, workflow_run_id: str) -> GraphRunStatus:
         return self.graph_repository.get_run(workflow_run_id).status
+
+    def ensure_execution(self, workflow_run_id: str) -> None:
+        if self.execution_scheduler is not None:
+            self.execution_scheduler(workflow_run_id)
+
+    def cancel_workflow(self, workflow_run_id: str) -> None:
+        if self.execution_canceller is not None:
+            self.execution_canceller(workflow_run_id)
+        else:
+            self.graph_runtime.cancel_run(workflow_run_id)
+
+    @staticmethod
+    def _workspace_from_input(dispatch: WorkflowDispatch) -> str | None:
+        value = dispatch.workflow_input.get("workspace_or_target")
+        if value is None:
+            return None
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise ValueError("scheduled workspace must be an absolute path")
+        resolved = Path(value).resolve(strict=True)
+        if not resolved.is_dir():
+            raise ValueError("scheduled workspace must be a directory")
+        return str(resolved)
 
     @staticmethod
     def _graph_run_id(source_run_request_id: str, action_hash: str) -> str:

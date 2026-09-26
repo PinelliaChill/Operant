@@ -12,6 +12,8 @@ export type GeneratedSchedulerClient = Pick<Phase45Client,
   | 'createSchedule'
   | 'setScheduleStatus'
   | 'triggerSchedule'
+  | 'signalScheduleHook'
+  | 'cancelRunRequest'
   | 'replayDeadLetter'
 >;
 
@@ -58,6 +60,18 @@ export class SchedulerClient {
       { idempotency_key: idempotencyKey },
       { idempotencyKey },
     );
+  }
+
+  signalHook(scheduleId: string, eventId: string, idempotencyKey: string): Promise<Record<string, unknown>> {
+    return this.generated.signalScheduleHook(
+      scheduleId,
+      { event_type: 'application.signal', event_id: eventId },
+      { idempotencyKey },
+    );
+  }
+
+  cancelRunRequest(requestId: string, idempotencyKey: string): Promise<Record<string, unknown>> {
+    return this.generated.cancelRunRequest(requestId, { idempotencyKey });
   }
 
   replayDeadLetter(requestId: string, idempotencyKey: string): Promise<Record<string, unknown>> {

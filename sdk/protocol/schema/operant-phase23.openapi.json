@@ -11,6 +11,13 @@
         "responses": {"200": {"description": "Protocol metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProtocolNegotiation"}}}}}
       }
     },
+    "/v1/graph/workflows/suggest": {
+      "post": {
+        "operationId": "suggestWorkflowDraft",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowSuggestionRequest"}}}},
+        "responses": {"200": {"description": "Unpersisted compiler-validated Workflow suggestion", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkflowSuggestion"}}}}}
+      }
+    },
     "/v1/graph/workflows/drafts": {
       "post": {
         "operationId": "createWorkflowDraft",
@@ -226,6 +233,8 @@
       "CompileDiagnostic": {"type": "object", "additionalProperties": false, "required": ["severity", "code", "message"], "properties": {"severity": {"type": "string", "enum": ["error", "warning"]}, "code": {"type": "string"}, "message": {"type": "string"}, "node_id": {"type": ["string", "null"]}, "edge_id": {"type": ["string", "null"]}}},
       "WorkflowCompileResult": {"type": "object", "additionalProperties": false, "required": ["workflow_id", "definition_version", "valid", "diagnostics", "definition_hash"], "properties": {"workflow_id": {"type": "string"}, "definition_version": {"type": "integer"}, "valid": {"type": "boolean"}, "diagnostics": {"type": "array", "items": {"$ref": "#/components/schemas/CompileDiagnostic"}}, "definition_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
       "WorkflowDefinition": {"type": "object", "additionalProperties": false, "required": ["workflow_id", "version", "name", "nodes", "status", "created_at"], "properties": {"workflow_id": {"type": "string"}, "version": {"type": "integer"}, "name": {"type": "string"}, "description": {"type": "string"}, "input_schema": {"type": "object", "additionalProperties": true}, "output_schema": {"type": "object", "additionalProperties": true}, "nodes": {"type": "array", "items": {"$ref": "#/components/schemas/NodeSpec"}}, "edges": {"type": "array", "items": {"$ref": "#/components/schemas/EdgeSpec"}}, "graph_limits": {"$ref": "#/components/schemas/GraphLimits"}, "default_budget": {"$ref": "#/components/schemas/Budget"}, "default_policy": {"type": "object", "additionalProperties": true}, "required_plugins": {"type": "array", "items": {"type": "string"}}, "required_capabilities": {"type": "array", "items": {"type": "string"}}, "locked_role_versions": {"type": "object", "additionalProperties": {"type": "integer"}}, "locked_provider_versions": {"type": "object", "additionalProperties": {"type": "string"}}, "status": {"type": "string", "enum": ["draft", "published", "deprecated"]}, "created_at": {"type": "string", "format": "date-time"}}},
+      "WorkflowSuggestionRequest": {"type": "object", "additionalProperties": false, "required": ["instruction", "team_id", "team_version"], "properties": {"instruction": {"type": "string", "minLength": 1, "maxLength": 8000}, "team_id": {"type": "string", "minLength": 1, "maxLength": 300}, "team_version": {"type": "integer", "minimum": 1}, "base_workflow_id": {"type": ["string", "null"], "maxLength": 300}, "base_version": {"type": ["integer", "null"], "minimum": 1}}},
+      "WorkflowSuggestion": {"type": "object", "additionalProperties": false, "required": ["definition", "changes", "model_id"], "properties": {"definition": {"$ref": "#/components/schemas/WorkflowDefinition"}, "changes": {"type": "array", "items": {"type": "string"}}, "model_id": {"type": "string"}, "prompt_tokens": {"type": ["integer", "null"]}, "completion_tokens": {"type": ["integer", "null"]}, "input_redacted": {"type": "boolean"}}},
       "StartGraphRunRequest": {"type": "object", "additionalProperties": false, "required": ["workflow_id", "definition_version"], "properties": {"workflow_id": {"type": "string"}, "definition_version": {"type": "integer", "minimum": 1}, "input": {"type": "object", "additionalProperties": true}, "workspace_or_target": {"type": ["string", "null"]}}},
       "ResumeGraphRunRequest": {"type": "object", "additionalProperties": false, "required": ["allow_unknown_side_effect_replay"], "properties": {"allow_unknown_side_effect_replay": {"const": false}}},
       "NodeInputRequest": {"type": "object", "additionalProperties": false, "required": ["value"], "properties": {"value": {}, "approval_id": {"type": ["string", "null"]}}},

@@ -90,7 +90,9 @@ def test_phase45_schema_and_clients_are_reproducible_and_additive() -> None:
         "getSchedule",
         "setScheduleStatus",
         "triggerSchedule",
+        "signalScheduleHook",
         "listSchedulerQueue",
+        "cancelRunRequest",
         "listDeadLetter",
         "replayDeadLetter",
     }
@@ -141,7 +143,9 @@ def test_phase45_generated_clients_expose_phase45_operations() -> None:
         "getSchedule",
         "setScheduleStatus",
         "triggerSchedule",
+        "signalScheduleHook",
         "listSchedulerQueue",
+        "cancelRunRequest",
         "listDeadLetter",
         "replayDeadLetter",
     ):

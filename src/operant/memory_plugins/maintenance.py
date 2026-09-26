@@ -1332,6 +1332,22 @@ class MaintenanceAwareSchedulerGateway:
         self.graph_gateway = graph_gateway
         self.maintenance_gateway = maintenance_gateway
 
+    def _is_maintenance_run(self, workflow_run_id: str) -> bool:
+        run = self.graph_gateway.graph_repository.get_run(workflow_run_id)
+        definition = self.graph_gateway.graph_repository.get_definition(
+            run.workflow_definition_id, run.workflow_definition_version
+        )
+        return any(node.metadata.get("maintenance") is True for node in definition.nodes)
+
+    def ensure_execution(self, workflow_run_id: str) -> None:
+        if not self._is_maintenance_run(workflow_run_id):
+            self.graph_gateway.ensure_execution(workflow_run_id)
+
+    def cancel_workflow(self, workflow_run_id: str) -> None:
+        if self._is_maintenance_run(workflow_run_id):
+            self.maintenance_gateway.cancel_workflow(workflow_run_id)
+        self.graph_gateway.cancel_workflow(workflow_run_id)
+
     def dispatch_workflow(self, action: Any) -> str:
         controller = self.maintenance_gateway.coordinator.executor.controller
         with controller.service.store._connect() as connection:

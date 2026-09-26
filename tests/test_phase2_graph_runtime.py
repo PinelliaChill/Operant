@@ -232,14 +232,55 @@ def test_compiler_rejects_callable_condition_syntax() -> None:
     assert "invalid_condition" in {issue.code for issue in raised.value.issues}
 
 
-def test_compiler_represents_but_rejects_timer_until_scheduler_exists() -> None:
+def test_compiler_accepts_timer_for_bounded_executor() -> None:
     definition = WorkflowDefinition(
         name="timer-is-not-scheduler",
         nodes=(NodeSpec(node_id="timer", node_kind=NodeKind.TIMER),),
     )
-    with pytest.raises(GraphCompilationError) as raised:
-        GraphCompiler().compile(definition)
-    assert "scheduler_out_of_scope" in {issue.code for issue in raised.value.issues}
+    compiled = GraphCompiler().compile(definition)
+    assert compiled.entry_node_ids == ("timer",)
+
+
+def test_timer_ready_timestamp_survives_recovery() -> None:
+    definition = WorkflowDefinition(
+        name="timer-recovery",
+        nodes=(
+            NodeSpec(
+                node_id="source",
+                node_kind=NodeKind.TOOL,
+                output_ports=(PortSpec(name="value", value_type="string"),),
+            ),
+            NodeSpec(
+                node_id="timer",
+                node_kind=NodeKind.TIMER,
+                input_ports=(PortSpec(name="value", value_type="string"),),
+                output_ports=(PortSpec(name="value", value_type="string"),),
+            ),
+        ),
+        edges=(
+            EdgeSpec(
+                edge_id="source-timer",
+                source_node="source",
+                source_port="value",
+                target_node="timer",
+                target_port="value",
+            ),
+        ),
+        status=WorkflowDefinitionStatus.PUBLISHED,
+    )
+    repository = InMemoryGraphRepository()
+    runtime = GraphRuntime(repository)
+    run = runtime.create_run(definition)
+    runtime.start_run(run.id)
+    attempt = runtime.start_attempt(_node(repository, run.id, "source").id)
+    runtime.complete_attempt(attempt, succeeded=True, output_refs={"value": "ready"})
+    before = _node(repository, run.id, "timer")
+    assert before.status is NodeRunStatus.READY
+    runtime.interrupt_run(run.id)
+    runtime.recover(run.id)
+    after = _node(repository, run.id, "timer")
+    assert after.status is NodeRunStatus.READY
+    assert after.updated_at == before.updated_at
 
 
 def test_sequential_run_attempts_unlock_dependencies_and_complete() -> None:

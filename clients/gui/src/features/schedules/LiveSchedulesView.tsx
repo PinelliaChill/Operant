@@ -64,8 +64,9 @@ function requestBadgeStatus(status: RunRequestStatus): string {
 const RequestCard: React.FC<{
   request: LiveRunRequest;
   replay?: () => void;
+  cancel?: () => void;
   busy?: boolean;
-}> = ({ request, replay, busy = false }) => (
+}> = ({ request, replay, cancel, busy = false }) => (
   <article className="scheduler-request-card">
     <div className="scheduler-request-main">
       <div className="scheduler-card-title">
@@ -91,11 +92,12 @@ const RequestCard: React.FC<{
         {busy ? '提交中…' : '显式 Replay'}
       </button>
     )}
+    {cancel && <button type="button" className="btn btn-secondary btn-sm" onClick={cancel} disabled={busy}>取消请求</button>}
   </article>
 );
 
 export const LiveSchedulesView: React.FC = () => {
-  const { connectionStatus, addNotification } = useOperant();
+  const { connectionStatus, activeWorkspace, addNotification } = useOperant();
   const client = useMemo(createSchedulerClient, []);
   const keys = useRef(new SchedulerIdempotencyKeys());
   const queryEpoch = useRef(0);
@@ -109,6 +111,7 @@ export const LiveSchedulesView: React.FC = () => {
   const [triggerKind, setTriggerKind] = useState<TriggerKind>('cron');
   const [cronExpression, setCronExpression] = useState('0 3 * * *');
   const [timerAt, setTimerAt] = useState(localDateTime);
+  const [hookEventIds, setHookEventIds] = useState<Record<string, string>>({});
   const [workflowId, setWorkflowId] = useState('');
   const [workflowVersion, setWorkflowVersion] = useState('1');
 
@@ -151,10 +154,10 @@ export const LiveSchedulesView: React.FC = () => {
     || busyAction !== null;
   const parsedWorkflowVersion = Number(workflowVersion);
   const timerDate = new Date(timerAt);
-  const createInputValid = Boolean(name.trim() && workflowId.trim())
+  const createInputValid = Boolean(name.trim() && workflowId.trim() && activeWorkspace.trim())
     && Number.isSafeInteger(parsedWorkflowVersion)
     && parsedWorkflowVersion >= 1
-    && (triggerKind === 'cron' ? Boolean(cronExpression.trim()) : !Number.isNaN(timerDate.getTime()));
+    && (triggerKind === 'cron' ? Boolean(cronExpression.trim()) : triggerKind === 'timer' ? !Number.isNaN(timerDate.getTime()) : true);
 
   const updateStatus = async (scheduleId: string, version: number, status: ScheduleStatus) => {
     const action = `status:${scheduleId}:v${version}:${status}`;
@@ -204,6 +207,48 @@ export const LiveSchedulesView: React.FC = () => {
     }
   };
 
+  const signalHook = async (scheduleId: string, scheduleName: string) => {
+    const eventId = hookEventIds[scheduleId]?.trim();
+    if (!eventId) return;
+    const action = `hook:${scheduleId}:${eventId}`;
+    const key = keys.current.acquire(action);
+    setBusyAction(action);
+    setError(null);
+    try {
+      const request = mapRunRequest(await client.signalHook(scheduleId, eventId, key));
+      keys.current.release(action);
+      setSnapshot((current) => ({ ...current, queue: [request, ...current.queue.filter((item) => item.id !== request.id)] }));
+      addNotification('success', `「${scheduleName}」事件 ${eventId} 已由 Core 接收；重复事件会复用同一请求。`);
+      await refresh(true);
+    } catch (caught) {
+      const nextError = schedulerError(caught);
+      if (nextError.recovery === 'use_new_idempotency_key') keys.current.release(action);
+      setError(nextError);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const cancelRequest = async (requestId: string) => {
+    const action = `cancel:${requestId}`;
+    const key = keys.current.acquire(action);
+    setBusyAction(action);
+    setError(null);
+    try {
+      const request = mapRunRequest(await client.cancelRunRequest(requestId, key));
+      keys.current.release(action);
+      setSnapshot((current) => ({ ...current, queue: [request, ...current.queue.filter((item) => item.id !== request.id)] }));
+      addNotification('success', `运行请求 ${requestId} 已提交取消；等待 Core 确认终态。`);
+      await refresh(true);
+    } catch (caught) {
+      const nextError = schedulerError(caught);
+      if (nextError.recovery === 'use_new_idempotency_key') keys.current.release(action);
+      setError(nextError);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const createSchedule = async () => {
     if (!createInputValid) return;
     const action = 'create';
@@ -215,9 +260,11 @@ export const LiveSchedulesView: React.FC = () => {
         trigger_kind: triggerKind,
         cron_expression: triggerKind === 'cron' ? cronExpression.trim() : null,
         timer_at: triggerKind === 'timer' ? timerDate.toISOString() : null,
+        hook_event_type: triggerKind === 'hook' ? 'application.signal' : null,
         timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         workflow_id: workflowId.trim(),
         workflow_version: parsedWorkflowVersion,
+        workflow_input: { workspace_or_target: activeWorkspace.trim() },
       };
       const action = `create:${JSON.stringify(request)}`;
       const key = keys.current.acquire(action);
@@ -329,7 +376,7 @@ export const LiveSchedulesView: React.FC = () => {
                   return (
                     <article className="scheduler-schedule-card" key={schedule.id}>
                       <span className="scheduler-kind-icon" aria-hidden="true">
-                        {schedule.triggerKind === 'cron' ? <CalendarClock size={17} /> : <Clock size={17} />}
+                        {schedule.triggerKind === 'cron' ? <CalendarClock size={17} /> : schedule.triggerKind === 'timer' ? <Clock size={17} /> : <Play size={17} />}
                       </span>
                       <div className="scheduler-card-body">
                         <div className="scheduler-card-title">
@@ -337,13 +384,16 @@ export const LiveSchedulesView: React.FC = () => {
                           <StatusBadge status={schedule.status === 'enabled' ? 'active' : schedule.status} size="sm" />
                         </div>
                         <p className="scheduler-rule">
-                          {schedule.triggerKind === 'cron' ? schedule.cronExpression : `单次 ${formatDateTime(schedule.timerAt ?? '')}`}
+                          {schedule.triggerKind === 'cron' ? schedule.cronExpression : schedule.triggerKind === 'timer' ? `单次 ${formatDateTime(schedule.timerAt ?? '')}` : '本地应用信号 · application.signal'}
                           <span> · {schedule.timezoneName}</span>
                         </p>
                         <p className="scheduler-target">{schedule.workflowId} · Workflow v{schedule.workflowVersion} · 调度 v{schedule.version}</p>
                       </div>
                       <div className="scheduler-card-actions">
-                        <button
+                        {schedule.triggerKind === 'hook' ? <>
+                          <label className="scheduler-hook-event">事件 ID<input className="input" value={hookEventIds[schedule.id] ?? ''} onChange={(event) => setHookEventIds((current) => ({ ...current, [schedule.id]: event.target.value }))} placeholder="应用事件的稳定 ID" maxLength={200} disabled={mutationsDisabled || schedule.status !== 'enabled'} /></label>
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void signalHook(schedule.id, schedule.name)} disabled={mutationsDisabled || schedule.status !== 'enabled' || !hookEventIds[schedule.id]?.trim()}>{busyAction?.startsWith(`hook:${schedule.id}:`) ? '提交中…' : '发送应用信号'}</button>
+                        </> : <button
                           type="button"
                           className="btn btn-secondary btn-sm"
                           onClick={() => void triggerNow(schedule.id, schedule.name)}
@@ -351,7 +401,7 @@ export const LiveSchedulesView: React.FC = () => {
                         >
                           {triggerBusy ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Play size={13} aria-hidden="true" />}
                           {triggerBusy ? '提交中…' : '立即运行'}
-                        </button>
+                        </button>}
                         {schedule.status !== 'cancelled' && (
                           <button
                             type="button"
@@ -375,7 +425,7 @@ export const LiveSchedulesView: React.FC = () => {
             <section aria-labelledby="scheduler-queue-heading">
               <div className="scheduler-section-heading"><div><h2 id="scheduler-queue-heading">运行请求队列</h2><p>显示已提交请求的权威状态，不推断后台仍在运行。</p></div><strong>{snapshot.queue.length}</strong></div>
               <div className="scheduler-request-list">
-                {snapshot.queue.length === 0 ? <p className="scheduler-inline-empty">队列中暂无运行请求。</p> : snapshot.queue.map((request) => <RequestCard key={request.id} request={request} />)}
+                {snapshot.queue.length === 0 ? <p className="scheduler-inline-empty">队列中暂无运行请求。</p> : snapshot.queue.map((request) => <RequestCard key={request.id} request={request} busy={mutationsDisabled} cancel={['queued', 'leased', 'retry_wait'].includes(request.status) ? () => void cancelRequest(request.id) : undefined} />)}
               </div>
             </section>
             <section aria-labelledby="scheduler-dead-heading">
@@ -411,10 +461,12 @@ export const LiveSchedulesView: React.FC = () => {
           <fieldset><legend>触发类型</legend><div className="scheduler-segmented">
             <button type="button" className={`btn btn-sm ${triggerKind === 'cron' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'cron'} onClick={() => setTriggerKind('cron')}>Cron</button>
             <button type="button" className={`btn btn-sm ${triggerKind === 'timer' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'timer'} onClick={() => setTriggerKind('timer')}>单次 Timer</button>
+            <button type="button" className={`btn btn-sm ${triggerKind === 'hook' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'hook'} onClick={() => setTriggerKind('hook')}>应用 Hook</button>
           </div></fieldset>
-          {triggerKind === 'cron' ? <label>Cron 表达式<input className="input" value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label> : <label>触发时间<input type="datetime-local" className="input" value={timerAt} onChange={(event) => setTimerAt(event.target.value)} /></label>}
+          {triggerKind === 'cron' ? <label>Cron 表达式<input className="input" value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label> : triggerKind === 'timer' ? <label>触发时间<input type="datetime-local" className="input" value={timerAt} onChange={(event) => setTimerAt(event.target.value)} /></label> : <p className="scheduler-form-note">独立的 application.signal Hook。创建后输入稳定事件 ID，可重复发送而不重复创建 RunRequest。</p>}
           <label>已发布 Workflow ID<input className="input" value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} placeholder="例如 builtin.coding-review" /></label>
           <label>Workflow 版本<input type="number" min="1" step="1" className="input" value={workflowVersion} onChange={(event) => setWorkflowVersion(event.target.value)} /></label>
+          <p className="scheduler-form-note">运行工作区：{activeWorkspace || '请先在会话页选择一个 Core 项目'}</p>
           <p className="scheduler-form-note">live 契约只接受已发布 Workflow；Prompt 和系统巡检仍仅保留在演示模式。</p>
         </div>
       </Modal>

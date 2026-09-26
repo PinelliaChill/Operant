@@ -24,6 +24,7 @@ PROTOCOL_VERSION = "phase23.v1"
 
 EXPECTED_OPERATION_IDS = {
     "negotiateProtocol",
+    "suggestWorkflowDraft",
     "createWorkflowDraft",
     "compileWorkflowDraft",
     "publishWorkflow",

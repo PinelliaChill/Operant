@@ -327,6 +327,29 @@ class SQLiteSchedulerStore:
                 raise SchedulerConflictError("schedule changed while triggering manually")
             return self._insert_or_get_request(connection, request)
 
+    def enqueue_hook(
+        self,
+        schedule: ScheduleDefinition,
+        *,
+        idempotency_key: str,
+        requested_at: datetime,
+    ) -> RunRequest:
+        request = self._request_for(
+            schedule, requested_at, requested_at, idempotency_key=idempotency_key
+        )
+        with self._transaction() as connection:
+            head = connection.execute(
+                "SELECT current_version, status FROM schedule_heads WHERE schedule_id=?",
+                (schedule.id,),
+            ).fetchone()
+            if (
+                head is None
+                or int(head["current_version"]) != schedule.version
+                or head["status"] != ScheduleStatus.ENABLED.value
+            ):
+                raise SchedulerConflictError("hook schedule changed or is not enabled")
+            return self._insert_or_get_request(connection, request)
+
     def replay_dead_letter(
         self,
         request_id: str,
@@ -692,6 +715,29 @@ class SQLiteSchedulerStore:
         with self._transaction() as connection:
             self._assert_authority(connection, writer_lease, current_time)
             self._recover_expired_jobs(connection, current_time)
+            # A committed GraphRun is already the durable side effect. Take over
+            # its expired lease without consuming a new dispatch attempt or
+            # creating another GraphRun, including when max_attempts is one.
+            expired = connection.execute(
+                "SELECT l.run_request_id, l.fencing FROM job_leases l "
+                "JOIN run_requests r ON r.request_id=l.run_request_id "
+                "WHERE r.status='leased' AND r.workflow_run_id IS NOT NULL "
+                "AND l.expires_at<=?",
+                (_dt(current_time),),
+            ).fetchall()
+            for row in expired:
+                connection.execute(
+                    "UPDATE job_leases SET owner=?, token=?, fencing=?, expires_at=? "
+                    "WHERE run_request_id=? AND expires_at<=?",
+                    (
+                        owner,
+                        token_urlsafe(24),
+                        int(row["fencing"]) + 1,
+                        _dt(expires),
+                        row["run_request_id"],
+                        _dt(current_time),
+                    ),
+                )
             rows = connection.execute(
                 "SELECT r.*, l.owner AS lease_owner, l.token AS lease_token, "
                 "l.fencing AS lease_fencing, l.attempt_number AS lease_attempt_number "
@@ -1029,6 +1075,10 @@ class SQLiteSchedulerStore:
             (_dt(now),),
         ).fetchall()
         for row in rows:
+            if row["workflow_run_id"] is not None:
+                # The Graph binding survives a Core restart. The next Writer
+                # takes over this lease and reads the same GraphRun terminal state.
+                continue
             unsafe = (
                 row["dispatch_idempotency"] == DispatchIdempotency.NON_IDEMPOTENT.value
                 and bool(row["side_effect_started"])

@@ -26,6 +26,7 @@ def require_aware_utc(value: datetime, *, field: str) -> datetime:
 class TriggerKind(str, Enum):
     CRON = "cron"
     TIMER = "timer"
+    HOOK = "hook"
 
 
 class MisfirePolicy(str, Enum):
@@ -73,6 +74,7 @@ class ScheduleDefinition(BaseModel):
     trigger_kind: TriggerKind
     cron_expression: str | None = Field(default=None, min_length=1, max_length=200)
     timer_at: datetime | None = None
+    hook_event_type: Literal["application.signal"] | None = None
     timezone_name: str = Field(min_length=1, max_length=100)
     misfire_policy: MisfirePolicy = MisfirePolicy.FIRE_ONCE
     max_catch_up: int = Field(default=10, ge=1, le=1_000)
@@ -107,10 +109,13 @@ class ScheduleDefinition(BaseModel):
     @model_validator(mode="after")
     def validate_trigger(self) -> ScheduleDefinition:
         if self.trigger_kind is TriggerKind.CRON:
-            if self.cron_expression is None or self.timer_at is not None:
+            if self.cron_expression is None or self.timer_at is not None or self.hook_event_type:
                 raise ValueError("cron schedules require cron_expression only")
-        elif self.timer_at is None or self.cron_expression is not None:
-            raise ValueError("timer schedules require timer_at only")
+        elif self.trigger_kind is TriggerKind.TIMER:
+            if self.timer_at is None or self.cron_expression is not None or self.hook_event_type:
+                raise ValueError("timer schedules require timer_at only")
+        elif self.hook_event_type != "application.signal" or self.cron_expression or self.timer_at:
+            raise ValueError("hook schedules require application.signal only")
         if self.retry_base_seconds > self.retry_max_seconds:
             raise ValueError("retry_base_seconds cannot exceed retry_max_seconds")
         return self

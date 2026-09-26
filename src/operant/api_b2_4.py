@@ -131,7 +131,9 @@ def install_b2_4_routes(app: FastAPI, service: ApplicationService) -> None:
     async def shutdown() -> None:
         pending = list(tasks.items())
         for run_id, task in pending:
-            executor.cancel(run_id)
+            # A Core shutdown is an interruption. Explicit cancellation goes
+            # through the Graph cancel route and must remain distinct.
+            executor.interrupt(run_id)
             task.cancel()
         if pending:
             await asyncio.gather(*(task for _, task in pending), return_exceptions=True)

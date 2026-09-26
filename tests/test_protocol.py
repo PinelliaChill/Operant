@@ -330,6 +330,26 @@ def test_redactor_covers_assignments_json_partial_keys_and_bounds() -> None:
     }
 
 
+def test_private_key_redaction_preserves_text_around_multiple_blocks() -> None:
+    text = (
+        "before\n"
+        "-----BEGIN ordinary header-----\n"
+        "between\n"
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nfirst-secret\n"
+        "-----END ENCRYPTED PRIVATE KEY-----\n"
+        "middle\n"
+        "-----begin rsa private key-----\nsecond-secret"
+    )
+    assert redact_public_text(text) == (
+        "before\n-----BEGIN ordinary header-----\nbetween\n"
+        "[REDACTED PRIVATE KEY]\nmiddle\n[REDACTED PRIVATE KEY]"
+    )
+    assert (
+        redact_public_text("-----BEGIN PRİVATE KEY-----\nsecret-value\n-----END PRİVATE KEY-----")
+        == "[REDACTED PRIVATE KEY]"
+    )
+
+
 @pytest.mark.parametrize(
     ("payload", "max_bytes", "expected_type"),
     [
