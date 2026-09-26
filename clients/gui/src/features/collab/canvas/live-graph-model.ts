@@ -5,6 +5,11 @@ type Edge = Phase23.EdgeSpec;
 type Kind = Node['node_kind'];
 type Point = { x: number; y: number };
 
+export function hasOutputPort(nodes: Node[], source: { node: string; port: string } | null): boolean {
+  if (!source) return false;
+  return Boolean(nodes.find((node) => node.node_id === source.node)?.output_ports?.some((port) => port.name === source.port));
+}
+
 function sameJson(left: unknown, right: unknown): boolean {
   if (left === right) return true;
   if (Array.isArray(left) || Array.isArray(right)) {

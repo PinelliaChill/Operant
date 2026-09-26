@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import subprocess
 import sys
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
@@ -26,7 +29,15 @@ from operant.domain.graph import (
     WorkflowDefinitionStatus,
 )
 from operant.domain.messages import ModelResponse, ModelUsage, ProviderEvent
-from operant.domain.models import AgentStatus, Budget, ModelProfile, RolePreset, ToolPolicy
+from operant.domain.models import (
+    AgentStatus,
+    Budget,
+    CommandExecutionPolicy,
+    CommandRunnerType,
+    ModelProfile,
+    RolePreset,
+    ToolPolicy,
+)
 from operant.domain.team import (
     MessageAudience,
     MessageEnvelope,
@@ -702,7 +713,21 @@ async def test_mixed_graph_runs_read_tool_branch_join_timer_and_agent(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_script_uses_exact_approval_and_real_host_runner(tmp_path: Path) -> None:
+@pytest.mark.parametrize("runner", [CommandRunnerType.HOST, CommandRunnerType.DOCKER])
+async def test_script_uses_exact_approval_and_command_runner(
+    tmp_path: Path, runner: CommandRunnerType
+) -> None:
+    image = os.getenv("OPERANT_DOCKER_TEST_IMAGE") if runner is CommandRunnerType.DOCKER else None
+    if runner is CommandRunnerType.DOCKER:
+        if not image or shutil.which("docker") is None:
+            pytest.skip("requires Docker and OPERANT_DOCKER_TEST_IMAGE")
+        inspected = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        assert inspected.returncode == 0, "explicit Docker test image is not available locally"
     provider = RecordingProvider()
     service, agent_role = _service(tmp_path, provider)
     script_role = service.create_role(
@@ -715,6 +740,10 @@ async def test_script_uses_exact_approval_and_real_host_runner(tmp_path: Path) -
                 allowed_tools=("run_command",),
                 workspace_write=True,
                 command_execution=True,
+                command_execution_policy=CommandExecutionPolicy(
+                    runner=runner,
+                    docker_image=image or "python:3.13-slim",
+                ),
             ),
         )
     )
@@ -735,7 +764,15 @@ async def test_script_uses_exact_approval_and_real_host_runner(tmp_path: Path) -
                 metadata={
                     "role_id": script_role.id,
                     "role_version": script_role.version,
-                    "argv": [sys.executable, "-c", "print('real-script')"],
+                    "argv": (
+                        [
+                            "sh",
+                            "-c",
+                            "printf isolated > container-marker.txt; printf 'real-script\\n'",
+                        ]
+                        if runner is CommandRunnerType.DOCKER
+                        else ["sh", "-c", "printf 'real-script\\n'"]
+                    ),
                 },
             ),
         ),
@@ -781,6 +818,9 @@ async def test_script_uses_exact_approval_and_real_host_runner(tmp_path: Path) -
     assert result.status is GraphRunStatus.COMPLETED
     script_output = next(node for node in result.node_runs if node.node_id == "script")
     assert script_output.output_refs["result"]["stdout"].strip() == "real-script"
+    assert script_output.output_refs["result"]["runner"] == runner.value
+    if runner is CommandRunnerType.DOCKER:
+        assert not (tmp_path / "container-marker.txt").exists()
     assert result.run.consumed_tool_calls == 1
 
 

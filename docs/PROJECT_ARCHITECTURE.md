@@ -4,7 +4,7 @@
 >
 > 最后更新：2026-09-26（可操作编排系统实施树；记录身份：Codex，保留原历史署名）
 >
-> 对应源码：`codex/orchestration-system-work`，基于主线 `cf25546`；包含会话工作台与本次 H-03～H-06 改动，SQLite 仍为 v19。当前实施树未合并、未更新已安装 App。
+> 对应源码：`codex/orchestration-system-work` 基于主线 `cf25546` 的交付增量；包含会话工作台与 H-03～H-06，SQLite 仍为 v19。合并状态以 Git/PR 为准；本机已安装 App 尚未更新。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -15,7 +15,7 @@
 
 ## 当前版本速览
 
-- **当前源码**：B2-1～B2-7、图标、UI 与会话式多 Agent 工作台已合并；本实施树加入可操作的编排系统，尚未合并。
+- **当前源码**：在 B2-1～B2-7、图标、UI 与会话式多 Agent 工作台基础上，加入 H-03～H-06 可操作编排系统；是否进入主线以对应提交和 PR 状态核对。
 - **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
 - **会话工作台**：[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 提供会话内子 Agent、定向消息、历史树，以及 GUI/TUI 引用、命令和上下文入口，详见 §2.1。
 - **交付边界**：本机候选安装不等于正式签名、公证或自动更新发布；主线合并也不会自动更新已安装 App。历史批次的失败与验收范围仍保留。
@@ -736,6 +736,8 @@ Condition 只开放不使用 Python `eval` 的受限表达式。Runtime 从已�
 Tool/Script、Condition、Fan-out/Join、Loop、Timer，至少需要一个 Team Agent 节点。Tool/Script 绑定冻结
 RolePreset，通过原有 Tool Policy、Action Gateway、审批和 Graph Attempt 边界执行；成功的 Agent Loop 下一轮
 使用新 Agent/Thread 身份。Core 关停先持久 interrupt，明确用户取消才持久 cancel；未知写结果不自动重放。
+Graph 的 Tool/Script 在副作用开始前同时核对 Policy ASK 与 Role ToolPolicy 的命令分类审批；即使
+Policy ALLOW，命中 Role 的 `shell` 等审批类别仍须绑定当前 Action Receipt 的用户决定。
 
 Live 画布从 Core 读取不可变 Definition，编辑已支持节点的常用参数、端口和连线，其余字段随 Definition 保留；保存产生新草稿
 版本，校验与发布回读 Core，运行图只显示 Core 的 NodeRun 状态。模型建议使用正式 ModelProfile 与 Team

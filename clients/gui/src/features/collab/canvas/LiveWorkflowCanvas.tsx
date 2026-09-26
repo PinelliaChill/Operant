@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bot, GitBranch, GitFork, Merge, Plus, Timer, Trash2, Wrench, FileCode } from 'lucide-react';
 import type { Phase23 } from '@operant/sdk';
-import { newNode, nodePosition } from './live-graph-model';
+import { hasOutputPort, newNode, nodePosition } from './live-graph-model';
 export { graphDifference } from './live-graph-model';
 
 type Node = Phase23.NodeSpec;
@@ -84,11 +84,12 @@ export const LiveWorkflowCanvas: React.FC<Props> = ({ nodes, edges, diagnostics,
   const edge = edges.find((item) => item.edge_id === selectedEdge);
   const nodeIssues = (id: string) => diagnostics.filter((item) => item.node_id === id && item.severity === 'error');
   const runFor = (id: string) => nodeRuns.find((item) => item.node_id === id);
+  useEffect(() => { if (source && !hasOutputPort(nodes, source)) setSource(null); }, [nodes, source]);
   const updateNode = (id: string, patch: Partial<Node>) => onChangeNodes(nodes.map((item) => item.node_id === id ? { ...item, ...patch } : item));
   const updateEdge = (id: string, patch: Partial<Edge>) => onChangeEdges(edges.map((item) => item.edge_id === id ? { ...item, ...patch } : item));
   const add = (kind: Kind) => { const created = newNode(kind, nodes.length); onChangeNodes([...nodes, created]); setSelectedNode(created.node_id); setSelectedEdge(null); };
   const connect = (target: Node, port: string) => {
-    if (disabled || !source || source.node === target.node_id) return;
+    if (disabled || !hasOutputPort(nodes, source) || !source || source.node === target.node_id) return;
     if (edges.some((item) => item.source_node === source.node && item.source_port === source.port && item.target_node === target.node_id && item.target_port === port)) return;
     const created: Edge = { edge_id: `edge_${crypto.randomUUID().slice(0, 8)}`, source_node: source.node, source_port: source.port, target_node: target.node_id, target_port: port, delivery_mode: 'value' };
     onChangeEdges([...edges, created]); setSource(null); setSelectedEdge(created.edge_id); setSelectedNode(null);
@@ -100,7 +101,7 @@ export const LiveWorkflowCanvas: React.FC<Props> = ({ nodes, edges, diagnostics,
     updateNode(drag.id, { metadata: { ...nodes.find((item) => item.node_id === drag.id)?.metadata, canvas_position: { x, y } } });
   };
   const remove = () => {
-    if (selectedNode) { onChangeNodes(nodes.filter((item) => item.node_id !== selectedNode)); onChangeEdges(edges.filter((item) => item.source_node !== selectedNode && item.target_node !== selectedNode)); setSelectedNode(null); }
+    if (selectedNode) { onChangeNodes(nodes.filter((item) => item.node_id !== selectedNode)); onChangeEdges(edges.filter((item) => item.source_node !== selectedNode && item.target_node !== selectedNode)); if (source?.node === selectedNode) setSource(null); setSelectedNode(null); }
     if (selectedEdge) { onChangeEdges(edges.filter((item) => item.edge_id !== selectedEdge)); setSelectedEdge(null); }
   };
   return <div className="livegraph-editor">

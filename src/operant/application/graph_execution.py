@@ -962,6 +962,13 @@ class BoundedGraphExecutor:
                     result = claim.replay_result
                 else:
                     requirement = gateway.approval_requirement(claim)
+                    if requirement is None:
+                        category = tools.required_approval_category(name, arguments)
+                        if category is not None:
+                            requirement = (
+                                category,
+                                tools.safe_action_summary(name, arguments, category=category),
+                            )
                     if requirement is not None:
                         gateway.request_approval(
                             claim,

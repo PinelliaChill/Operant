@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Phase23Client } from '@operant/sdk';
 import type * as Phase23 from '../../../../../sdk/typescript-client/phase23.generated';
 import type { CollaborationTeam } from './b24-client';
@@ -13,15 +13,29 @@ interface Props {
 
 export const WorkflowAssistant: React.FC<Props> = ({ client, team, baseWorkflow, disabled, onDraftReady }) => {
   const [instruction, setInstruction] = useState('');
-  const [suggestion, setSuggestion] = useState<Phase23.WorkflowSuggestion | null>(null);
+  const [suggestionState, setSuggestionState] = useState<{ value: Phase23.WorkflowSuggestion; scope: string } | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const scope = JSON.stringify([team?.team_id, team?.version, baseWorkflow?.workflow_id, baseWorkflow?.version]);
+  const currentScope = useRef(scope);
+  const requestVersion = useRef(0);
+  currentScope.current = scope;
+  const suggestion = suggestionState?.scope === scope ? suggestionState.value : null;
+
+  useEffect(() => {
+    requestVersion.current += 1;
+    setSuggestionState(null);
+    setPending(false);
+    setError(null);
+  }, [scope]);
 
   const suggest = async () => {
     if (!team?.team_id || !team.version || !instruction.trim()) return;
+    const requestScope = scope;
+    const requestId = ++requestVersion.current;
     setPending(true);
     setError(null);
-    setSuggestion(null);
+    setSuggestionState(null);
     try {
       const result = await client.suggestWorkflowDraft({
         instruction: instruction.trim(),
@@ -32,11 +46,15 @@ export const WorkflowAssistant: React.FC<Props> = ({ client, team, baseWorkflow,
           base_version: baseWorkflow.version,
         } : {}),
       });
-      setSuggestion(result);
+      if (requestVersion.current === requestId && currentScope.current === requestScope) {
+        setSuggestionState({ value: result, scope: requestScope });
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '草稿建议失败，请检查模型连接。');
+      if (requestVersion.current === requestId && currentScope.current === requestScope) {
+        setError(caught instanceof Error ? caught.message : '草稿建议失败，请检查模型连接。');
+      }
     } finally {
-      setPending(false);
+      if (requestVersion.current === requestId && currentScope.current === requestScope) setPending(false);
     }
   };
 
@@ -62,7 +80,7 @@ export const WorkflowAssistant: React.FC<Props> = ({ client, team, baseWorkflow,
       <p className="b24-helper-text">默认预算：{suggestion.definition.default_budget?.max_turns ?? 12} 轮、{suggestion.definition.default_budget?.timeout_seconds ?? 300} 秒；输出 Token {suggestion.definition.default_budget?.max_output_tokens ?? '未设置'}，费用上限 {suggestion.definition.default_budget?.max_cost_usd ?? '未设置'} 美元，工具调用 {suggestion.definition.default_budget?.max_tool_calls ?? '未设置'}。</p>
       {suggestion.input_redacted && <p className="b24-helper-text">输入中的凭据样式内容已脱敏后交给模型，请核对建议是否仍符合原意。</p>}
       <p className="b24-helper-text">{suggestion.definition.nodes.length} 个节点 · {suggestion.definition.edges?.length ?? 0} 条连线 · 模型 {suggestion.model_id}</p>
-      <button className="btn btn-primary" type="button" onClick={() => { onDraftReady(suggestion.definition); setSuggestion(null); }} disabled={disabled}>应用到画布审阅</button>
+      <button className="btn btn-primary" type="button" onClick={() => { if (suggestionState?.scope !== currentScope.current) return; onDraftReady(suggestion.definition); setSuggestionState(null); }} disabled={disabled}>应用到画布审阅</button>
     </div>}
   </section>;
 };

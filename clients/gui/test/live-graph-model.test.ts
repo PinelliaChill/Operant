@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { graphDifference, newNode, nodePosition } from '../src/features/collab/canvas/live-graph-model.ts';
+import { graphDifference, hasOutputPort, newNode, nodePosition } from '../src/features/collab/canvas/live-graph-model.ts';
 
 test('new live nodes use Phase23 ports and required kind fields', () => {
   const condition = newNode('condition', 0);
@@ -39,4 +39,13 @@ test('definition difference ignores JSON object key order', () => {
   assert.deepEqual(graphDifference(baseline, [sameNode as typeof node], []), {
     added: [], removed: [], changed: [], edgeAdded: [], edgeRemoved: [],
   });
+});
+
+test('removed connection source cannot create an edge', () => {
+  const source = newNode('agent', 0);
+  const target = newNode('tool', 1);
+  const selected = { node: source.node_id, port: 'output' };
+  assert.equal(hasOutputPort([source, target], selected), true);
+  assert.equal(hasOutputPort([target], selected), false);
+  assert.equal(hasOutputPort([{ ...source, output_ports: [] }, target], selected), false);
 });
