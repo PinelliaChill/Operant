@@ -106,6 +106,7 @@ from operant.persistence.sqlite import (
 )
 from operant.plugins import PluginHost
 from operant.protocol import (
+    MAX_PUBLIC_COLLECTION_ITEMS,
     RecoveryAction,
     canonical_action_hash,
     error_payload,
@@ -738,10 +739,12 @@ def _parse_last_event_id(value: str | None) -> int | None:
     return _parse_event_cursor(value, field_name="Last-Event-ID")
 
 
-def _stored_command_payload(payload: Any, *, status_code: int) -> Any:
+def _stored_command_payload(
+    payload: Any, *, status_code: int, max_items: int = MAX_PUBLIC_COLLECTION_ITEMS
+) -> Any:
     """Bound and redact every durable Command response before persistence/replay."""
 
-    safe = redact_public_data(payload)
+    safe = redact_public_data(payload, max_items=max_items)
     if status_code < 400:
         return safe
     if isinstance(safe, dict) and "detail" in safe:
@@ -1773,6 +1776,11 @@ def create_app(
         stored_payload = _stored_command_payload(
             stored_payload,
             status_code=response.status_code,
+            max_items=(
+                2_000
+                if request.url.path == "/v1/graph/workflows/suggest"
+                else MAX_PUBLIC_COLLECTION_ITEMS
+            ),
         )
         stored_json = json.dumps(stored_payload, ensure_ascii=False)
         if response.status_code >= 400:

@@ -53,7 +53,9 @@ EXPECTED_OPERATION_IDS = {
     "getSchedule",
     "setScheduleStatus",
     "triggerSchedule",
+    "signalScheduleHook",
     "listSchedulerQueue",
+    "cancelRunRequest",
     "listDeadLetter",
     "replayDeadLetter",
 }

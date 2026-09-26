@@ -6,7 +6,7 @@ import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -20,6 +20,11 @@ from operant.application.graph import (
     GraphStateError,
 )
 from operant.application.team import TeamRuntime
+from operant.application.workflow_assistant import (
+    WorkflowSuggestionError,
+    WorkflowSuggestionRequest,
+    suggest_workflow,
+)
 from operant.domain.graph import (
     BoundaryResolution,
     GraphRunStatus,
@@ -48,6 +53,7 @@ from operant.domain.team import (
 )
 from operant.persistence.graph_team import SQLiteGraphRepository, SQLiteTeamRepository
 from operant.persistence.sqlite import NotFoundError, SQLiteStore
+from operant.protocol import redact_public_data
 
 MAX_CURSOR = 2**63 - 1
 
@@ -190,6 +196,61 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
         if any(agent_id not in roster_ids for agent_id in agent_ids):
             raise HTTPException(status_code=422, detail="Agent is not in the Team Roster")
         return roster_ids
+
+    @app.post("/v1/graph/workflows/suggest", operation_id="suggestWorkflowDraft")
+    async def suggest_workflow_draft(body: WorkflowSuggestionRequest) -> dict[str, Any]:
+        """Propose a draft; saving and publishing remain separate user commands."""
+        if (body.base_workflow_id is None) != (body.base_version is None):
+            raise HTTPException(
+                status_code=422, detail="base workflow id and version must be paired"
+            )
+        team = team_repository.get_team_definition(body.team_id, body.team_version)
+        if team is None:
+            raise HTTPException(status_code=404, detail="Team Definition not found")
+        base = None
+        if body.base_workflow_id is not None and body.base_version is not None:
+            try:
+                base = graph_repository.get_definition(body.base_workflow_id, body.base_version)
+            except KeyError as exc:
+                raise HTTPException(
+                    status_code=404, detail="base Workflow Definition not found"
+                ) from exc
+        with store._connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(version) AS version FROM workflow_definitions WHERE workflow_id = ?",
+                (body.base_workflow_id or "",),
+            ).fetchone()
+        next_version = int(row["version"] or 0) + 1
+        try:
+            suggestion = await suggest_workflow(
+                request=body,
+                service=app.state.operant_service,
+                team=team,
+                base=base,
+                next_version=next_version,
+            )
+        except WorkflowSuggestionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Workflow suggestion provider failed: {type(exc).__name__}",
+            ) from exc
+        response = suggestion.model_dump(mode="json", exclude_defaults=True, exclude_none=True)
+        # Keep the candidate shape identical to a Definition readback. A sparse
+        # response makes the canvas report unchanged nodes as modified.
+        response["definition"] = suggestion.definition.model_dump(mode="json")
+        if len(json.dumps(response, ensure_ascii=False).encode("utf-8")) > 75_000:
+            raise HTTPException(status_code=422, detail="suggested Workflow is too large")
+        safe_response = redact_public_data(response, max_items=2_000)
+        try:
+            safe_definition = WorkflowDefinition.model_validate(safe_response["definition"])
+            compiler.compile(safe_definition)
+        except (KeyError, TypeError, ValueError, GraphCompilationError) as exc:
+            raise HTTPException(
+                status_code=422, detail="suggested Workflow changed during public redaction"
+            ) from exc
+        return cast(dict[str, Any], safe_response)
 
     @app.post("/v1/graph/workflows/drafts", status_code=202)
     async def create_workflow_draft(

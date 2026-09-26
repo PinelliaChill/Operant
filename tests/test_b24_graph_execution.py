@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from operant.domain.graph import (
     EdgeSpec,
     GraphLimits,
     GraphRunStatus,
+    IdempotencyClass,
+    LoopPolicy,
     NodeKind,
     NodeRunStatus,
     NodeSpec,
@@ -23,7 +26,7 @@ from operant.domain.graph import (
     WorkflowDefinitionStatus,
 )
 from operant.domain.messages import ModelResponse, ModelUsage, ProviderEvent
-from operant.domain.models import AgentStatus, Budget, ModelProfile, RolePreset
+from operant.domain.models import AgentStatus, Budget, ModelProfile, RolePreset, ToolPolicy
 from operant.domain.team import (
     MessageAudience,
     MessageEnvelope,
@@ -405,7 +408,7 @@ async def test_cancel_signals_running_session_and_persists_cancelled_graph(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_interrupted_run_with_terminal_prepared_agent_stays_interrupted(
+async def test_interrupted_run_with_cancelled_prepared_agent_uses_new_identity(
     tmp_path: Path,
 ) -> None:
     provider = RecordingProvider()
@@ -423,18 +426,19 @@ async def test_interrupted_run_with_terminal_prepared_agent_stays_interrupted(
     executor.prepare(run.id)
     runtime.start_run(run.id)
     node = graph_repository.list_node_runs(run.id)[0]
-    runtime.start_attempt(node.id)
-    runtime.interrupt_run(run.id)
     team_run_id = graph_repository.get_run(run.id).team_run_id
     assert team_run_id is not None
     entry = team_repository.list_roster(team_run_id)[0]
+    runtime.start_attempt(node.id, agent_instance_id=entry.agent_instance_id)
+    runtime.interrupt_run(run.id)
     service.store.update_agent_status(entry.agent_instance_id, AgentStatus.CANCELLED)
 
-    with pytest.raises(GraphExecutionError, match="cannot resume"):
-        await executor.run(run.id)
-
-    assert graph_repository.get_run(run.id).status is GraphRunStatus.INTERRUPTED
-    assert provider.calls == []
+    result = await executor.run(run.id)
+    assert result.status is GraphRunStatus.COMPLETED
+    attempts = graph_repository.list_attempts(node.id)
+    assert len(attempts) == 2
+    assert attempts[1].agent_instance_id != entry.agent_instance_id
+    assert len(provider.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -472,6 +476,46 @@ async def test_interrupted_run_with_reusable_agent_recovers_with_new_attempt(
     assert len(provider.calls) == 1
     with service.store._connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_public_interrupt_fences_active_agent_and_resumes_with_new_identity(
+    tmp_path: Path,
+) -> None:
+    block = asyncio.Event()
+    provider = RecordingProvider(block=block)
+    service, role = _service(tmp_path, provider)
+    graphs, teams, runtime, executor = _executor(service)
+    definition = _definition(
+        role.id,
+        role.version,
+        team_id="team.interrupt-live",
+        nodes=(_node("worker", role.id, role.version),),
+    )
+    teams.put_team_definition(_team("team.interrupt-live", role.id, ("worker",)))
+    run = runtime.create_run(definition, workspace_or_target=str(tmp_path))
+    running = asyncio.create_task(executor.run(run.id))
+    for _ in range(100):
+        if provider.active:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        running.cancel()
+        pytest.fail("Agent did not start")
+    interrupted = executor.interrupt(run.id)
+    first_result = await running
+    assert interrupted.status is GraphRunStatus.INTERRUPTED
+    assert first_result.status is GraphRunStatus.INTERRUPTED
+    node_run = graphs.list_node_runs(run.id)[0]
+    first_attempt = graphs.list_attempts(node_run.id)[0]
+    assert first_attempt.result.value == "interrupted"
+
+    provider.block = None
+    result = await executor.run(run.id)
+    attempts = graphs.list_attempts(node_run.id)
+    assert result.status is GraphRunStatus.COMPLETED
+    assert len(attempts) == 2
+    assert attempts[0].agent_instance_id != attempts[1].agent_instance_id
 
 
 @pytest.mark.asyncio
@@ -550,7 +594,7 @@ def test_unsupported_nodes_and_role_drift_fail_before_roster_creation(tmp_path: 
     )
     team_repository.put_team_definition(_team("team.unsupported", role.id, ("tool",)))
     unsupported_run = runtime.create_run(unsupported, workspace_or_target=str(tmp_path))
-    with pytest.raises(GraphExecutionError, match="only AGENT"):
+    with pytest.raises(GraphExecutionError, match="at least one Agent"):
         executor.prepare(unsupported_run.id)
     with service.store._connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 0
@@ -569,6 +613,375 @@ def test_unsupported_nodes_and_role_drift_fail_before_roster_creation(tmp_path: 
         executor.prepare(drift_run.id)
     with service.store._connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_mixed_graph_runs_read_tool_branch_join_timer_and_agent(tmp_path: Path) -> None:
+    (tmp_path / "input.txt").write_text("real data", encoding="utf-8")
+    provider = RecordingProvider()
+    service, role = _service(tmp_path, provider)
+    role = service.update_role(
+        role.id,
+        tool_policy=ToolPolicy(allowed_tools=("read_file",)),
+    )
+    graph_repository, team_repository, runtime, executor = _executor(service)
+    ports = (PortSpec(name="value", required=False),)
+    nodes = (
+        _node("source", role.id, role.version),
+        NodeSpec(
+            node_id="read",
+            node_kind=NodeKind.TOOL,
+            input_ports=(PortSpec(name="input", required=False),),
+            output_ports=(PortSpec(name="result", value_type="object"),),
+            metadata={
+                "role_id": role.id,
+                "role_version": role.version,
+                "tool_name": "read_file",
+                "arguments": {"path": "input.txt"},
+            },
+        ),
+        NodeSpec(
+            node_id="choice",
+            node_kind=NodeKind.CONDITION,
+            input_ports=(PortSpec(name="value", value_type="object"),),
+            output_ports=(
+                PortSpec(name="true", value_type="boolean"),
+                PortSpec(name="false", value_type="boolean"),
+            ),
+            metadata={"expression": "flag == 'yes'"},
+        ),
+        NodeSpec(node_id="yes", node_kind=NodeKind.FAN_OUT, input_ports=ports, output_ports=ports),
+        NodeSpec(node_id="no", node_kind=NodeKind.FAN_OUT, input_ports=ports, output_ports=ports),
+        NodeSpec(node_id="join", node_kind=NodeKind.JOIN, input_ports=ports, output_ports=ports),
+        NodeSpec(
+            node_id="delay",
+            node_kind=NodeKind.TIMER,
+            input_ports=ports,
+            output_ports=ports,
+            metadata={"delay_seconds": 0.01},
+        ),
+        _node("finish", role.id, role.version),
+    )
+    links = (
+        ("source", "result", "read", "input"),
+        ("read", "result", "choice", "value"),
+        ("choice", "true", "yes", "value"),
+        ("choice", "false", "no", "value"),
+        ("yes", "value", "join", "value"),
+        ("no", "value", "join", "value"),
+        ("join", "value", "delay", "value"),
+        ("delay", "value", "finish", "input"),
+    )
+    definition = _definition(
+        role.id,
+        role.version,
+        team_id="team.mixed",
+        nodes=nodes,
+        edges=tuple(
+            EdgeSpec(
+                edge_id=f"{index}",
+                source_node=source,
+                source_port=source_port,
+                target_node=target,
+                target_port=target_port,
+            )
+            for index, (source, source_port, target, target_port) in enumerate(links)
+        ),
+    )
+    team_repository.put_team_definition(_team("team.mixed", role.id, ("source", "finish")))
+    run = runtime.create_run(definition, input={"flag": "yes"}, workspace_or_target=str(tmp_path))
+    result = await executor.run(run.id)
+
+    assert result.status is GraphRunStatus.COMPLETED
+    by_id = {node.node_id: node for node in result.node_runs}
+    assert by_id["no"].status is NodeRunStatus.SKIPPED
+    assert by_id["yes"].status is NodeRunStatus.SUCCEEDED
+    assert by_id["read"].output_refs["result"]["content"] == "real data"
+    assert len(provider.calls) == 2
+    assert result.run.consumed_tool_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_script_uses_exact_approval_and_real_host_runner(tmp_path: Path) -> None:
+    provider = RecordingProvider()
+    service, agent_role = _service(tmp_path, provider)
+    script_role = service.create_role(
+        RolePreset(
+            id="role_script",
+            name="Script worker",
+            system_prompt="Execute only approved work.",
+            model_profile_id=agent_role.model_profile_id,
+            tool_policy=ToolPolicy(
+                allowed_tools=("run_command",),
+                workspace_write=True,
+                command_execution=True,
+            ),
+        )
+    )
+    graph_repository, team_repository, runtime, executor = _executor(service)
+    definition = _definition(
+        agent_role.id,
+        agent_role.version,
+        team_id="team.script",
+        nodes=(
+            _node("source", agent_role.id, agent_role.version),
+            NodeSpec(
+                node_id="script",
+                node_kind=NodeKind.SCRIPT,
+                input_ports=(PortSpec(name="input", required=False),),
+                output_ports=(PortSpec(name="result", value_type="object"),),
+                idempotency_class=IdempotencyClass.NON_IDEMPOTENT,
+                writes_workspace=True,
+                metadata={
+                    "role_id": script_role.id,
+                    "role_version": script_role.version,
+                    "argv": [sys.executable, "-c", "print('real-script')"],
+                },
+            ),
+        ),
+        edges=(
+            EdgeSpec(
+                edge_id="to-script",
+                source_node="source",
+                source_port="result",
+                target_node="script",
+                target_port="input",
+            ),
+        ),
+    ).model_copy(
+        update={
+            "locked_role_versions": {
+                agent_role.id: agent_role.version,
+                script_role.id: script_role.version,
+            },
+        }
+    )
+    team_repository.put_team_definition(_team("team.script", agent_role.id, ("source",)))
+    run = runtime.create_run(definition, workspace_or_target=str(tmp_path))
+    running = asyncio.create_task(executor.run(run.id))
+    for _ in range(100):
+        script_node = next(
+            node for node in graph_repository.list_node_runs(run.id) if node.node_id == "script"
+        )
+        if script_node.active_attempt_id is not None:
+            attempt = graph_repository.get_attempt(script_node.active_attempt_id)
+            if attempt.agent_instance_id is not None:
+                action_agent = service.store.get_agent(attempt.agent_instance_id)
+                approvals = service.list_pending_approvals(action_agent.session_id)
+                if approvals:
+                    assert service.decide_approval(
+                        action_agent.session_id, attempt.id, approved=True
+                    )["accepted"]
+                    break
+        await asyncio.sleep(0.05)
+    else:
+        running.cancel()
+        pytest.fail("script approval was not created")
+    result = await running
+    assert result.status is GraphRunStatus.COMPLETED
+    script_output = next(node for node in result.node_runs if node.node_id == "script")
+    assert script_output.output_refs["result"]["stdout"].strip() == "real-script"
+    assert result.run.consumed_tool_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fence", ["cancel", "interrupt"])
+async def test_fenced_started_script_requires_manual_reconcile_without_replay(
+    tmp_path: Path,
+    fence: str,
+) -> None:
+    provider = RecordingProvider()
+    service, agent_role = _service(tmp_path, provider)
+    script_role = service.create_role(
+        RolePreset(
+            id="role_cancel_script",
+            name="Script worker",
+            system_prompt="Bounded action.",
+            model_profile_id=agent_role.model_profile_id,
+            tool_policy=ToolPolicy(
+                allowed_tools=("run_command",),
+                workspace_write=True,
+                command_execution=True,
+            ),
+        )
+    )
+    graphs, teams, runtime, executor = _executor(service)
+    marker = tmp_path / "script-started.txt"
+    script = NodeSpec(
+        node_id="script",
+        node_kind=NodeKind.SCRIPT,
+        input_ports=(PortSpec(name="input", required=False),),
+        idempotency_class=IdempotencyClass.NON_IDEMPOTENT,
+        writes_workspace=True,
+        metadata={
+            "role_id": script_role.id,
+            "role_version": script_role.version,
+            "argv": [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import time; "
+                f"Path({str(marker)!r}).write_text('started'); time.sleep(10)",
+            ],
+        },
+    )
+    definition = _definition(
+        agent_role.id,
+        agent_role.version,
+        team_id="team.cancel-script",
+        nodes=(_node("source", agent_role.id, agent_role.version), script),
+        edges=(
+            EdgeSpec(
+                edge_id="to-script",
+                source_node="source",
+                source_port="result",
+                target_node="script",
+                target_port="input",
+            ),
+        ),
+    ).model_copy(
+        update={
+            "locked_role_versions": {
+                agent_role.id: agent_role.version,
+                script_role.id: script_role.version,
+            }
+        }
+    )
+    teams.put_team_definition(_team("team.cancel-script", agent_role.id, ("source",)))
+    run = runtime.create_run(definition, workspace_or_target=str(tmp_path))
+    running = asyncio.create_task(executor.run(run.id))
+    for _ in range(100):
+        script_node = next(
+            node for node in graphs.list_node_runs(run.id) if node.node_id == "script"
+        )
+        if script_node.active_attempt_id:
+            attempt = graphs.get_attempt(script_node.active_attempt_id)
+            if attempt.agent_instance_id:
+                session_id = service.store.get_agent(attempt.agent_instance_id).session_id
+                if service.list_pending_approvals(session_id):
+                    service.decide_approval(session_id, attempt.id, approved=True)
+                    break
+        await asyncio.sleep(0.05)
+    else:
+        running.cancel()
+        pytest.fail("script approval was not created")
+    for _ in range(100):
+        if marker.exists():
+            break
+        await asyncio.sleep(0.05)
+    else:
+        running.cancel()
+        pytest.fail("script was not started")
+    fenced = getattr(executor, fence)(run.id)
+    result = await running
+    assert fenced.status is GraphRunStatus.MANUAL_RECONCILE_REQUIRED
+    assert result.status is GraphRunStatus.MANUAL_RECONCILE_REQUIRED
+    assert runtime.recover(run.id).status is GraphRunStatus.MANUAL_RECONCILE_REQUIRED
+    assert (await executor.run(run.id)).status is GraphRunStatus.MANUAL_RECONCILE_REQUIRED
+    assert marker.read_text() == "started"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_uses_new_agent_each_iteration(tmp_path: Path) -> None:
+    provider = RecordingProvider()
+    service, role = _service(tmp_path, provider)
+    graphs, teams, runtime, executor = _executor(service)
+    worker = _node("worker", role.id, role.version)
+    loop = NodeSpec(
+        node_id="loop",
+        node_kind=NodeKind.LOOP,
+        input_ports=(PortSpec(name="value", value_type="string"),),
+        output_ports=(PortSpec(name="value", value_type="string"),),
+        loop_policy=LoopPolicy(
+            max_iterations=3,
+            max_wall_seconds=30,
+            max_output_tokens=1000,
+            max_cost_usd=1,
+            max_subagents=0,
+            max_recursion_depth=1,
+            exit_expression="iteration >= 2",
+            on_limit_node_id="limit",
+        ),
+    )
+    definition = _definition(
+        role.id,
+        role.version,
+        team_id="team.agent-loop",
+        nodes=(
+            worker,
+            loop,
+            NodeSpec(
+                node_id="limit",
+                node_kind=NodeKind.JOIN,
+                input_ports=(PortSpec(name="value", value_type="string"),),
+            ),
+        ),
+        edges=(
+            EdgeSpec(
+                edge_id="worker-loop",
+                source_node="worker",
+                source_port="result",
+                target_node="loop",
+                target_port="value",
+            ),
+            EdgeSpec(
+                edge_id="loop-worker",
+                source_node="loop",
+                source_port="value",
+                target_node="worker",
+                target_port="input",
+                loop_back=True,
+            ),
+            EdgeSpec(
+                edge_id="loop-limit",
+                source_node="loop",
+                source_port="value",
+                target_node="limit",
+                target_port="value",
+            ),
+        ),
+    )
+    teams.put_team_definition(_team("team.agent-loop", role.id, ("worker",)))
+    run = runtime.create_run(definition, workspace_or_target=str(tmp_path))
+    result = await executor.run(run.id)
+    assert result.status is GraphRunStatus.COMPLETED
+    assert len(provider.calls) == 2
+    worker_run = next(node for node in result.node_runs if node.node_id == "worker")
+    loop_run = next(node for node in result.node_runs if node.node_id == "loop")
+    attempts = graphs.list_attempts(worker_run.id)
+    assert len(attempts) == 2
+    assert attempts[0].agent_instance_id != attempts[1].agent_instance_id
+    assert loop_run.iteration == 2
+    assert len(teams.list_roster(result.run.team_run_id or "")) == 2
+    assert (
+        next(node for node in result.node_runs if node.node_id == "limit").status
+        is NodeRunStatus.SKIPPED
+    )
+
+    assert loop.loop_policy is not None
+    limited_loop = loop.model_copy(
+        update={
+            "loop_policy": loop.loop_policy.model_copy(
+                update={"max_iterations": 1, "exit_expression": "False"}
+            )
+        }
+    )
+    limited_definition = definition.model_copy(
+        update={
+            "workflow_id": "graph.execution.team.agent-loop-limited",
+            "nodes": (worker, limited_loop, definition.nodes[2]),
+        }
+    )
+    limited_run = runtime.create_run(limited_definition, workspace_or_target=str(tmp_path))
+    limited_result = await executor.run(limited_run.id)
+    assert limited_result.status is GraphRunStatus.COMPLETED
+    assert len(provider.calls) == 3
+    limited_state = next(node for node in limited_result.node_runs if node.node_id == "loop")
+    assert limited_state.status is NodeRunStatus.SKIPPED
+    assert limited_state.output_refs["limit_reasons"] == ["max_iterations"]
+    assert (
+        next(node for node in limited_result.node_runs if node.node_id == "limit").status
+        is NodeRunStatus.SUCCEEDED
+    )
 
 
 @pytest.mark.asyncio

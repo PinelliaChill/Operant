@@ -397,16 +397,6 @@ class GraphCompiler:
                             node_id=node.node_id,
                         )
                     )
-            if node.node_kind is NodeKind.TIMER:
-                issues.append(
-                    CompilationIssue(
-                        code="scheduler_out_of_scope",
-                        message=(
-                            f"timer node {node.node_id} cannot run until Scheduler is implemented"
-                        ),
-                        node_id=node.node_id,
-                    )
-                )
             delivered = {edge.target_port for edge in incoming[node.node_id] if not edge.loop_back}
             missing = [
                 port.name
@@ -1375,7 +1365,9 @@ class GraphRuntime:
         )
         iteration = node_run.iteration + 1
         limit_reasons: list[str] = []
-        if iteration > policy.max_iterations:
+        if iteration > policy.max_iterations or (
+            continue_loop and iteration >= policy.max_iterations
+        ):
             limit_reasons.append("max_iterations")
         if repeats >= policy.max_no_progress_repeats:
             limit_reasons.append("no_progress")
@@ -1425,9 +1417,16 @@ class GraphRuntime:
             self._finish_if_terminal(node_run.workflow_run_id)
             self._refresh_run_activity_status(node_run.workflow_run_id)
             return updated
+        definition = self.repository.get_definition(
+            self.repository.get_run(node_run.workflow_run_id).workflow_definition_id,
+            self.repository.get_run(node_run.workflow_run_id).workflow_definition_version,
+        )
+        has_back_edge = any(
+            edge.source_node == spec.node_id and edge.loop_back for edge in definition.edges
+        )
         updated = self._save_node(
             node_run,
-            status=NodeRunStatus.READY,
+            status=NodeRunStatus.PENDING if has_back_edge else NodeRunStatus.READY,
             iteration=iteration,
             no_progress_signature=progress_signature,
             no_progress_repeats=repeats,
@@ -1796,8 +1795,13 @@ class GraphRuntime:
             run.workflow_definition_id, run.workflow_definition_version
         )
         has_incoming = {edge.target_node for edge in definition.edges if not edge.loop_back}
+        kinds = {node.node_id: node.node_kind for node in definition.nodes}
         for node in self.repository.list_node_runs(run_id):
             if node.node_id not in has_incoming:
+                continue
+            if node.status is NodeRunStatus.READY and kinds[node.node_id] is NodeKind.TIMER:
+                # The READY timestamp is the durable timer start. Resetting
+                # it during recovery would extend a delay after every restart.
                 continue
             attempts = self.repository.list_attempts(node.id)
             latest = attempts[-1] if attempts else None
@@ -1842,8 +1846,11 @@ class GraphRuntime:
                 elif target_spec.node_kind is NodeKind.JOIN:
                     # ALL joins aggregate every branch that actually ran. A
                     # skipped branch is absent, not a reason to deadlock.
-                    ready = not unresolved
-                    skipped = False
+                    # If no branch ran, a control-only join may still run;
+                    # a join with required input has nothing to aggregate.
+                    accepts_empty = not any(port.required for port in target_spec.input_ports)
+                    ready = not unresolved and (bool(active_edges) or accepts_empty)
+                    skipped = not unresolved and not ready
                 else:
                     ready = not unresolved and not disabled
                     skipped = disabled
@@ -1887,6 +1894,12 @@ class GraphRuntime:
             source_spec = next(
                 node for node in definition.nodes if node.node_id == edge.source_node
             )
+            if (
+                source_spec.node_kind is NodeKind.LOOP
+                and source_spec.loop_policy is not None
+                and edge.target_node == source_spec.loop_policy.on_limit_node_id
+            ):
+                return "disabled"
             selected_port = source.output_refs.get("selected_port")
             if source_spec.node_kind is NodeKind.CONDITION and selected_port is not None:
                 if edge.source_port != selected_port:
@@ -1974,6 +1987,21 @@ class GraphRuntime:
                 self._save_node(node, status=NodeRunStatus.PENDING, active_attempt_id=None)
         for target in targets:
             self._ready_node_by_spec_id(run_id, target, allow_reset=True)
+            target_node = next(
+                item for item in self.repository.list_node_runs(run_id) if item.node_id == target
+            )
+            input_refs = dict(target_node.input_refs)
+            for edge in definition.edges:
+                if (
+                    edge.source_node == loop_node_id
+                    and edge.target_node == target
+                    and edge.loop_back
+                ):
+                    loop_output = by_spec[loop_node_id].output_refs
+                    if edge.source_port in loop_output:
+                        input_refs[edge.target_port] = loop_output[edge.source_port]
+            if input_refs != target_node.input_refs:
+                self._save_node(target_node, input_refs=input_refs)
 
     @staticmethod
     def _loop_cycle_nodes(
@@ -2117,7 +2145,9 @@ def coding_workflow_definition(
                 input_ports=any_in,
                 output_ports=(PortSpec(name="out", required=False),),
                 loop_policy=LoopPolicy(
-                    max_iterations=max(max_rework_rounds, 1),
+                    # One initial loop activation is needed before each
+                    # permitted legacy rework continuation.
+                    max_iterations=max_rework_rounds + 1,
                     max_wall_seconds=3_600,
                     max_output_tokens=1_000_000,
                     max_cost_usd=1_000,

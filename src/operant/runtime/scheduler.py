@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -33,6 +34,14 @@ class SchedulerActionGateway(Protocol):
 
     def workflow_status(self, workflow_run_id: str) -> GraphRunStatus:
         """Return the authoritative GraphRun status for a dispatched workflow."""
+        ...
+
+    def ensure_execution(self, workflow_run_id: str) -> None:
+        """Start or resume the bound GraphRun through the formal executor."""
+        ...
+
+    def cancel_workflow(self, workflow_run_id: str) -> None:
+        """Propagate a durable scheduler cancellation to the GraphRun."""
         ...
 
 
@@ -120,8 +129,7 @@ class SchedulerWorker:
             # Compatibility for non-Graph test gateways. Production composition
             # always implements workflow_status and retains the lease.
             return self._store.complete_job(lease, workflow_run_id=workflow_run_id)
-        status = status_reader(workflow_run_id)
-        return self._finish_if_terminal(dispatched, lease, status)
+        return self._reconcile_one(dispatched, lease, status_reader)
 
     def _reconcile_dispatched(self, writer_lease: SchedulerLease) -> RunRequest | None:
         status_reader = getattr(self._gateway, "workflow_status", None)
@@ -133,13 +141,36 @@ class SchedulerWorker:
             ttl_seconds=self._job_ttl_seconds,
         )
         for request, lease in jobs:
-            assert request.workflow_run_id is not None
-            result = self._finish_if_terminal(
-                request, lease, status_reader(request.workflow_run_id)
-            )
+            result = self._reconcile_one(request, lease, status_reader)
             if result.status is not RunRequestStatus.LEASED:
                 return result
         return None
+
+    def _reconcile_one(
+        self, request: RunRequest, lease: JobLease, status_reader: Callable[[str], GraphRunStatus]
+    ) -> RunRequest:
+        assert request.workflow_run_id is not None
+        status = status_reader(request.workflow_run_id)
+        if request.cancel_requested and status not in {
+            GraphRunStatus.COMPLETED,
+            GraphRunStatus.FAILED,
+            GraphRunStatus.CANCELLED,
+            GraphRunStatus.MANUAL_RECONCILE_REQUIRED,
+        }:
+            cancel = getattr(self._gateway, "cancel_workflow", None)
+            if cancel is not None:
+                cancel(request.workflow_run_id)
+                status = status_reader(request.workflow_run_id)
+        elif status in {
+            GraphRunStatus.CREATED,
+            GraphRunStatus.QUEUED,
+            GraphRunStatus.RUNNING,
+            GraphRunStatus.INTERRUPTED,
+        }:
+            ensure = getattr(self._gateway, "ensure_execution", None)
+            if ensure is not None:
+                ensure(request.workflow_run_id)
+        return self._finish_if_terminal(request, lease, status)
 
     def _finish_if_terminal(
         self,

@@ -759,7 +759,9 @@ class SQLiteTeamRepository(TeamRepository):
         with self.store._connect() as connection:
             return self._list_roster_with_connection(connection, team_run_id)
 
-    def replace_roster_agent(self, old: RosterEntry, new: RosterEntry) -> RosterEntry:
+    def replace_roster_agent(
+        self, old: RosterEntry, new: RosterEntry, *, allow_completed: bool = False
+    ) -> RosterEntry:
         if (old.team_run_id, old.member_id, old.thread_id) != (
             new.team_run_id,
             new.member_id,
@@ -778,7 +780,12 @@ class SQLiteTeamRepository(TeamRepository):
                 previous is None
                 or replacement is None
                 or previous["session_id"] != replacement["session_id"]
-                or previous["status"] not in {"failed", "cancelled", "timed_out"}
+                or previous["status"]
+                not in (
+                    {"failed", "cancelled", "timed_out", "completed"}
+                    if allow_completed
+                    else {"failed", "cancelled", "timed_out"}
+                )
                 or replacement["status"] != "created"
             ):
                 raise ValueError("retry Agent must be new and preserve the failed Session")

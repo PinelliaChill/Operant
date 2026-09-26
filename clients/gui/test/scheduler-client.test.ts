@@ -26,6 +26,8 @@ function generatedDouble(overrides: Partial<GeneratedSchedulerClient> = {}): {
     createSchedule: result('createSchedule') as GeneratedSchedulerClient['createSchedule'],
     setScheduleStatus: result('setScheduleStatus') as GeneratedSchedulerClient['setScheduleStatus'],
     triggerSchedule: result('triggerSchedule') as GeneratedSchedulerClient['triggerSchedule'],
+    signalScheduleHook: result('signalScheduleHook') as GeneratedSchedulerClient['signalScheduleHook'],
+    cancelRunRequest: result('cancelRunRequest') as GeneratedSchedulerClient['cancelRunRequest'],
     replayDeadLetter: result('replayDeadLetter') as GeneratedSchedulerClient['replayDeadLetter'],
     ...overrides,
   };
@@ -47,11 +49,14 @@ test('scheduler adapter delegates every operation to generated Phase45Client met
   await client.createSchedule(schedule, 'create-key');
   await client.setScheduleStatus('schedule-1', { status: 'paused', expected_version: 2 }, 'status-key');
   await client.triggerSchedule('schedule-1', 'trigger-key');
+  await client.signalHook('schedule-1', 'event-1', 'hook-key');
+  await client.cancelRunRequest('request-1', 'cancel-key');
   await client.replayDeadLetter('request-1', 'replay-key');
 
   assert.deepEqual(calls.map((call) => call.method), [
     'negotiateProtocol', 'listSchedules', 'listSchedulerQueue', 'listDeadLetter',
-    'createSchedule', 'setScheduleStatus', 'triggerSchedule', 'replayDeadLetter',
+    'createSchedule', 'setScheduleStatus', 'triggerSchedule', 'signalScheduleHook',
+    'cancelRunRequest', 'replayDeadLetter',
   ]);
   assert.deepEqual(calls[0]?.args, [true]);
   assert.deepEqual(calls[4]?.args, [schedule, { idempotencyKey: 'create-key' }]);
@@ -62,6 +67,11 @@ test('scheduler adapter delegates every operation to generated Phase45Client met
     'schedule-1', { idempotency_key: 'trigger-key' }, { idempotencyKey: 'trigger-key' },
   ]);
   assert.deepEqual(calls[7]?.args, [
+    'schedule-1', { event_type: 'application.signal', event_id: 'event-1' },
+    { idempotencyKey: 'hook-key' },
+  ]);
+  assert.deepEqual(calls[8]?.args, ['request-1', { idempotencyKey: 'cancel-key' }]);
+  assert.deepEqual(calls[9]?.args, [
     'request-1', { idempotency_key: 'replay-key' }, { idempotencyKey: 'replay-key' },
   ]);
 });

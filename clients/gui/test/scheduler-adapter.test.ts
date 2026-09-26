@@ -50,6 +50,12 @@ test('scheduler adapter maps exact Phase 5A schedule fields', () => {
   });
 });
 
+test('scheduler adapter accepts only the supported application signal Hook', () => {
+  const hook = { ...schedule, trigger_kind: 'hook', cron_expression: null, hook_event_type: 'application.signal' };
+  assert.equal(mapSchedule(hook).triggerKind, 'hook');
+  assert.throws(() => mapSchedule({ ...hook, hook_event_type: null }), /hook_event_type/);
+});
+
 test('scheduler adapter maps queue and dead-letter facts without deriving state', () => {
   const mapped = mapRunRequest(request);
   assert.equal(mapped.status, 'dead_letter');

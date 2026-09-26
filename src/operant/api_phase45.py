@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 from collections.abc import AsyncIterator, Mapping
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from operant.application.graph import GraphRuntime
@@ -196,6 +197,13 @@ class IdempotentTriggerBody(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=300)
 
 
+class ApplicationSignalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal["application.signal"]
+    event_id: str = Field(min_length=1, max_length=200)
+
+
 class LeasedReferenceResolver:
     """Keep exact SecretBroker material only until the shortest lease expires."""
 
@@ -279,6 +287,8 @@ def install_phase45_routes(
         graph_runtime=graph_runtime,
         security=scheduler_security,
         dispatch_registry=SQLiteGraphDispatchRegistry(store.path),
+        execution_scheduler=lambda run_id: app.state.b24_schedule_graph(run_id),
+        execution_canceller=lambda run_id: app.state.b24_graph_executor.cancel(run_id),
     )
     scheduler_worker = SchedulerWorker(
         store=scheduler_store,
@@ -1120,6 +1130,28 @@ def install_phase45_routes(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return request.model_dump(mode="json")
 
+    @app.post("/v1/schedules/{schedule_id}/hook", operation_id="signalScheduleHook")
+    async def signal_schedule_hook(
+        schedule_id: str, body: ApplicationSignalBody, request: Request
+    ) -> dict[str, Any]:
+        if request.client is None or request.client.host not in {"127.0.0.1", "::1", "testclient"}:
+            raise HTTPException(
+                status_code=403, detail="application signals require a local caller"
+            )
+        guard_schedule(
+            "signal_hook",
+            schedule_id,
+            body.model_dump(mode="json"),
+            f"hook:{schedule_id}:{hashlib.sha256(body.event_id.encode()).hexdigest()}",
+        )
+        try:
+            queued = trigger_service.signal_hook(schedule_id, event_id=body.event_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="schedule not found") from exc
+        except SchedulerConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return queued.model_dump(mode="json")
+
     @app.get("/v1/scheduler/queue", operation_id="listSchedulerQueue")
     async def list_scheduler_queue(
         status: RunRequestStatus | None = None,
@@ -1131,6 +1163,15 @@ def install_phase45_routes(
                 for item in scheduler_store.list_requests(status=status, limit=limit)
             ]
         }
+
+    @app.post("/v1/scheduler/queue/{request_id}/cancel", operation_id="cancelRunRequest")
+    async def cancel_run_request(request_id: str) -> dict[str, Any]:
+        guard_schedule("cancel_request", request_id, {}, f"scheduler-cancel:{request_id}")
+        try:
+            queued = scheduler_store.request_cancel(request_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="run request not found") from exc
+        return queued.model_dump(mode="json")
 
     @app.get("/v1/scheduler/dead-letter", operation_id="listDeadLetter")
     async def list_dead_letter(
