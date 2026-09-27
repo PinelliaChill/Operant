@@ -1,0 +1,12 @@
+.goal-plan-panel { border: 1px solid var(--border-default); border-radius: 12px; padding: 16px; background: var(--bg-card); margin: 16px 0; display: grid; gap: 12px; }
+.goal-plan-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.goal-plan-head h2, .goal-plan-panel h3 { margin: 0; font-size: 15px; }
+.goal-plan-head p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; }
+.goal-plan-panel label { display: grid; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+.goal-plan-panel textarea { min-height: 62px; resize: vertical; }
+.goal-plan-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+.goal-plan-columns .config-card { display: grid; align-content: start; gap: 10px; margin: 0; }
+.goal-checklist { padding-left: 20px; display: grid; gap: 12px; }
+.goal-checklist li { display: grid; gap: 5px; }
+.goal-checklist small { color: var(--text-muted); }
+.goal-checklist-actions { display: flex; gap: 6px; }

@@ -74,6 +74,8 @@ class OpenAICompatibleProvider:
             # The runtime also enforces the cumulative value from returned
             # usage; this request limit only prevents avoidable overshoot.
             payload["max_completion_tokens"] = snapshot.budget.max_output_tokens
+        if snapshot.temperature is not None:
+            payload["temperature"] = snapshot.temperature
         if tools:
             payload["tools"] = [
                 {

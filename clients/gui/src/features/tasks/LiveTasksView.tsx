@@ -8,6 +8,8 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { B2LiveAdapter, normalizeB2Error } from '../../live/b2Adapter';
 import { createIdempotencyKey } from '../../live/liveState';
+import { LiveGoalPlanPanel } from './LiveGoalPlanPanel';
+import '../settings/live-config.css';
 
 type TaskFilter = 'all' | 'active' | 'done';
 
@@ -149,6 +151,7 @@ export const LiveTasksView: React.FC = () => {
       )}
       <div className="section-scroll">
         <div className="section-inner">
+          <LiveGoalPlanPanel />
           {loading ? (
             <div className="live-panel-loading b2-task-loading" role="status"><RefreshCw size={16} className="animate-spin" />正在读取 Core Task Projection…</div>
           ) : filteredTasks.length === 0 ? (

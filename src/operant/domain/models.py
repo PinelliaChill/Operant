@@ -131,6 +131,7 @@ class ModelProfile(BaseModel):
     secret_ref: str = Field(min_length=1, max_length=200)
     context_window: int | None = Field(default=None, ge=1)
     default_token_budget: int | None = Field(default=None, ge=1)
+    supports_temperature: bool = False
     input_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     output_usd_per_million_tokens: float | None = Field(default=None, ge=0)
     supported_efforts: tuple[Effort, ...] = (Effort.LOW, Effort.MEDIUM, Effort.HIGH)
@@ -239,6 +240,12 @@ class RoleSnapshot(BaseModel):
     tool_policy: ToolPolicy
     budget: Budget
     memory_scope: str
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    skill_ids: tuple[str, ...] = ()
+    mcp_server_ids: tuple[str, ...] = ()
+    config_sources: dict[str, str] = Field(default_factory=dict)
+    config_workspace_ref: str | None = None
+    config_project_id: str | None = None
     captured_at: datetime = Field(default_factory=utc_now)
     overrides: SnapshotOverrides = Field(default_factory=SnapshotOverrides)
 

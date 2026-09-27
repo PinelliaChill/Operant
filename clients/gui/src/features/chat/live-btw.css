@@ -1,0 +1,11 @@
+.live-btw-panel { border-top: 1px solid var(--border-default); padding: 14px 0; }
+.live-btw-panel summary { cursor: pointer; font-weight: 600; }
+.live-btw-panel summary span { font-size: 12px; color: var(--text-muted); font-weight: 400; margin-left: 8px; }
+.live-btw-content { display: grid; gap: 10px; padding: 12px 0; font-size: 12px; }
+.live-btw-content p { margin: 0; color: var(--text-secondary); }
+.live-btw-content label { display: grid; gap: 6px; }
+.live-btw-content textarea { min-height: 72px; resize: vertical; }
+.live-btw-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.live-btw-result { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border-default); border-radius: 10px; }
+.live-btw-result small { color: var(--text-muted); overflow-wrap: anywhere; }
+.live-btw-result pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; margin: 0; font: inherit; }

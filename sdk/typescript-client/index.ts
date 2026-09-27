@@ -16,6 +16,13 @@ export { Phase1EClient, ProtocolNegotiationError } from './phase1e.generated';
 export * as Phase1E from './phase1e.generated';
 export { WorkbenchClient } from './workbench.generated';
 export * as Workbench from './workbench.generated';
+export { Phase3Client } from './phase3.generated';
+export * as Phase3 from './phase3.generated';
+export type {
+  Phase3Request,
+  Phase3Response,
+  Phase3Transport,
+} from './phase3-transport';
 export {
   MAX_SSE_DATA_BYTES,
   MAX_SSE_FRAME_BYTES,

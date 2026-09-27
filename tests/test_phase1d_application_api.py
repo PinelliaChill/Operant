@@ -164,6 +164,7 @@ def test_slash_registry_lists_and_resolves_aliases_without_execution() -> None:
         "/review",
         "/clear-context",
         "/compact-context",
+        "/plan",
     }
     resolved = registry.resolve("/清空上下文")
     assert resolved.canonical_name == "/clear-context"

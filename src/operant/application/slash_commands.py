@@ -33,6 +33,12 @@ _PHASE1D_COMMANDS = (
         command_kind=SlashCommandKind.CONTEXT_COMPACT,
         endpoint="/v1/commands/context/compact",
     ),
+    SlashCommandDefinition(
+        canonical_name="/plan",
+        aliases=("/计划",),
+        command_kind=SlashCommandKind.PLAN,
+        endpoint="/v1/workbench/threads/{thread_id}/commands",
+    ),
 )
 
 

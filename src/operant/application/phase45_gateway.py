@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -38,11 +38,13 @@ class Phase45ActionGateway:
         engine: PolicyEngine,
         *,
         principal: str = "core:phase45",
+        on_approval_requested: Callable[[str], None] | None = None,
     ) -> None:
         self.repository = repository
         self.phase_repository = phase_repository
         self.engine = engine
         self.principal = principal
+        self.on_approval_requested = on_approval_requested
         self.normalizer = ActionNormalizer()
         self.broker = CapabilityBroker(repository)
         self._external_actions: dict[str, str] = {}
@@ -102,6 +104,12 @@ class Phase45ActionGateway:
                 expires_at=(datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
             )
             approval_id = str(approval["approval_id"])
+            if (
+                approval["status"] == "pending"
+                and not action.dry_run
+                and self.on_approval_requested is not None
+            ):
+                self.on_approval_requested(approval_id)
             if created:
                 self.repository.append_security_audit(
                     SecurityAuditEvent(

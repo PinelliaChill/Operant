@@ -113,6 +113,36 @@ def test_rejects_malicious_or_ambiguous_frontmatter(tmp_path: Path, frontmatter:
     assert result.issues[0].code == "candidate_rejected"
 
 
+def test_accepts_bounded_default_pack_frontmatter_variants(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    _write_skill(
+        root / "grill-me",
+        frontmatter=(
+            "name: grill-me\ndescription: Interview the user\ndisable-model-invocation: true"
+        ),
+    )
+    _write_skill(
+        root / "skill-creator",
+        frontmatter=(
+            "name: skill-creator\ndescription: Create a Skill\n"
+            "metadata:\n  short-description: Create reusable Skills"
+        ),
+    )
+    _write_skill(
+        root / "presentations",
+        frontmatter="name: Presentations\ndescription: Create presentations",
+    )
+    result = SkillDiscovery([root]).discover()
+    assert result.issues == ()
+    assert {candidate.name for candidate in result.candidates} == {
+        "grill-me",
+        "skill-creator",
+        "Presentations",
+    }
+    grill = next(candidate for candidate in result.candidates if candidate.name == "grill-me")
+    assert grill.frontmatter["disable-model-invocation"] == "true"
+
+
 def test_rejects_oversized_manifest_and_bounded_resource_set(tmp_path: Path) -> None:
     root = tmp_path / "skills"
     _write_skill(root / "large", body="x" * 500)

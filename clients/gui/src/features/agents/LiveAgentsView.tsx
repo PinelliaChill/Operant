@@ -18,6 +18,7 @@ type ModelForm = {
   secretRef: string;
   contextWindow: string;
   tokenBudget: string;
+  supportsTemperature: boolean;
 };
 
 type RoleForm = {
@@ -36,6 +37,7 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   secretRef: 'OPERANT_API_KEY',
   contextWindow: '',
   tokenBudget: '',
+  supportsTemperature: false,
 };
 
 const DEFAULT_ROLE_FORM: RoleForm = {
@@ -60,6 +62,7 @@ function modelToForm(model: B2.ModelProfile): ModelForm {
     secretRef: model.secret_ref,
     contextWindow: model.context_window ? String(model.context_window) : '',
     tokenBudget: model.default_token_budget ? String(model.default_token_budget) : '',
+    supportsTemperature: model.supports_temperature ?? false,
   };
 }
 
@@ -183,6 +186,7 @@ export const LiveAgentsView: React.FC = () => {
           secret_ref: modelForm.secretRef.trim(),
           context_window: contextWindow ?? null,
           default_token_budget: tokenBudget ?? null,
+          supports_temperature: modelForm.supportsTemperature,
         }, key)
         : await adapter.createModel({
           name: modelForm.name.trim(),
@@ -191,6 +195,7 @@ export const LiveAgentsView: React.FC = () => {
           secret_ref: modelForm.secretRef.trim(),
           context_window: contextWindow,
           default_token_budget: tokenBudget,
+          supports_temperature: modelForm.supportsTemperature,
         }, key);
       loadEpoch.current += 1;
       setModels((current) => editingModel?.id
@@ -307,6 +312,7 @@ export const LiveAgentsView: React.FC = () => {
                         <dl className="b2-agents-card-summary">
                           <div><dt>模型 ID</dt><dd><code>{model.model_id}</code></dd></div>
                           <div><dt>上下文窗口</dt><dd>{model.context_window ? `${model.context_window.toLocaleString()} tokens` : '未设置'}</dd></div>
+                          <div><dt>温度参数</dt><dd>{model.supports_temperature ? '支持' : '不支持'}</dd></div>
                           <div><dt>默认预算</dt><dd>{model.default_token_budget ? `${model.default_token_budget.toLocaleString()} tokens` : '未设置'}</dd></div>
                         </dl>
                         <details className="b2-agents-details">
@@ -506,6 +512,11 @@ export const LiveAgentsView: React.FC = () => {
                 <label htmlFor="b2-model-budget">默认 Token 预算</label>
                 <input id="b2-model-budget" className="input" type="number" min={1} value={modelForm.tokenBudget} onChange={(event) => setModelForm((current) => ({ ...current, tokenBudget: event.target.value }))} />
                 <p>角色未另行设置预算时使用。</p>
+              </div>
+              <div className="b2-agents-field">
+                <label htmlFor="b2-model-temperature">温度参数</label>
+                <label className="b2-agents-checkbox"><input id="b2-model-temperature" type="checkbox" checked={modelForm.supportsTemperature} onChange={(event) => setModelForm((current) => ({ ...current, supportsTemperature: event.target.checked }))} />此模型支持 temperature</label>
+                <p>只在已确认 Provider 支持时启用；配置继承页据此显示温度覆盖。</p>
               </div>
             </div>
           </fieldset>

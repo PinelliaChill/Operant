@@ -16,6 +16,7 @@ class SlashCommandKind(str, Enum):
     REVIEW = "review.run"
     CONTEXT_CLEAR = "context.clear"
     CONTEXT_COMPACT = "context.compact"
+    PLAN = "plan.generate"
 
 
 class SlashCommandDefinition(BaseModel):

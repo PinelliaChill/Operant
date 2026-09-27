@@ -239,6 +239,9 @@ export function mapConversationThread(value: B2.ConversationThread): B2.Conversa
 
 export function mapModelProfile(value: B2.ModelProfile): B2.ModelProfile {
   const source = requiredRecord(value, 'ModelProfile');
+  if (source.supports_temperature !== undefined && typeof source.supports_temperature !== 'boolean') {
+    throw new B2AdapterError({ code: 'invalid_b2_projection', message: 'Core 返回的 ModelProfile.supports_temperature 无效。', retryable: false, recovery: 'none', detail: source.supports_temperature });
+  }
   return {
     id: optionalText(source.id),
     name: requiredText(source.name, 'ModelProfile.name'),
@@ -253,6 +256,7 @@ export function mapModelProfile(value: B2.ModelProfile): B2.ModelProfile {
     supported_efforts: efforts(source.supported_efforts, 'ModelProfile.supported_efforts'),
     default_effort: effort(source.default_effort, 'ModelProfile.default_effort'),
     effort_parameter: source.effort_parameter === null ? null : optionalText(source.effort_parameter),
+    supports_temperature: source.supports_temperature === true,
     effort_mapping: Array.isArray(source.effort_mapping)
       ? source.effort_mapping.map((item) => {
         const mapping = requiredRecord(item, 'ModelProfile.effort_mapping');

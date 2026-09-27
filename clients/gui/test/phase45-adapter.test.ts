@@ -125,13 +125,15 @@ test('Security audit mapping keeps only the explicit safe projection fields', ()
     event_type: 'policy.evaluated',
     decision: 'ask',
     rule_ids: ['secret.ask'],
-    detail: { raw_argument: 'must-not-map', secret_ref: 'MUST_NOT_MAP' },
+    detail: { raw_argument: 'must-not-map', secret_ref: 'MUST_NOT_MAP', reason_code: 'review_model_unavailable', decided_by: 'reviewer' },
     created_at: '2026-09-03T00:00:00Z',
   }] });
   assert.equal(facts[0].cursor, 9007199254740993n);
   assert.equal(facts[0].decision, 'ask');
   assert.equal('detail' in facts[0], false);
   assert.equal('actionHash' in facts[0], false);
+  assert.equal(facts[0].reasonCode, 'review_model_unavailable');
+  assert.equal(facts[0].decidedBy, 'reviewer');
 });
 
 test('adapter delegates to the generated Phase45 client', async () => {

@@ -1,0 +1,17 @@
+.config-inner { max-width: 1000px; }
+.config-card { padding: 16px; border: 1px solid var(--border-default); border-radius: 12px; background: var(--bg-card); margin-bottom: 12px; }
+.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.config-grid label { display: grid; gap: 6px; color: var(--text-secondary); font-size: 12px; }
+.config-hint { color: var(--text-muted); font-size: 12px; margin: 12px 0 0; }
+.config-field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.config-field-head h2 { font-size: 14px; margin: 0; }
+.config-field-head span, .config-effective { font-size: 12px; color: var(--text-secondary); }
+.config-effective code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 110px; overflow: auto; margin-top: 4px; color: var(--text-primary); }
+.config-checkbox { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 10px 0; }
+.config-textarea { width: 100%; min-height: 74px; resize: vertical; }
+.config-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0; }
+.config-rules-label { display: grid; gap: 6px; margin-top: 12px; font-size: 12px; color: var(--text-secondary); }
+.live-ask-lookup { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin: 12px 0; }
+.live-ask-lookup label { display: grid; gap: 6px; flex: 1 1 230px; font-size: 12px; }
+.live-ask-result { font-size: 12px; overflow-wrap: anywhere; }
+.live-ask-result ol { display: grid; gap: 8px; padding-left: 20px; }
