@@ -236,7 +236,7 @@ class AgentLoop:
             completed_payload: dict[str, Any] = {
                 "content": completed.content,
                 "finish_reason": completed.finish_reason,
-                "tool_calls": [call.model_dump() for call in completed.tool_calls],
+                "tool_calls": [self.tools.public_tool_call(call) for call in completed.tool_calls],
                 "usage": (
                     None if completed.usage is None else completed.usage.model_dump(mode="json")
                 ),

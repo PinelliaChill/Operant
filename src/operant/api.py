@@ -120,6 +120,7 @@ from operant.providers.openai_compatible import (
     OpenAICompatibleProvider,
     ProviderError,
 )
+from operant.remote.tool_extensions import local_capability_tool_extensions
 from operant.remote_control.gateway import RemoteGatewayConfig, install_remote_gateway
 from operant.settings import configured_path_roots, database_path, load_local_env
 
@@ -1364,6 +1365,7 @@ def create_app(
         artifact_capability_secret=artifact_capability_secret,
         physical_delete_enabled=physical_delete_enabled,
         physical_delete_authorization=physical_delete_authorization,
+        tool_extension_factory=local_capability_tool_extensions,
     )
     service.initialize()
     workflow = SequentialCodingWorkflow(service)

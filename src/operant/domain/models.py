@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -85,6 +86,7 @@ class ToolPolicy(BaseModel):
             "wait_for_agent",
         }
         unknown = set(value).difference(known)
+        unknown = {name for name in unknown if not re.fullmatch(r"ext_[a-z][a-z0-9_]{1,98}", name)}
         if unknown:
             raise ValueError(f"unknown tools: {sorted(unknown)}")
         if len(value) != len(set(value)):

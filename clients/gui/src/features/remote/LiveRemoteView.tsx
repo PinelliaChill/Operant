@@ -78,6 +78,10 @@ export const LiveRemoteView: React.FC = () => {
   const [targets, setTargets] = useState<RemoteTargetProjection[]>([]);
   const [jobs, setJobs] = useState<RemoteJobProjection[]>([]);
   const [ticket, setTicket] = useState<PairingTicketProjection | null>(null);
+  const [selectedJob, setSelectedJob] = useState<RemoteJobProjection | null>(null);
+  const [jobDetail, setJobDetail] = useState<Record<string, unknown> | null>(null);
+  const [jobDetailError, setJobDetailError] = useState<string | null>(null);
+  const [jobDetailLoading, setJobDetailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -180,7 +184,27 @@ export const LiveRemoteView: React.FC = () => {
     }
   };
 
+  const loadJobDetail = async (job: RemoteJobProjection) => {
+    setSelectedJob(job);
+    setJobDetail(null);
+    setJobDetailLoading(true);
+    setJobDetailError(null);
+    try {
+      setJobDetail(record(await phase56Client.getRemoteTargetJobResult(job.jobId), 'Job result'));
+    } catch (reason: unknown) {
+      setJobDetail(null);
+      setJobDetailError(reason instanceof Error ? reason.message : '任务结果读取失败。');
+    } finally {
+      setJobDetailLoading(false);
+    }
+  };
+
   const actionsDisabled = connectionStatus !== 'connected' || loading;
+  const capabilityJobs = jobs.filter((job) => job.capability.startsWith('browser.') || job.capability.startsWith('computer.'));
+  const detailResult = jobDetail?.result && typeof jobDetail.result === 'object' && !Array.isArray(jobDetail.result) ? jobDetail.result as Record<string, unknown> : null;
+  const detailObservation = jobDetail?.observation && typeof jobDetail.observation === 'object' && !Array.isArray(jobDetail.observation) ? jobDetail.observation as Record<string, unknown> : null;
+  const detailPostcondition = detailResult?.postcondition && typeof detailResult.postcondition === 'object' && !Array.isArray(detailResult.postcondition) ? detailResult.postcondition as Record<string, unknown> : null;
+  const detailStatus = typeof jobDetail?.status === 'string' ? jobDetail.status : selectedJob?.status;
   return (
     <div style={{ padding: 24, overflowY: 'auto', height: '100%', display: 'flex', flexDirection: 'column', gap: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
@@ -243,10 +267,11 @@ export const LiveRemoteView: React.FC = () => {
           </section>
 
           <section>
-            <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Browser / Computer Job（{jobs.length}）</h3>
-            {jobs.length === 0 ? <EmptyState title="暂无远程任务" description="观察和动作任务会显示绑定的 Capability 与明确状态。" /> :
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{jobs.slice(0, 50).map((job) => <div className="card" key={job.jobId} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <span>{job.capability} · {job.operation}<small style={{ display: 'block', color: 'var(--text-muted)' }}>{job.targetId}</small></span><StatusBadge status={job.status} size="sm" />
+            <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Browser / Computer Job（{capabilityJobs.length}）</h3>
+            {capabilityJobs.length === 0 ? <EmptyState title="暂无浏览器或电脑任务" description="观察和动作任务会显示绑定的 Capability 与明确状态。" /> :
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{capabilityJobs.slice(0, 50).map((job) => <div className="card" key={job.jobId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <span>{job.capability} · {job.operation}<small style={{ display: 'block', color: 'var(--text-muted)' }}>{job.targetId} · {job.jobId}</small></span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><StatusBadge status={job.status} size="sm" /><button className="btn btn-secondary btn-sm" onClick={() => void loadJobDetail(job)} disabled={actionsDisabled} aria-label={`查看任务 ${job.jobId} 的结果`}>查看结果</button></span>
               </div>)}</div>}
           </section>
         </>
@@ -257,6 +282,19 @@ export const LiveRemoteView: React.FC = () => {
           <p>请让远程设备在票据过期前提交自己的签名公钥与交换公钥。</p>
           <code style={{ overflowWrap: 'anywhere' }}>operant://pair?challenge={encodeURIComponent(ticket.challengeId)}&amp;code={encodeURIComponent(ticket.oneTimeCode)}</code>
           <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>过期时间：{formatDate(ticket.expiresAt)}。票据只能使用一次。</p>
+        </div>}
+      </Modal>
+
+      <Modal isOpen={selectedJob !== null} onClose={() => setSelectedJob(null)} title="能力任务结果" footer={<><button className="btn btn-secondary" onClick={() => selectedJob && void loadJobDetail(selectedJob)} disabled={jobDetailLoading || connectionStatus !== 'connected'}>刷新结果</button><button className="btn btn-primary" onClick={() => setSelectedJob(null)}>关闭</button></>}>
+        {selectedJob && <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-busy={jobDetailLoading}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><StatusBadge status={detailStatus || 'unknown'} size="sm" /><code style={{ overflowWrap: 'anywhere' }}>{selectedJob.jobId}</code></div>
+          <p style={{ color: 'var(--text-secondary)' }}>{selectedJob.capability} · {selectedJob.operation} · {selectedJob.targetId}</p>
+          {jobDetailLoading && <p role="status">正在读取持久结果…</p>}
+          {jobDetailError && <div className="live-error" role="alert">{jobDetailError} 请刷新结果，保留原 Job ID 核对。</div>}
+          {detailStatus === 'manual_reconcile_required' && <div className="live-error" role="status">结果不明：先检查目标当前状态，再决定后续动作。不要自动重试这项操作。</div>}
+          {!jobDetailLoading && !jobDetailError && !detailResult && !detailObservation && <p role="status" style={{ color: 'var(--text-muted)' }}>暂无终态回执，可稍后按原 Job ID 刷新。</p>}
+          {detailObservation && <><strong>观察</strong><pre style={{ maxHeight: '35vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 12, padding: 12, background: 'var(--bg-surface)', borderRadius: 8 }}>{JSON.stringify(detailObservation.body ?? detailObservation, null, 2)}</pre></>}
+          {detailResult && <><strong>回执</strong>{typeof detailResult.error_code === 'string' && <p role="alert">错误代码：{detailResult.error_code}</p>}{detailPostcondition && Object.keys(detailPostcondition).length > 0 && <pre style={{ maxHeight: '35vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 12, padding: 12, background: 'var(--bg-surface)', borderRadius: 8 }}>{JSON.stringify(detailPostcondition, null, 2)}</pre>}</>}
         </div>}
       </Modal>
     </div>

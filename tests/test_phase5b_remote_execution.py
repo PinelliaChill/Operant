@@ -10,13 +10,17 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from operant.api_phase56_target import install_phase56_target_routes
+from operant.api_phase56_target import (
+    _validate_local_capability_action,
+    install_phase56_target_routes,
+)
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.remote_execution import RemoteAuthorization, RemoteExecutionController
 from operant.application.security import PolicyEngine
 from operant.domain.remote_execution import (
     CapabilityActionRequest,
     CapabilityManifest,
+    CapabilityObservation,
     RemoteActionIdempotency,
     RemoteCapability,
     RemoteExecutionResult,
@@ -41,6 +45,41 @@ from operant.remote import ConnectorOutcome, InMemoryRemoteTargetConnector, Remo
 
 def _now() -> datetime:
     return datetime(2026, 9, 4, 6, 0, tzinfo=timezone.utc)
+
+
+def test_local_capability_preflight_rejects_persisted_credentials_and_url_query() -> None:
+    action = CapabilityActionRequest(
+        target_id="browser-test",
+        capability=RemoteCapability.BROWSER_SUBMIT,
+        operation="fill",
+        target_ref="browser-test",
+        observation_hash="a" * 64,
+        arguments={"selector": "#query", "value": "sk-abcdefghijklmnopqrstuv"},
+        idempotency_key="credential-preflight",
+        idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+    )
+    with pytest.raises(ValueError, match="arguments"):
+        _validate_local_capability_action("browser", action)
+    navigation = action.model_copy(
+        update={
+            "capability": RemoteCapability.BROWSER_NAVIGATE,
+            "operation": "navigate",
+            "arguments": {"url": "https://example.com/?token=value"},
+        }
+    )
+    with pytest.raises(ValueError, match="query"):
+        _validate_local_capability_action("browser", navigation)
+    hidden_argument = action.model_copy(
+        update={
+            "arguments": {
+                "selector": "#query",
+                "value": "safe text",
+                "secret": "sk-abcdefghijklmnopqrstuv",
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="arguments"):
+        _validate_local_capability_action("browser", hidden_argument)
 
 
 def _allow_engine() -> PolicyEngine:
@@ -176,6 +215,7 @@ def test_remote_target_lease_fencing_pull_result_and_checksum(tmp_path: Path) ->
         idempotency=RemoteActionIdempotency.IDEMPOTENT,
         now=_now(),
     )
+    assert controller.repository.get_result(job.job_id) is None
     polled = controller.poll_jobs(
         target_id=target.target_id,
         lease_id=lease.lease_id,
@@ -206,6 +246,7 @@ def test_remote_target_lease_fencing_pull_result_and_checksum(tmp_path: Path) ->
         artifact_bytes=artifact,
     )
     assert completed.status is RemoteJobStatus.SUCCEEDED
+    assert controller.repository.get_result(job.job_id) == completed
     with pytest.raises(ConflictError, match="checksum"):
         controller.complete_job(
             result.model_copy(update={"job_id": "missing"}),
@@ -505,6 +546,7 @@ def test_remote_target_api_installer_exposes_bounded_operations(tmp_path: Path) 
         "completeRemoteTargetJob",
         "cancelRemoteTargetJob",
         "listRemoteTargetJobs",
+        "getRemoteTargetJobResult",
         "observeBrowser",
         "actBrowser",
         "observeComputer",
@@ -536,3 +578,91 @@ def test_remote_target_api_installer_exposes_bounded_operations(tmp_path: Path) 
         jobs = client.get("/v1/remote-targets/jobs", params={"target_id": "api-target"})
         assert jobs.status_code == 200
         assert jobs.json() == {"items": []}
+        missing_result = client.get("/v1/remote-targets/jobs/missing/result")
+        assert missing_result.status_code == 404
+
+
+def test_existing_remote_browser_target_keeps_its_action_contract(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "remote-browser-api.sqlite3")
+    store.initialize()
+    gateway = Phase45ActionGateway(
+        SQLiteSecurityRepository(store), SQLitePhase45Repository(store), _allow_engine()
+    )
+    app = FastAPI()
+    install_phase56_target_routes(app, store, action_gateway=gateway)
+    with TestClient(app) as client:
+        target_id = "existing-browser-target"
+        identity = "public-key-" + "x" * 32
+        registered = client.post(
+            "/v1/remote-targets",
+            json={
+                "target_id": target_id,
+                "display_name": "Existing remote browser",
+                "endpoint_ref": "REMOTE_ENDPOINT",
+                "identity_public_key": identity,
+                "credential_ref": "REMOTE_TARGET_TOKEN",
+                "policy_ref": "balanced",
+                "artifact_namespace": "existing-browser",
+                "capability_manifest": {
+                    "version": "1",
+                    "capabilities": ["browser.submit", "browser.observe"],
+                    "supported_operations": ["submit", "observe_browser"],
+                    "platform": "test",
+                },
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        assert (
+            client.post(
+                f"/v1/remote-targets/{target_id}/heartbeat",
+                json={"identity_public_key": identity},
+            ).status_code
+            == 200
+        )
+        lease_response = client.post(
+            f"/v1/remote-targets/{target_id}/leases",
+            json={
+                "owner": "existing-browser-test",
+                "workspace_ref": str(tmp_path),
+                "ttl_seconds": 180,
+                "idempotency_key": "existing-browser-lease",
+            },
+        )
+        assert lease_response.status_code == 201, lease_response.text
+        lease = lease_response.json()
+        observation_body = {"form_ready": True}
+        observation_hash = canonical_action_hash(
+            {"target_id": target_id, "target_ref": "browser:tab-1", "body": observation_body}
+        )
+        SQLiteRemoteExecutionRepository(store).record_observation(
+            CapabilityObservation(
+                target_id=target_id,
+                capability=RemoteCapability.BROWSER_OBSERVE,
+                target_ref="browser:tab-1",
+                observation_hash=observation_hash,
+                body=observation_body,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=3),
+            )
+        )
+        accepted = client.post(
+            "/v1/browser/act",
+            json={
+                "lease_id": lease["lease_id"],
+                "token": lease["token"],
+                "fencing": lease["fencing"],
+                "action": {
+                    "target_id": target_id,
+                    "capability": "browser.submit",
+                    "operation": "submit",
+                    "target_ref": "browser:tab-1",
+                    "observation_hash": observation_hash,
+                    "precondition": {"form_ready": True},
+                    "arguments": {"button": "Send"},
+                    "postcondition": {"confirmation": True},
+                    "idempotency_key": "existing-browser-submit",
+                    "idempotency": "non_idempotent",
+                },
+            },
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["job"]["operation"] == "submit"

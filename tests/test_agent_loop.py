@@ -21,8 +21,10 @@ from operant.domain.models import (
     RoleSnapshot,
     ToolPolicy,
 )
+from operant.domain.security import Capability
 from operant.providers.base import ModelProvider
 from operant.runtime.loop import AgentLoop
+from operant.tools.extensions import ToolExtension
 from operant.tools.workspace import WorkspaceTools
 
 
@@ -198,6 +200,78 @@ async def test_tool_result_is_returned_to_model_context(tmp_path: Path) -> None:
     tool_message = provider.received_messages[1][-1]
     assert tool_message.tool_call_id == "call_1"
     assert "hello from a real file" in (tool_message.content or "")
+
+
+@pytest.mark.asyncio
+async def test_registered_capability_extension_reaches_agent_context(tmp_path: Path) -> None:
+    class BrowserProvider(ScriptedProvider):
+        async def stream(
+            self,
+            *,
+            snapshot: RoleSnapshot,
+            messages: Sequence[Message],
+            tools: Sequence[ToolDefinition],
+        ) -> AsyncIterator[ProviderEvent]:
+            del snapshot
+            self.turn += 1
+            self.received_messages.append(list(messages))
+            assert [tool.name for tool in tools] == ["ext_browser_observe"]
+            if self.turn == 1:
+                yield ProviderEvent(
+                    event_type="model.completed",
+                    response=ModelResponse(
+                        tool_calls=(
+                            ToolCall(
+                                id="browser-observe",
+                                name="ext_browser_observe",
+                                arguments_json="{}",
+                            ),
+                        ),
+                        finish_reason="tool_calls",
+                    ),
+                )
+            else:
+                assert "observation_hash" in (messages[-1].content or "")
+                yield ProviderEvent(
+                    event_type="model.completed",
+                    response=ModelResponse(content="Observed.", finish_reason="stop"),
+                )
+
+    async def observe(_arguments: dict[str, object]) -> dict[str, object]:
+        return {"observation_hash": "a" * 64}
+
+    extension = ToolExtension(
+        plugin_id="operant.chrome.browser",
+        plugin_version="phase56.v1",
+        host_api_version="operant-tool-extension.v1",
+        definition=ToolDefinition(
+            name="ext_browser_observe",
+            description="Observe dedicated browser.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        capabilities=(Capability.BROWSER_OBSERVE,),
+        side_effecting=False,
+        execute=observe,
+    )
+    bound_snapshot = snapshot().model_copy(
+        update={"tool_policy": ToolPolicy(allowed_tools=("ext_browser_observe",))}
+    )
+    provider = BrowserProvider()
+    tools = WorkspaceTools(
+        tmp_path,
+        policy=bound_snapshot.tool_policy,
+        extensions={extension.definition.name: extension},
+    )
+    events = [
+        event
+        async for event in AgentLoop(provider, tools).run(
+            snapshot=bound_snapshot, user_message="Observe the browser"
+        )
+    ]
+    assert events[-1].event_type == "agent.completed"
+    assert provider.turn == 2
+    completed = next(event for event in events if event.event_type == "model.completed")
+    assert "input_sha256" in completed.payload["tool_calls"][0]["arguments_json"]
 
 
 @pytest.mark.asyncio

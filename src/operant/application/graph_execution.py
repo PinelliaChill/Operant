@@ -14,7 +14,7 @@ import asyncio
 import hashlib
 import inspect
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -42,7 +42,14 @@ from operant.domain.graph import (
     NodeSpec,
     WorkflowDefinition,
 )
-from operant.domain.models import AgentInstance, AgentStatus, Budget, RolePreset, Session
+from operant.domain.models import (
+    AgentInstance,
+    AgentStatus,
+    Budget,
+    RolePreset,
+    Session,
+    ToolPolicy,
+)
 from operant.domain.team import (
     RosterEntry,
     RosterMemberStatus,
@@ -55,6 +62,7 @@ from operant.domain.team import (
 )
 from operant.domain.threads import ConversationThread
 from operant.runtime.loop import RuntimeEvent
+from operant.tools.extensions import ToolExtension
 from operant.tools.workspace import ToolError, WorkspaceTools
 
 if TYPE_CHECKING:
@@ -110,6 +118,7 @@ class _NodeExecution:
 
 class _PreparedService(Protocol):
     store: SQLiteStore
+    tool_extension_factory: Callable[[Path, ToolPolicy], dict[str, ToolExtension]] | None
     """The narrow service surface used by this bridge."""
 
     factory: Any
@@ -927,7 +936,15 @@ class BoundedGraphExecutor:
         )
         arguments = cast(dict[str, Any], self._bind_inputs(arguments, node_run.input_refs))
         workspace = self._workspace_for_run(run, definition)
-        tools = WorkspaceTools(workspace, policy=role.tool_policy)
+        tools = WorkspaceTools(
+            workspace,
+            policy=role.tool_policy,
+            extensions=(
+                self.service.tool_extension_factory(self.service.store.path, role.tool_policy)
+                if self.service.tool_extension_factory is not None
+                else None
+            ),
+        )
         thread = self.service.create_thread(ConversationThread(workspace_ref=workspace))
         session = self.service.create_session(role.id, thread_id=thread.id)
         self._validate_created_session(session, role, node)

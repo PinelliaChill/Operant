@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-26（配置、审批与任务控制实施树；记录身份：Codex，保留原历史署名）
+> 最后更新：2026-09-27（扩展能力与运行治理实施树；记录身份：Codex，保留原历史署名）
 >
-> 对应源码：`codex/config-approval-task-control` 基于主线 `47ebe36` 的交付增量；包含会话工作台、H-03～H-06 与 H-08/H-09/H-12，SQLite 为 v20。合并状态以 Git/PR 为准；本机已安装 App 尚未更新。
+> 对应源码：`codex/extension-runtime-governance` 基于主线 `d13c6b1` 的增量；前三部分已合并，SQLite 为 v20。第四部分的合并与真实桌面验收状态以 Git/PR 及本节记录为准；本机已安装 App 尚未更新。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -98,13 +98,15 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 | Graph/Team | 正式 Agent、Tool、Script、Condition、Fan-out、Join、Loop、Timer 执行；Live 画布编辑/连线/版本差异/运行投影；Team消息、Mailbox及任务/工件板、隔离Writer | 混合图至少含一个 Agent 且锁定 Team；Human Input/Approval/Wait/Subworkflow/Artifact/Merge 尚未接入此正式执行器；会话式委派使用独立工作台运行时 |
 | 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile，ASK 自动审核并留审计，模型不可用转人工；Cron/Timer/本地 application.signal Hook 派发正式 Graph Agent | 审批模型默认仍为人工模式；硬 DENY 始终优先。Hook 暂无文件/Git watcher；动态Slash、通用插件驱动仍有缺口 |
 | 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Phase3 GUI 入口已接 Core；新配置只作用于新 Session 的冻结快照。TUI 尚无相同的配置/Goal/Plan 管理界面，交互终端未实现 |
-| Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | Browser/Computer不是完整内置驱动；公网、容器联合流程与完整跨设备产品不外推 |
+| Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | 公网、容器联合流程与完整跨设备产品不外推 |
+| 本机能力插件 | 仅安装随 Core 发布的浏览器/电脑适配器；摘要绑定安装、版本/目标白名单、启停/卸载；Chrome 专用临时 Profile 经正式 Target 租约与 Action Gateway 完成真实观察/导航/点击；受信工具扩展使 Agent 能正式调用，真实模型已验收只读观察 | macOS 电脑输入仍需辅助功能权限；没有通用第三方代码安装、GUI 直接调用或生产远程验收；Agent 输入/提交未做真实模型自主动作验收；临时 Profile 回收不等于全局资源治理 |
 | 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证 | 非正式签名/公证发布，无完整安装向导、DMG或自动更新；本机启动适配另有安装记录 |
 
 可复用的最近证据：B2-7范围与负结果见[任务包](design/b2-7/task-package.md)；
 UI关键页面与集中验收见[任务包](design/ui-refine-2-3/task-package.md)。
 本实施树的 H-03～H-06 范围、真实链路与限制见[可操作编排验收记录](design/orchestration-system/acceptance.md)。
 H-08/H-09/H-12 的实现与验收见[配置、审批与任务控制记录](design/config-approval-task-control/acceptance.md)。
+第四部分本机能力插件的范围、真实链路和未完成边界见[扩展能力与运行治理记录](design/extension-runtime-governance/acceptance.md)。
 本机最新安装状态、授权合并事实与后续目标以治理根进度入口核对，不从旧阶段的“未合并”文字推断。
 
 当前仍缺的用户能力统一由[Harness待实现目标](design/Operant-Harness待实现目标.md)维护 H-01～H-18；
@@ -154,6 +156,14 @@ Docker 检查有 1 项跳过。上述为原实现批次的验证结果，历史�
 - 全局 `approval_reviewer` 可在 `off/human/auto` 间切换。auto 要求 Discovery 找到独立 Profile 的精确模型 ID；Phase45 Gateway 和正式 Agent Session 的非 dry-run、非硬 DENY ASK 均可触发模型审核。输入是脱敏、去路径/URL/参数的有限事实；严格度控制可自动处理的风险范围，critical 始终转人工。结果与延期原因留审计；批准后仍需再次计算 Policy 并一次性消费原 Action 的 Approval。
 - v20 的 `Goal`、`PlanArtifact` 和 `ExecutionChecklistItem` 使用持久状态与修订号，清单完成要有证据且前置项完成。`/plan <goal_id>` 或 Goal 的生成接口通过零工具、只读 Planner Sidecar 建立可编辑草稿，不直接发布或执行；普通 BTW 在 Live 会话里可只读提问并显式提升结果。默认能力包按可信根发现、校验、安装并按项目启用六个 Skill；`disable-model-invocation` 的 Skill 默认不自动注入。
 - Phase3 的配置与任务控制路由使用 `phase3.v1` Schema、digest 与生成的 Python/TypeScript Client；模型、Phase45 与 Workbench 变动从各自单一 Schema 重生成。具体已验收范围见上方记录。
+
+## 2.3 本机能力插件增量
+
+`plugins/capability_registry.py` 仅允许显式安装随 Core 发布的 Chrome Browser 与 macOS Computer 适配器，记录版本、源码摘要和目标白名单。默认禁用；启用前和 Worker 每次取任务前重验源码摘要及状态，禁用后不再接收新任务。CLI 负责安装、启停、卸载；未认证的外部 Python 包不能借此执行。`tools/extensions.py` 提供版本化的受信工具注册边界；Role 工具白名单和 Host 注入必须同时满足才能向 Agent 暴露工具，CLI `role add --extension-tool` / `role update --enable-extension-tool`、`--disable-extension-tool` 提供显式版本化授权。副作用工具仍经 Agent 工具回执、Policy/Approval 与 Core Capability Gateway，Agent 侧审计与 `model.completed` 事件只存扩展参数摘要，活动轮次内才持有执行参数。记忆 PluginHost 仍是独立的记忆 SDK，不因新注册表被称为通用第三方插件平台。
+
+`remote/local_worker.py` 使用现有 Remote Execution Target 的注册、短期 Lease、fencing、Action Gateway、观察哈希及持久 Job/Receipt；Worker 不读 Core SQLite，也不保存租约 Token。Chrome 驱动使用独立临时 Profile、精确来源白名单（协议/主机/端口）、DNS 地址检查/固定解析、CDP 请求拦截及无直连回退的本机网络代理；代理只转发白名单目标，阻断未授权 HTTP 写请求，并逐次核对 CONNECT 目标。公网域名只能解析到公网地址，本机名只能解析到回环地址；Worker 还排除其 Core 来源及本机 Core 端口，防止误白名单让页面访问控制面。Chrome 子进程不继承 Worker 凭据或代理环境，但保留 macOS 所需的系统 HOME/TMPDIR 路径。仅接受类型化观察、导航、非密码文本输入及点击，不接受调用方传入任意 JavaScript 或 CDP 命令。`fill` 输入由短期 Lease Token 派生密钥，以 AES-GCM 绑定目标、租约、观察哈希、字段和幂等键后封装；本机插件 Target 的 Core 路由在持久 Job 入队前拒绝明文字段及带查询参数的导航 URL，SQLite 仅保存密文，Worker 在执行前解封。已有非本机 Remote Target 仍保留其版本化动作契约。浏览器操作前重读当前页面并核对观察哈希，表单状态变化也会使旧动作失效。输入值及页面回显中的同值文本从观察回执中隐去，未知写结果进入人工核对路径，不能盲重试。可选专用可见窗口供用户接管。页面正文限长并脱敏，页面自身请求的 URL 查询只留摘要。正常关闭删除临时 Profile；异常退出后只回收本用户持有、标记有效、进程已退出且超过一小时的 Profile；CLI 可预览大小、状态和保留原因。
+
+macOS Computer 适配器只观察前台白名单 App 的窗口/按钮，并以同一窗口和观察哈希执行指定按钮点击；窗口/按钮文本脱敏，原文只在本机短暂复核，变化哈希保证脱敏后仍能识别窗口变化。系统设置、终端、钥匙串和已列入保护集的密码管理器硬拒绝。无辅助功能权限时明确失败。当前没有键盘输入、剪贴板、屏幕截图或通用电脑控制。两种适配器均需先经现有 Target 管理流程注册、授予 Lease，再运行本机 Worker；本部分新增按 Job ID 读取持久结果的 Phase56 Schema/生成客户端，以及浏览器和电脑的正式协议 CLI。Agent 可通过显式 Role 工具白名单和只在进程环境中注入的目标租约使用类型化工具；`gpt-6-luna` 已经正式 Session 完成真实 Chrome 只读观察。Live Remote 页面可按 Job ID 读取持久回执并提示人工核对，不发起能力动作。GUI 直接操控、真实电脑输入和第三方插件隔离仍未验收，不能将此增量说成完整 H-15/H-16 或已验收跨设备产品。
 
 ## 3. 总体架构
 
@@ -1407,6 +1417,10 @@ lease，另一个服务进程执行 `initialize()` 会把全库遗留 `in_progre
 
 ```text
 operant init
+operant capability-plugin install|enable|disable|list|uninstall
+operant capability-worker
+operant capability-browser observe|navigate|fill|click|status
+operant capability-computer observe|click-button|status
 
 operant model add
 operant model list
@@ -1871,9 +1885,9 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 6. **数据与迁移**：当前SQLite v20，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
 7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布；TUI 尚未提供本次配置/Goal/Plan 的等效管理界面。文件正文/PTY、任意对象`@`和动态`/`注册仍有缺口。Phase1E冻结协议本身的查询缺口需与后续入口区分。
 8. **权限与公网**：OAuth面向单用户私网，不是多租户或通用公网CSRF方案；loopback仍可无OAuth。Remote配对/E2E不替代所有API鉴权，Gateway/Relay不属于已审计公网托管产品。面向非可信HTTP客户端的Artifact capability签发仍未完成；跨项目操作必须走已实现的显式共享授权，不能由路径推定权限。
-9. **外部能力与隔离**：Browser/Computer当前主要是协议与受控动作边界，缺完整内置驱动；MCP Streamable HTTP、真实第三方Server长时验证、多Host发现/通知与移动推送仍有缺口。历史Docker隔离测试与真实Host模型任务是不同证据，不能相加冒充真实模型+Docker Coder/Container联合验收；候选中的Docker skip及生产HTTPS Target限制继续保留。
-10. **扩展与审批**：现有命令加上 `/plan`，仍缺通用扩展注册。六项默认 Skill 能从配置的可信根安装，但运行依赖相应 Skill 包与工具环境，不能把安装读回当成文档/幻灯片/PDF 内容质量验收。审批模型默认不开启，启用后失联或重启中的审核保持人工待审；模型不能修改 Policy。
-11. **保留策略与缓存**：Artifact可Pin/归档/计划删除/Trash/Restore/显式孤儿修复，物理删除另行启用；其他事件、规范历史、回执、审计及Context/Compaction缺统一保留执行器，Artifact亦非全自动清扫。Provider缓存目前只做观测，不复制或裁决Provider内部缓存；不得按临时TTL删除长期知识/审计/恢复证据。
+9. **外部能力与隔离**：本机 Chrome 已有真实隔离 Profile 与 Core Job 链路，Agent 工具入口已完成真实模型只读观察；macOS Computer 适配器的真实输入仍受辅助功能权限阻断。GUI 仅有持久 Job 读回和人工核对提示，直接操控、Agent 自主输入/提交、第三方插件沙箱和生产 Remote 尚未验收。MCP Streamable HTTP、真实第三方 Server 长时验证、多 Host 发现/通知与移动推送仍有缺口。历史 Docker 隔离测试与真实 Host 模型任务是不同证据；候选中的 Docker skip 及生产 HTTPS Target 限制继续保留。
+10. **扩展与审批**：新增受信 Tool 扩展边界和两种随 Core 发布的能力适配器，仍缺通用 Command/Event/Provider/Runtime 扩展及第三方代码认证/隔离。六项默认 Skill 能从配置的可信根安装，但运行依赖相应 Skill 包与工具环境，不能把安装读回当成文档/幻灯片/PDF 内容质量验收。审批模型默认不开启，启用后失联或重启中的审核保持人工待审；模型不能修改 Policy。
+11. **保留策略与缓存**：Artifact 可 Pin/归档/计划删除/Trash/Restore/显式孤儿修复，物理删除另行启用；新增浏览器临时 Profile 正常关闭即清理、崩溃后一小时回收，但其他事件、规范历史、回执、审计及 Context/Compaction 仍缺统一保留执行器。Provider 缓存目前只做观测，不复制或裁决 Provider 内部缓存；不得按临时 TTL 删除长期知识/审计/恢复证据。
 12. **评测与发布**：价格/首次模型等待等部分遥测未知；缺自动价格发现、一般化统计显著性、Evaluation Run逐Result续跑等，历史Exp19—24学习验收未完成。候选已测本机macOS arm64，不代表Windows/Linux/浏览器矩阵或正式签名WebView。仓库仍缺完整安装向导、Developer ID/公证、DMG和自动更新；本机launcher适配不等于跨设备安装产品。历史安全扫描事项未全部清零。
 
 ## 19. 文档维护规则

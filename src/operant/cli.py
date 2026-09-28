@@ -30,7 +30,10 @@ from operant.domain.models import (
 from operant.domain.workflow import WorkflowRunStatus
 from operant.persistence.sqlite import NotFoundError, SQLiteStore
 from operant.providers.openai_compatible import OpenAICompatibleProvider
+from operant.remote.cli_operator import browser_app, computer_app
+from operant.remote.tool_extensions import local_capability_tool_extensions
 from operant.settings import database_path, load_local_env
+from operant.tools.extensions import EXTENSION_TOOL_NAME
 
 app = typer.Typer(no_args_is_help=True, help="由角色预设驱动的多模型 Coding Agent Runtime。")
 model_app = typer.Typer(no_args_is_help=True, help="管理 Model Profile。")
@@ -47,6 +50,7 @@ memory_app = typer.Typer(
 evaluation_app = typer.Typer(no_args_is_help=True, help="管理并顺序运行可复现 Evaluation Suite。")
 evaluation_suite_app = typer.Typer(no_args_is_help=True, help="创建和查询 Evaluation Suite。")
 evaluation_result_app = typer.Typer(no_args_is_help=True, help="查询 Evaluation Result。")
+capability_plugin_app = typer.Typer(no_args_is_help=True, help="管理内置浏览器与电脑能力插件。")
 app.add_typer(model_app, name="model")
 app.add_typer(role_app, name="role")
 app.add_typer(session_app, name="session")
@@ -55,6 +59,9 @@ app.add_typer(memory_app, name="memory")
 evaluation_app.add_typer(evaluation_suite_app, name="suite")
 evaluation_app.add_typer(evaluation_result_app, name="result")
 app.add_typer(evaluation_app, name="evaluation")
+app.add_typer(capability_plugin_app, name="capability-plugin")
+app.add_typer(browser_app, name="capability-browser")
+app.add_typer(computer_app, name="capability-computer")
 console = Console()
 
 
@@ -63,6 +70,7 @@ def _service() -> ApplicationService:
     service = ApplicationService(
         SQLiteStore(database_path()),
         OpenAICompatibleProvider(),
+        tool_extension_factory=local_capability_tool_extensions,
     )
     service.initialize()
     return service
@@ -140,6 +148,202 @@ def _tool_policy(
             pids_limit=pids_limit,
         ),
     )
+
+
+def _extend_tool_policy(
+    policy: ToolPolicy, *, enable: list[str], disable: list[str] | None = None
+) -> ToolPolicy:
+    removed = set(disable or [])
+    if any(not EXTENSION_TOOL_NAME.fullmatch(name) for name in (*enable, *removed)):
+        raise typer.BadParameter("扩展工具名称必须以 ext_ 开头")
+    if removed.intersection(enable):
+        raise typer.BadParameter("同一扩展工具不能同时启用和停用")
+    tools = tuple(dict.fromkeys((*policy.allowed_tools, *enable)))
+    return ToolPolicy.model_validate(
+        {
+            **policy.model_dump(),
+            "allowed_tools": tuple(name for name in tools if name not in removed),
+        }
+    )
+
+
+def _capability_registry() -> Any:
+    from operant.plugins.capability_registry import CapabilityPluginRegistry
+
+    return CapabilityPluginRegistry(
+        database_path().expanduser().resolve().parent / "capability-plugins"
+    )
+
+
+@capability_plugin_app.command("install", help="安装并绑定随 Core 发布的能力插件。")
+def install_capability_plugin(
+    kind: str = typer.Argument(..., help="browser 或 computer。"),
+    allow_origin: list[str] = typer.Option(
+        [], "--allow-origin", help="精确浏览器来源，如 https://example.com，可重复。"
+    ),
+    allow_bundle_id: list[str] = typer.Option(
+        [], "--allow-bundle-id", help="允许的 App bundle ID，可重复。"
+    ),
+) -> None:
+    from operant.remote.local_worker import BROWSER_PLUGIN, COMPUTER_PLUGIN
+
+    if kind == "browser" and allow_origin and not allow_bundle_id:
+        plugin_id, targets = BROWSER_PLUGIN.plugin_id, tuple(allow_origin)
+    elif kind == "computer" and allow_bundle_id and not allow_origin:
+        plugin_id, targets = COMPUTER_PLUGIN.plugin_id, tuple(allow_bundle_id)
+    else:
+        raise typer.BadParameter("kind 与目标白名单必须一致且非空")
+    record = _capability_registry().install(plugin_id, targets)
+    console.print(f"已安装 {record.plugin_id}，当前禁用；源码摘要 {record.source_digest[:12]}。")
+
+
+@capability_plugin_app.command("enable", help="启用已核验的能力插件。")
+def enable_capability_plugin(kind: str = typer.Argument(...)) -> None:
+    from operant.remote.local_worker import BROWSER_PLUGIN, COMPUTER_PLUGIN
+
+    plugin_id = {"browser": BROWSER_PLUGIN.plugin_id, "computer": COMPUTER_PLUGIN.plugin_id}.get(
+        kind
+    )
+    if plugin_id is None:
+        raise typer.BadParameter("kind 必须是 browser 或 computer")
+    record = _capability_registry().set_enabled(plugin_id, True)
+    console.print(f"已启用 {record.plugin_id}。")
+
+
+@capability_plugin_app.command("disable", help="停止插件接收新任务。")
+def disable_capability_plugin(kind: str = typer.Argument(...)) -> None:
+    from operant.remote.local_worker import BROWSER_PLUGIN, COMPUTER_PLUGIN
+
+    plugin_id = {"browser": BROWSER_PLUGIN.plugin_id, "computer": COMPUTER_PLUGIN.plugin_id}.get(
+        kind
+    )
+    if plugin_id is None:
+        raise typer.BadParameter("kind 必须是 browser 或 computer")
+    record = _capability_registry().set_enabled(plugin_id, False)
+    console.print(f"已禁用 {record.plugin_id}。")
+
+
+@capability_plugin_app.command("list", help="查看能力插件版本、状态和目标白名单。")
+def list_capability_plugins() -> None:
+    records = _capability_registry().list()
+    console.print_json(json.dumps([record.model_dump(mode="json") for record in records]))
+
+
+@capability_plugin_app.command("uninstall", help="卸载已禁用的能力插件绑定。")
+def uninstall_capability_plugin(kind: str = typer.Argument(...)) -> None:
+    from operant.remote.local_worker import BROWSER_PLUGIN, COMPUTER_PLUGIN
+
+    plugin_id = {"browser": BROWSER_PLUGIN.plugin_id, "computer": COMPUTER_PLUGIN.plugin_id}.get(
+        kind
+    )
+    if plugin_id is None:
+        raise typer.BadParameter("kind 必须是 browser 或 computer")
+    _capability_registry().uninstall(plugin_id)
+    console.print(f"已卸载 {plugin_id}。")
+
+
+@capability_plugin_app.command("profiles", help="预览专用浏览器临时 Profile 的大小和保留原因。")
+def list_browser_profiles() -> None:
+    from operant.remote.local_browser import browser_profile_inventory
+
+    console.print_json(
+        json.dumps(
+            [profile.__dict__ for profile in browser_profile_inventory()], ensure_ascii=False
+        )
+    )
+
+
+@capability_plugin_app.command("reap-profiles", help="只清理已过宽限期且进程退出的临时 Profile。")
+def reap_browser_profiles() -> None:
+    from operant.remote.local_browser import reap_stale_browser_profiles
+
+    removed = reap_stale_browser_profiles()
+    console.print_json(json.dumps({"removed_profile_ids": removed}, ensure_ascii=False))
+
+
+@capability_plugin_app.command("doctor-computer", help="只读检查 macOS 电脑驱动的辅助功能权限。")
+def doctor_computer() -> None:
+    from operant.remote.local_computer import _OBSERVE_SCRIPT, ComputerTargetError, MacComputer
+
+    try:
+        MacComputer._script(_OBSERVE_SCRIPT)
+    except ComputerTargetError as exc:
+        if "Accessibility permission" in str(exc):
+            console.print(
+                "macOS 辅助功能尚未授权。请在系统设置 → 隐私与安全性 → 辅助功能中"
+                "授权运行 Operant 的程序与 osascript，然后重新检查。"
+            )
+        else:
+            console.print("无法读取前台窗口；请先打开一个普通 App，再检查辅助功能权限。")
+        raise typer.Exit(code=1) from exc
+    console.print("macOS 辅助功能可读取前台窗口。")
+
+
+@app.command("capability-worker", help="运行经租约绑定的本机浏览器或电脑能力插件。")
+def capability_worker(
+    kind: str = typer.Option(..., help="browser 或 computer。"),
+    core_origin: str = typer.Option("http://127.0.0.1:8000", help="Core HTTPS 或回环地址。"),
+    target_id: str = typer.Option(..., help="已注册并在线的 Target ID。"),
+    lease_id: str = typer.Option(..., help="已签发的租约 ID。"),
+    lease_fencing: int = typer.Option(..., min=1, help="租约 fencing。"),
+    chrome_path: Path = typer.Option(
+        Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        help="受信任 Chrome 可执行文件。",
+    ),
+    visible: bool = typer.Option(False, help="显示专用 Chrome 窗口，允许用户接管页面。"),
+) -> None:
+    from operant.remote.local_worker import (
+        BROWSER_PLUGIN,
+        COMPUTER_PLUGIN,
+        browser_worker,
+        computer_worker,
+    )
+
+    lease_token = os.environ.get("OPERANT_TARGET_LEASE_TOKEN", "")
+    if len(lease_token) < 16:
+        raise typer.BadParameter("请用 OPERANT_TARGET_LEASE_TOKEN 注入短期租约 Token")
+    plugin_id = {"browser": BROWSER_PLUGIN.plugin_id, "computer": COMPUTER_PLUGIN.plugin_id}.get(
+        kind
+    )
+    if plugin_id is None:
+        raise typer.BadParameter("kind 必须是 browser 或 computer")
+    registry = _capability_registry()
+    record = registry.get(plugin_id, require_enabled=True)
+    if kind == "browser":
+        worker = browser_worker(
+            core_origin=core_origin,
+            target_id=target_id,
+            lease_id=lease_id,
+            lease_token=lease_token,
+            lease_fencing=lease_fencing,
+            allowed_origins=frozenset(record.allowed_targets),
+            chrome_path=chrome_path,
+            visible=visible,
+        )
+    else:
+        if visible:
+            raise typer.BadParameter("--visible 仅适用于 browser")
+        worker = computer_worker(
+            core_origin=core_origin,
+            target_id=target_id,
+            lease_id=lease_id,
+            lease_token=lease_token,
+            lease_fencing=lease_fencing,
+            allowed_bundle_ids=frozenset(record.allowed_targets),
+        )
+
+    def check_lifecycle() -> None:
+        registry.get(plugin_id, require_enabled=True)
+
+    worker.lifecycle_check = check_lifecycle
+    try:
+        worker.run()
+    except KeyboardInterrupt:
+        console.print("本机能力插件已停止。")
+    except PermissionError:
+        console.print("能力插件已禁用，Worker 已停止。")
+    finally:
+        worker.close()
 
 
 @app.command("init", help="初始化本地 SQLite 数据库。")
@@ -278,6 +482,9 @@ def add_role(
     memory_limit_mb: int = typer.Option(512, min=64, max=262_144),
     pids_limit: int = typer.Option(256, min=16, max=65_536),
     timeout_seconds: int = typer.Option(300, min=1, max=3600),
+    extension_tool: list[str] = typer.Option(
+        [], "--extension-tool", help="显式授予 ext_ 工具名称，可重复；需另行安装和启用插件。"
+    ),
 ) -> None:
     role = _service().create_role(
         RolePreset(
@@ -285,13 +492,16 @@ def add_role(
             model_profile_id=model_profile_id,
             system_prompt=system_prompt,
             effort=effort,
-            tool_policy=_tool_policy(
-                writable,
-                command_runner=command_runner,
-                docker_image=docker_image,
-                cpu_limit=cpu_limit,
-                memory_limit_mb=memory_limit_mb,
-                pids_limit=pids_limit,
+            tool_policy=_extend_tool_policy(
+                _tool_policy(
+                    writable,
+                    command_runner=command_runner,
+                    docker_image=docker_image,
+                    cpu_limit=cpu_limit,
+                    memory_limit_mb=memory_limit_mb,
+                    pids_limit=pids_limit,
+                ),
+                enable=extension_tool,
             ),
             budget=Budget(timeout_seconds=timeout_seconds),
         )
@@ -334,7 +544,10 @@ def update_role(
     system_prompt: str | None = typer.Option(None),
     model_profile_id: str | None = typer.Option(None),
     effort: Effort | None = typer.Option(None),
+    enable_extension_tool: list[str] = typer.Option([], "--enable-extension-tool"),
+    disable_extension_tool: list[str] = typer.Option([], "--disable-extension-tool"),
 ) -> None:
+    service = _service()
     changes: dict[str, Any] = {
         key: value
         for key, value in {
@@ -345,7 +558,14 @@ def update_role(
         }.items()
         if value is not None
     }
-    role = _service().update_role(role_id, **changes)
+    if enable_extension_tool or disable_extension_tool:
+        current = service.get_role(role_id)
+        changes["tool_policy"] = _extend_tool_policy(
+            current.tool_policy,
+            enable=enable_extension_tool,
+            disable=disable_extension_tool,
+        )
+    role = service.update_role(role_id, **changes)
     console.print_json(role.model_dump_json(indent=2))
 
 

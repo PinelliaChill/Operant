@@ -6,8 +6,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from operant.domain.messages import ToolDefinition
+from operant.domain.messages import ToolCall, ToolDefinition
 from operant.domain.models import CommandRunnerType, ToolPolicy
+from operant.domain.security import Capability
 from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
 from operant.tools.execution import (
     CommandRunner,
@@ -16,6 +17,7 @@ from operant.tools.execution import (
     HostCommandRunner,
     is_protected_workspace_name,
 )
+from operant.tools.extensions import EXTENSION_TOOL_NAME, ToolExtension
 
 
 class ToolError(RuntimeError):
@@ -57,6 +59,7 @@ class WorkspaceTools:
         runner: CommandRunner | None = None,
         collaboration: CollaborationTools | None = None,
         reference_reader: ReferenceReader | None = None,
+        extensions: dict[str, ToolExtension] | None = None,
     ) -> None:
         if output_limit < 1:
             raise ValueError("output_limit must be positive")
@@ -66,6 +69,9 @@ class WorkspaceTools:
         self.runner = runner or self._runner_for_policy()
         self.collaboration = collaboration
         self.reference_reader = reference_reader
+        self.extensions = dict(extensions or {})
+        if any(name != extension.definition.name for name, extension in self.extensions.items()):
+            raise ValueError("tool extension name does not match its definition")
 
     def definitions(self) -> tuple[ToolDefinition, ...]:
         delegate_options = (
@@ -278,7 +284,12 @@ class WorkspaceTools:
         )
         return tuple(
             definition
-            for definition in (*definitions, *collaboration_definitions, *reference_definitions)
+            for definition in (
+                *definitions,
+                *collaboration_definitions,
+                *reference_definitions,
+                *(extension.definition for extension in self.extensions.values()),
+            )
             if definition.name in self.policy.allowed_tools
             or definition.name == "read_context_reference"
         )
@@ -337,6 +348,8 @@ class WorkspaceTools:
             if self.reference_reader is None:
                 raise ToolError("no explicit reference is attached to this run")
             result = self.reference_reader(str(arguments["artifact_id"]))
+        elif name in self.extensions:
+            result = await self.extensions[name].execute(arguments)
         else:
             raise ToolError(f"unknown tool: {name}")
         return json.dumps(
@@ -344,9 +357,40 @@ class WorkspaceTools:
             ensure_ascii=False,
         )
 
-    @staticmethod
-    def is_side_effecting(name: str) -> bool:
+    def is_side_effecting(self, name: str) -> bool:
+        extension = self.extensions.get(name)
+        if extension is not None:
+            return extension.side_effecting
         return name in {"apply_patch", "run_command", "delegate_agent", "send_agent_message"}
+
+    def extension_capabilities(self, name: str) -> tuple[Capability, ...] | None:
+        extension = self.extensions.get(name)
+        return None if extension is None else extension.capabilities
+
+    def audit_arguments(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        extension = self.extensions.get(name)
+        if extension is None:
+            if EXTENSION_TOOL_NAME.fullmatch(name):
+                return {"input_sha256": canonical_action_hash(arguments)}
+            return arguments
+        return {
+            "plugin_id": extension.plugin_id,
+            "plugin_version": extension.plugin_version,
+            "input_sha256": canonical_action_hash(arguments),
+        }
+
+    def public_tool_call(self, call: ToolCall) -> dict[str, Any]:
+        payload = call.model_dump()
+        if EXTENSION_TOOL_NAME.fullmatch(call.name):
+            payload["arguments_json"] = json.dumps(
+                {
+                    "input_sha256": canonical_action_hash(
+                        {"tool": call.name, "arguments_json": call.arguments_json}
+                    )
+                },
+                sort_keys=True,
+            )
+        return payload
 
     def action_hash(self, name: str, arguments: dict[str, Any]) -> str:
         """Hash the fully normalized action; callers persist only the digest."""
@@ -361,6 +405,14 @@ class WorkspaceTools:
             }
         elif name in {"delegate_agent", "send_agent_message"}:
             normalized_arguments = dict(sorted(arguments.items()))
+        elif name in self.extensions:
+            extension = self.extensions[name]
+            normalized_arguments = {
+                "plugin_id": extension.plugin_id,
+                "plugin_version": extension.plugin_version,
+                "host_api_version": extension.host_api_version,
+                "arguments": arguments,
+            }
         else:
             raw_argv = arguments["argv"]
             if not isinstance(raw_argv, list) or not all(
@@ -397,6 +449,12 @@ class WorkspaceTools:
     ) -> str:
         """Return an approval preview that never includes argument values."""
 
+        extension = self.extensions.get(name)
+        if extension is not None:
+            return (
+                f"{name} category={category}; plugin={extension.plugin_id}; "
+                "lease-bound target action; argument values hidden"
+            )
         if name == "run_command":
             argv = arguments.get("argv")
             executable = "unknown"
@@ -411,6 +469,10 @@ class WorkspaceTools:
         return f"{name} category={category}; workspace-scoped action"
 
     def required_approval_category(self, name: str, arguments: dict[str, Any]) -> str | None:
+        extension = self.extensions.get(name)
+        if extension is not None:
+            category = extension.approval_category
+            return category if category in self.policy.approval_required else None
         if name != "run_command":
             return None
         raw_argv = arguments.get("argv")

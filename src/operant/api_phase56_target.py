@@ -5,6 +5,7 @@ import binascii
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import Any, TypeVar
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,7 +24,8 @@ from operant.domain.remote_execution import (
 from operant.domain.security import ActionRequest, Capability, PolicyDecision
 from operant.persistence.remote_execution import SQLiteRemoteExecutionRepository
 from operant.persistence.sqlite import ConflictError, IdempotencyConflictError, SQLiteStore
-from operant.protocol import canonical_action_hash
+from operant.protocol import canonical_action_hash, redact_public_text
+from operant.remote.sealed_input import valid_sealed_browser_input
 
 T = TypeVar("T")
 
@@ -103,6 +105,65 @@ class ObserveCapabilityBody(LeaseBindingBody):
 
 class ActCapabilityBody(LeaseBindingBody):
     action: CapabilityActionRequest
+
+
+def _validate_local_capability_action(kind: str, action: CapabilityActionRequest) -> None:
+    """Reject likely credentials before the action enters durable Job storage."""
+    if (
+        action.target_ref != action.target_id
+        or action.precondition
+        or action.postcondition
+        or action.idempotency is not RemoteActionIdempotency.NON_IDEMPOTENT
+    ):
+        raise ValueError("local capability action binding is invalid")
+    if kind == "browser" and action.operation == "fill":
+        if action.capability is not RemoteCapability.BROWSER_SUBMIT or set(action.arguments) != {
+            "selector",
+            "value_sealed",
+        }:
+            raise ValueError("browser fill arguments are invalid")
+        selector = action.arguments["selector"]
+        value_sealed = action.arguments.get("value_sealed")
+        if (
+            not isinstance(selector, str)
+            or not 1 <= len(selector) <= 500
+            or not valid_sealed_browser_input(value_sealed)
+        ):
+            raise ValueError("browser fill envelope is invalid")
+    elif kind == "browser" and action.operation == "navigate":
+        if action.capability is not RemoteCapability.BROWSER_NAVIGATE or set(action.arguments) != {
+            "url"
+        }:
+            raise ValueError("browser navigation arguments are invalid")
+        url = action.arguments.get("url")
+        if not isinstance(url, str):
+            raise ValueError("browser navigation URL is invalid")
+        parsed = urlsplit(url)
+        if parsed.query or parsed.fragment or redact_public_text(url) != url:
+            raise ValueError("browser navigation URL cannot include query or credential data")
+    elif kind == "browser" and action.operation == "click":
+        selector = action.arguments.get("selector")
+        if (
+            action.capability is not RemoteCapability.BROWSER_SUBMIT
+            or set(action.arguments) != {"selector"}
+            or not isinstance(selector, str)
+            or not 1 <= len(selector) <= 500
+        ):
+            raise ValueError("browser click arguments are invalid")
+    elif kind == "computer" and action.operation == "click_button":
+        if action.capability is not RemoteCapability.COMPUTER_INPUT or set(action.arguments) != {
+            "button_name"
+        }:
+            raise ValueError("computer button arguments are invalid")
+        label = action.arguments.get("button_name")
+        if (
+            not isinstance(label, str)
+            or not 1 <= len(label) <= 200
+            or redact_public_text(label) != label
+        ):
+            raise ValueError("computer button label is invalid or credential-shaped")
+    else:
+        raise ValueError("local capability operation is unsupported")
 
 
 class _Phase45RemoteAuthorization(RemoteAuthorization):
@@ -199,6 +260,39 @@ def install_phase56_target_routes(
             ]
         }
 
+    @app.get("/v1/remote-targets/jobs/{job_id}/result", operation_id="getRemoteTargetJobResult")
+    async def get_remote_target_job_result(job_id: str) -> dict[str, Any]:
+        job = call(lambda: repository.get_job(job_id))
+        result = repository.get_result(job_id)
+        response: dict[str, Any] = {
+            "job_id": job.job_id,
+            "target_id": job.target_id,
+            "capability": job.capability.value,
+            "operation": job.operation,
+            "status": job.status.value,
+            "result": None if result is None else result.model_dump(mode="json"),
+        }
+        postcondition = result.postcondition if result is not None else {}
+        if (
+            result is not None
+            and result.status is RemoteJobStatus.SUCCEEDED
+            and job.capability
+            in {RemoteCapability.BROWSER_OBSERVE, RemoteCapability.COMPUTER_OBSERVE}
+            and isinstance(postcondition.get("target_ref"), str)
+            and isinstance(postcondition.get("observation"), dict)
+        ):
+            observation_hash = canonical_action_hash(
+                {
+                    "target_id": job.target_id,
+                    "target_ref": postcondition["target_ref"],
+                    "body": postcondition["observation"],
+                }
+            )
+            response["observation"] = call(
+                lambda: repository.get_observation(job.target_id, observation_hash)
+            ).model_dump(mode="json")
+        return response
+
     @app.get("/v1/remote-targets/{target_id}", operation_id="getRemoteTarget")
     async def get_remote_target(target_id: str) -> dict[str, Any]:
         return call(lambda: repository.get_target(target_id)).model_dump(mode="json")
@@ -280,6 +374,12 @@ def install_phase56_target_routes(
     async def create_remote_target_job(
         target_id: str, body: CreateRemoteTargetJobBody
     ) -> dict[str, Any]:
+        target = call(lambda: repository.get_target(target_id))
+        if target.endpoint_ref in {"operant.chrome.browser", "operant.macos.computer"}:
+            raise HTTPException(
+                status_code=403,
+                detail="local capability targets require the typed browser/computer action route",
+            )
         return call(
             lambda: controller.create_job(
                 target_id=target_id,
@@ -401,6 +501,12 @@ def install_phase56_target_routes(
         return await observe("computer", target_id, body)
 
     async def act(kind: str, body: ActCapabilityBody) -> dict[str, Any]:
+        target = call(lambda: repository.get_target(body.action.target_id))
+        if target.endpoint_ref in {"operant.chrome.browser", "operant.macos.computer"}:
+            try:
+                _validate_local_capability_action(kind, body.action)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         job, receipt = call(
             lambda: controller.act(
                 body.action,

@@ -478,6 +478,14 @@ class SQLiteRemoteExecutionRepository:
             raise KeyError(job_id)
         return self._job(row)
 
+    def get_result(self, job_id: str) -> RemoteExecutionResult | None:
+        """Read the durable terminal result for a job without guessing from its status."""
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM remote_execution_results WHERE job_id=?", (job_id,)
+            ).fetchone()
+        return None if row is None else self._result(row)
+
     def list_jobs(
         self, *, target_id: str | None = None, limit: int = 200
     ) -> tuple[RemoteExecutionJob, ...]:
