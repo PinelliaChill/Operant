@@ -60,6 +60,39 @@ def _profile_root() -> Path:
     return root
 
 
+def _profile_owner_path(profile: Path) -> Path:
+    sidecar = profile.parent / f".owner-{profile.name}.json"
+    if sidecar.exists() or sidecar.is_symlink():
+        return sidecar
+    return profile / "operant-profile-owner.json"
+
+
+def _write_profile_owner(profile: Path, *, pid: int, created_at: float) -> None:
+    marker = profile.parent / f".owner-{profile.name}.json"
+    if marker.is_symlink():
+        raise BrowserTargetError("browser profile owner marker is a symlink")
+    descriptor, temporary = tempfile.mkstemp(prefix=".owner-write-", dir=profile.parent)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(
+                {
+                    "schema": "operant-browser-profile.v1",
+                    "name": profile.name,
+                    "uid": os.getuid(),
+                    "pid": pid,
+                    "created_at": created_at,
+                },
+                stream,
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, marker)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 @dataclass(frozen=True)
 class BrowserProfileSummary:
     profile_id: str
@@ -67,6 +100,49 @@ class BrowserProfileSummary:
     created_at: float | None
     state: str
     retention_reason: str
+
+
+@dataclass(frozen=True)
+class _ManagedProfile:
+    name: str
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.name)
+
+
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _owner_activity(pid: int) -> str:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "group" if _group_alive(pid) else "exited"
+    except PermissionError:
+        return "unverified"
+    return "running"
+
+
+def _stop_chrome_group(process: subprocess.Popen[bytes]) -> bool:
+    """Return true only when no process in the dedicated group remains."""
+    if process.poll() is None:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired as exc:
+        raise BrowserTargetError("isolated Chrome did not stop") from exc
+    deadline = time.monotonic() + 1
+    while _group_alive(process.pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not _group_alive(process.pid)
 
 
 def browser_profile_inventory(*, min_age_seconds: int = 3600) -> tuple[BrowserProfileSummary, ...]:
@@ -89,7 +165,7 @@ def browser_profile_inventory(*, min_age_seconds: int = 3600) -> tuple[BrowserPr
                     size += (Path(walk_root) / filename).lstat().st_size
                 except OSError:
                     continue
-        marker = profile / "operant-profile-owner.json"
+        marker = _profile_owner_path(profile)
         created_at: float | None = None
         state, reason = "unmanaged", "missing or invalid ownership marker"
         if not marker.is_symlink() and marker.is_file() and profile.stat().st_uid == os.getuid():
@@ -103,17 +179,20 @@ def browser_profile_inventory(*, min_age_seconds: int = 3600) -> tuple[BrowserPr
                     pid = int(owner["pid"])
                     created_at = float(owner["created_at"])
                     if pid > 0:
-                        try:
-                            os.kill(pid, 0)
-                        except ProcessLookupError:
+                        activity = _owner_activity(pid)
+                        if activity == "exited":
                             if time.time() - created_at >= min_age_seconds:
                                 state, reason = "eligible", "owner exited and grace period elapsed"
                             else:
                                 state, reason = "grace", "owner exited; grace period active"
-                        except PermissionError:
+                        elif activity == "group":
+                            state, reason = "held", "Chrome process group is still running"
+                        elif activity == "unverified":
                             state, reason = "held", "owner process cannot be verified"
                         else:
                             state, reason = "active", "owner process is running"
+                    else:
+                        state, reason = "held", "owner process was not recorded"
             except (OSError, ValueError, TypeError, KeyError, AttributeError):
                 pass
         summaries.append(
@@ -141,7 +220,7 @@ def reap_stale_browser_profiles(*, min_age_seconds: int = 3600) -> tuple[str, ..
             or not _PROFILE_NAME.fullmatch(profile.name)
         ):
             continue
-        marker = profile / "operant-profile-owner.json"
+        marker = _profile_owner_path(profile)
         if marker.is_symlink() or not marker.is_file() or profile.stat().st_uid != os.getuid():
             continue
         try:
@@ -158,16 +237,23 @@ def reap_stale_browser_profiles(*, min_age_seconds: int = 3600) -> tuple[str, ..
             continue
         if time.time() - created_at < min_age_seconds or pid <= 0:
             continue
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            continue
-        else:
+        if _owner_activity(pid) != "exited":
             continue
         shutil.rmtree(profile)
+        if marker.parent == root:
+            marker.unlink(missing_ok=True)
         removed.append(profile.name)
+    for marker in root.glob(".owner-profile-*.json"):
+        if marker.is_symlink() or not marker.is_file() or marker.stat().st_uid != os.getuid():
+            continue
+        profile_name = marker.name.removeprefix(".owner-").removesuffix(".json")
+        if not _PROFILE_NAME.fullmatch(profile_name):
+            continue
+        if (
+            not (root / profile_name).exists()
+            and time.time() - marker.stat().st_mtime >= min_age_seconds
+        ):
+            marker.unlink(missing_ok=True)
     return tuple(removed)
 
 
@@ -422,7 +508,7 @@ class IsolatedChromeBrowser:
         self.policy = policy
         self.visible = visible
         self.blocked_ports = blocked_ports
-        self._profile: tempfile.TemporaryDirectory[str] | None = None
+        self._profile: _ManagedProfile | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self._cdp: _Cdp | None = None
         self._proxy: BrowserNetworkProxy | None = None
@@ -440,8 +526,13 @@ class IsolatedChromeBrowser:
             raise BrowserTargetError("approved Chrome executable is unavailable")
         pinned_resolvers = self.policy.pinned_resolvers()
         reap_stale_browser_profiles()
-        profile = tempfile.TemporaryDirectory(prefix="profile-", dir=_profile_root())
+        profile = _ManagedProfile(tempfile.mkdtemp(prefix="profile-", dir=_profile_root()))
+        profile_path = Path(profile.name)
+        created_at = time.time()
         try:
+            # Keep the owner record outside Chrome's profile directory so
+            # startup and late child writes cannot erase it.
+            _write_profile_owner(profile_path, pid=0, created_at=created_at)
             proxy = BrowserNetworkProxy(self.policy)
             for port in self.blocked_ports:
                 proxy.block_port(port)
@@ -489,17 +580,7 @@ class IsolatedChromeBrowser:
             raise
         cdp: _Cdp | None = None
         try:
-            (Path(profile.name) / "operant-profile-owner.json").write_text(
-                json.dumps(
-                    {
-                        "schema": "operant-browser-profile.v1",
-                        "name": Path(profile.name).name,
-                        "uid": os.getuid(),
-                        "pid": process.pid,
-                        "created_at": time.time(),
-                    }
-                )
-            )
+            _write_profile_owner(profile_path, pid=process.pid, created_at=created_at)
             port_file = Path(profile.name) / "DevToolsActivePort"
             deadline = time.monotonic() + 10
             while not port_file.exists():
@@ -517,17 +598,12 @@ class IsolatedChromeBrowser:
         except Exception:
             if cdp is not None:
                 cdp.close()
-            if process.poll() is None:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGTERM)
+            can_delete_profile = False
             try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=3)
+                can_delete_profile = _stop_chrome_group(process)
             finally:
-                profile.cleanup()
+                if can_delete_profile:
+                    profile.cleanup()
                 proxy.close()
             raise
         self._profile = profile
@@ -546,19 +622,12 @@ class IsolatedChromeBrowser:
             if cdp is not None:
                 cdp.close()
         finally:
+            can_delete_profile = process is None
             try:
                 if process is not None:
-                    if process.poll() is None:
-                        with suppress(ProcessLookupError):
-                            os.killpg(process.pid, signal.SIGTERM)
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        with suppress(ProcessLookupError):
-                            os.killpg(process.pid, signal.SIGKILL)
-                        process.wait(timeout=3)
+                    can_delete_profile = _stop_chrome_group(process)
             finally:
-                if profile is not None:
+                if profile is not None and can_delete_profile:
                     profile.cleanup()
                 if proxy is not None:
                     proxy.close()

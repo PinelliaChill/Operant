@@ -191,7 +191,8 @@ def test_external_tool_reinstall_requires_fresh_role_grant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = _package(tmp_path / "source", "print('{}')\n")
-    registry = ExternalToolRegistry(tmp_path / "external-tools")
+    root = tmp_path / "external-tools"
+    registry = ExternalToolRegistry(root)
 
     def admitted(self: SandboxProbe, **_: object) -> SandboxEvidence:
         return SandboxEvidence(
@@ -202,6 +203,8 @@ def test_external_tool_reinstall_requires_fresh_role_grant(
     first = registry.install(source)
     old_grant = first.granted_name("ext_sample_tool_check")
     registry.set_enabled("sample_tool", True)
+    old_data = root / "data" / f"sample_tool-{first.installation_id}"
+    (old_data / "retained.txt").write_text("previous installation data")
     previous_extension = local_capability_tool_extensions(
         tmp_path / "core.sqlite3", ToolPolicy(allowed_tools=(old_grant,))
     )[old_grant]
@@ -211,6 +214,10 @@ def test_external_tool_reinstall_requires_fresh_role_grant(
     new_grant = second.granted_name("ext_sample_tool_check")
     assert new_grant != old_grant
     registry.set_enabled("sample_tool", True)
+    new_data = root / "data" / f"sample_tool-{second.installation_id}"
+    assert old_data != new_data
+    assert (old_data / "retained.txt").read_text() == "previous installation data"
+    assert not (new_data / "retained.txt").exists()
     assert (
         local_capability_tool_extensions(
             tmp_path / "core.sqlite3", ToolPolicy(allowed_tools=(old_grant,))

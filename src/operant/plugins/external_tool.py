@@ -349,7 +349,7 @@ class ExternalToolRegistry:
             package = self._verify(record)
             evidence_ref = record.sandbox_evidence_ref
             if enabled:
-                evidence = self._probe(package)
+                evidence = self._probe(package, record.installation_id)
                 evidence_ref = evidence.evidence_ref
             updated = record.model_copy(
                 update={
@@ -372,8 +372,11 @@ class ExternalToolRegistry:
             self._write(records)
             shutil.rmtree(package)
 
-    def _managed_roots(self, package: Path) -> tuple[Path, Path, Path, Path]:
-        result = tuple(self.root / name / package.name for name in ("data", "state", "logs", "tmp"))
+    def _managed_roots(self, package: Path, installation_id: str) -> tuple[Path, Path, Path, Path]:
+        if not re.fullmatch(r"[0-9a-f]{12}", installation_id):
+            raise ValueError("external Tool installation identity is invalid")
+        storage_name = f"{package.name}-{installation_id}"
+        result = tuple(self.root / name / storage_name for name in ("data", "state", "logs", "tmp"))
         for path in result:
             for directory in (path.parent, path):
                 directory.mkdir(mode=0o700, exist_ok=True)
@@ -382,8 +385,8 @@ class ExternalToolRegistry:
                     raise PermissionError("external Tool managed data directory is not private")
         return result  # type: ignore[return-value]
 
-    def _probe(self, package: Path) -> SandboxEvidence:
-        data, state, logs, temporary = self._managed_roots(package)
+    def _probe(self, package: Path, installation_id: str) -> SandboxEvidence:
+        data, state, logs, temporary = self._managed_roots(package, installation_id)
         return self.sandbox_probe.check(
             package_root=package,
             data_root=data,
@@ -425,8 +428,8 @@ class ExternalToolRegistry:
             ).encode()
             if len(payload) > _MAX_REQUEST:
                 raise ValueError("external Tool request is too large")
-            evidence = self._probe(package)
-            _, _, _, temporary = self._managed_roots(package)
+            evidence = self._probe(package, record.installation_id)
+            _, _, _, temporary = self._managed_roots(package, record.installation_id)
             with (
                 tempfile.TemporaryFile(dir=temporary) as output,
                 tempfile.TemporaryFile(dir=temporary) as errors,

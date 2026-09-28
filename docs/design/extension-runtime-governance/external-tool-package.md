@@ -63,7 +63,7 @@ operant capability-plugin enable-external-tool sample_tool
 operant role update ROLE_ID --enable-extension-tool GRANTED_TOOL_NAME_FROM_LIST
 ```
 
-先检查插件 ID、工具名和包摘要，确认来源后在安装命令中固定该摘要；若源文件在两步之间变化，安装会拒绝。安装会复制声明文件到私有 Host 目录并默认禁用。`list-external-tools` 返回带本次安装 ID 的授权名，例如 `ext_sample_tool_count__a1b2c3d4e5f6`。重装会生成新授权名，旧 Role 不会自动获得新代码，旧会话缓存的工具也会因安装 ID 不同而拒绝执行。启用会验证实际隔离；每次调用重查源码摘要、启用状态、参数与资源限制，再通过正式 Agent Tool Policy、Action Gateway 和隔离进程执行。禁用后不接收新调用；卸载前必须禁用，卸载仅删除托管代码，数据目录保留供人工检查。
+先检查插件 ID、工具名和包摘要，确认来源后在安装命令中固定该摘要；若源文件在两步之间变化，安装会拒绝。安装会复制声明文件到私有 Host 目录并默认禁用。`list-external-tools` 返回带本次安装 ID 的授权名，例如 `ext_sample_tool_count__a1b2c3d4e5f6`。重装会生成新授权名，旧 Role 不会自动获得新代码，旧会话缓存的工具也会因安装 ID 不同而拒绝执行。托管的 data/state/logs/tmp 目录也按安装 ID 分开；旧数据保留供人工检查，新安装的沙箱不能读取。启用会验证实际隔离；每次调用重查源码摘要、启用状态、参数与资源限制，再通过正式 Agent Tool Policy、Action Gateway 和隔离进程执行。禁用后不接收新调用；卸载前必须禁用，卸载仅删除托管代码，旧数据目录保留。
 
 ```bash
 operant capability-plugin disable-external-tool sample_tool

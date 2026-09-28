@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -105,6 +106,123 @@ def test_browser_profile_reaper_only_removes_owned_expired_profiles(
     assert reap_stale_browser_profiles() == (old.name,)
     assert not old.exists()
     assert unmarked.exists() and unrelated.exists()
+
+
+def test_browser_profile_reaper_holds_live_child_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("operant.remote.local_browser.tempfile.gettempdir", lambda: str(tmp_path))
+    root = tmp_path / "operant-browser-profiles"
+    root.mkdir(mode=0o700)
+    profile = root / "profile-child-group"
+    profile.mkdir()
+    owner_pid = 99999999
+    marker = root / f".owner-{profile.name}.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "schema": "operant-browser-profile.v1",
+                "name": profile.name,
+                "uid": os.getuid(),
+                "pid": owner_pid,
+                "created_at": time.time() - 7200,
+            }
+        )
+    )
+    original_kill = os.kill
+    original_killpg = os.killpg
+
+    def absent_parent(pid: int, operation: int) -> None:
+        if pid == owner_pid and operation == 0:
+            raise ProcessLookupError
+        original_kill(pid, operation)
+
+    def live_group(pgid: int, operation: int) -> None:
+        if pgid == owner_pid and operation == 0:
+            return
+        original_killpg(pgid, operation)
+
+    monkeypatch.setattr("operant.remote.local_browser.os.kill", absent_parent)
+    monkeypatch.setattr("operant.remote.local_browser.os.killpg", live_group)
+    summary = next(item for item in browser_profile_inventory() if item.profile_id == profile.name)
+    assert summary.state == "held"
+    assert "group" in summary.retention_reason
+    assert reap_stale_browser_profiles() == ()
+    assert profile.exists() and marker.exists()
+
+
+def test_browser_start_with_exited_parent_keeps_external_owner_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("operant.remote.local_browser.tempfile.gettempdir", lambda: str(tmp_path))
+    root = tmp_path / "operant-browser-profiles"
+    root.mkdir(mode=0o700)
+    launched: list[Path] = []
+
+    class ExitedChrome:
+        pid = 99999999
+
+        def __init__(self, arguments: list[str], **_: object) -> None:
+            launched.append(
+                Path(
+                    next(
+                        arg.split("=", 1)[1]
+                        for arg in arguments
+                        if arg.startswith("--user-data-dir=")
+                    )
+                )
+            )
+
+        def poll(self) -> int:
+            return 1
+
+        def wait(self, *, timeout: int) -> int:
+            return 1
+
+    class StubProxy:
+        port = 8766
+
+        def __init__(self, *_: object) -> None:
+            pass
+
+        def block_port(self, *_: object) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("operant.remote.local_browser.subprocess.Popen", ExitedChrome)
+    monkeypatch.setattr("operant.remote.local_browser.BrowserNetworkProxy", StubProxy)
+
+    def exited_group_probe(_: int, operation: int) -> None:
+        if operation != 0:
+            pytest.fail("exited Chrome PID must not be signaled")
+        raise ProcessLookupError
+
+    monkeypatch.setattr(
+        "operant.remote.local_browser.os.killpg",
+        exited_group_probe,
+    )
+    browser = IsolatedChromeBrowser(
+        Path(sys.executable), BrowserTargetPolicy(frozenset({"http://127.0.0.1:8765"}))
+    )
+    with pytest.raises(BrowserTargetError, match="did not start"):
+        browser.start()
+    assert len(launched) == 1
+    assert not launched[0].exists()
+    marker = root / f".owner-{launched[0].name}.json"
+    assert marker.is_file()
+    assert json.loads(marker.read_text())["pid"] == ExitedChrome.pid
+    launched[0].mkdir()
+    summary = next(
+        item for item in browser_profile_inventory() if item.profile_id == launched[0].name
+    )
+    assert summary.state == "grace"
+    assert reap_stale_browser_profiles() == ()
+    assert launched[0].exists()
 
 
 def test_real_chrome_observe_navigate_click_and_stale_guard() -> None:
