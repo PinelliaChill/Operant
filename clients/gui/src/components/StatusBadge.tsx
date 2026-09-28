@@ -18,6 +18,9 @@ export type BadgeStatus =
   | 'completed'
   | 'failed'
   | 'waiting'
+  | 'queued'
+  | 'leased'
+  | 'manual_reconcile_required'
   | 'waiting_approval'
   | 'pending'
   | 'interrupted'
@@ -47,6 +50,9 @@ export const STATUS_LABELS: Record<string, string> = {
   completed: '已完成',
   failed: '已失败',
   waiting: '待处理',
+  queued: '排队中',
+  leased: '已领取',
+  manual_reconcile_required: '需人工核对',
   waiting_approval: '等待审批',
   pending: '待处理',
   interrupted: '已中断',
@@ -113,6 +119,9 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       break;
 
     case 'waiting':
+    case 'queued':
+    case 'leased':
+    case 'manual_reconcile_required':
     case 'waiting_approval':
     case 'pending':
     case 'warn':

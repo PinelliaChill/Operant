@@ -158,6 +158,7 @@ from operant.persistence.sqlite import (
 from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
 from operant.providers.base import ModelProvider
 from operant.runtime.loop import AgentLoop, RuntimeEvent, ToolActionClaim
+from operant.tools.extensions import ToolExtension
 from operant.tools.workspace import ApprovalCallback, ToolError, WorkspaceTools
 
 DEFAULT_ARTIFACT_MAX_SIZE_BYTES = 16 * 1024 * 1024
@@ -190,6 +191,9 @@ class _PersistentActionGateway:
         self._authorized_claims: set[str] = set()
 
     def _capabilities_for(self, name: str, arguments: dict[str, Any]) -> tuple[Capability, ...]:
+        extension_capabilities = self.tools.extension_capabilities(name)
+        if extension_capabilities is not None:
+            return extension_capabilities
         if name == "apply_patch":
             return (Capability.WORKSPACE_WRITE,)
         if name in {"delegate_agent", "send_agent_message"}:
@@ -242,7 +246,7 @@ class _PersistentActionGateway:
             principal=f"agent:{self.agent_id}",
             tool=name,
             operation="execute",
-            arguments=arguments,
+            arguments=self.tools.audit_arguments(name, arguments),
             requested_capabilities=capabilities,
             idempotency_key=f"{self.scope}:{tool_call_id}",
             policy_version=self.policy_engine.bundle.version,
@@ -577,11 +581,14 @@ class ApplicationService:
         artifact_capability_secret: bytes | None = None,
         physical_delete_enabled: bool = False,
         physical_delete_authorization: str | None = None,
+        tool_extension_factory: Callable[[Path, ToolPolicy], dict[str, ToolExtension]]
+        | None = None,
     ) -> None:
         if session_lease_ttl_seconds <= 0:
             raise ValueError("session lease TTL must be positive")
         self.store = store
         self.provider = provider
+        self.tool_extension_factory = tool_extension_factory
         # These are instance-owned so a service cannot inherit a manager or
         # factory from another ApplicationService instance.
         self.memory_manager = None
@@ -3438,6 +3445,11 @@ class ApplicationService:
                 policy=session.role_snapshot.tool_policy,
                 collaboration=collaboration,
                 reference_reader=reference_reader,
+                extensions=(
+                    self.tool_extension_factory(self.store.path, session.role_snapshot.tool_policy)
+                    if self.tool_extension_factory is not None
+                    else None
+                ),
             )
             normalized_workspace = str(Path(workspace).resolve())
             manager = self.memory_manager

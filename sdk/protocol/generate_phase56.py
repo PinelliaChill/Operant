@@ -55,6 +55,7 @@ EXPECTED_OPERATION_IDS = {
     "completeRemoteTargetJob",
     "cancelRemoteTargetJob",
     "listRemoteTargetJobs",
+    "getRemoteTargetJobResult",
     "observeBrowser",
     "actBrowser",
     "observeComputer",
