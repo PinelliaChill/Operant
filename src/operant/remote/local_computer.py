@@ -246,6 +246,17 @@ class LocalComputerConnector:
                     )
                 else:
                     raise ComputerTargetError("computer operation is not supported")
+                postcondition = {
+                    **postcondition,
+                    "pre_observation_hash": expected_hash,
+                    "post_observation_hash": canonical_action_hash(
+                        {
+                            "target_id": self.target_id,
+                            "target_ref": target_ref,
+                            "body": postcondition,
+                        }
+                    ),
+                }
         except ComputerTargetError:
             return ConnectorOutcome(
                 result=RemoteExecutionResult(

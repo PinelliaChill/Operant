@@ -14,6 +14,7 @@ from operant.domain.messages import ToolDefinition
 from operant.domain.models import ToolPolicy
 from operant.domain.security import Capability
 from operant.plugins.capability_registry import CapabilityPluginRecord, CapabilityPluginRegistry
+from operant.plugins.external_tool import installed_external_tool_extensions
 from operant.remote.local_browser import BrowserTargetPolicy
 from operant.remote.local_worker import BROWSER_PLUGIN, COMPUTER_PLUGIN, _validate_core_origin
 from operant.remote.operator import (
@@ -126,8 +127,9 @@ def local_capability_tool_extensions(
 ) -> dict[str, ToolExtension]:
     """Expose only installed, enabled adapters with an explicit local lease."""
     requested = set(policy.allowed_tools)
+    external = installed_external_tool_extensions(database_path, policy)
     if not requested.intersection((*_BROWSER_NAMES, *_COMPUTER_NAMES)):
-        return {}
+        return external
     registry = CapabilityPluginRegistry(
         database_path.expanduser().resolve().parent / "capability-plugins"
     )
@@ -291,4 +293,6 @@ def local_capability_tool_extensions(
                         side_effecting=side_effecting,
                         execute=execute,
                     )
-    return extensions
+    if set(extensions).intersection(external):
+        raise ValueError("external Tool conflicts with a bundled capability Tool")
+    return {**external, **extensions}

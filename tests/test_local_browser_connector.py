@@ -8,7 +8,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
 
+import httpx
 import pytest
+from websockets.sync.client import connect
 
 from operant.domain.remote_execution import (
     RemoteActionIdempotency,
@@ -254,6 +256,100 @@ def test_real_chrome_observe_navigate_click_and_stale_guard() -> None:
             assert clicked.result.status is RemoteJobStatus.SUCCEEDED
             assert "done" in clicked.result.postcondition["text"]
         assert not profile_path.exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_visible_chrome_external_takeover_invalidates_pending_action() -> None:
+    if os.environ.get("OPERANT_LOCAL_BROWSER_TEST") != "1":
+        pytest.skip("set OPERANT_LOCAL_BROWSER_TEST=1 for visible Chrome takeover acceptance")
+    chrome = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    if not chrome.is_file():
+        pytest.skip("local Chrome is not installed")
+
+    class Page(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = (
+                b"<title>Takeover fixture</title><body>"
+                b"<input id='draft' value='original'>"
+                b"<button id='go' onclick=\"document.body.append(' clicked')\">Go</button>"
+                b"</body>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Page)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        origin = f"http://127.0.0.1:{server.server_port}"
+        with IsolatedChromeBrowser(
+            chrome, BrowserTargetPolicy(frozenset({origin})), visible=True
+        ) as browser:
+            before = browser.navigate(f"{origin}/")
+            old_hash = observation_hash("local-browser-test", "local-browser-test", before)
+            assert browser._profile is not None
+            debug_port = int(
+                (Path(browser._profile.name) / "DevToolsActivePort").read_text().splitlines()[0]
+            )
+            tabs = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=3).json()
+            page = next(item for item in tabs if item.get("type") == "page")
+            # A separate DevTools session models a user taking the visible window
+            # away from the Operant connector. It never uses the connector's CDP object.
+            external_edit = "document.querySelector('#draft').value='outside edit'"
+            with connect(page["webSocketDebuggerUrl"], open_timeout=3) as outside:
+                outside.send(
+                    json.dumps(
+                        {
+                            "id": 1,
+                            "method": "Runtime.evaluate",
+                            "params": {"expression": external_edit},
+                        }
+                    )
+                )
+                for _ in range(10):
+                    response = json.loads(outside.recv(timeout=3))
+                    if response.get("id") == 1:
+                        assert "error" not in response
+                        break
+                else:
+                    raise AssertionError("external Chrome input was not acknowledged")
+            connector = LocalBrowserConnector(
+                target_id="local-browser-test",
+                lease_id="lease-test",
+                lease_token="token-test-1234567890",
+                lease_fencing=1,
+                browser=browser,
+            )
+            rejected = connector.execute(
+                _job(
+                    RemoteCapability.BROWSER_SUBMIT,
+                    "click",
+                    {"observation_hash": old_hash, "arguments": {"selector": "#go"}},
+                )
+            )
+            assert rejected.result.status is RemoteJobStatus.FAILED
+            current = browser.observe()
+            assert current["form_state_sha256"] != before["form_state_sha256"]
+            current_hash = observation_hash("local-browser-test", "local-browser-test", current)
+            clicked = connector.execute(
+                _job(
+                    RemoteCapability.BROWSER_SUBMIT,
+                    "click",
+                    {"observation_hash": current_hash, "arguments": {"selector": "#go"}},
+                )
+            )
+            assert clicked.result.status is RemoteJobStatus.SUCCEEDED
+            assert "clicked" in clicked.result.postcondition["text"]
+            assert clicked.result.postcondition["pre_observation_hash"] == current_hash
+            assert clicked.result.postcondition["post_observation_hash"] != current_hash
     finally:
         server.shutdown()
         server.server_close()

@@ -175,6 +175,85 @@ def _capability_registry() -> Any:
     )
 
 
+def _external_tool_registry() -> Any:
+    from operant.plugins.external_tool import ExternalToolRegistry
+
+    return ExternalToolRegistry(database_path().expanduser().resolve().parent / "external-tools")
+
+
+@capability_plugin_app.command(
+    "install-external-tool", help="从本地 manifest.json 和 plugin.py 安装隔离的第三方 Tool。"
+)
+def install_external_tool(
+    source: Path = typer.Option(..., "--source", help="包含 manifest.json 与 plugin.py 的目录。"),
+    expected_sha256: str | None = typer.Option(
+        None, "--expected-sha256", help="可选：与事先检查的完整包摘要比对。"
+    ),
+) -> None:
+    record = _external_tool_registry().install(source, expected_digest=expected_sha256)
+    console.print(
+        f"已安装 {record.manifest.plugin_id}@{record.manifest.version}，当前禁用；"
+        f"包摘要 {record.package_digest[:12]}。"
+    )
+
+
+@capability_plugin_app.command("inspect-external-tool", help="只读检查第三方 Tool 清单和包摘要。")
+def inspect_external_tool(
+    source: Path = typer.Option(..., "--source", help="待检查的本地包目录。"),
+) -> None:
+    from operant.plugins.external_tool import ExternalToolRegistry
+
+    manifest, digest = ExternalToolRegistry.inspect(source)
+    console.print_json(
+        json.dumps(
+            {
+                "plugin_id": manifest.plugin_id,
+                "version": manifest.version,
+                "tools": [tool.name for tool in manifest.tools],
+                "package_digest": digest,
+            }
+        )
+    )
+
+
+@capability_plugin_app.command("enable-external-tool", help="沙箱实测通过后启用第三方 Tool。")
+def enable_external_tool(plugin_id: str = typer.Argument(...)) -> None:
+    record = _external_tool_registry().set_enabled(plugin_id, True)
+    console.print(f"已启用 {record.manifest.plugin_id}；隔离证据已记录。")
+
+
+@capability_plugin_app.command("disable-external-tool", help="停止第三方 Tool 新调用。")
+def disable_external_tool(plugin_id: str = typer.Argument(...)) -> None:
+    record = _external_tool_registry().set_enabled(plugin_id, False)
+    console.print(f"已禁用 {record.manifest.plugin_id}。")
+
+
+@capability_plugin_app.command("list-external-tools", help="查看第三方 Tool 的版本和启用状态。")
+def list_external_tools() -> None:
+    console.print_json(
+        json.dumps(
+            [
+                {
+                    "plugin_id": record.manifest.plugin_id,
+                    "version": record.manifest.version,
+                    "state": record.state,
+                    "tools": [record.granted_name(tool.name) for tool in record.manifest.tools],
+                    "package_digest": record.package_digest,
+                    "sandbox_evidence_ref": record.sandbox_evidence_ref,
+                }
+                for record in _external_tool_registry().list()
+            ],
+            ensure_ascii=False,
+        )
+    )
+
+
+@capability_plugin_app.command("uninstall-external-tool", help="卸载已禁用的第三方 Tool 代码。")
+def uninstall_external_tool(plugin_id: str = typer.Argument(...)) -> None:
+    _external_tool_registry().uninstall(plugin_id)
+    console.print(f"已卸载 {plugin_id}；插件数据目录保留供人工检查。")
+
+
 @capability_plugin_app.command("install", help="安装并绑定随 Core 发布的能力插件。")
 def install_capability_plugin(
     kind: str = typer.Argument(..., help="browser 或 computer。"),

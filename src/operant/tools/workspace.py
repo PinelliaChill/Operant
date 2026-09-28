@@ -452,8 +452,7 @@ class WorkspaceTools:
         extension = self.extensions.get(name)
         if extension is not None:
             return (
-                f"{name} category={category}; plugin={extension.plugin_id}; "
-                "lease-bound target action; argument values hidden"
+                f"{name} category={category}; plugin={extension.plugin_id}; argument values hidden"
             )
         if name == "run_command":
             argv = arguments.get("argv")

@@ -92,6 +92,8 @@ def test_computer_connector_checks_observation_and_target_before_input() -> None
     )
     assert clicked.result.status is RemoteJobStatus.SUCCEEDED
     assert computer.clicks == 1
+    assert clicked.result.postcondition["pre_observation_hash"] == current_hash
+    assert clicked.result.postcondition["post_observation_hash"] == current_hash
 
 
 def test_macos_adapter_fails_closed_without_accessibility(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -698,7 +698,14 @@ class IsolatedChromeBrowser:
         except Exception as exc:
             raise RemoteOutcomeUnknown("browser click outcome is unknown") from exc
         try:
-            return self.observe()
+            # CDP acknowledges input before the page's handler can finish.
+            # Keep observing briefly so the receipt can capture an ensuing change.
+            deadline = time.monotonic() + 1.0
+            while True:
+                after = self.observe()
+                if after != expected_observation or time.monotonic() >= deadline:
+                    return after
+                time.sleep(0.05)
         except BrowserTargetError as exc:
             raise RemoteOutcomeUnknown("browser click outcome is unknown") from exc
 
@@ -822,6 +829,13 @@ class LocalBrowserConnector:
                     postcondition = self.browser.fill(selector, value, expected_observation=current)
                 else:
                     raise BrowserTargetError("browser operation is not supported")
+                postcondition = {
+                    **postcondition,
+                    "pre_observation_hash": expected_hash,
+                    "post_observation_hash": observation_hash(
+                        self.target_id, str(target_ref), postcondition
+                    ),
+                }
         except BrowserTargetError as exc:
             return ConnectorOutcome(
                 result=RemoteExecutionResult(
@@ -847,4 +861,11 @@ class LocalBrowserConnector:
 
 
 def observation_hash(target_id: str, target_ref: str, body: dict[str, Any]) -> str:
-    return canonical_action_hash({"target_id": target_id, "target_ref": target_ref, "body": body})
+    observed = {
+        key: value
+        for key, value in body.items()
+        if key not in {"pre_observation_hash", "post_observation_hash"}
+    }
+    return canonical_action_hash(
+        {"target_id": target_id, "target_ref": target_ref, "body": observed}
+    )
