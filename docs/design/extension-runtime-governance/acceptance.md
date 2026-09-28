@@ -1,7 +1,7 @@
 # 第四部分：扩展能力与运行治理验收记录
 
 > 2026-09-28；记录身份：Codex；适用对象：本实施分支及后续集成者。
-> 基线：`d13c6b1d9e962b68cb6f752125268558bae4d0e5`；实施分支：`codex/extension-runtime-governance`。草稿 [PR #32](https://github.com/PinelliaChill/Operant/pull/32) 已创建，当前本地新增的隔离第三方 Tool 尚未推送；最终 CI、合并状态待完成后补录。
+> 基线：`d13c6b1d9e962b68cb6f752125268558bae4d0e5`；实施分支：`codex/extension-runtime-governance`。草稿 [PR #32](https://github.com/PinelliaChill/Operant/pull/32) 已创建，隔离第三方 Tool 已推送；最终真实模型验收脚本、CI、合并状态待完成后补录。
 
 ## 已实现的可验证范围
 
@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | Chrome 与 Core 正式链路 | 隔离 SQLite、真实回环 HTTP Core、真实本机 Chrome 与本地页面；注册、心跳、租约、observe→navigate→observe→fill→observe→click→回执；生成 SDK 和 CLI 分别调用 | 通过；密码字段拒绝、Core 入队前拒绝明文输入；`fill` Job SQLite 只见密文封装，结果 API 无输入值；页面回显同值文本不进入观察回执，页面或表单改变后旧观察拒绝，插件禁用后 Worker 停止。混合来源 DNS 回归通过 |
 | 既有 Remote Target 兼容 | 非本机 `REMOTE_ENDPOINT` 的 Browser Target 经正式 API 提交原有 `submit` 操作，保留目标引用、前置条件和原动作参数 | 通过；本机插件专属校验只作用于 `operant.chrome.browser` 与 `operant.macos.computer` Target |
-| 正式 Agent 工具与真实模型 | 从 Provider Discovery 取得精确模型 ID `gpt-6-luna`；临时 ModelProfile、Role 工具白名单、`ApplicationService.run_session`、真实本机 Chrome/Target/Worker，调用 `ext_browser_observe` | 通过：`tool.started`、`tool.completed`、`agent.completed`，Worker 无错误；持久 `model.completed` 只含扩展参数摘要。可重复脚本为 `tests/acceptance/phase4_browser_agent.py`。仅验证只读观察，不外推到真实模型自主提交。发现列表中的 `gemini-2.5-flash-lite` 在同一 Chat Completions 入口返回 HTTP 404，未作为通过证据 |
+| 正式 Agent 工具与真实模型 | 从 Provider Discovery 取得精确模型 ID `gpt-6-luna`；临时 ModelProfile、Role 工具白名单、`ApplicationService.run_session`、真实本机 Chrome/Target/Worker，执行观察→导航→填写非密码字段→点击→观察 | 通过：页面产生预期 `accepted`，`tool.started`、`tool.completed`、`agent.completed` 均出现，Worker 无错误；三次有副作用动作由测试场景内逐项审批，持久 `model.completed` 只含扩展参数摘要。可重复命令为 `OPERANT_PHASE4_REAL_MODEL=1 OPERANT_ACCEPTANCE_MODEL_ID=gpt-6-luna OPERANT_ACCEPTANCE_ENV_FILE=<未提交环境文件> uv run --offline python -m tests.acceptance.phase4_browser_agent`。没有真实账号或对外提交。发现列表中的 `gemini-2.5-flash-lite` 在同一 Chat Completions 入口返回 HTTP 404，未作为通过证据 |
 | 隔离第三方 Tool 与真实模型 | 当前 Provider Discovery 的精确模型 ID `gpt-6-luna`；临时安装包、实际 macOS 沙箱、带安装 ID 的 Role 授权、正式 `ApplicationService.run_session` | `tool.started`、`tool.completed`、`agent.completed` 均出现；模型调用参数在持久事件中只留摘要，执行结果含不可信来源标记。可重复脚本为 `tests/acceptance/phase4_external_tool_agent.py`，临时包及数据库在脚本结束后删除 |
 | Live Remote 结果读回 | 临时 Core 中放入结果不明的 Browser Job，正式 Vite Live 页面读取持久回执；在 1280px 与 375px、明暗主题检查可见性、指针点击、Escape 和焦点 | 通过：原 Job ID、中文“需人工核对”、错误码和不自动重试说明可见；Escape 关闭后焦点回到结果按钮。[桌面浅色](evidence/job-result-desktop-light.png)、[窄屏深色](evidence/job-result-mobile-dark.png)截图留证。页面不发起能力动作，临时浏览器、Core 和 Vite 已关闭 |
 | 网络出口 | 单独测试代理的主机白名单、HTTP 写请求窗口、WebSocket Upgrade 和非白名单 CONNECT；真实 Chrome 页面尝试连接非白名单 WebSocket | 代理定向检查及 Chrome 负例通过；初版 CDP 拦截曾漏掉 WebSocket，已改用本机代理并复测两轮真实 Chrome 链路。仍不外推为经渗透测试的任意网页沙箱 |
@@ -37,12 +37,14 @@
 
 Chrome 代理选择与 WebSocket 的行为依据 [Chromium Proxy 文档](https://chromium.googlesource.com/chromium/src/+/HEAD/net/docs/proxy.md)；实际浏览器仍以本机测试为准。
 
-## 本部分仍需完成
+## 本部分交付判定与后续边界
 
-- H-15 已有受信 Tool、隔离第三方 Tool 与内置能力驱动；通用 Command/Event/Provider/Runtime 插件 API、第三方能力驱动契约及客户端安装体验尚未实现。
-- H-16 电脑驱动已通过真实回环 HTTP Core/Worker 点击临时 App；浏览器可见窗口下的真人接管、更多日常页面动作和 GUI 直接操控仍需验收或实现；GUI 已有持久结果读回，Agent 入口已完成真实只读观察，提交/输入尚未做真实模型自主动作验收；当前浏览器真实链路是受控本地任务，不代表完整电脑控制。
-- H-17 真实跨设备控制与执行、H-14 全局临时资源治理、H-07 交互终端均未由本次局部实现验收。原顺序把三项分别绑定真实远程环境、资源压力和日常使用需要；本次没有生产远程设备或真实跨设备任务，专用浏览器 Profile 盘点为 0 个/0 字节，且没有新增日常 PTY 场景。故保留条件触发，不用本机模拟或临时 Profile 回收冒充这三项完成。
-- 阶段性代码已推送并建立草稿 PR #32，当前本地新增第三方 Tool 未推送；最终 CI、合并和合并后主线回读尚未完成。用户已授权推送和合并；完整范围验收后执行。
+按目标清单第四部分的交付范围，H-15 提供了 H-16 所需的内置能力驱动、正式 Agent Tool 接入和可核验安装的隔离第三方 Tool；默认能力包复用第三部分正式入口。H-16 在独立浏览器与临时 App 完成了正式 Core/Worker/Agent 的受控真实动作及仿真接管，保留审批、目标限制、凭据隔离和未知结果边界。这构成本部分的候选交付；跨版本 CI、PR 合并与主线回读后才标记完成。
+
+- H-15 的通用 Command/Event/Provider/Runtime 插件 API、第三方能力驱动契约及客户端安装体验尚未实现；它们需要具体消费场景和各自的隔离、权限与恢复契约，不能由本次 Tool 包推定完成。
+- H-16 浏览器可见窗口下的真人接管、更多日常页面动作和 GUI 直接操控仍需后续场景验收或实现；当前受控本地任务不代表完整电脑控制。
+- H-17 真实跨设备控制与执行、H-14 全局临时资源治理、H-07 交互终端仍按真实远程环境、资源压力和日常使用需要触发。本次没有生产远程设备或真实跨设备任务，专用浏览器 Profile 盘点为 0 个/0 字节，且没有新增日常 PTY 场景；不使用本机模拟或临时 Profile 回收冒充这三项完成。
+- 阶段性代码已推送到草稿 PR #32；最终真实模型验收脚本与记录待推送，跨版本 CI、合并和合并后主线回读尚未完成。用户已授权推送和合并。
 
 ## 流程改进
 

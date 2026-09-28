@@ -1,7 +1,7 @@
 # Operant Harness 待实现目标
 
 > 清单编号：HARNESS-GOALS-20260921；记录身份：Agent1；适用对象：所有 Agent
-> 日期：2026-09-21；2026-09-27 更新（Codex）：前三部分已合并；第四部分实施中，状态以源码、验收及 Git/PR 为准。
+> 日期：2026-09-21；2026-09-28 更新（Codex）：前三部分已合并；第四部分候选交付，状态以源码、验收及 Git/PR 为准。
 > 核对基线：`74a0251f0e17a46a1d66c4a5d293b4ee0b11e453`；本机对应工作树 `.worktrees/ui-install-main`。
 
 ## 1. 定位与维护
@@ -104,8 +104,8 @@ B2-4 Host 原性能限制保留；本清单不自动授权重启专项优化。D
 按各自未覆盖范围处理，不被新功能清单掩盖。安装配置、数据备份/恢复与升级体验可按试用反馈安排。
 这些后续目标不会改变 Beta 2.0 的历史候选验收；前三部分的实现与 PR 不代表已更新本机安装、发布正式版本或迁移真实用户库。
 
-## 6. 第四部分实施中记录（2026-09-28）
+## 6. 第四部分候选交付记录（2026-09-28）
 
-`codex/extension-runtime-governance` 从已合并第三部分的主线继续。当前已新增随 Core 发布的 Browser/Computer 能力插件注册表、源码摘要和版本绑定、启停/卸载、精确目标来源白名单、租约 Worker，以及 Chrome 专用临时 Profile 的状态预览和回收。真实 Chrome 本地任务通过正式 Target、Action Gateway、SQLite 回执和回环 HTTP 服务，验证观察、导航、非密码文本输入、点击、旧观察拒绝与禁用停止；独立 DevTools 会话接管可见窗口的仿真也使旧动作失效。受信 Tool 扩展已接 Role 白名单和 Agent/Graph 的正式入口，真实模型完成一次只读浏览器观察。另有隔离第三方 Tool 包的显式安装与版本/摘要核验，真实 macOS 沙箱负例验证包外文件、网络和环境密钥拒绝。详细证据和限制见[本部分验收记录](extension-runtime-governance/acceptance.md)。
+`codex/extension-runtime-governance` 从已合并第三部分的主线继续。当前已新增随 Core 发布的 Browser/Computer 能力插件注册表、源码摘要和版本绑定、启停/卸载、精确目标来源白名单、租约 Worker，以及 Chrome 专用临时 Profile 的状态预览和回收。真实 Chrome 本地任务通过正式 Target、Action Gateway、SQLite 回执和回环 HTTP 服务，验证观察、导航、非密码文本输入、点击、旧观察拒绝与禁用停止；独立 DevTools 会话接管可见窗口的仿真也使旧动作失效。受信 Tool 扩展已接 Role 白名单和 Agent/Graph 的正式入口，真实模型完成临时网页的观察、导航、非密码输入、点击和完成状态读回。另有隔离第三方 Tool 包的显式安装与版本/摘要核验，真实 macOS 沙箱负例验证包外文件、网络和环境密钥拒绝。详细证据和限制见[本部分验收记录](extension-runtime-governance/acceptance.md)。
 
-此增量覆盖 H-15 的 Tool/能力驱动接入和 H-16 的有限本机动作；Command/Event/Provider/Runtime 等第三方扩展及浏览器/电脑完整操控仍未完成。macOS Computer 已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；日常 App 操作范围仍待验收。H-17 真实跨设备、H-14 全局资源治理和 H-07 交互终端仍按第四部分条件与真实使用需要评估，不能由本机 Chrome 仿真推定已完成。
+此增量覆盖第四部分所需的 H-15 Tool/能力驱动接入和 H-16 受控本机动作；Command/Event/Provider/Runtime 等第三方扩展及浏览器/电脑完整操控仍是更长期目标。macOS Computer 已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；日常 App 操作范围仍待验收。H-17 真实跨设备、H-14 全局资源治理和 H-07 交互终端仍按第四部分条件与真实使用需要评估，不能由本机 Chrome 仿真推定已完成。跨版本 CI、合并与主线回读后才能将第四部分候选交付标记完成。

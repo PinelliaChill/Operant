@@ -7,6 +7,7 @@ import os
 import socket
 import tempfile
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
 
@@ -47,6 +48,30 @@ async def main() -> None:
             "OPERANT_CHROME_PATH", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         )
     )
+
+    class Page(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = (
+                b"<title>Operant acceptance</title><body>"
+                b"<input id='draft' value=''>"
+                b"<button id='go' onclick=\"if("
+                b"document.querySelector('#draft').value==='phase four')"
+                b"document.body.append(' accepted')\">Submit</button>"
+                b"</body>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_: object) -> None:
+            pass
+
+    page_server = ThreadingHTTPServer(("127.0.0.1", 0), Page)
+    page_thread = Thread(target=page_server.serve_forever, daemon=True)
+    page_thread.start()
+    page_origin = f"http://127.0.0.1:{page_server.server_port}"
     with tempfile.TemporaryDirectory(prefix="operant-phase4-model-") as temporary:
         root = Path(temporary).resolve()
         store = SQLiteStore(root / "core.sqlite3")
@@ -71,13 +96,22 @@ async def main() -> None:
             RolePreset(
                 name="Browser observation acceptance",
                 system_prompt=(
-                    "First call ext_browser_observe exactly once. "
-                    "Then answer with the observed URL only. Do not invent an observation."
+                    "Use browser tools to complete the requested local test page. "
+                    "Observe before every action, copy the latest observation_hash exactly, "
+                    "and use a unique idempotency_key for each action. "
+                    "Never claim success without observing the word accepted after clicking."
                 ),
                 model_profile_id=profile.id,
                 effort=Effort.LOW,
-                tool_policy=ToolPolicy(allowed_tools=("ext_browser_observe",)),
-                budget=Budget(max_turns=3, timeout_seconds=90),
+                tool_policy=ToolPolicy(
+                    allowed_tools=(
+                        "ext_browser_observe",
+                        "ext_browser_navigate",
+                        "ext_browser_fill",
+                        "ext_browser_click",
+                    )
+                ),
+                budget=Budget(max_turns=12, timeout_seconds=240),
             )
         )
         session = service.create_session(role.id, workspace_ref=str(root))
@@ -127,7 +161,7 @@ async def main() -> None:
         if not server.started:
             raise RuntimeError("Core did not start")
         registry = CapabilityPluginRegistry(root / "capability-plugins")
-        registry.install(BROWSER_PLUGIN.plugin_id, ("http://127.0.0.1:8765",))
+        registry.install(BROWSER_PLUGIN.plugin_id, (page_origin,))
         registry.set_enabled(BROWSER_PLUGIN.plugin_id, True)
         target_id = "local-browser-model-test"
         identity = "public-key-" + "x" * 32
@@ -182,7 +216,7 @@ async def main() -> None:
                 }
             )
             browser = IsolatedChromeBrowser(
-                chrome_path, BrowserTargetPolicy(frozenset({"http://127.0.0.1:8765"}))
+                chrome_path, BrowserTargetPolicy(frozenset({page_origin}))
             )
             worker = LocalCapabilityWorker(
                 core_origin=core_origin,
@@ -212,15 +246,27 @@ async def main() -> None:
 
             pump = Thread(target=pump_worker, daemon=True)
             pump.start()
-            events = [
-                event
-                async for event in service.run_session(
-                    session.id,
-                    user_message="Observe the dedicated browser and report its URL.",
-                    workspace=root,
-                    memory_enabled=False,
-                )
-            ]
+            events = []
+            approvals = 0
+            async for event in service.run_session(
+                session.id,
+                user_message=(
+                    f"In the dedicated browser open {page_origin}/, fill #draft with "
+                    "phase four, click #go, and report whether the page says accepted. "
+                    "This page is a temporary local test fixture."
+                ),
+                workspace=root,
+                memory_enabled=False,
+            ):
+                events.append(event)
+                if event.event_type == "tool.approval_required":
+                    approvals += 1
+                    if approvals > 3:
+                        raise RuntimeError("browser test requested too many approvals")
+                    if not service.submit_approval(
+                        session.id, str(event.payload["tool_call_id"]), approved=True
+                    ):
+                        raise RuntimeError("browser test approval was not accepted")
             names = [event.event_type for event in events]
             model_events = [event for event in events if event.event_type == "model.completed"]
             redacted_calls = all(
@@ -236,6 +282,10 @@ async def main() -> None:
             print("agent_completed", "agent.completed" in names)
             print("worker_errors", worker_errors)
             print("tool_arguments_redacted", redacted_calls)
+            print("test_fixture_approvals", approvals)
+            final_observation = browser.observe()
+            completed_page = "accepted" in str(final_observation.get("text", ""))
+            print("page_action_completed", completed_page)
             if not {"tool.started", "tool.completed", "agent.completed"}.issubset(names):
                 print("event_types", names)
                 for event in events:
@@ -246,6 +296,8 @@ async def main() -> None:
                 raise RuntimeError("local browser worker failed")
             if not redacted_calls:
                 raise RuntimeError("extension call arguments were not redacted")
+            if not completed_page:
+                raise RuntimeError("real-model browser page action was not completed")
         finally:
             stop.set()
             if pump is not None:
@@ -258,6 +310,9 @@ async def main() -> None:
             server_thread.join(timeout=5)
             listener.close()
             service.close()
+    page_server.shutdown()
+    page_server.server_close()
+    page_thread.join(timeout=5)
 
 
 asyncio.run(main())
