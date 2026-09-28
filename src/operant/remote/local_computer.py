@@ -90,9 +90,9 @@ class ComputerTargetPolicy:
 
 class MacComputer:
     def __init__(self, policy: ComputerTargetPolicy) -> None:
+        self.policy = policy
         if sys.platform != "darwin":
             raise ComputerTargetError("macOS accessibility is unavailable on this platform")
-        self.policy = policy
 
     @staticmethod
     def _script(source: str, *arguments: str) -> str:
