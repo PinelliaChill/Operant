@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-27（扩展能力与运行治理实施树；记录身份：Codex，保留原历史署名）
+> 最后更新：2026-09-28（前四部分主线联调；记录身份：Codex，保留原历史署名）
 >
-> 对应源码：`codex/extension-runtime-governance` 基于主线 `d13c6b1` 的增量；前三部分已合并，SQLite 为 v20。第四部分的合并与真实桌面验收状态以 Git/PR 及本节记录为准；本机已安装 App 尚未更新。
+> 对应源码：`origin/main@4dd2ec13` 的前四部分，以及 `codex/four-part-integration` 的 Graph 工具权限修复；SQLite 为 v20。本机已安装 App 尚未更新。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -15,7 +15,7 @@
 
 ## 当前版本速览
 
-- **当前源码**：在会话工作台与 H-03～H-06 可操作编排系统基础上，加入 H-08/H-09/H-12 的配置继承、审批 Reviewer 和 Goal/Plan/BTW 入口；是否进入主线以对应提交和 PR 状态核对。
+- **当前源码**：会话工作台、H-03～H-06 编排、H-08/H-09/H-12 配置与任务控制、第四部分受信能力驱动和隔离第三方 Tool 已合并主线。本分支修复 Graph Tool/Script 使用有效 Session 工具权限的问题；本分支的合并状态以 Git 核对。
 - **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
 - **会话工作台**：[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 提供会话内子 Agent、定向消息、历史树，以及 GUI/TUI 引用、命令和上下文入口，详见 §2.1。
 - **交付边界**：本机候选安装不等于正式签名、公证或自动更新发布；主线合并也不会自动更新已安装 App。历史批次的失败与验收范围仍保留。
@@ -85,7 +85,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 ## 2. 当前完成度
 
-本节概览主线 `47ebe36` 加本实施树的改动，不表示本文列出的每项能力均在本次重跑了产品验收。原阶段详情、失败与旧状态
+本节概览主线 `4dd2ec13` 加本次 Graph 权限修复，不表示本文列出的每项能力均在本次重跑了产品验收。原阶段详情、失败与旧状态
 已移至[阶段与验收原记录](history/PROJECT_ARCHITECTURE-history-20260922.md)，按阶段保留新增能力与证据。
 
 | 范围 | 当前已实现 | 仍需区分的边界 |
@@ -106,10 +106,10 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 UI关键页面与集中验收见[任务包](design/ui-refine-2-3/task-package.md)。
 本实施树的 H-03～H-06 范围、真实链路与限制见[可操作编排验收记录](design/orchestration-system/acceptance.md)。
 H-08/H-09/H-12 的实现与验收见[配置、审批与任务控制记录](design/config-approval-task-control/acceptance.md)。
-第四部分本机能力插件的范围、真实链路和未完成边界见[扩展能力与运行治理记录](design/extension-runtime-governance/acceptance.md)。
+第四部分本机能力插件的范围、真实链路和未完成边界见[扩展能力与运行治理记录](design/extension-runtime-governance/acceptance.md)。四部分合并后的联调与剩余缺口见[前四部分联调验收](design/four-part-integration/acceptance.md)。
 本机最新安装状态、授权合并事实与后续目标以治理根进度入口核对，不从旧阶段的“未合并”文字推断。
 
-当前仍缺的用户能力统一由[Harness待实现目标](design/Operant-Harness待实现目标.md)维护 H-01～H-18；
+当前仍缺的用户能力统一由[Harness待实现目标](design/Operant-Harness待实现目标.md)按 H-ID 维护；
 它是目标附件，不能代替本版本源码与测试。安全、数据、恢复及未验收限制见第18节。
 
 ## 2.1 会话工作台增量（已合并 PR #28）
@@ -755,8 +755,9 @@ Condition 只开放不使用 Python `eval` 的受限表达式。Runtime 从已�
 启动 Core 时，Repository 会找出可恢复的 Graph Run，并从 Attempt/Node 已提交事实重算派生路由；
 即使进程在成功 Attempt 与下游推进之间崩溃，也不会重放成功动作。STARTED/UNKNOWN 的幂等 Attempt
 沿用首次 key 重试；未知非幂等写进入 `manual_reconcile_required`。`BoundedGraphExecutor` 现接入 Agent、
-Tool/Script、Condition、Fan-out/Join、Loop、Timer，至少需要一个 Team Agent 节点。Tool/Script 绑定冻结
-RolePreset，通过原有 Tool Policy、Action Gateway、审批和 Graph Attempt 边界执行；成功的 Agent Loop 下一轮
+Tool/Script、Condition、Fan-out/Join、Loop、Timer，至少需要一个 Team Agent 节点。Tool/Script 锁定
+RolePreset 版本，执行前创建正式 Session，并以该 Session 的有效 `RoleSnapshot.tool_policy` 构造工具和扩展；
+配置层收窄的权限因此同样作用于 Graph 动作。动作仍经过 Action Gateway、审批和 Graph Attempt 边界；成功的 Agent Loop 下一轮
 使用新 Agent/Thread 身份。Core 关停先持久 interrupt，明确用户取消才持久 cancel；未知写结果不自动重放。
 Graph 的 Tool/Script 在副作用开始前同时核对 Policy ASK 与 Role ToolPolicy 的命令分类审批；即使
 Policy ALLOW，命中 Role 的 `shell` 等审批类别仍须绑定当前 Action Receipt 的用户决定。

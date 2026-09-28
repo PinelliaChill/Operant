@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from operant.application.configuration import ConfigService
 from operant.application.graph import GraphRuntime
 from operant.application.graph_execution import BoundedGraphExecutor, GraphExecutionError
 from operant.application.service import ApplicationService
@@ -710,6 +711,58 @@ async def test_mixed_graph_runs_read_tool_branch_join_timer_and_agent(tmp_path: 
     assert by_id["read"].output_refs["result"]["content"] == "real data"
     assert len(provider.calls) == 2
     assert result.run.consumed_tool_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_graph_tool_obeys_effective_session_policy(tmp_path: Path) -> None:
+    (tmp_path / "input.txt").write_text("private data", encoding="utf-8")
+    service, role = _service(tmp_path, RecordingProvider())
+    role = service.update_role(role.id, tool_policy=ToolPolicy(allowed_tools=("read_file",)))
+    ConfigService(service.store).put_scope(
+        "global",
+        "default",
+        patch={"tool_policy": ToolPolicy(allowed_tools=()).model_dump(mode="json")},
+        expected_revision=0,
+    )
+    graphs, teams, runtime, executor = _executor(service)
+    definition = _definition(
+        role.id,
+        role.version,
+        team_id="team.narrowed-tool",
+        nodes=(
+            _node("source", role.id, role.version),
+            NodeSpec(
+                node_id="read",
+                node_kind=NodeKind.TOOL,
+                input_ports=(PortSpec(name="input", required=False),),
+                metadata={
+                    "role_id": role.id,
+                    "role_version": role.version,
+                    "tool_name": "read_file",
+                    "arguments": {"path": "input.txt"},
+                },
+            ),
+        ),
+        edges=(
+            EdgeSpec(
+                edge_id="to-read",
+                source_node="source",
+                source_port="result",
+                target_node="read",
+                target_port="input",
+            ),
+        ),
+    )
+    teams.put_team_definition(_team("team.narrowed-tool", role.id, ("source",)))
+    run = runtime.create_run(definition, workspace_or_target=str(tmp_path))
+
+    result = await executor.run(run.id)
+
+    assert result.status is GraphRunStatus.FAILED
+    read = next(node for node in result.node_runs if node.node_id == "read")
+    assert read.status is NodeRunStatus.FAILED
+    assert not read.output_refs
+    assert graphs.get_run(run.id).status is GraphRunStatus.FAILED
 
 
 @pytest.mark.asyncio

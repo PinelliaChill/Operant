@@ -936,18 +936,19 @@ class BoundedGraphExecutor:
         )
         arguments = cast(dict[str, Any], self._bind_inputs(arguments, node_run.input_refs))
         workspace = self._workspace_for_run(run, definition)
+        thread = self.service.create_thread(ConversationThread(workspace_ref=workspace))
+        session = self.service.create_session(role.id, thread_id=thread.id)
+        self._validate_created_session(session, role, node)
+        policy = session.role_snapshot.tool_policy
         tools = WorkspaceTools(
             workspace,
-            policy=role.tool_policy,
+            policy=policy,
             extensions=(
-                self.service.tool_extension_factory(self.service.store.path, role.tool_policy)
+                self.service.tool_extension_factory(self.service.store.path, policy)
                 if self.service.tool_extension_factory is not None
                 else None
             ),
         )
-        thread = self.service.create_thread(ConversationThread(workspace_ref=workspace))
-        session = self.service.create_session(role.id, thread_id=thread.id)
-        self._validate_created_session(session, role, node)
         agent = self.service.factory.create_agent(session.id)
         async with self._state_lock:
             attempt = self.graph_runtime.start_attempt(
