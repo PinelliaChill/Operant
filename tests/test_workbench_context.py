@@ -122,6 +122,22 @@ def test_file_reference_rejects_invalid_or_incomplete_utf8(tmp_path):
             )
 
 
+def test_existing_shell_history_cannot_be_attached_as_reference(tmp_path):
+    service, thread, workspace, _ = scope(tmp_path)
+    history = workspace / ".bash_history"
+    history.write_text("private command marker\n", encoding="utf-8")
+    app = FastAPI()
+    install_workbench_context_routes(app, service)
+    with TestClient(app) as client:
+        denied = client.post(
+            f"/v1/workbench/threads/{thread.id}/references",
+            json={"kind": "file", "target": history.name},
+        )
+        assert denied.status_code == 403
+        assert "private command marker" not in denied.text
+    assert history.read_text(encoding="utf-8") == "private command marker\n"
+
+
 def test_four_byte_utf8_scalar_cut_by_file_preview_limit(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

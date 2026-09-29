@@ -343,6 +343,9 @@ class TerminalManager:
                 env={
                     "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
                     "HOME": root,
+                    "HISTFILE": os.devnull,
+                    "HISTSIZE": "0",
+                    "HISTFILESIZE": "0",
                     "TERM": "xterm-256color",
                     "LC_ALL": "C.UTF-8",
                 },

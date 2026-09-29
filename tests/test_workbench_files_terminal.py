@@ -97,6 +97,19 @@ def test_h07_preview_bounds_protected_paths_and_unicode(tmp_path: Path) -> None:
         assert len(bounded.json()["content"].encode()) <= 1024
 
 
+def test_h07_existing_shell_history_cannot_be_previewed(tmp_path: Path) -> None:
+    app, _, initialization, workspace = _scope(tmp_path)
+    history = workspace / ".bash_history"
+    history.write_text("private command marker\n", encoding="utf-8")
+    with TestClient(app) as client:
+        base = f"/v1/workspaces/{initialization.id}"
+        for endpoint in ("file-content", "diff"):
+            denied = client.get(f"{base}/{endpoint}", params={"path": history.name})
+            assert denied.status_code == 403
+            assert "private command marker" not in denied.text
+    assert history.read_text(encoding="utf-8") == "private command marker\n"
+
+
 def test_h07_diff_is_bounded_and_workspace_scoped(tmp_path: Path) -> None:
     app, _, initialization, workspace = _scope(tmp_path)
     subprocess.run(["git", "init", "-q", str(workspace)], check=True)
@@ -331,6 +344,25 @@ def test_h07_shell_exit_reaps_background_job(tmp_path: Path) -> None:
         finally:
             with contextlib.suppress(ProcessLookupError):
                 os.kill(child_pid, signal.SIGKILL)
+
+
+def test_h07_terminal_exit_does_not_write_workspace_history(tmp_path: Path) -> None:
+    app, thread, _, workspace = _scope(tmp_path, allow_terminal=True)
+    with TestClient(app) as client:
+        created = client.post(
+            f"/v1/workbench/threads/{thread.id}/terminals",
+            json={"cols": 80, "rows": 24, "idempotency_key": "h07-no-history"},
+        )
+        assert created.status_code == 200
+        terminal_id = created.json()["terminal_id"]
+        item = app.state.workbench_terminals.sessions[terminal_id]
+        os.write(item.master_fd, b"printf ran > command-ran.txt\nexit\n")
+        item.process.wait(timeout=3)
+        app.state.workbench_terminals.exit(item)
+        assert (workspace / "command-ran.txt").read_text(encoding="utf-8") == "ran"
+    assert not any(
+        (workspace / name).exists() for name in (".bash_history", ".sh_history", ".history")
+    )
 
 
 def test_h07_unconfirmed_cleanup_blocks_same_thread_retry(
