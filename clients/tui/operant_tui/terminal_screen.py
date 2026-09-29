@@ -13,7 +13,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.events import Key, Resize
 from textual.screen import Screen
-from textual.widgets import Footer, Label, RichLog
+from textual.widgets import Footer, Label, RichLog, Static
 from websockets.asyncio.client import connect
 from websockets.typing import Subprotocol
 
@@ -46,6 +46,7 @@ class TerminalScreen(Screen[None]):
     TerminalScreen { layout: vertical; }
     #terminal-status { height: auto; min-height: 2; padding: 0 1; }
     #terminal-output { height: 1fr; border: solid $primary; }
+    #terminal-current-line { height: 1; padding: 0 1; }
     """
     BINDINGS = [("ctrl+q", "close", "关闭终端")]
 
@@ -62,10 +63,12 @@ class TerminalScreen(Screen[None]):
         self.stream_task: asyncio.Task[None] | None = None
         self.closed = False
         self.on_closed = on_closed
+        self.pending_output = ""
 
     def compose(self) -> ComposeResult:
         yield Label("连接终端… Ctrl+Q 关闭", id="terminal-status")
         yield RichLog(id="terminal-output", wrap=False, markup=False, highlight=False)
+        yield Static("", id="terminal-current-line", markup=False)
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -93,10 +96,9 @@ class TerminalScreen(Screen[None]):
                 async for raw in socket:
                     frame = json.loads(raw)
                     if frame.get("type") == "output":
-                        self.query_one("#terminal-output", RichLog).write(
-                            Text.from_ansi(str(frame.get("data", "")))
-                        )
+                        self.append_output(str(frame.get("data", "")))
                     elif frame.get("type") == "exit":
+                        self.flush_output()
                         label.update(f"终端已退出 · 状态码 {frame.get('exit_code')} · Ctrl+Q 返回")
                         break
         except asyncio.CancelledError:
@@ -106,7 +108,29 @@ class TerminalScreen(Screen[None]):
         finally:
             self.socket = None
 
+    def append_output(self, chunk: str) -> None:
+        self.pending_output += chunk.replace("\r\n", "\n").replace("\r", "\n")
+        log = self.query_one("#terminal-output", RichLog)
+        while "\n" in self.pending_output:
+            line, self.pending_output = self.pending_output.split("\n", 1)
+            log.write(Text.from_ansi(line))
+        if len(self.pending_output) > 8192:
+            log.write(Text.from_ansi(self.pending_output[:8192]))
+            self.pending_output = self.pending_output[8192:]
+        self.query_one("#terminal-current-line", Static).update(Text.from_ansi(self.pending_output))
+
+    def flush_output(self) -> None:
+        if self.pending_output:
+            self.query_one("#terminal-output", RichLog).write(Text.from_ansi(self.pending_output))
+            self.pending_output = ""
+            self.query_one("#terminal-current-line", Static).update("")
+
     async def on_key(self, event: Key) -> None:
+        if event.key == "ctrl+q":
+            event.stop()
+            event.prevent_default()
+            await self.action_close()
+            return
         if self.socket is None:
             return
         special = {

@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from operant_tui.app import OperantTui
 from operant_tui.conversation import ConversationController, history_lines
 from operant_tui.conversation_screen import ConversationScreen
 from operant_tui.terminal_screen import (
@@ -14,7 +15,7 @@ from operant_tui.terminal_screen import (
     terminal_token_protocol,
 )
 from textual.app import App
-from textual.widgets import Button, Input, Select, TextArea, Tree
+from textual.widgets import Button, Input, Select, Static, TextArea, Tree
 
 from sdk.python_client.transport import Phase1EError
 
@@ -521,16 +522,33 @@ class ConversationScreenTests(unittest.IsolatedAsyncioTestCase):
             {"terminal_id": "terminal-1", "stream_token": "abcdefghijklmnop"},
             on_closed=reports.append,
         )
+
+        class TestApp(OperantTui):
+            async def on_mount(self):
+                pass
+
         with patch("operant_tui.terminal_screen.connect", fake_connect):
-            async with App().run_test(size=(80, 24)) as pilot:
+            async with TestApp(SimpleNamespace()).run_test(size=(80, 24)) as pilot:
                 await pilot.app.push_screen(screen)
                 await pilot.pause()
                 await pilot.press("a", "enter")
                 await pilot.pause()
                 self.assertIn('{"type": "input", "data": "a"}', socket.sent)
                 self.assertIn('{"type": "input", "data": "\\r"}', socket.sent)
+                screen.append_output("p")
+                screen.append_output("w")
+                screen.append_output("d\r\n/workspace\r\nsh$ ")
+                await pilot.pause()
+                lines = "\n".join(line.text for line in screen.query_one("#terminal-output").lines)
+                self.assertIn("pwd", lines)
+                self.assertIn("/workspace", lines)
+                self.assertEqual(
+                    screen.query_one("#terminal-current-line", Static).content.plain, "sh$ "
+                )
                 await pilot.press("ctrl+q")
                 await pilot.pause()
+                self.assertNotIsInstance(pilot.app.screen, TerminalScreen)
+                self.assertTrue(screen.closed)
         self.assertEqual(stopped, ["terminal-1"])
         self.assertEqual(reports, ["终端 terminal-1 清理未确认，需人工核对工作区内进程"])
 

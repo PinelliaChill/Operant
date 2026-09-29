@@ -47,6 +47,7 @@ class OperantTui(App[None]):
         Binding("alt+4", "experience", "经验与授权"),
         Binding("alt+5", "conversation", "会话工作台"),
         Binding("/", "command", "命令"),
+        Binding("ctrl+q", "close_terminal_or_quit", "关闭终端 / 退出", priority=True),
         Binding("escape", "dismiss_layer", "关闭"),
         Binding("q", "quit", "退出", show=False),
     ]
@@ -291,6 +292,14 @@ class OperantTui(App[None]):
 
     def action_command(self) -> None:
         self.query_one("#run-id", Input).focus()
+
+    def action_close_terminal_or_quit(self) -> None:
+        from .terminal_screen import TerminalScreen
+
+        if isinstance(self.screen, TerminalScreen):
+            self.pop_screen()
+        else:
+            self.exit()
 
     def action_dismiss_layer(self) -> None:
         self.pending_cancel_run_id = None
