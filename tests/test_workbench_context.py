@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from operant.api_workbench_context import (
     create_reference,
     install_workbench_context_routes,
     read_context_reference,
+    read_workspace_text,
 )
 from operant.application.service import ApplicationService
 from operant.domain.models import ModelProfile, RolePreset, ToolPolicy
@@ -76,6 +78,57 @@ def test_file_snapshot_is_metadata_first_scoped_and_immutable(tmp_path):
     service.create_session(role.id, thread_id=other.id)
     with pytest.raises(PermissionError):
         read_context_reference(service, other.id, (view.reference,), view.reference.target_id)
+
+
+def test_long_utf8_file_reference_truncates_at_complete_character(tmp_path):
+    service, thread, workspace, _ = scope(tmp_path)
+    target = workspace / "long.txt"
+    target.write_text("中文" * 105_000, encoding="utf-8")
+    assert target.stat().st_size == 630_000
+
+    preview, truncated = read_workspace_text(workspace, "long.txt")
+    assert truncated is True
+    assert len(preview.encode("utf-8")) == 127_998
+    assert preview.endswith("文")
+
+    view = create_reference(
+        service,
+        thread.id,
+        WorkbenchReferenceRequest(kind="file", target="long.txt", max_tokens=8000),
+    )
+    assert view.truncated is True
+    raw_snapshot = service._read_artifact_for_context(view.reference.target_id)
+    assert view.content_hash == hashlib.sha256(raw_snapshot).hexdigest()
+    result = read_context_reference(service, thread.id, (view.reference,), view.reference.target_id)
+    assert result["source"] == "file:long.txt"
+    assert result["truncated"] is True
+    assert result["content"] == preview[:24_000]
+    assert result["content_hash"] == view.content_hash
+
+
+def test_file_reference_rejects_invalid_or_incomplete_utf8(tmp_path):
+    service, thread, workspace, _ = scope(tmp_path)
+    for content in (
+        b"valid\xffinvalid",
+        b"a" * 127_998 + b"\xe4\xb8",
+        b"a" * 127_999 + b"\xf0\xff\x80\x80" + b"tail",
+    ):
+        (workspace / "invalid.txt").write_bytes(content)
+        with pytest.raises(UnicodeDecodeError):
+            read_workspace_text(workspace, "invalid.txt")
+        with pytest.raises(UnicodeDecodeError):
+            create_reference(
+                service, thread.id, WorkbenchReferenceRequest(kind="file", target="invalid.txt")
+            )
+
+
+def test_four_byte_utf8_scalar_cut_by_file_preview_limit(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "emoji.txt").write_text("a" * 127_999 + "😀" + "suffix", encoding="utf-8")
+    preview, truncated = read_workspace_text(workspace, "emoji.txt")
+    assert truncated is True
+    assert preview == "a" * 127_999
 
 
 @pytest.mark.parametrize("target", ["../outside", ".env", "link.txt", "folder/link.txt"])

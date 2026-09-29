@@ -192,7 +192,7 @@ def thread_session(service: ApplicationService, thread_id: str) -> Session:
 
 
 def read_workspace_text(root: Path, relative: str, limit: int = 128_000) -> tuple[str, bool]:
-    """Open each path segment without following links; read at most limit+1 bytes."""
+    """Open each path segment without following links; read at most limit+4 bytes."""
     path = Path(relative)
     if (
         path.is_absolute()
@@ -212,13 +212,33 @@ def read_workspace_text(root: Path, relative: str, limit: int = 128_000) -> tupl
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise PermissionError("reference must be a regular file")
         chunks = bytearray()
-        while len(chunks) <= limit:
-            chunk = os.read(descriptor, min(16_384, limit + 1 - len(chunks)))
+        while len(chunks) < limit + 4:
+            chunk = os.read(descriptor, min(16_384, limit + 4 - len(chunks)))
             if not chunk:
                 break
             chunks.extend(chunk)
         truncated = len(chunks) > limit
-        text = bytes(chunks[:limit]).decode("utf-8", errors="strict")
+        preview = bytes(chunks[:limit])
+        try:
+            text = preview.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            if not (
+                truncated and exc.end == len(preview) and exc.reason == "unexpected end of data"
+            ):
+                raise
+            lead = preview[exc.start]
+            if 0xC2 <= lead <= 0xDF:
+                scalar_bytes = 2
+            elif 0xE0 <= lead <= 0xEF:
+                scalar_bytes = 3
+            elif 0xF0 <= lead <= 0xF4:
+                scalar_bytes = 4
+            else:
+                raise
+            # Validate the complete boundary scalar using at most three more
+            # bytes. A malformed continuation or incomplete file still fails.
+            bytes(chunks[exc.start : exc.start + scalar_bytes]).decode("utf-8", errors="strict")
+            text = preview[: exc.start].decode("utf-8", errors="strict")
         if "\x00" in text:
             raise ValueError("binary files cannot be attached as text references")
         return text, truncated
