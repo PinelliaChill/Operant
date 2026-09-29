@@ -37,6 +37,12 @@ EXPECTED_OPERATION_IDS = {
     "cancelWorkbenchThread",
     "listWorkbenchAgentMessages",
     "sendWorkbenchAgentMessage",
+    "getWorkbenchFileContent",
+    "getWorkbenchFileDiff",
+    "createWorkbenchTerminal",
+    "getWorkbenchTerminal",
+    "deleteWorkbenchTerminal",
+    "listWorkbenchReferenceArtifacts",
 }
 OPERATION_MAP = {
     "negotiateWorkbench": "negotiateProtocol",

@@ -97,7 +97,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 | 经验与共享 | 经验Skill验证发布/回退、Writer晋级、授权共享/撤销、数据集移交与Remote最小包 | 跨项目共享须显式授权，未合并知识不自动晋级；生产Remote未因此验收 |
 | Graph/Team | 正式 Agent、Tool、Script、Condition、Fan-out、Join、Loop、Timer 执行；Live 画布编辑/连线/版本差异/运行投影；Team消息、Mailbox及任务/工件板、隔离Writer | 混合图至少含一个 Agent 且锁定 Team；Human Input/Approval/Wait/Subworkflow/Artifact/Merge 尚未接入此正式执行器；会话式委派使用独立工作台运行时 |
 | 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile，ASK 自动审核并留审计，模型不可用转人工；Cron/Timer/本地 application.signal Hook 派发正式 Graph Agent | 审批模型默认仍为人工模式；硬 DENY 始终优先。Hook 暂无文件/Git watcher；动态Slash、通用插件驱动仍有缺口 |
-| 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Phase3 GUI 入口已接 Core；新配置只作用于新 Session 的冻结快照。TUI 尚无相同的配置/Goal/Plan 管理界面，交互终端未实现 |
+| 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Task 1 候选已增文件正文、Diff 和本机 PTY Core 接口；GUI/TUI 的真实联调与安装验收仍以本批记录为准 |
 | Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | 公网、容器联合流程与完整跨设备产品不外推 |
 | 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；隔离第三方 Tool 包经私有目录、摘要和真实沙箱探测后才启用；Chrome 专用 Profile 经正式 Target/Action Gateway 执行，真实模型已验收临时网页观察、导航、非密码输入和点击 | macOS 临时测试 App 已经真实回环 HTTP Core/Worker/生成客户端完成实际点击；第三方 Command/Event/Provider/Runtime 与驱动未开放，GUI 直接调用和生产远程未验收；临时 Profile 回收不等于全局资源治理 |
 | 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证 | 非正式签名/公证发布，无完整安装向导、DMG或自动更新；本机启动适配另有安装记录 |
@@ -168,6 +168,40 @@ Docker 检查有 1 项跳过。上述为原实现批次的验证结果，历史�
 新 Profile 在 Chrome 启动前于其目录外写所有权记录，避免 Chrome 启动或退出时重新写目录造成无标记残留。退出时只向仍可确认存活的专用进程组发终止信号，确认整个组消失后才删除 Profile；若父进程已退出但组仍在，则保留目录和归属记录。预览与一小时后回收都检查主 PID 及进程组；启动时没有成功记录 PID 的目录保守保留供人工核对。当前尚有一次旧失败运行留下的无标记 Profile，约 4.4 MB；不按名称猜测归属并自动删除，详情见[验收记录](design/extension-runtime-governance/acceptance.md)。
 
 macOS Computer 适配器只观察前台白名单 App 的窗口/按钮，并以同一窗口和观察哈希执行指定按钮点击；窗口/按钮文本脱敏，原文只在本机短暂复核，变化哈希保证脱敏后仍能识别窗口变化。系统设置、终端、钥匙串和已列入保护集的密码管理器硬拒绝。无辅助功能权限时明确失败。当前没有键盘输入、剪贴板、屏幕截图或通用电脑控制。两种适配器均需先经现有 Target 管理流程注册、授予 Lease，再运行本机 Worker；本部分新增按 Job ID 读取持久结果的 Phase56 Schema/生成客户端，以及浏览器和电脑的正式协议 CLI。Agent 可通过显式 Role 工具白名单和只在进程环境中注入的目标租约使用类型化工具；`gpt-6-luna` 已经正式 Session 完成真实 Chrome 临时网页的观察、导航、非密码输入和点击，三次有副作用动作经测试场景内逐项审批。Live Remote 页面可按 Job ID 读取持久回执并提示人工核对，不发起能力动作。GUI 直接操控、日常电脑 App 的操作范围、第三方 Command/Event/Provider/Runtime 与驱动仍未验收，不能将此增量说成完整 H-15/H-16 或已验收跨设备产品。
+
+## 2.4 日常工作台补齐：文件与终端 Core 候选
+
+`api_workbench_files.py` 从已注册且可读的工作区提供有界 UTF-8 正文和指定文件的 Git unified diff。
+目录逐段以 `openat` 和 `O_NOFOLLOW` 打开，拒绝越界、敏感名、符号链接、非普通文件及二进制；
+返回的 `content_hash` 只对应预览字节，`hash_scope=preview`，不是完整文件版本。长文本在 UTF-8 字符边界
+截断。Diff 禁用外部工具、textconv、fsmonitor 与 pager，限制输出和运行时间。两个接口只接受本机回环
+HTTP，不能用路径猜测跨工作区读取权限。
+
+H-10 的 `api_workbench_context.py` 还增加当前 Thread 的 Artifact 选择 Query：只列该 Thread 或绑定
+Session 直接来源、`normal`、活动生命周期的文本/JSON/XML 工件，分页返回来源、摘要、大小与完整内容哈希。
+内部 `context-reference` 快照不进入选择列表。`kind=artifact` 创建引用时重新校验来源、灵敏度、
+生命周期、类型和有界正文，再建立只属于当前 Thread 的快照；模型按需读取仍要求本轮显式附加的
+快照 ID。知道 Artifact ID 或读取全局元数据列表不构成正文授权。
+
+`api_workbench_terminal.py` 的创建、状态和终止接口同属 `workbench.v1`。创建仅接受本机回环请求、已绑定
+工作区的活动普通 Thread，以及冻结 RoleSnapshot 中开启 `run_command`、`command_execution` 且使用 Host
+Runner 的角色。Host PTY 拥有本机进程权限，因此创建动作以 `process.exec` 交 Phase45 Action Gateway；
+默认 Policy 产生 ASK，经现有审批后用同一幂等键重试，不把 Host shell 伪装成 no-network 容器执行。
+工作区目录重新核对设备号和 inode，子进程通过继承的目录 FD 执行 `fchdir` 后再启动 `/bin/sh -i`。
+启动与 READY 握手在线程中有界等待，不阻塞 Core 事件循环；请求取消或 Thread/Session 在等待期取消时，
+Core 回收尚未发布令牌的进程并拒绝创建。
+创建返回 30 秒的一次性 `stream_token`；WebSocket URL 不含令牌，握手同时提供
+`operant.terminal.v1` 和 `operant.token.<stream_token>` 两个子协议，Core 只回选前者，并要求回环连接与
+受信本地 Origin。输入、调整大小和输出仅属于已获授权的这一个会话；断线、超时、Thread 完成/取消/归档、
+Session 取消、显式 DELETE 与 Core 正常关闭均触发 PTY 回收。Shell 禁用 job control，使后台作业留在
+当前 PTY 进程组；Core 还核对精确后代及组成员，沙箱拒绝组信号时只向核对过的后代发信号。
+枚举或信号失败标记 `cleanup_unknown` 并持久审计，同 Thread 后续创建被 Core 拒绝，要求人工核对。
+活动终端最多 4 个，输出缓冲有界；已结束状态最多保留 256 条或 1 小时。重复创建的同一幂等键在
+当前 Core 进程返回同一终端，进程重启后的不明结果要求人工核对，不自动再次启动 Host shell。
+
+OpenAPI 由 `sdk/protocol/generate_workbench.py` 单源生成 `operant-workbench.openapi.json`、digest 和
+Python/TypeScript Client；WebSocket 帧及一次性 token 不写入通用 REST Command 回执。本节是源码候选说明，
+定向测试覆盖文件边界、Policy/Role、PTY 交互与取消；GUI/TUI 联调、本机安装及跨设备终端未由这些测试证明。
 
 ## 3. 总体架构
 
@@ -1888,7 +1922,7 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 4. **Graph与协作**：正式执行器已有八类混合节点与 Live 画布，但尚未覆盖 Human Input/Approval/Wait/Subworkflow/Artifact/Merge 的直接执行；混合图需至少一个 Agent 与匹配的 Team。智能建议尚无持久对话历史；Hook 限本地 application.signal，文件/Git watcher 未接入。会话委派/消息与 Graph Team 是不同运行时，不能混作一个状态权威。
 5. **记忆效果与清理**：召回、治理、共享和小样本质量评测已实现，但不证明普遍收益。原固定复用问题失败与补充条件化成功分开；尚无一般化自动冲突合并或完整容量淘汰。插件专属数据delete与全局历史/缓存治理不同。
 6. **数据与迁移**：当前SQLite v20，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
-7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布；TUI 尚未提供本次配置/Goal/Plan 的等效管理界面。文件正文/PTY、任意对象`@`和动态`/`注册仍有缺口。Phase1E冻结协议本身的查询缺口需与后续入口区分。
+7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布。Task 1 候选的文件正文、Diff 和本机 PTY Core 接口待 GUI/TUI 联调与本机验收；任意对象`@`和动态`/`注册仍有缺口。Phase1E冻结协议本身的查询缺口需与后续入口区分。
 8. **权限与公网**：OAuth面向单用户私网，不是多租户或通用公网CSRF方案；loopback仍可无OAuth。Remote配对/E2E不替代所有API鉴权，Gateway/Relay不属于已审计公网托管产品。面向非可信HTTP客户端的Artifact capability签发仍未完成；跨项目操作必须走已实现的显式共享授权，不能由路径推定权限。
 9. **外部能力与隔离**：本机 Chrome 已有真实隔离 Profile 与 Core Job 链路，Agent 工具入口已完成真实模型在临时网页上的观察、导航、非密码输入和点击；macOS Computer 适配器已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；日常 App 操作范围仍需验收。隔离第三方 Tool 已以临时包验证包外文件、网络和环境密钥拒绝，但不代表其他插件类别已有沙箱。GUI 仅有持久 Job 读回和人工核对提示，直接操控和生产 Remote 尚未验收。MCP Streamable HTTP、真实第三方 Server 长时验证、多 Host 发现/通知与移动推送仍有缺口。历史 Docker 隔离测试与真实 Host 模型任务是不同证据；候选中的 Docker skip 及生产 HTTPS Target 限制继续保留。
 10. **扩展与审批**：新增受信 Tool 扩展边界、隔离第三方 Tool 包和两种随 Core 发布的能力适配器，仍缺通用 Command/Event/Provider/Runtime 扩展和第三方能力驱动契约。六项默认 Skill 能从配置的可信根安装，但运行依赖相应 Skill 包与工具环境，不能把安装读回当成文档/幻灯片/PDF 内容质量验收。审批模型默认不开启，启用后失联或重启中的审核保持人工待审；模型不能修改 Policy。

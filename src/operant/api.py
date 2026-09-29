@@ -41,6 +41,8 @@ from operant.api_phase56_writer import install_phase56_writer_routes
 from operant.api_task_control import install_task_control_routes
 from operant.api_workbench_agents import install_workbench_agent_routes
 from operant.api_workbench_context import install_workbench_context_routes
+from operant.api_workbench_files import install_workbench_file_routes
+from operant.api_workbench_terminal import install_workbench_terminal_routes
 from operant.application.approval_review import ApprovalModelReviewer, ReviewerConfig
 from operant.application.client_projection import (
     ProjectProjectionCursorError,
@@ -1519,6 +1521,16 @@ def create_app(
         }:
             # These routes own durable bounded command journals. Do not persist
             # a second snapshot or truncate their typed projection results.
+            return await call_next(request)
+        if (
+            request.method == "POST"
+            and request.url.path.startswith("/v1/workbench/threads/")
+            and request.url.path.endswith("/terminals")
+        ) or (
+            request.method == "DELETE" and request.url.path.startswith("/v1/workbench/terminals/")
+        ):
+            # TerminalManager owns the exact creation key and never stores its
+            # one-time stream token in the generic command receipt.
             return await call_next(request)
         idempotency_key = request.headers.get("Idempotency-Key")
         scope = _command_scope(request.method, request.url.path)
@@ -3610,6 +3622,7 @@ def create_app(
     install_task_control_routes(app, service)
     install_workbench_context_routes(app, service)
     install_workbench_agent_routes(app, service)
+    install_workbench_file_routes(app, service)
     install_phase23_routes(app, store)
     install_phase45_routes(
         app,
@@ -3627,6 +3640,7 @@ def create_app(
             or ReviewerConfig()
         ),
     )
+    install_workbench_terminal_routes(app, service, app.state.phase45_action_gateway)
     from operant.api_b2_4 import install_b2_4_routes
 
     install_b2_4_routes(app, service)

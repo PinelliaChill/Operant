@@ -16,6 +16,7 @@ export default defineConfig({
       '/v1': {
         target: process.env.OPERANT_CORE_URL ?? 'http://127.0.0.1:8000',
         changeOrigin: true,
+        ws: true,
       },
       '/healthz': {
         target: process.env.OPERANT_CORE_URL ?? 'http://127.0.0.1:8000',

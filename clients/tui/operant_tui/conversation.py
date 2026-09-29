@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any
 
 from sdk.python_client.b2_generated import B2Client
+from sdk.python_client.phase3_generated import Phase3Client
 from sdk.python_client.transport import Phase1EError
 
 
@@ -31,10 +33,19 @@ def history_lines(items: list[dict[str, Any]]) -> list[str]:
 
 
 class ConversationController:
-    def __init__(self, controller: Any, *, b2: Any = None, workbench: Any = None) -> None:
+    def __init__(
+        self, controller: Any, *, b2: Any = None, workbench: Any = None, phase3: Any = None
+    ) -> None:
         self.core = controller
         self.b2 = b2 or B2Client(controller.core_url)
         self._workbench = workbench
+        self._phase3 = phase3
+
+    @property
+    def phase3(self) -> Any:
+        if self._phase3 is None:
+            self._phase3 = Phase3Client(self.core.core_url)
+        return self._phase3
 
     @property
     def workbench(self) -> Any:
@@ -73,9 +84,158 @@ class ConversationController:
     def context(self, thread_id: str) -> Any:
         return self.workbench.get_workbench_context(thread_id)
 
+    def file_content(self, workspace_id: str, path: str) -> dict[str, Any]:
+        if not path.strip():
+            raise ValueError("请填写工作区内相对路径")
+        return self.workbench.get_workbench_file_content(
+            workspace_id, path=path.strip(), max_bytes=64_000
+        )
+
+    def file_diff(self, workspace_id: str, path: str) -> dict[str, Any]:
+        if not path.strip():
+            raise ValueError("请填写工作区内相对路径")
+        return self.workbench.get_workbench_file_diff(
+            workspace_id, path=path.strip(), max_bytes=64_000
+        )
+
+    def create_terminal(self, thread_id: str, *, cols: int, rows: int, key: str) -> dict[str, Any]:
+        return self.workbench.create_workbench_terminal(
+            thread_id,
+            {"cols": cols, "rows": rows, "idempotency_key": key},
+            idempotency_key=key,
+        )
+
+    def stop_terminal(self, terminal_id: str) -> dict[str, Any]:
+        return self.workbench.delete_workbench_terminal(terminal_id)
+
+    def terminal_approval(self, approval_id: str) -> dict[str, Any]:
+        return self.core.phase45.get_phase45_approval(approval_id)
+
+    def decide_terminal_approval(
+        self, approval_id: str, *, approved: bool, key: str
+    ) -> dict[str, Any]:
+        return self.core.phase45.decide_phase45_approval(
+            approval_id, {"approved": approved}, idempotency_key=key
+        )
+
+    def effective_config(
+        self, role_id: str, project_id: str | None, workspace_ref: str | None
+    ) -> dict[str, Any]:
+        return self.phase3.get_effective_config(
+            role_id=role_id, project_id=project_id, workspace_ref=workspace_ref
+        )
+
+    def save_config(self, scope: dict[str, Any], patch_text: str, *, key: str) -> dict[str, Any]:
+        patch = json.loads(patch_text)
+        if not isinstance(patch, dict):
+            raise ValueError("配置覆盖必须是 JSON 对象")
+        return self.phase3.put_config_scope(
+            scope["scope_type"],
+            scope["scope_id"],
+            {"patch": patch, "expected_revision": scope["revision"]},
+            idempotency_key=key,
+        )
+
+    def reset_config(self, scope: dict[str, Any], *, key: str) -> dict[str, Any]:
+        return self.phase3.delete_config_scope(
+            scope["scope_type"],
+            scope["scope_id"],
+            expected_revision=scope["revision"],
+            idempotency_key=key,
+        )
+
+    def goals(self, thread_id: str) -> list[dict[str, Any]]:
+        return self.phase3.list_goals(owner_thread_id=thread_id)
+
+    def create_goal(
+        self,
+        thread_id: str,
+        objective: str,
+        criteria: list[str],
+        token_budget: int | None,
+        *,
+        key: str,
+    ) -> dict[str, Any]:
+        if not objective.strip():
+            raise ValueError("请填写目标")
+        return self.phase3.create_goal(
+            {
+                "owner_thread_id": thread_id,
+                "objective": objective.strip(),
+                "completion_criteria": criteria,
+                "token_budget": token_budget,
+            },
+            idempotency_key=key,
+        )
+
+    def update_goal(
+        self, goal: dict[str, Any], changes: dict[str, Any], *, key: str
+    ) -> dict[str, Any]:
+        return self.phase3.update_goal(
+            goal["id"],
+            {"expected_revision": goal["revision"], "changes": changes},
+            idempotency_key=key,
+        )
+
+    def plans(self, goal_id: str) -> list[dict[str, Any]]:
+        return self.phase3.list_plans(goal_id)
+
+    def create_plan(self, goal_id: str, scope: str, *, key: str) -> dict[str, Any]:
+        if not scope.strip():
+            raise ValueError("请填写计划范围")
+        return self.phase3.create_plan(
+            goal_id, {"goal_id": goal_id, "scope": scope.strip()}, idempotency_key=key
+        )
+
+    def update_plan(
+        self, plan: dict[str, Any], changes: dict[str, Any], *, key: str
+    ) -> dict[str, Any]:
+        return self.phase3.update_plan(
+            plan["id"],
+            {"expected_revision": plan["revision"], "changes": changes},
+            idempotency_key=key,
+        )
+
+    def checklist(self, plan_id: str) -> list[dict[str, Any]]:
+        return self.phase3.list_checklist_items(plan_id)
+
+    def create_checklist(self, plan_id: str, description: str, *, key: str) -> dict[str, Any]:
+        if not description.strip():
+            raise ValueError("请填写清单项")
+        return self.phase3.create_checklist_item(
+            plan_id,
+            {"plan_id": plan_id, "description": description.strip()},
+            idempotency_key=key,
+        )
+
+    def set_checklist_status(
+        self,
+        item: dict[str, Any],
+        status: str,
+        evidence: list[str],
+        blocker: str | None,
+        *,
+        key: str,
+    ) -> dict[str, Any]:
+        return self.phase3.command_checklist_status(
+            item["id"],
+            {
+                "expected_revision": item["revision"],
+                "status": status,
+                "evidence_refs": evidence,
+                "blocker": blocker,
+            },
+            idempotency_key=key,
+        )
+
     def reference(self, thread_id: str, kind: str, target: str, *, key: str) -> Any:
         return self.workbench.create_workbench_reference(
             thread_id, {"kind": kind, "target": target}, idempotency_key=key
+        )
+
+    def artifacts(self, thread_id: str, after_cursor: int | None) -> dict[str, Any]:
+        return self.workbench.list_workbench_reference_artifacts(
+            thread_id, after_cursor=after_cursor, limit=50
         )
 
     def child(self, thread_id: str, task: str, *, key: str) -> Any:
