@@ -9,6 +9,38 @@ use tauri::{AppHandle, Manager, State};
 
 const CORE_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8000);
 
+struct CoreEndpoint {
+    addr: SocketAddr,
+    url: String,
+    external_dev_core: bool,
+}
+
+fn parse_dev_core_url(value: &str) -> Result<CoreEndpoint, String> {
+    let port = value
+        .strip_prefix("http://127.0.0.1:")
+        .filter(|text| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|text| text.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .ok_or("OPERANT_CORE_URL must be http://127.0.0.1:<port>")?;
+    Ok(CoreEndpoint {
+        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        url: format!("http://127.0.0.1:{port}"),
+        external_dev_core: true,
+    })
+}
+
+fn configured_endpoint() -> Result<CoreEndpoint, String> {
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var("OPERANT_CORE_URL") {
+        return parse_dev_core_url(&value);
+    }
+    Ok(CoreEndpoint {
+        addr: CORE_ADDR,
+        url: "http://127.0.0.1:8000".into(),
+        external_dev_core: false,
+    })
+}
+
 #[derive(Default)]
 struct CoreProcess(Mutex<Option<Child>>);
 
@@ -28,11 +60,12 @@ impl Drop for CoreProcess {
 struct CoreStatus {
     reachable: bool,
     managed_process_running: bool,
-    endpoint: &'static str,
+    endpoint: String,
 }
 
-fn core_reachable() -> bool {
-    let Ok(mut stream) = TcpStream::connect_timeout(&CORE_ADDR, Duration::from_millis(250)) else {
+fn core_reachable(endpoint: &CoreEndpoint) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&endpoint.addr, Duration::from_millis(250))
+    else {
         return false;
     };
     let timeout = Some(Duration::from_millis(500));
@@ -40,7 +73,13 @@ fn core_reachable() -> bool {
         return false;
     }
     if stream
-        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nConnection: close\r\n\r\n")
+        .write_all(
+            format!(
+                "GET /healthz HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                endpoint.addr
+            )
+            .as_bytes(),
+        )
         .is_err()
     {
         return false;
@@ -55,6 +94,7 @@ fn core_reachable() -> bool {
 
 #[tauri::command]
 fn core_status(state: State<'_, CoreProcess>) -> Result<CoreStatus, String> {
+    let endpoint = configured_endpoint()?;
     let mut guard = state.0.lock().map_err(|_| "Core process lock failed")?;
     let managed_process_running = match guard.as_mut() {
         Some(child) => child
@@ -67,16 +107,20 @@ fn core_status(state: State<'_, CoreProcess>) -> Result<CoreStatus, String> {
         *guard = None;
     }
     Ok(CoreStatus {
-        reachable: core_reachable(),
+        reachable: core_reachable(&endpoint),
         managed_process_running,
-        endpoint: "http://127.0.0.1:8000",
+        endpoint: endpoint.url,
     })
 }
 
 #[tauri::command]
 fn start_local_core(state: State<'_, CoreProcess>) -> Result<CoreStatus, String> {
-    if core_reachable() {
+    let endpoint = configured_endpoint()?;
+    if core_reachable(&endpoint) {
         return core_status(state);
+    }
+    if endpoint.external_dev_core {
+        return Err("Configured local development Core is unavailable".into());
     }
     let mut guard = state.0.lock().map_err(|_| "Core process lock failed")?;
     if guard.is_none() {
@@ -100,9 +144,9 @@ fn start_local_core(state: State<'_, CoreProcess>) -> Result<CoreStatus, String>
         *guard = Some(child);
     }
     Ok(CoreStatus {
-        reachable: core_reachable(),
+        reachable: core_reachable(&endpoint),
         managed_process_running: true,
-        endpoint: "http://127.0.0.1:8000",
+        endpoint: endpoint.url,
     })
 }
 
@@ -160,8 +204,9 @@ pub fn run() {
         .manage(CoreProcess::default())
         .setup(|app| {
             start_local_core(app.state::<CoreProcess>())?;
+            let endpoint = configured_endpoint()?;
             for _ in 0..50 {
-                if core_reachable() {
+                if core_reachable(&endpoint) {
                     return Ok(());
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -180,7 +225,27 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_secret_ref;
+    use super::{parse_dev_core_url, valid_secret_ref};
+
+    #[test]
+    fn dev_core_url_accepts_only_explicit_loopback_http_port() {
+        let endpoint = parse_dev_core_url("http://127.0.0.1:18769").unwrap();
+        assert_eq!(endpoint.addr.port(), 18769);
+        assert_eq!(endpoint.url, "http://127.0.0.1:18769");
+        assert!(endpoint.external_dev_core);
+        for invalid in [
+            "http://localhost:18769",
+            "http://0.0.0.0:18769",
+            "https://127.0.0.1:18769",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "http://127.0.0.1:18769/path",
+            "http://127.0.0.1:18769?token=secret",
+            "http://127.0.0.1:18769@evil.example",
+        ] {
+            assert!(parse_dev_core_url(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn secret_reference_accepts_only_environment_variable_names() {
