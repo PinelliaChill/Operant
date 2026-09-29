@@ -356,10 +356,19 @@ def test_h07_terminal_exit_does_not_write_workspace_history(tmp_path: Path) -> N
         assert created.status_code == 200
         terminal_id = created.json()["terminal_id"]
         item = app.state.workbench_terminals.sessions[terminal_id]
-        os.write(item.master_fd, b"printf ran > command-ran.txt\nexit\n")
-        item.process.wait(timeout=3)
-        app.state.workbench_terminals.exit(item)
-        assert (workspace / "command-ran.txt").read_text(encoding="utf-8") == "ran"
+        marker = workspace / "command-ran.txt"
+        try:
+            os.write(item.master_fd, b"printf ran > command-ran.txt\n")
+            deadline = time.monotonic() + 8
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert marker.read_text(encoding="utf-8") == "ran"
+            os.write(item.master_fd, b"exit\n")
+            item.process.wait(timeout=8)
+            app.state.workbench_terminals.exit(item)
+        finally:
+            if item.process.poll() is None:
+                app.state.workbench_terminals.stop(terminal_id)
     assert not any(
         (workspace / name).exists() for name in (".bash_history", ".sh_history", ".history")
     )
