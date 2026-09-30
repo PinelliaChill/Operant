@@ -364,7 +364,16 @@ def test_h07_terminal_exit_does_not_write_workspace_history(tmp_path: Path) -> N
                 time.sleep(0.02)
             assert marker.read_text(encoding="utf-8") == "ran"
             os.write(item.master_fd, b"exit\n")
-            item.process.wait(timeout=8)
+            # A real stream keeps reading the PTY while the shell exits. If this
+            # test leaves the master unread, an interactive shell can block on
+            # its final prompt/echo before it reaches the queued exit command.
+            deadline = time.monotonic() + 8
+            while item.process.poll() is None and time.monotonic() < deadline:
+                if select.select([item.master_fd], [], [], 0.05)[0]:
+                    with contextlib.suppress(OSError):
+                        os.read(item.master_fd, 4096)
+            assert item.process.poll() is not None, "interactive shell did not exit"
+            item.process.wait(timeout=1)
             app.state.workbench_terminals.exit(item)
         finally:
             if item.process.poll() is None:
