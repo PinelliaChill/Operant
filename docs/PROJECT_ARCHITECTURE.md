@@ -172,7 +172,7 @@ macOS Computer 适配器只观察前台白名单 App 的窗口/按钮，并以�
 ## 2.4 日常工作台补齐：文件、终端与客户端入口
 
 `api_workbench_files.py` 从已注册且可读的工作区提供有界 UTF-8 正文和指定文件的 Git unified diff。
-目录逐段以 `openat` 和 `O_NOFOLLOW` 打开，拒绝越界、敏感名、符号链接、非普通文件及二进制；
+目录逐段以 `openat` 和 `O_NOFOLLOW` 打开；最终文件名从目录句柄精确核对，打开前后比较设备号和 inode，拒绝大小写别名与替换竞态。越界、敏感名、符号链接、非普通文件及二进制均拒绝；
 返回的 `content_hash` 只对应预览字节，`hash_scope=preview`，不是完整文件版本。长文本在 UTF-8 字符边界
 截断。Diff 禁用外部工具、textconv、fsmonitor 与 pager，限制输出和运行时间。两个接口只接受本机回环
 HTTP，不能用路径猜测跨工作区读取权限。

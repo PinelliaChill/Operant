@@ -97,6 +97,32 @@ def test_h07_preview_bounds_protected_paths_and_unicode(tmp_path: Path) -> None:
         assert len(bounded.json()["content"].encode()) <= 1024
 
 
+def test_h07_preview_rejects_file_replaced_between_check_and_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _, initialization, workspace = _scope(tmp_path)
+    target = workspace / "notes.txt"
+    target.write_text("original", encoding="utf-8")
+    replacement = workspace / "replacement.txt"
+    replacement.write_text("replacement", encoding="utf-8")
+    original_open = os.open
+
+    def replace_before_open(path, flags, mode=0o777, *, dir_fd=None):
+        if path == target.name and flags & os.O_NONBLOCK:
+            replacement.replace(target)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", replace_before_open)
+    monkeypatch.setattr(os, "supports_dir_fd", os.supports_dir_fd | {replace_before_open})
+    with TestClient(app) as client:
+        response = client.get(
+            f"/v1/workspaces/{initialization.id}/file-content", params={"path": target.name}
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "workspace_file_changed"
+    assert "replacement" not in response.text
+
+
 def test_h07_existing_shell_history_cannot_be_previewed(tmp_path: Path) -> None:
     app, _, initialization, workspace = _scope(tmp_path)
     history = workspace / ".bash_history"

@@ -17,8 +17,10 @@ from pydantic import BaseModel
 from operant.application.client_projection import (
     WorkspaceProjectionError,
     _ensure_root_reference_unchanged,
+    _find_exact_child,
     _open_directory,
     _validate_relative_path,
+    _WorkspaceCaseAliasError,
 )
 from operant.application.service import ApplicationService
 from operant.persistence.sqlite import NotFoundError
@@ -59,9 +61,40 @@ def _file_descriptor(root: str, path: str) -> tuple[int, tuple[int, int]]:
         raise WorkspaceProjectionError("workspace_path_invalid", "file path is required")
     parent_fd, _, root_identity = _open_directory(root, parts[:-1])
     try:
+        match = _find_exact_child(parent_fd, parts[-1])
+        if match is None:
+            raise WorkspaceProjectionError(
+                "workspace_path_not_found", "workspace file does not exist", status_code=404
+            )
+        if match.name != parts[-1]:
+            raise _WorkspaceCaseAliasError()
+        try:
+            expected = os.stat(match.name, dir_fd=parent_fd, follow_symlinks=False)
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            raise WorkspaceProjectionError(
+                "workspace_file_changed",
+                "workspace file changed; refresh the file listing",
+                status_code=409,
+            ) from exc
+        except OSError as exc:
+            raise WorkspaceProjectionError(
+                "workspace_file_unavailable", "workspace file cannot be opened", status_code=403
+            ) from exc
+        if stat.S_ISLNK(expected.st_mode):
+            raise WorkspaceProjectionError(
+                "workspace_symlink_forbidden",
+                "workspace path cannot contain a symbolic link",
+                status_code=403,
+            )
+        if not stat.S_ISREG(expected.st_mode):
+            raise WorkspaceProjectionError(
+                "workspace_file_not_regular",
+                "workspace path is not a regular file",
+                status_code=400,
+            )
         try:
             fd = os.open(
-                parts[-1],
+                match.name,
                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                 dir_fd=parent_fd,
             )
@@ -75,7 +108,21 @@ def _file_descriptor(root: str, path: str) -> tuple[int, tuple[int, int]]:
             ) from exc
     finally:
         os.close(parent_fd)
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    try:
+        opened = os.fstat(fd)
+    except OSError as exc:
+        os.close(fd)
+        raise WorkspaceProjectionError(
+            "workspace_file_unavailable", "workspace file cannot be opened", status_code=403
+        ) from exc
+    if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+        os.close(fd)
+        raise WorkspaceProjectionError(
+            "workspace_file_changed",
+            "workspace file changed; refresh the file listing",
+            status_code=409,
+        )
+    if not stat.S_ISREG(opened.st_mode):
         os.close(fd)
         raise WorkspaceProjectionError(
             "workspace_file_not_regular", "workspace path is not a regular file", status_code=400
