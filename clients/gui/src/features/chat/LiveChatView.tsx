@@ -820,7 +820,7 @@ export const LiveChatView: React.FC = () => {
                   {command.status === 'sending' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <SendHorizontal size={16} aria-hidden="true" />}
                 </button>
               </div>
-              <p className="live-composer-note">输入 / 可发现 Core 命令，输入 @ 可附加有版本摘要。文件变更或权限失效时发送会由 Core 拒绝；失败后草稿和引用保留供核对。</p>
+              <p className="live-composer-note">输入 / 可发现 Core 命令，输入 @ 可附加有版本摘要。文件引用保留创建时的快照；源文件变更后可重附加，用哈希区分版本。权限或快照失效时 Core 会拒绝，草稿与引用保留供核对。</p>
             {history && history.next_cursor !== null && <button type="button" className="btn btn-secondary" disabled={historyLoading} onClick={() => void loadMoreHistory()}>加载更多历史</button>}
               </section>
 
