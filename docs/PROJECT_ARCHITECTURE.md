@@ -189,7 +189,7 @@ Artifact ID 或读取全局元数据列表不构成正文授权。
 Runner 的角色。Host PTY 拥有本机进程权限，因此创建动作以 `process.exec` 交 Phase45 Action Gateway；
 默认 Policy 产生 ASK，经现有审批后用同一幂等键重试，不把 Host shell 伪装成 no-network 容器执行。
 工作区目录重新核对设备号和 inode，子进程通过继承的目录 FD 执行 `fchdir` 后再启动 `/bin/sh -i`；交互 Shell 的历史文件指向 `/dev/null`，常见历史路径也禁止预览、Diff 和引用。
-启动与 READY 握手在线程中有界等待，不阻塞 Core 事件循环；请求取消或 Thread/Session 在等待期取消时，
+启动与 READY 握手在线程中有界等待，以拆分输入回显后的完整随机标记判断 Shell 就绪，不依赖不同 PTY 的换行形式；不阻塞 Core 事件循环。请求取消或 Thread/Session 在等待期取消时，
 Core 回收尚未发布令牌的进程并拒绝创建。
 创建返回 30 秒的一次性 `stream_token`；WebSocket URL 不含令牌，握手同时提供
 `operant.terminal.v1` 和 `operant.token.<stream_token>` 两个子协议，Core 只回选前者，并要求回环连接与

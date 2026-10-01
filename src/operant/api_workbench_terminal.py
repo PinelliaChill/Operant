@@ -363,7 +363,10 @@ class TerminalManager:
             )
             startup = bytearray()
             deadline = time.monotonic() + 3
-            while b"\r\n" + marker + b"\r\n" not in startup:
+            # PTY line endings and prompts differ across shells/platforms.
+            # The echoed input has the nonce split by quotes, so only the
+            # executed echo can contain these bytes contiguously.
+            while marker not in startup:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or process.poll() is not None:
                     raise OSError("terminal shell did not become ready")
