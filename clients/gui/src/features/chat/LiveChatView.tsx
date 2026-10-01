@@ -1,5 +1,7 @@
 import { B24ContextInspector } from "./B24ContextInspector";
 import { LiveWorkbenchPanel } from './LiveWorkbenchPanel';
+import { LiveFilePreview } from './LiveFilePreview';
+import { LiveTerminalPanel, TERMINAL_CLEANUP_EVENT, readTerminalCleanupUnknown } from './LiveTerminalPanel';
 import { workbenchClient } from '../../live/workbenchClient';
 import type { WorkbenchCommandRegistry, WorkbenchReference } from '../../live/workbenchClient';
 import './b2-chat-layout.css';
@@ -10,7 +12,6 @@ import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ChevronRight,
-  File,
   Folder,
   Loader2,
   MessageSquare,
@@ -19,6 +20,7 @@ import {
   SendHorizontal,
   ShieldCheck,
   Square,
+  Terminal,
   Wifi,
   X,
 } from 'lucide-react';
@@ -27,7 +29,7 @@ import { StatusBadge } from '../../components/StatusBadge';
 import type * as B2 from '../../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../../context/ClientContext';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
-import type { LiveApproval, LiveEvent, LiveSessionOption, LiveWorkspaceFile } from '../../live/liveState';
+import type { LiveApproval, LiveEvent, LiveSessionOption } from '../../live/liveState';
 import { approvalsForSession, canDecideApproval, formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
 
@@ -54,6 +56,8 @@ function statusLabel(status: string): string {
 }
 
 const REVIEW_TOOLS = ['read_file', 'search_files', 'git_diff'];
+type ReferenceKind = 'file' | 'thread' | 'artifact';
+type ArtifactChoice = { id: string; source: string; summary: string; media_type: string; content_hash: string; size_bytes: number };
 
 function isReadOnlyReviewer(role: B2.RolePreset): boolean {
   const policy = role.tool_policy;
@@ -156,56 +160,6 @@ export const LiveApprovalCard: React.FC<{
     </div>
   </article>
 );
-
-const LiveFileBrowser: React.FC<{
-  projectId: string;
-  workspaceRef: string;
-  files: LiveWorkspaceFile[];
-  currentPath: string;
-  loading: boolean;
-  onLoad: (path: string) => void;
-}> = ({ projectId, workspaceRef, files, currentPath, loading, onLoad }) => {
-  const parentPath = currentPath.split('/').filter(Boolean).slice(0, -1).join('/');
-  return (
-    <section className="live-panel live-files-panel" aria-labelledby="live-files-title">
-      <div className="live-panel-heading">
-        <div>
-          <h2 id="live-files-title">Workspace 文件</h2>
-          <p>{workspaceRef} · 只读目录 metadata</p>
-        </div>
-        {currentPath && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onLoad(parentPath)} disabled={loading}>
-            返回上级
-          </button>
-        )}
-      </div>
-      <div className="live-file-path" aria-label="当前目录路径">
-        <span>{currentPath ? `/${currentPath}` : '/'}</span>
-        <span className="live-file-project-id">Workspace ID: {projectId}</span>
-      </div>
-      {loading ? (
-        <div className="live-panel-loading" role="status"><Loader2 size={16} className="animate-spin" />正在读取 Core 文件投影…</div>
-      ) : files.length === 0 ? (
-        <p className="live-panel-empty">当前目录没有可读条目，或 Core 未返回目录内容。</p>
-      ) : (
-        <ul className="live-file-list">
-          {files.map((file) => (
-            <li key={file.path}>
-              {file.kind === 'directory' ? <Folder size={15} aria-hidden="true" /> : <File size={15} aria-hidden="true" />}
-              {file.kind === 'directory' ? (
-                <button type="button" className="live-file-link" onClick={() => onLoad(file.path)}>{file.name}</button>
-              ) : (
-                <span className="live-file-name">{file.name}</span>
-              )}
-              <span className="live-file-kind">{file.kind === 'directory' ? '目录' : '文件'}</span>
-              {file.size !== null && <span className="live-file-size">{formatCursor(file.size)} B</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-};
 
 const LiveEventTimeline: React.FC<{ events: LiveEvent[]; cursor: LiveEvent['sequence']; status: string }> = ({ events, cursor, status }) => (
   <section className="live-panel live-events-panel" aria-labelledby="live-events-title">
@@ -358,16 +312,26 @@ export const LiveChatView: React.FC = () => {
   const [draft, setDraft] = useState('');
   const projectSelectRef = useRef<HTMLSelectElement>(null);
   const [showFiles, setShowFiles] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalCleanupId, setTerminalCleanupId] = useState<string | null>(null);
   const [showEvents, setShowEvents] = useState(false);
   const [filePath, setFilePath] = useState('');
   const [filesLoading, setFilesLoading] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
   const [selectedRoleId, setSelectedRoleId] = useState('');
   const [references, setReferences] = useState<WorkbenchReference[]>([]);
-  const [referenceKind, setReferenceKind] = useState<'file' | 'thread'>('file');
+  const [referenceKind, setReferenceKind] = useState<ReferenceKind>('file');
   const [referenceTarget, setReferenceTarget] = useState('');
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
   const [referenceBusy, setReferenceBusy] = useState(false);
+  const [referenceMaxTokens, setReferenceMaxTokens] = useState(1200);
+  const [artifactChoices, setArtifactChoices] = useState<ArtifactChoice[]>([]);
+  const [artifactCursor, setArtifactCursor] = useState<number | null>(null);
+  const [artifactLoaded, setArtifactLoaded] = useState(false);
+  const [artifactBusy, setArtifactBusy] = useState(false);
+  const [artifactError, setArtifactError] = useState('');
+  const [artifactReload, setArtifactReload] = useState(0);
+  const artifactRequest = useRef(0);
   const [workbenchError, setWorkbenchError] = useState('');
   const [workbenchNotice, setWorkbenchNotice] = useState('');
   const [registry, setRegistry] = useState<WorkbenchCommandRegistry | null>(null);
@@ -401,9 +365,10 @@ export const LiveChatView: React.FC = () => {
     && !busy
     && phase === 'ready';
   const workbenchConnected = phase === 'ready' && connectionStatus === 'connected' && !projectionStale;
+  const pickerVisible = referencePickerOpen || draft.includes('@');
   const commandSuggestions = useMemo(() => draft.startsWith('/') && registry
     ? registry.commands.filter((item) => [item.canonical_name, ...(item.aliases ?? [])]
-      .some((alias) => alias.toLowerCase().startsWith(draft.trim().toLowerCase())))
+      .some((alias) => alias.toLowerCase().startsWith(draft.trim().split(/\s/, 1)[0].toLowerCase())))
     : [], [draft, registry]);
   const reviewCommand = /^\/(review|审查)(\s|$)/i.test(draft.trim());
   const reviewerRoles = useMemo(() => roles.filter(isReadOnlyReviewer), [roles]);
@@ -415,7 +380,65 @@ export const LiveChatView: React.FC = () => {
     setReferencePickerOpen(false);
     setWorkbenchError('');
     setWorkbenchNotice('');
+    setShowTerminal(false);
+    ++artifactRequest.current;
+    setArtifactChoices([]);
+    setArtifactCursor(null);
+    setArtifactLoaded(false);
+    setArtifactBusy(false);
+    setArtifactError('');
   }, [selectedThreadId]);
+
+  useEffect(() => {
+    if (!pickerVisible || referenceKind !== 'artifact' || !selectedThreadId || !workbenchConnected || artifactLoaded) return;
+    const request = ++artifactRequest.current;
+    setArtifactBusy(true);
+    setArtifactError('');
+    void workbenchClient.listReferenceArtifacts(selectedThreadId).then((page) => {
+      if (request !== artifactRequest.current) return;
+      setArtifactChoices(page.items);
+      setArtifactCursor(page.next_cursor ?? null);
+      setArtifactLoaded(true);
+    }).catch((error: unknown) => {
+      if (request === artifactRequest.current) setArtifactError(error instanceof Error ? error.message : '可引用工件列表读取失败');
+    }).finally(() => { if (request === artifactRequest.current) setArtifactBusy(false); });
+  }, [pickerVisible, referenceKind, selectedThreadId, workbenchConnected, artifactLoaded, artifactReload]);
+
+  const loadMoreArtifacts = async () => {
+    if (!selectedThreadId || artifactCursor === null || artifactBusy) return;
+    const request = ++artifactRequest.current;
+    setArtifactBusy(true); setArtifactError('');
+    try {
+      const page = await workbenchClient.listReferenceArtifacts(selectedThreadId, artifactCursor);
+      if (request === artifactRequest.current) {
+        setArtifactChoices((current) => [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]);
+        setArtifactCursor(page.next_cursor ?? null);
+      }
+    } catch (error) { if (request === artifactRequest.current) setArtifactError(error instanceof Error ? error.message : '后续工件读取失败'); }
+    finally { if (request === artifactRequest.current) setArtifactBusy(false); }
+  };
+
+  useEffect(() => {
+    setShowFiles(false);
+    setFilePath('');
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    const refreshCleanup = () => setTerminalCleanupId(selectedThreadId ? readTerminalCleanupUnknown(selectedThreadId) : null);
+    refreshCleanup();
+    window.addEventListener(TERMINAL_CLEANUP_EVENT, refreshCleanup);
+    return () => window.removeEventListener(TERMINAL_CLEANUP_EVENT, refreshCleanup);
+  }, [selectedThreadId]);
+
+  useEffect(() => {
+    if (pickerVisible && workbenchConnected) return;
+    ++artifactRequest.current;
+    setArtifactChoices([]);
+    setArtifactCursor(null);
+    setArtifactLoaded(false);
+    setArtifactBusy(false);
+    setArtifactError('');
+  }, [pickerVisible, workbenchConnected]);
 
   useEffect(() => {
     if (!workbenchConnected || !selectedThreadId) { setRegistry(null); return; }
@@ -445,6 +468,14 @@ export const LiveChatView: React.FC = () => {
     const message = draft.trim();
     if (message.startsWith('/')) {
       if (!registry) { setWorkbenchError('命令列表尚未加载，无法校验命令。'); return; }
+      const [name, ...argumentParts] = message.split(/\s+/);
+      const definition = registry.commands.find((item) => [item.canonical_name, ...(item.aliases ?? [])]
+        .some((alias) => alias.toLowerCase() === name.toLowerCase()));
+      if (!definition) { setWorkbenchError(`Core 未注册命令 ${name}。请从命令列表选择。`); return; }
+      if (argumentParts.length > 0 && !['review.run', 'plan.generate'].includes(definition.command_kind)) {
+        setWorkbenchError(`${definition.canonical_name} 不接受参数；草稿已保留。`);
+        return;
+      }
       if (reviewCommand && !effectiveReviewerRoleId) {
         setWorkbenchError('运行 /review 需要严格只读的 Reviewer 角色：仅允许 read_file、search_files、git_diff。请先在 Agent 设置中配置。');
         return;
@@ -468,15 +499,15 @@ export const LiveChatView: React.FC = () => {
     if (completed) { setDraft(''); setReferences([]); }
   };
 
-  const addReference = async () => {
-    if (!selectedThread || !workbenchConnected || !referenceTarget.trim() || referenceBusy) return;
+  const addReference = async (target = referenceTarget, kind = referenceKind) => {
+    if (!selectedThread || !workbenchConnected || !target.trim() || referenceBusy) return;
     setReferenceBusy(true); setWorkbenchError('');
     try {
-      const identity = `reference:${selectedThread.id}:${referenceKind}:${referenceTarget.trim()}`;
-      const value = await workbenchClient.createReference(selectedThread.id, { kind: referenceKind, target: referenceTarget.trim() }, keyForWorkbenchAction(identity));
+      const identity = `reference:${selectedThread.id}:${kind}:${target.trim()}:${referenceMaxTokens}`;
+      const value = await workbenchClient.createReference(selectedThread.id, { kind, target: target.trim(), max_tokens: referenceMaxTokens }, keyForWorkbenchAction(identity));
       workbenchKeys.current.delete(identity);
       setReferences((current) => [...current, value]);
-      setReferenceTarget('');
+      if (target === referenceTarget) setReferenceTarget('');
       setReferencePickerOpen(false);
       setWorkbenchNotice(`已附加 ${value.source} 的摘要快照，正文按需读取。`);
     } catch (error) { setWorkbenchError(error instanceof Error ? error.message : '引用创建失败'); }
@@ -569,6 +600,7 @@ export const LiveChatView: React.FC = () => {
       )}
       {workbenchError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>{workbenchError}</span></div>}
       {workbenchNotice && <div className="live-workbench-notice" role="status">{workbenchNotice}</div>}
+      {terminalCleanupId && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>终端 {terminalCleanupId} 的清理结果未确认；请人工核查。打开终端面板可回读 Core 状态。本提示不改变 Core 审计。</span></div>}
 
       {manualReconcileRequired && (
         <div className="live-alert live-alert-warn" role="alert">
@@ -757,13 +789,17 @@ export const LiveChatView: React.FC = () => {
               </div>
               <div className="live-composer">
                 <div className="live-composer-extras">
-                  <button type="button" className="btn btn-ghost btn-sm live-reference-toggle" aria-expanded={referencePickerOpen || draft.includes('@')} onClick={() => setReferencePickerOpen((current) => !current)} disabled={!workbenchConnected || !selectedThread.sessionId}>@ 添加引用</button>
-                  {references.length > 0 && <ul className="live-reference-chips" aria-label="待发送引用">{references.map((item, index) => <li key={`${item.content_hash}:${index}`}><span title={item.summary}>{item.source}{item.truncated ? ' · 已截断' : ''}</span><button type="button" aria-label={`移除引用 ${item.source}`} onClick={() => setReferences((current) => current.filter((_, position) => position !== index))}>×</button></li>)}</ul>}
-                  {(referencePickerOpen || draft.includes('@')) && <div className="live-reference-picker"><label>引用类型<select className="select" value={referenceKind} onChange={(event) => { setReferenceKind(event.target.value as 'file' | 'thread'); setReferenceTarget(''); }} disabled={!workbenchConnected || referenceBusy}><option value="file">文件</option><option value="thread">会话摘要</option></select></label>
+                  <button type="button" className="btn btn-ghost btn-sm live-reference-toggle" aria-expanded={pickerVisible} onClick={() => setReferencePickerOpen((current) => !current)} disabled={!workbenchConnected || !selectedThread.sessionId}>@ 添加引用</button>
+                  {references.length > 0 && <ul className="live-reference-chips" aria-label="待发送引用">{references.map((item, index) => <li key={`${item.content_hash}:${index}`}><details><summary>{item.source} · {item.size_bytes.toLocaleString()} B · {item.content_hash.slice(0, 8)}{item.truncated ? ' · 摘要已截断' : ''}</summary><p>{item.summary}</p><small>SHA-256 {item.content_hash}</small></details><button type="button" aria-label={`移除引用 ${item.source}`} onClick={() => setReferences((current) => current.filter((_, position) => position !== index))}>×</button></li>)}</ul>}
+                  {pickerVisible && <div className="live-reference-picker"><label>引用类型<select className="select" value={referenceKind} onChange={(event) => { setReferenceKind(event.target.value as ReferenceKind); setReferenceTarget(''); }} disabled={!workbenchConnected || referenceBusy}><option value="file">文件</option><option value="thread">会话摘要</option><option value="artifact">可引用工件</option></select></label>
                     {referenceKind === 'thread' ? <label>目标会话<select className="select" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} disabled={!workbenchConnected || referenceBusy}><option value="">选择会话</option>{threads.filter((item) => item.id !== selectedThread.id && item.workspaceRef === selectedThread.workspaceRef).map((item) => <option key={item.id} value={item.id}>{item.title || item.id}</option>)}</select></label>
-                      : <label>工作区相对路径<input className="input" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} list="live-reference-files" placeholder="输入或选择文件路径" disabled={!workbenchConnected || referenceBusy} /><datalist id="live-reference-files">{files.filter((item) => item.kind === 'file').map((item) => <option key={item.path} value={item.path} />)}</datalist></label>}
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => void addReference()} disabled={!workbenchConnected || !referenceTarget.trim() || referenceBusy}>附加摘要</button></div>}
-                  {commandSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用命令">{commandSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.canonical_name} key={item.canonical_name} onClick={() => setDraft(item.canonical_name)}>{item.canonical_name}<small>{item.command_kind}</small></button>)}</div>}
+                      : referenceKind === 'artifact' ? <><label>当前会话可引用工件<select className="select" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} disabled={!workbenchConnected || referenceBusy || artifactBusy}><option value="">选择 Core 已授权的工件</option>{artifactChoices.map((item) => <option key={item.id} value={item.id}>{item.source} · {item.id.slice(0, 12)}</option>)}</select></label>
+                        {artifactBusy && <span role="status">正在读取可引用工件…</span>}{artifactError && <><span role="alert">{artifactError}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => { setArtifactLoaded(false); setArtifactChoices([]); setArtifactCursor(null); setArtifactReload((current) => current + 1); }} disabled={artifactBusy}>重试读取</button></>}{artifactCursor !== null && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void loadMoreArtifacts()} disabled={artifactBusy}>加载更多工件</button>}
+                        {artifactChoices.filter((item) => item.id === referenceTarget).map((item) => <p className="live-artifact-choice" key={item.id}>{item.summary} · {item.media_type} · {item.size_bytes.toLocaleString()} B · SHA-256 {item.content_hash.slice(0, 16)}…</p>)}</>
+                        : <label>工作区相对路径<input className="input" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} list="live-reference-files" placeholder="输入或选择文件路径" disabled={!workbenchConnected || referenceBusy} /><datalist id="live-reference-files">{files.filter((item) => item.kind === 'file').map((item) => <option key={item.path} value={item.path} />)}</datalist></label>}
+                    <label>摘要 Token 上限<input className="input" type="number" min={128} max={4096} value={referenceMaxTokens} onChange={(event) => setReferenceMaxTokens(Number(event.target.value))} disabled={referenceBusy} /></label>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => void addReference()} disabled={!workbenchConnected || !referenceTarget.trim() || referenceBusy || referenceMaxTokens < 128 || referenceMaxTokens > 4096}>附加摘要</button></div>}
+                  {commandSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用命令">{commandSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.canonical_name} key={item.canonical_name} onClick={() => setDraft(item.canonical_name)}><span>{item.canonical_name}{item.aliases?.length ? ` · ${item.aliases.join('、')}` : ''}</span><small>{item.command_kind} · {item.execution_mode || 'json'} · Core</small></button>)}</div>}
                   {reviewCommand && <label className="live-reviewer-role">审查角色<select className="select" value={effectiveReviewerRoleId} onChange={(event) => setReviewerRoleId(event.target.value)} disabled={commandBusy || reviewerRoles.length === 0}><option value="" disabled>选择严格只读角色</option>{reviewerRoles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.id}</option>)}</select>{reviewerRoles.length === 0 && <span>需要仅允许 read_file、search_files、git_diff 的角色。</span>}</label>}
                 </div>
                 <textarea
@@ -784,12 +820,12 @@ export const LiveChatView: React.FC = () => {
                   {command.status === 'sending' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <SendHorizontal size={16} aria-hidden="true" />}
                 </button>
               </div>
-              <p className="live-composer-note">输入 / 可发现命令，输入 @ 可附加文件或会话摘要。运行结果以 Core 确认为准。</p>
+              <p className="live-composer-note">输入 / 可发现 Core 命令，输入 @ 可附加有版本摘要。文件引用保留创建时的快照；源文件变更后可重附加，用哈希区分版本。权限或快照失效时 Core 会拒绝，草稿与引用保留供核对。</p>
             {history && history.next_cursor !== null && <button type="button" className="btn btn-secondary" disabled={historyLoading} onClick={() => void loadMoreHistory()}>加载更多历史</button>}
               </section>
 
             {selectedThread.sessionId && <LiveWorkbenchPanel threadId={selectedThread.id} connected={workbenchConnected} onChanged={refresh} />}
-            <details className="live-inspector-column ui-chat-inspector"><summary>运行详情与文件</summary><div className="ui-chat-inspector-body" aria-label="Core 实时检查器">
+            <details className="live-inspector-column ui-chat-inspector" onToggle={(event) => { if (!event.currentTarget.open) setShowTerminal(false); }}><summary>运行详情与文件</summary><div className="ui-chat-inspector-body" aria-label="Core 实时检查器">
           <details className="live-thread-summary ui-thread-details"><summary>会话信息 <StatusBadge status={selectedThread.status} label={statusLabel(selectedThread.status)} size="sm" /></summary><div className="ui-thread-detail-body" aria-label="Core Thread Projection">
             <div className="live-thread-summary-main">
               <span className="live-thread-icon" aria-hidden="true"><MessageSquare size={16} /></span>
@@ -809,21 +845,26 @@ export const LiveChatView: React.FC = () => {
                   const next = !showFiles;
                   setShowFiles(next);
                   if (next) void loadLiveFiles();
-                }} disabled={!selectedProject}>
+                }} disabled={!selectedProject} aria-expanded={showFiles}>
                   <Folder size={13} aria-hidden="true" />{showFiles ? '隐藏文件' : '浏览文件'}
+                </button>
+                <button type="button" className={`btn btn-secondary btn-sm${showTerminal ? ' active' : ''}`} onClick={() => setShowTerminal((current) => !current)} disabled={!selectedThread.sessionId} aria-expanded={showTerminal}>
+                  <Terminal size={13} aria-hidden="true" />{showTerminal ? '隐藏终端' : '交互终端'}
                 </button>
               </div>
               {showEvents && <LiveEventTimeline events={stream.events} cursor={stream.cursor} status={stream.status} />}
               {showFiles && selectedProject && (
-                <LiveFileBrowser
-                  projectId={selectedProject.id}
-                  workspaceRef={selectedProject.workspaceRef}
+                <LiveFilePreview
+                  workspaceId={selectedProject.id}
                   files={files}
                   currentPath={filePath}
                   loading={filesLoading}
                   onLoad={(path) => void loadLiveFiles(path)}
+                  onReference={(path) => void addReference(path, 'file')}
+                  canReference={workbenchConnected && Boolean(selectedThread.sessionId) && !referenceBusy && referenceMaxTokens >= 128 && referenceMaxTokens <= 4096}
                 />
               )}
+              {showTerminal && selectedThread.sessionId && <LiveTerminalPanel key={selectedThread.id} threadId={selectedThread.id} connected={workbenchConnected} />}
               <section className="live-panel live-scope-panel">
                 <div className="live-panel-heading"><h2>连接与协议</h2><ChevronRight size={15} aria-hidden="true" /></div>
                 <p>当前使用本地 Core 的真实状态。会话、运行、审批和事件记录均由服务端提供，协议为 phase1e.v1 / B2。</p>

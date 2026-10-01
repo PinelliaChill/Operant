@@ -8,7 +8,7 @@ import stat
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from operant.application.service import ApplicationService
@@ -19,7 +19,13 @@ from operant.domain.commands import (
 )
 from operant.domain.context import ContextReferenceType, ReferenceIncludeMode, ReferenceRequest
 from operant.domain.models import Session, utc_now
-from operant.domain.threads import ArtifactSensitivity, ArtifactSourceRef, ArtifactSourceType
+from operant.domain.threads import (
+    Artifact,
+    ArtifactSensitivity,
+    ArtifactSourceRef,
+    ArtifactSourceType,
+    RetentionLifecycle,
+)
 from operant.persistence.sqlite import ConflictError, NotFoundError
 from operant.protocol import redact_public_text
 from operant.tools.execution import is_protected_workspace_name
@@ -27,7 +33,7 @@ from operant.tools.execution import is_protected_workspace_name
 
 class WorkbenchReferenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["file", "thread"]
+    kind: Literal["file", "thread", "artifact"]
     target: str = Field(min_length=1, max_length=2048)
     max_tokens: int = Field(default=2000, ge=128, le=8000)
 
@@ -39,6 +45,107 @@ class WorkbenchReferenceView(BaseModel):
     content_hash: str
     size_bytes: int
     truncated: bool
+
+
+class WorkbenchArtifactOption(BaseModel):
+    id: str
+    source: str
+    summary: str
+    media_type: str
+    content_hash: str
+    size_bytes: int
+
+
+class WorkbenchArtifactOptions(BaseModel):
+    items: list[WorkbenchArtifactOption]
+    next_cursor: int | None = None
+
+
+def _text_artifact(artifact: Artifact) -> bool:
+    return artifact.media_type.startswith("text/") or artifact.media_type in {
+        "application/json",
+        "application/xml",
+        "application/x-yaml",
+    }
+
+
+def _owned_artifact(
+    service: ApplicationService,
+    thread_id: str,
+    session_id: str,
+    artifact_id: str,
+    *,
+    verify: bool = True,
+) -> Artifact:
+    artifact = service.get_artifact(artifact_id, verify=verify)
+    if artifact.sensitivity is not ArtifactSensitivity.NORMAL:
+        raise PermissionError("restricted Artifact cannot be referenced")
+    if not _text_artifact(artifact):
+        raise ValueError("Artifact is not previewable text")
+    if artifact.retention_policy_ref == "context-reference":
+        raise PermissionError("internal reference snapshots cannot be referenced")
+    if not any(
+        (ref.source_type is ArtifactSourceType.THREAD and ref.source_id == thread_id)
+        or (ref.source_type is ArtifactSourceType.SESSION and ref.source_id == session_id)
+        for ref in artifact.source_refs
+    ):
+        raise PermissionError("Artifact does not belong to this conversation")
+    state = service.get_artifact_retention_state(artifact_id)
+    if state.lifecycle is not RetentionLifecycle.ACTIVE:
+        raise PermissionError("Artifact is no longer active")
+    return artifact
+
+
+def list_reference_artifacts(
+    service: ApplicationService,
+    thread_id: str,
+    *,
+    after_cursor: int = 0,
+    limit: int = 50,
+) -> WorkbenchArtifactOptions:
+    session = thread_session(service, thread_id)
+    if "read_file" not in session.role_snapshot.tool_policy.allowed_tools:
+        raise PermissionError("the session role does not allow reading references")
+    with service.store._connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT a.id, a.sequence FROM artifacts AS a
+            JOIN artifact_source_refs AS s ON s.artifact_id = a.id
+            JOIN artifact_retention_states AS r ON r.artifact_id = a.id
+            WHERE a.sequence > ? AND a.sensitivity = 'normal' AND r.lifecycle = 'active'
+              AND a.retention_policy_ref != 'context-reference'
+              AND (a.media_type LIKE 'text/%' OR a.media_type IN
+                   ('application/json','application/xml','application/x-yaml'))
+              AND ((s.source_type = 'thread' AND s.source_id = ?)
+                   OR (s.source_type = 'session' AND s.source_id = ?))
+            ORDER BY a.sequence LIMIT ?
+            """,
+            (after_cursor, thread_id, session.id, limit + 1),
+        ).fetchall()
+    selected = rows[:limit]
+    items: list[WorkbenchArtifactOption] = []
+    for row in selected:
+        artifact = _owned_artifact(service, thread_id, session.id, str(row["id"]), verify=False)
+        source = next(
+            f"{ref.source_type.value}:{ref.source_id}"
+            for ref in artifact.source_refs
+            if (ref.source_type is ArtifactSourceType.THREAD and ref.source_id == thread_id)
+            or (ref.source_type is ArtifactSourceType.SESSION and ref.source_id == session.id)
+        )
+        items.append(
+            WorkbenchArtifactOption(
+                id=artifact.id,
+                source=source,
+                summary=f"{artifact.media_type} · {artifact.size_bytes} bytes · {source}",
+                media_type=artifact.media_type,
+                content_hash=artifact.content_hash,
+                size_bytes=artifact.size_bytes,
+            )
+        )
+    return WorkbenchArtifactOptions(
+        items=items,
+        next_cursor=int(selected[-1]["sequence"]) if len(rows) > limit else None,
+    )
 
 
 class WorkbenchCommandRequest(BaseModel):
@@ -85,7 +192,7 @@ def thread_session(service: ApplicationService, thread_id: str) -> Session:
 
 
 def read_workspace_text(root: Path, relative: str, limit: int = 128_000) -> tuple[str, bool]:
-    """Open each path segment without following links; read at most limit+1 bytes."""
+    """Open each path segment without following links; read at most limit+4 bytes."""
     path = Path(relative)
     if (
         path.is_absolute()
@@ -105,13 +212,33 @@ def read_workspace_text(root: Path, relative: str, limit: int = 128_000) -> tupl
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise PermissionError("reference must be a regular file")
         chunks = bytearray()
-        while len(chunks) <= limit:
-            chunk = os.read(descriptor, min(16_384, limit + 1 - len(chunks)))
+        while len(chunks) < limit + 4:
+            chunk = os.read(descriptor, min(16_384, limit + 4 - len(chunks)))
             if not chunk:
                 break
             chunks.extend(chunk)
         truncated = len(chunks) > limit
-        text = bytes(chunks[:limit]).decode("utf-8", errors="strict")
+        preview = bytes(chunks[:limit])
+        try:
+            text = preview.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            if not (
+                truncated and exc.end == len(preview) and exc.reason == "unexpected end of data"
+            ):
+                raise
+            lead = preview[exc.start]
+            if 0xC2 <= lead <= 0xDF:
+                scalar_bytes = 2
+            elif 0xE0 <= lead <= 0xEF:
+                scalar_bytes = 3
+            elif 0xF0 <= lead <= 0xF4:
+                scalar_bytes = 4
+            else:
+                raise
+            # Validate the complete boundary scalar using at most three more
+            # bytes. A malformed continuation or incomplete file still fails.
+            bytes(chunks[exc.start : exc.start + scalar_bytes]).decode("utf-8", errors="strict")
+            text = preview[: exc.start].decode("utf-8", errors="strict")
         if "\x00" in text:
             raise ValueError("binary files cannot be attached as text references")
         return text, truncated
@@ -132,7 +259,7 @@ def create_reference(
     if body.kind == "file":
         text, truncated = read_workspace_text(root, body.target)
         source = f"file:{body.target}"
-    else:
+    elif body.kind == "thread":
         target = service.get_thread(body.target)
         if not target.workspace_ref or Path(target.workspace_ref).resolve(strict=True) != root:
             raise PermissionError("referenced conversation belongs to another workspace")
@@ -149,6 +276,16 @@ def create_reference(
                 parts.append(f"{payload['type']}: {payload['text']}")
         text, truncated = "\n".join(parts), len(rows) > 20
         source = f"thread:{target.id}"
+    else:
+        artifact = _owned_artifact(service, thread_id, session.id, body.target)
+        if artifact.size_bytes > 128_000:
+            raise ValueError("Artifact exceeds the bounded reference limit")
+        raw = service._read_artifact_for_context(artifact.id)
+        text = raw.decode("utf-8", errors="strict")
+        if "\x00" in text:
+            raise ValueError("binary Artifact cannot be referenced")
+        truncated = False
+        source = f"artifact:{artifact.id}"
     max_chars = body.max_tokens * 3
     truncated = truncated or len(text) > max_chars
     text = redact_public_text(text[:max_chars], max_chars=max_chars)
@@ -294,6 +431,23 @@ def install_workbench_context_routes(app: FastAPI, service: ApplicationService) 
     def reference(thread_id: str, body: WorkbenchReferenceRequest) -> WorkbenchReferenceView:
         try:
             return create_reference(service, thread_id, body)
+        except (NotFoundError, ValueError, PermissionError, OSError, ConflictError) as exc:
+            raise _http_error(exc) from exc
+
+    @app.get(
+        "/v1/workbench/threads/{thread_id}/artifacts",
+        operation_id="listWorkbenchReferenceArtifacts",
+        response_model=WorkbenchArtifactOptions,
+    )
+    def reference_artifacts(
+        thread_id: str,
+        after_cursor: int = Query(default=0, ge=0),
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> WorkbenchArtifactOptions:
+        try:
+            return list_reference_artifacts(
+                service, thread_id, after_cursor=after_cursor, limit=limit
+            )
         except (NotFoundError, ValueError, PermissionError, OSError, ConflictError) as exc:
             raise _http_error(exc) from exc
 

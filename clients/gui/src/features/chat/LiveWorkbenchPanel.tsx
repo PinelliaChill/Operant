@@ -36,6 +36,7 @@ export const LiveWorkbenchPanel: React.FC<{ threadId: string; connected: boolean
   const [message, setMessage] = useState('');
   const [replyTo, setReplyTo] = useState('');
   const [contextCommandBusy, setContextCommandBusy] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const mutationKeys = useRef(new Map<string, string>());
   const requestSequence = useRef(0);
   const keyFor = (scope: string, fingerprint: string) => {
@@ -71,6 +72,7 @@ export const LiveWorkbenchPanel: React.FC<{ threadId: string; connected: boolean
     setMessages([]);
     setContext(null);
     setRecipient('');
+    setConfirmClear(false);
     setNotice('');
     setError('');
     setQueryError('');
@@ -162,6 +164,7 @@ export const LiveWorkbenchPanel: React.FC<{ threadId: string; connected: boolean
       const result = await workbenchClient.executeCommand(threadId, { text }, keyFor('command', `${threadId}:${text}`));
       mutationKeys.current.delete(identity);
       setNotice(`${result.command}：${result.message}`);
+      setConfirmClear(false);
       await refresh();
     } catch (cause) { setError(errorText(cause)); }
     finally { setContextCommandBusy(false); }
@@ -218,8 +221,9 @@ export const LiveWorkbenchPanel: React.FC<{ threadId: string; connected: boolean
           <ul>{(context.blocks ?? []).map((block, index) => <li key={index}>{String(block.type ?? `区块 ${index + 1}`)}{typeof block.token_estimate === 'number' ? ` · ${block.token_estimate} Token` : ''}</li>)}</ul>
           {(context.references?.length ?? 0) > 0 && <><strong>已绑定引用</strong><ul>{(context.references ?? []).map((reference, index) => <li key={index}>{String(reference.ref_type ?? '引用')} · {String(reference.target_id ?? reference.source_ref ?? '来源已记录')}</li>)}</ul></>}
         </details>
+        <p className="live-workbench-hint">压缩和清理会建立新基线，下一轮生效；历史消息仍由 Core 保留。</p>
         <div className="live-workbench-actions"><button type="button" className="btn btn-secondary btn-sm" onClick={() => void runContextCommand('/compact-context')} disabled={!connected || contextCommandBusy}>压缩上下文</button>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void runContextCommand('/clear-context')} disabled={!connected || contextCommandBusy}>清理上下文</button></div>
+          {confirmClear ? <><button type="button" className="btn btn-secondary btn-sm" onClick={() => void runContextCommand('/clear-context')} disabled={!connected || contextCommandBusy}>确认清理</button><button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmClear(false)}>取消</button></> : <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmClear(true)} disabled={!connected || contextCommandBusy}>清理上下文</button>}</div>
       </> : <p className="live-panel-empty">{loading ? '正在读取上下文…' : '暂无上下文详情'}</p>}
     </div>
     {selectedThread?.sessionId && selectedThread.workspaceRef && <LiveBtwPanel sessionId={selectedThread.sessionId} threadId={threadId} workspace={selectedThread.workspaceRef} connected={connected} onPromoted={onChanged} />}

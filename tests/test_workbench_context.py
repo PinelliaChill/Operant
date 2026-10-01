@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from operant.api import create_app
@@ -11,10 +13,20 @@ from operant.api_workbench_context import (
     create_reference,
     install_workbench_context_routes,
     read_context_reference,
+    read_workspace_text,
 )
 from operant.application.service import ApplicationService
 from operant.domain.models import ModelProfile, RolePreset, ToolPolicy
-from operant.domain.threads import ConversationThread, Item, Turn, UserMessagePayload
+from operant.domain.threads import (
+    ArtifactAccessLevel,
+    ArtifactSensitivity,
+    ArtifactSourceRef,
+    ArtifactSourceType,
+    ConversationThread,
+    Item,
+    Turn,
+    UserMessagePayload,
+)
 from operant.persistence.sqlite import SQLiteStore
 from operant.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -68,6 +80,73 @@ def test_file_snapshot_is_metadata_first_scoped_and_immutable(tmp_path):
         read_context_reference(service, other.id, (view.reference,), view.reference.target_id)
 
 
+def test_long_utf8_file_reference_truncates_at_complete_character(tmp_path):
+    service, thread, workspace, _ = scope(tmp_path)
+    target = workspace / "long.txt"
+    target.write_text("中文" * 105_000, encoding="utf-8")
+    assert target.stat().st_size == 630_000
+
+    preview, truncated = read_workspace_text(workspace, "long.txt")
+    assert truncated is True
+    assert len(preview.encode("utf-8")) == 127_998
+    assert preview.endswith("文")
+
+    view = create_reference(
+        service,
+        thread.id,
+        WorkbenchReferenceRequest(kind="file", target="long.txt", max_tokens=8000),
+    )
+    assert view.truncated is True
+    raw_snapshot = service._read_artifact_for_context(view.reference.target_id)
+    assert view.content_hash == hashlib.sha256(raw_snapshot).hexdigest()
+    result = read_context_reference(service, thread.id, (view.reference,), view.reference.target_id)
+    assert result["source"] == "file:long.txt"
+    assert result["truncated"] is True
+    assert result["content"] == preview[:24_000]
+    assert result["content_hash"] == view.content_hash
+
+
+def test_file_reference_rejects_invalid_or_incomplete_utf8(tmp_path):
+    service, thread, workspace, _ = scope(tmp_path)
+    for content in (
+        b"valid\xffinvalid",
+        b"a" * 127_998 + b"\xe4\xb8",
+        b"a" * 127_999 + b"\xf0\xff\x80\x80" + b"tail",
+    ):
+        (workspace / "invalid.txt").write_bytes(content)
+        with pytest.raises(UnicodeDecodeError):
+            read_workspace_text(workspace, "invalid.txt")
+        with pytest.raises(UnicodeDecodeError):
+            create_reference(
+                service, thread.id, WorkbenchReferenceRequest(kind="file", target="invalid.txt")
+            )
+
+
+def test_existing_shell_history_cannot_be_attached_as_reference(tmp_path):
+    service, thread, workspace, _ = scope(tmp_path)
+    history = workspace / ".bash_history"
+    history.write_text("private command marker\n", encoding="utf-8")
+    app = FastAPI()
+    install_workbench_context_routes(app, service)
+    with TestClient(app) as client:
+        denied = client.post(
+            f"/v1/workbench/threads/{thread.id}/references",
+            json={"kind": "file", "target": history.name},
+        )
+        assert denied.status_code == 403
+        assert "private command marker" not in denied.text
+    assert history.read_text(encoding="utf-8") == "private command marker\n"
+
+
+def test_four_byte_utf8_scalar_cut_by_file_preview_limit(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "emoji.txt").write_text("a" * 127_999 + "😀" + "suffix", encoding="utf-8")
+    preview, truncated = read_workspace_text(workspace, "emoji.txt")
+    assert truncated is True
+    assert preview == "a" * 127_999
+
+
 @pytest.mark.parametrize("target", ["../outside", ".env", "link.txt", "folder/link.txt"])
 def test_reference_rejects_escape_protected_and_symlinks(tmp_path, target):
     service, thread, workspace, _ = scope(tmp_path)
@@ -101,6 +180,70 @@ def test_thread_reference_copies_only_public_history_and_rejects_cross_workspace
         create_reference(
             service, thread.id, WorkbenchReferenceRequest(kind="thread", target=unrelated.id)
         )
+
+
+def test_artifact_picker_and_reference_recheck_scope_and_lifecycle(tmp_path):
+    service, thread, workspace, role = scope(tmp_path)
+    # Use the same service instance as the route under test.
+    app = FastAPI()
+    install_workbench_context_routes(app, service)
+    other = service.create_thread(ConversationThread(workspace_ref=str(workspace)))
+    service.create_session(role.id, thread_id=other.id)
+
+    def make(content: bytes, owner: str, sensitivity=ArtifactSensitivity.NORMAL):
+        artifact, _ = service.create_artifact(
+            content=content,
+            media_type="text/plain",
+            sensitivity=sensitivity,
+            source_refs=(
+                ArtifactSourceRef(source_type=ArtifactSourceType.THREAD, source_id=owner),
+            ),
+        )
+        return artifact
+
+    own = make(b"own visible body", thread.id)
+    own_second = make(b"second visible body", thread.id)
+    foreign = make(b"foreign private body", other.id)
+    sensitive = make(b"sensitive private body", thread.id, ArtifactSensitivity.SENSITIVE)
+    archived = make(b"archived old body", thread.id)
+    capability = service.issue_artifact_capability(
+        archived.id,
+        operation="retention_archive",
+        access_level=ArtifactAccessLevel.NORMAL,
+    )
+    service.archive_artifact(archived.id, capability=capability)
+
+    with TestClient(app) as client:
+        route = f"/v1/workbench/threads/{thread.id}/artifacts"
+        first = client.get(route, params={"limit": 1})
+        assert first.status_code == 200
+        assert [item["id"] for item in first.json()["items"]] == [own.id]
+        cursor = first.json()["next_cursor"]
+        second = client.get(route, params={"after_cursor": cursor, "limit": 1})
+        assert [item["id"] for item in second.json()["items"]] == [own_second.id]
+        assert second.json()["next_cursor"] is None
+        reference_route = f"/v1/workbench/threads/{thread.id}/references"
+        created = client.post(reference_route, json={"kind": "artifact", "target": own.id})
+        assert created.status_code == 200
+        view = created.json()
+        assert view["source"] == f"artifact:{own.id}"
+        from operant.domain.context import ReferenceRequest
+
+        snapshot = ReferenceRequest.model_validate(view["reference"])
+        read = read_context_reference(service, thread.id, (snapshot,), snapshot.target_id)
+        assert read["content"] == "own visible body"
+        listed_after_snapshot = client.get(route).json()["items"]
+        assert snapshot.target_id not in {item["id"] for item in listed_after_snapshot}
+        recursive = client.post(
+            reference_route, json={"kind": "artifact", "target": snapshot.target_id}
+        )
+        assert recursive.status_code == 403
+        with pytest.raises(PermissionError):
+            read_context_reference(service, thread.id, (), snapshot.target_id)
+        for denied in (foreign, sensitive, archived):
+            response = client.post(reference_route, json={"kind": "artifact", "target": denied.id})
+            assert response.status_code == 403
+            assert b"private body" not in response.content
 
 
 def test_command_parameter_error_and_clear_keep_history(tmp_path):

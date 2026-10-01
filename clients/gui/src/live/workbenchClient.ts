@@ -6,8 +6,13 @@ import type {
   WorkbenchCommandResult,
   WorkbenchContextView,
   WorkbenchReferenceView,
+  WorkbenchFileContent,
+  WorkbenchFileDiff,
+  TerminalView,
+  WorkbenchArtifactOptions,
 } from '../../../../sdk/typescript-client/workbench.generated';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
+import { resolveTerminalStreamUrl, terminalStreamProtocols } from './terminalStreamUrl';
 
 export type {
   ChildAgentView,
@@ -45,8 +50,24 @@ export const workbenchClient = {
     liveClient().listWorkbenchCommands(),
   getContext: (threadId: string): Promise<WorkbenchContextView> =>
     liveClient().getWorkbenchContext(threadId),
-  createReference: (threadId: string, input: { kind: 'file' | 'thread'; target: string; max_tokens?: number }, key: string): Promise<WorkbenchReferenceView> =>
+  createReference: (threadId: string, input: { kind: 'file' | 'thread' | 'artifact'; target: string; max_tokens?: number }, key: string): Promise<WorkbenchReferenceView> =>
     liveClient().createWorkbenchReference(threadId, input, { idempotencyKey: key }),
+  listReferenceArtifacts: (threadId: string, afterCursor?: number): Promise<WorkbenchArtifactOptions> =>
+    liveClient().listWorkbenchReferenceArtifacts(threadId, { afterCursor, limit: 50 }),
   executeCommand: (threadId: string, input: { text: string; registry_version?: string; reviewer_role_id?: string }, key: string): Promise<WorkbenchCommandResult> =>
     liveClient().executeWorkbenchCommand(threadId, input, { idempotencyKey: key }),
+  getFileContent: (workspaceId: string, path: string, maxBytes: number): Promise<WorkbenchFileContent> =>
+    liveClient().getWorkbenchFileContent(workspaceId, { path, maxBytes }),
+  getFileDiff: (workspaceId: string, path: string, maxBytes: number): Promise<WorkbenchFileDiff> =>
+    liveClient().getWorkbenchFileDiff(workspaceId, { path, maxBytes }),
+  createTerminal: (threadId: string, size: { cols: number; rows: number }, key: string): Promise<TerminalView> =>
+    liveClient().createWorkbenchTerminal(threadId, { ...size, idempotency_key: key }, { idempotencyKey: key }),
+  getTerminal: (terminalId: string): Promise<TerminalView> =>
+    liveClient().getWorkbenchTerminal(terminalId),
+  closeTerminal: (terminalId: string): Promise<TerminalView> =>
+    liveClient().deleteWorkbenchTerminal(terminalId),
+  terminalStreamUrl: (terminalId: string): string => {
+    return resolveTerminalStreamUrl(currentBrowserOrigin(), terminalId);
+  },
+  terminalStreamProtocols,
 };

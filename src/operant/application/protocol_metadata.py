@@ -75,6 +75,9 @@ WORKBENCH_CAPABILITIES: tuple[str, ...] = (
     "directed_mailbox",
     "context_references",
     "conversation_commands",
+    "workspace_file_content",
+    "workspace_file_diff",
+    "interactive_terminal",
 )
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 

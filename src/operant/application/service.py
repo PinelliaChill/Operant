@@ -597,6 +597,7 @@ class ApplicationService:
         self.slash_commands = SlashCommandRegistry()
         self._cancellations: dict[str, asyncio.Event] = {}
         self.workbench: Any | None = None
+        self.terminal_manager: Any | None = None
         self._sidecar_cancellations: dict[str, asyncio.Event] = {}
         self._approval_futures: dict[tuple[str, str], asyncio.Future[bool]] = {}
         self._approval_details: dict[tuple[str, str], dict[str, str]] = {}
@@ -1669,6 +1670,8 @@ class ApplicationService:
         )
 
     def archive_thread(self, thread_id: str) -> ConversationThread:
+        if self.terminal_manager is not None:
+            self.terminal_manager.cancel_thread(thread_id)
         return self.store.archive_thread(thread_id)
 
     def set_thread_status(
@@ -1676,6 +1679,19 @@ class ApplicationService:
         thread_id: str,
         status: ThreadStatus | str,
     ) -> ConversationThread:
+        if (
+            status
+            in {
+                ThreadStatus.COMPLETED,
+                ThreadStatus.CANCELLED,
+                ThreadStatus.ARCHIVED,
+                "completed",
+                "cancelled",
+                "archived",
+            }
+            and self.terminal_manager is not None
+        ):
+            self.terminal_manager.cancel_thread(thread_id)
         return self.store.set_thread_status(thread_id, status)
 
     def create_turn(self, turn: Turn) -> Turn:
@@ -3823,6 +3839,8 @@ class ApplicationService:
 
     def cancel_session(self, session_id: str) -> bool:
         self.get_session(session_id)
+        if self.terminal_manager is not None:
+            self.terminal_manager.cancel_session(session_id)
         if self.workbench is not None:
             self.workbench.cancel_session_children(session_id)
         accepted = self.store.cancel_session_run_lease(session_id)

@@ -4,14 +4,14 @@
   "version": "0.1.0",
   "identifier": "dev.operant.desktop",
   "build": {
-    "beforeDevCommand": "npm --prefix ../gui run dev",
+    "beforeDevCommand": "npm --prefix ../gui run dev -- --host 127.0.0.1 --strictPort",
     "beforeBuildCommand": "npm --prefix ../gui run build",
     "devUrl": "http://127.0.0.1:3000",
     "frontendDist": "../../gui/dist"
   },
   "app": {
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8000; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8000 ws://127.0.0.1:8000; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     },
     "windows": [
       {
