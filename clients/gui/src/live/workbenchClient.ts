@@ -10,6 +10,7 @@ import type {
   WorkbenchFileDiff,
   TerminalView,
   WorkbenchArtifactOptions,
+  ResourcePolicyPatch,
 } from '../../../../sdk/typescript-client/workbench.generated';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
 import { resolveTerminalStreamUrl, terminalStreamProtocols } from './terminalStreamUrl';
@@ -32,6 +33,22 @@ function liveClient(): WorkbenchClient {
 }
 
 export const workbenchClient = {
+  listResources: (threadId: string, cursors: Record<string, number> = {}) =>
+    liveClient().listWorkbenchResources(threadId, {
+      afterArtifact: cursors.after_artifact,
+      afterRevision: cursors.after_revision,
+      afterCompaction: cursors.after_compaction,
+    }),
+  updateResourcePolicy: (threadId: string, policy: ResourcePolicyPatch, key: string) =>
+    liveClient().updateWorkbenchResourcePolicy(threadId, policy, { idempotencyKey: key }),
+  confirmResources: (threadId: string, completed: boolean, key: string) =>
+    liveClient().confirmWorkbenchResources(threadId, { completed }, { idempotencyKey: key }),
+  pinResource: (threadId: string, resourceId: string, pinned: boolean, key: string) =>
+    liveClient().setWorkbenchResourcePin(threadId, resourceId, { pinned }, { idempotencyKey: key }),
+  previewResourceCleanup: (threadId: string, resourceIds: string[]) =>
+    liveClient().previewWorkbenchResourceCleanup(threadId, { resource_ids: resourceIds, mode: 'manual' }),
+  cleanupResources: (threadId: string, resourceIds: string[], key: string) =>
+    liveClient().cleanupWorkbenchResources(threadId, { resource_ids: resourceIds, mode: 'manual' }, { idempotencyKey: key }),
   listChildren: (parentId: string): Promise<ChildAgentView[]> =>
     liveClient().listWorkbenchChildAgents(parentId),
   createChild: (parentId: string, input: {

@@ -114,6 +114,13 @@ from operant.memory_plugins.b25_schema import schema_contracts as b25_schema_con
 from operant.memory_plugins.b26_schema import schema_contracts as b26_schema_contracts
 from operant.memory_plugins.management_schema import schema_contracts as b23_schema_contracts
 from operant.memory_plugins.recall_schema import schema_contracts as b24_schema_contracts
+from operant.persistence.resource_governance import (
+    downgrade as downgrade_resource_governance,
+)
+from operant.persistence.resource_governance import (
+    schema_contracts as resource_governance_schema_contracts,
+)
+from operant.persistence.resource_governance import upgrade as upgrade_resource_governance
 from operant.persistence.task_control_schema import (
     downgrade as downgrade_task_control,
 )
@@ -252,6 +259,7 @@ class WorkflowExecutionLease:
 
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
+        21: "1aa28a25987bd6da49bbf7cdc49293038f3a8e30f488388ae0f10140b7a3400c",
         20: "c4a8218693db68e469c7bb9e33617d6ef6187e2a8ce11360c145d5498c5f9948",
         19: "658d0732a8e13f06b09192329e93d7590c07bb35b06721ab8cd2a620618a2d6a",
         18: "245c61b8481bfd920dd7679f32b48cdc5c197e451a8b3e60385a4486e1059432",
@@ -274,6 +282,7 @@ class SQLiteStore:
         14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
+        21: "164a2941edbcdf482027b7de89a70035181ed1e2818c81d33f4357f33871d565",
         20: "2a0db4224e32f0968e6aae795c28e33a885722c35cc9948aca9195830f55e571",
         19: "3f071878abbe04dd52be28b86ccbbfe7043fe3102e27fa62bb4dc2e448dc7c1b",
         18: "3b9c6f033068b85d15f5d1291ca70d472fd7b69e25140319dc5a53fab2a654fb",
@@ -637,6 +646,12 @@ class SQLiteStore:
             build(18, "b26_experience_sharing", self._upgrade_v18, self._downgrade_v18),
             build(19, "session_workbench", upgrade_workbench, downgrade_workbench),
             build(20, "task_control_scoped_config", upgrade_task_control, downgrade_task_control),
+            build(
+                21,
+                "workbench_resource_governance",
+                upgrade_resource_governance,
+                downgrade_resource_governance,
+            ),
         )
 
     def _ensure_migration_table(self) -> None:
@@ -2160,6 +2175,8 @@ class SQLiteStore:
             tables.update(workbench_schema_contracts()[0])
         if version >= 20:
             tables.update(task_control_schema_contracts()[0])
+        if version >= 21:
+            tables.update(resource_governance_schema_contracts()[0])
         return tables
 
     @staticmethod
@@ -2435,6 +2452,8 @@ class SQLiteStore:
             contract.update(workbench_schema_contracts()[1])
         if version >= 20:
             contract.update(task_control_schema_contracts()[1])
+        if version >= 21:
+            contract.update(resource_governance_schema_contracts()[1])
         return contract
 
     @classmethod
@@ -2707,6 +2726,8 @@ class SQLiteStore:
                 upgrade_workbench(connection)
             if version >= 20:
                 upgrade_task_control(connection)
+            if version >= 21:
+                upgrade_resource_governance(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2915,6 +2936,8 @@ class SQLiteStore:
             contract.update(workbench_schema_contracts()[2])
         if version >= 20:
             contract.update(task_control_schema_contracts()[2])
+        if version >= 21:
+            contract.update(resource_governance_schema_contracts()[2])
         return contract
 
     @staticmethod
@@ -3132,6 +3155,8 @@ class SQLiteStore:
             contract.update(workbench_schema_contracts()[3])
         if version >= 20:
             contract.update(task_control_schema_contracts()[3])
+        if version >= 21:
+            contract.update(resource_governance_schema_contracts()[3])
         return contract
 
     @staticmethod
@@ -3563,6 +3588,8 @@ class SQLiteStore:
             contract.update(workbench_schema_contracts()[5])
         if version >= 20:
             contract.update(task_control_schema_contracts()[5])
+        if version >= 21:
+            contract.update(resource_governance_schema_contracts()[5])
         return contract
 
     @staticmethod
@@ -3823,6 +3850,8 @@ class SQLiteStore:
             indexes.update(workbench_schema_contracts()[4])
         if version >= 20:
             indexes.update(task_control_schema_contracts()[4])
+        if version >= 21:
+            indexes.update(resource_governance_schema_contracts()[4])
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -10142,6 +10171,14 @@ class SQLiteStore:
         self.get_session(event.session_id)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if event.event_type == "agent.completed" and event.agent_id is not None:
+                cancelled = connection.execute(
+                    "SELECT cancel_requested FROM session_run_leases "
+                    "WHERE session_id=? AND agent_id=? AND released_at IS NULL",
+                    (event.session_id, event.agent_id),
+                ).fetchone()
+                if cancelled is not None and bool(cancelled["cancel_requested"]):
+                    raise ConflictError("session cancellation was requested before completion")
             cursor = connection.execute(
                 """
                 INSERT INTO events(
@@ -10975,14 +11012,50 @@ class SQLiteStore:
             ):
                 raise NotFoundError(f"artifact not found: {artifact_id}")
             blockers: list[str] = []
+            policy_row = connection.execute(
+                "SELECT retention_policy_ref FROM artifacts WHERE id = ?", (artifact_id,)
+            ).fetchone()
+            temporary_context_snapshot = (
+                policy_row is not None
+                and policy_row["retention_policy_ref"] == "context-reference-temporary"
+            )
             if (
                 connection.execute(
-                    "SELECT 1 FROM artifact_source_refs WHERE artifact_id = ? LIMIT 1",
-                    (artifact_id,),
+                    """SELECT 1 FROM artifact_source_refs
+                    WHERE artifact_id = ? AND (? = 0 OR source_type != 'thread') LIMIT 1""",
+                    (artifact_id, int(temporary_context_snapshot)),
                 ).fetchone()
                 is not None
             ):
                 blockers.append("source_reference")
+            if temporary_context_snapshot:
+                owner_rows = connection.execute(
+                    """SELECT s.source_id AS thread_id, l.source_id AS session_id
+                    FROM artifact_source_refs s
+                    LEFT JOIN thread_legacy_refs l
+                      ON l.thread_id=s.source_id AND l.source_type='session'
+                    WHERE s.artifact_id=? AND s.source_type='thread'""",
+                    (artifact_id,),
+                ).fetchall()
+                if len(owner_rows) != 1 or owner_rows[0]["session_id"] is None:
+                    blockers.append("thread_owner_unverified")
+                else:
+                    owner_thread = str(owner_rows[0]["thread_id"])
+                    owner_session = str(owner_rows[0]["session_id"])
+                    if (
+                        connection.execute(
+                            """SELECT 1 FROM session_run_leases
+                        WHERE session_id=? AND released_at IS NULL LIMIT 1""",
+                            (owner_session,),
+                        ).fetchone()
+                        or connection.execute(
+                            """SELECT 1 FROM workbench_children
+                        WHERE thread_id=? AND status IN ('queued','running','interrupted')
+                        LIMIT 1""",
+                            (owner_thread,),
+                        ).fetchone()
+                    ):
+                        blockers.append("active_or_recoverable_run")
             if (
                 connection.execute(
                     """

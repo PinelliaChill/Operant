@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from contextlib import suppress
 from datetime import datetime
@@ -126,13 +127,35 @@ class WorkbenchRuntime:
                 lease = None
             if lease is not None and lease.released_at is None and lease.expires_at > utc_now():
                 return view
-            # A fresh Core never replays an unknown in-flight model or tool call.
+            # A terminal event may have committed just before the worker died,
+            # leaving only the child projection behind. Reconcile that exact
+            # Agent; an earlier completed wake must not complete a newer run.
+            status: str = "interrupted"
+            result: str | None = None
+            recovery: str | None = "manual_reconcile"
+            if lease is not None and lease.agent_id is not None:
+                with self.service.store._connect() as connection:
+                    event = connection.execute(
+                        "SELECT event_type,body FROM events WHERE session_id=? AND agent_id=? "
+                        "AND event_type IN ('agent.completed','agent.cancelled','agent.failed',"
+                        "'agent.timed_out','budget.exhausted') ORDER BY sequence DESC LIMIT 1",
+                        (view.session_id, lease.agent_id),
+                    ).fetchone()
+                if event is not None:
+                    if event["event_type"] == "agent.completed":
+                        status, recovery = "completed", None
+                        content = json.loads(event["body"]).get("content")
+                        result = content if isinstance(content, str) else None
+                    elif event["event_type"] == "agent.cancelled":
+                        status, recovery = "cancelled", None
+                    else:
+                        status, recovery = "failed", "inspect_events"
+            # An unknown in-flight model, tool or approval is never replayed.
             with self.service.store._connect() as connection:
                 connection.execute(
-                    "UPDATE workbench_children SET status='interrupted',"
-                    "recovery='manual_reconcile',"
+                    "UPDATE workbench_children SET status=?,result=?,recovery=?,"
                     "updated_at=? WHERE thread_id=? AND status IN ('queued','running')",
-                    (utc_now().isoformat(), thread_id),
+                    (status, result, recovery, utc_now().isoformat(), thread_id),
                 )
             return self.get_child(thread_id)
         return view
@@ -247,16 +270,33 @@ class WorkbenchRuntime:
             task=body.task,
             limit=MAX_CHILDREN,
         )
+        # Commit the cross-process lease before scheduling the coroutine. A
+        # second Core must never mistake this queued child for an orphan.
+        if not self.service.admit_session_run(session.id):
+            raise ConflictError("child session already has an active run")
         task = asyncio.create_task(
             self._run_child(thread.id, session.id, body.task, parent.workspace_ref)
         )
         self.tasks[thread.id] = task
+        lease = self.service.admitted_session_run_lease(session.id)
         task.add_done_callback(
-            lambda completed: (
-                self.tasks.pop(thread.id, None) if self.tasks.get(thread.id) is completed else None
-            )
+            lambda completed: self._finish_task(thread.id, session.id, lease, completed)
         )
         return self.get_child(thread.id)
+
+    def _finish_task(
+        self,
+        thread_id: str,
+        session_id: str,
+        lease: Any,
+        completed: asyncio.Task[None],
+        *,
+        wake: bool = False,
+    ) -> None:
+        tasks = self.wake_tasks if wake else self.tasks
+        if tasks.get(thread_id) is completed:
+            tasks.pop(thread_id, None)
+        self.service.release_session_run(session_id, lease)
 
     async def _run_child(
         self, thread_id: str, session_id: str, prompt: str, workspace: str
@@ -265,14 +305,22 @@ class WorkbenchRuntime:
         result: str | None = None
         recovery: str | None = "manual_reconcile"
         with self.service.store._connect() as connection:
-            connection.execute(
+            started = connection.execute(
                 "UPDATE workbench_children SET status='running',updated_at=? "
-                "WHERE thread_id=? AND status='queued'",
-                (utc_now().isoformat(), thread_id),
+                "WHERE thread_id=? AND status='queued' AND EXISTS ("
+                "SELECT 1 FROM threads WHERE id=? AND status='active')",
+                (utc_now().isoformat(), thread_id, thread_id),
             )
+        if started.rowcount != 1:
+            self.service.release_session_run(session_id)
+            return
         try:
             async for event in self.service.run_session(
-                session_id, user_message=prompt, workspace=workspace, thread_id=thread_id
+                session_id,
+                user_message=prompt,
+                workspace=workspace,
+                thread_id=thread_id,
+                _admission_granted=True,
             ):
                 if event.event_type == "agent.completed":
                     status = "completed"
@@ -298,6 +346,7 @@ class WorkbenchRuntime:
         except Exception:
             status, recovery = "interrupted", "manual_reconcile"
         finally:
+            self.service.release_session_run(session_id)
             with self.service.store._connect() as connection:
                 connection.execute(
                     "UPDATE workbench_children SET status=?,result=?,recovery=?,updated_at=? "
@@ -313,29 +362,90 @@ class WorkbenchRuntime:
         thread = self.service.get_thread(thread_id)
         for child in self.list_children(thread_id):
             self.cancel_tree(child.thread_id)
-        child_view: ChildAgentView | None = None
-        with self.service.store._connect() as connection:
-            connection.execute(
-                "UPDATE workbench_children SET status='cancelled',recovery=NULL,updated_at=? "
-                "WHERE thread_id=? AND status IN ('queued','running')",
-                (utc_now().isoformat(), thread_id),
-            )
         try:
             session = thread_session(self.service, thread_id)
-            self.service.cancel_session(session.id)
         except ValueError:
-            pass
+            session = None
+        queued_child = False
+        terminal_child = False
+        terminal_run = False
+        with self.service.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            child = connection.execute(
+                "SELECT session_id,status FROM workbench_children WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            if child is not None and child["status"] not in {"queued", "running"}:
+                terminal_child = True
+            target_session_id = (
+                str(child["session_id"])
+                if child is not None
+                else (session.id if session is not None else None)
+            )
+            lease = (
+                connection.execute(
+                    "SELECT agent_id,released_at FROM session_run_leases WHERE session_id=?",
+                    (target_session_id,),
+                ).fetchone()
+                if target_session_id is not None
+                else None
+            )
+            completed = (
+                connection.execute(
+                    "SELECT body FROM events WHERE session_id=? AND agent_id=? "
+                    "AND event_type='agent.completed' ORDER BY sequence DESC LIMIT 1",
+                    (target_session_id, lease["agent_id"]),
+                ).fetchone()
+                if lease is not None and lease["agent_id"] is not None
+                else None
+            )
+            if (
+                child is None
+                and completed is not None
+                and lease is not None
+                and lease["released_at"] is None
+            ):
+                terminal_run = True
+            if child is not None and completed is not None:
+                content = json.loads(completed["body"]).get("content")
+                connection.execute(
+                    "UPDATE workbench_children SET status='completed',result=?,recovery=NULL,"
+                    "updated_at=? WHERE thread_id=? AND status IN ('queued','running')",
+                    (
+                        content if isinstance(content, str) else None,
+                        utc_now().isoformat(),
+                        thread_id,
+                    ),
+                )
+                terminal_child = True
+            if child is not None and not terminal_child:
+                queued_child = child["status"] == "queued"
+                connection.execute(
+                    "UPDATE workbench_children SET status='cancelled',recovery=NULL,updated_at=? "
+                    "WHERE thread_id=? AND status IN ('queued','running')",
+                    (utc_now().isoformat(), thread_id),
+                )
+            if target_session_id is not None and not terminal_child and not terminal_run:
+                connection.execute(
+                    "UPDATE session_run_leases SET cancel_requested=1 "
+                    "WHERE session_id=? AND released_at IS NULL AND expires_at>?",
+                    (target_session_id, utc_now().isoformat()),
+                )
+        if terminal_child or terminal_run:
+            return self.get_child(thread_id) if child is not None else None
+        if session is not None:
+            self.service.cancel_session(session.id)
         if thread.status is ThreadStatus.ACTIVE:
             self.service.set_thread_status(thread_id, ThreadStatus.CANCELLED)
-        if thread_id in self.tasks:
+        if queued_child and thread_id in self.tasks:
             self.tasks[thread_id].cancel()
-        with self.service.store._connect() as connection:
-            exists = connection.execute(
-                "SELECT 1 FROM workbench_children WHERE thread_id=?", (thread_id,)
-            ).fetchone()
-        if exists:
-            child_view = self.get_child(thread_id)
-        return child_view
+        if (
+            thread_id in self.wake_tasks
+            and session is not None
+            and session.id not in self.service._cancellations
+        ):
+            self.wake_tasks[thread_id].cancel()
+        return self.get_child(thread_id) if child is not None else None
 
     def cancel_session_children(self, session_id: str) -> None:
         try:
@@ -403,8 +513,6 @@ class WorkbenchRuntime:
                 + parent_hint
             )
         recipient = self.service.get_thread(body.recipient_thread_id)
-        if sender.status is not ThreadStatus.ACTIVE or recipient.status is not ThreadStatus.ACTIVE:
-            raise ConflictError("message sender and recipient must be active")
         if sender.workspace_ref != recipient.workspace_ref or not sender.workspace_ref:
             raise PermissionError("private messages require one shared workspace")
         thread_session(self.service, body.recipient_thread_id)
@@ -431,6 +539,12 @@ class WorkbenchRuntime:
                 ):
                     raise ConflictError("message idempotency key reused with different content")
                 return self._message(existing), False
+            active = connection.execute(
+                "SELECT COUNT(*) FROM threads WHERE id IN (?,?) AND status='active'",
+                (sender_thread_id, body.recipient_thread_id),
+            ).fetchone()[0]
+            if active != 2:
+                raise ConflictError("message sender and recipient must be active")
             if body.reply_to is not None:
                 previous = connection.execute(
                     "SELECT sender_thread_id,recipient_thread_id "
@@ -467,6 +581,44 @@ class WorkbenchRuntime:
             assert row is not None
             return self._message(row), True
 
+    def _reserve_wake(self, thread_id: str, *, limit: int) -> str:
+        """Reserve one automatic turn and its child transition in one write."""
+
+        with self.service.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            thread = connection.execute(
+                "SELECT status FROM threads WHERE id=?", (thread_id,)
+            ).fetchone()
+            if thread is None or thread["status"] != "active":
+                return "pending"
+            child = connection.execute(
+                "SELECT status FROM workbench_children WHERE thread_id=?", (thread_id,)
+            ).fetchone()
+            if child is not None and child["status"] != "completed":
+                return "pending"
+            count = connection.execute(
+                "SELECT wake_count FROM workbench_wake_counts WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            used = 0 if count is None else int(count["wake_count"])
+            if used >= limit:
+                return "limit_reached"
+            now = utc_now().isoformat()
+            connection.execute(
+                "INSERT INTO workbench_wake_counts(thread_id,wake_count,updated_at) "
+                "VALUES (?,?,?) ON CONFLICT(thread_id) DO UPDATE SET "
+                "wake_count=excluded.wake_count,updated_at=excluded.updated_at",
+                (thread_id, used + 1, now),
+            )
+            if child is not None:
+                connection.execute(
+                    "UPDATE workbench_children SET status='queued',result=NULL,recovery=NULL,"
+                    "updated_at=? WHERE thread_id=? AND status='completed'",
+                    (now, thread_id),
+                )
+                return "child"
+        return "thread"
+
     async def wake(self, recipient_thread_id: str) -> str:
         if recipient_thread_id in self.tasks or recipient_thread_id in self.wake_tasks:
             return "active_run"
@@ -492,54 +644,52 @@ class WorkbenchRuntime:
             # even when the thread's last projection said completed.
             return "active_run" if lease.expires_at > utc_now() else "pending"
         limit = min(4, session.role_snapshot.budget.max_turns)
-        if not self.service.store.reserve_workbench_wake(recipient_thread_id, limit=limit):
-            return "limit_reached"
+        try:
+            admitted = self.service.admit_session_run(session.id)
+        except ConflictError:
+            return "pending"
+        if not admitted:
+            return "active_run"
+        admitted_lease = self.service.admitted_session_run_lease(session.id)
+        reserved = self._reserve_wake(recipient_thread_id, limit=limit)
+        if reserved in {"pending", "limit_reached"}:
+            self.service.release_session_run(session.id, admitted_lease)
+            return reserved
 
-        with self.service.store._connect() as connection:
-            child_row = connection.execute(
-                "SELECT status FROM workbench_children WHERE thread_id=?",
-                (recipient_thread_id,),
-            ).fetchone()
-            if child_row is not None and child_row["status"] == "completed":
-                connection.execute(
-                    "UPDATE workbench_children SET status='queued',result=NULL,recovery=NULL,"
-                    "updated_at=? WHERE thread_id=? AND status='completed'",
-                    (utc_now().isoformat(), recipient_thread_id),
+        if reserved == "child":
+            task = asyncio.create_task(
+                self._run_child(
+                    recipient_thread_id,
+                    session.id,
+                    "A private Agent message arrived. Read it and continue your task.",
+                    workspace_ref,
                 )
-                task = asyncio.create_task(
-                    self._run_child(
-                        recipient_thread_id,
-                        session.id,
-                        "A private Agent message arrived. Read it and continue your task.",
-                        workspace_ref,
-                    )
+            )
+            self.tasks[recipient_thread_id] = task
+            task.add_done_callback(
+                lambda completed: self._finish_task(
+                    recipient_thread_id, session.id, admitted_lease, completed
                 )
-                self.tasks[recipient_thread_id] = task
-                task.add_done_callback(
-                    lambda completed: (
-                        self.tasks.pop(recipient_thread_id, None)
-                        if self.tasks.get(recipient_thread_id) is completed
-                        else None
-                    )
-                )
-                return "scheduled"
+            )
+            return "scheduled"
 
         async def run() -> None:
+            if self.service.get_thread(recipient_thread_id).status is not ThreadStatus.ACTIVE:
+                return
             async for _ in self.service.run_session(
                 session.id,
                 user_message="A private Agent message arrived. Read it and continue your task.",
                 workspace=workspace_ref,
                 thread_id=recipient_thread_id,
+                _admission_granted=True,
             ):
                 pass
 
         task = asyncio.create_task(run())
         self.wake_tasks[recipient_thread_id] = task
         task.add_done_callback(
-            lambda completed: (
-                self.wake_tasks.pop(recipient_thread_id, None)
-                if self.wake_tasks.get(recipient_thread_id) is completed
-                else None
+            lambda completed: self._finish_task(
+                recipient_thread_id, session.id, admitted_lease, completed, wake=True
             )
         )
         return "scheduled"

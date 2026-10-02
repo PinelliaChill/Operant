@@ -147,7 +147,7 @@ def test_v20_schema_contract_and_nonempty_rollback_guard(tmp_path: Path) -> None
     store = SQLiteStore(database)
     store.migrate(19)
     assert store.schema_version() == 19
-    store.initialize()
+    store.migrate(20)
     assert store.schema_version() == 20
     with store._connect() as connection:
         store._validate_schema_contract(connection, version=20)
@@ -157,7 +157,7 @@ def test_v20_schema_contract_and_nonempty_rollback_guard(tmp_path: Path) -> None
     )
     store.rollback(19, isolated=True)
     assert store.schema_version() == 19
-    store.initialize()
+    store.migrate(20)
     with store._connect() as connection:
         connection.execute(
             "INSERT INTO scope_configs(scope_type, scope_id, body_json, revision, updated_at) "

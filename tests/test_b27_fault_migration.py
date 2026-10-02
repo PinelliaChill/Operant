@@ -535,7 +535,7 @@ def test_v19_failed_v18_rollback_preserves_workbench_schema_and_ledger(tmp_path:
         )
     with pytest.raises(MigrationError, match="B2-6"):
         store.rollback(17, isolated=True)
-    assert store.schema_version() == 20
+    assert store.schema_version() == max(SQLiteStore._FROZEN_MIGRATION_CHECKSUMS)
     with store._connect() as connection:
         assert (
             connection.execute(
@@ -553,7 +553,7 @@ def test_v19_nonempty_workbench_rejects_rollback_without_data_loss(tmp_path: Pat
     assert store.reserve_workbench_wake(thread.id, limit=1)
     with pytest.raises(MigrationError, match="workbench v19 contains data"):
         store.rollback(18, isolated=True)
-    assert store.schema_version() == 20
+    assert store.schema_version() == max(SQLiteStore._FROZEN_MIGRATION_CHECKSUMS)
     with store._connect() as connection:
         assert (
             connection.execute(

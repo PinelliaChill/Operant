@@ -93,6 +93,61 @@ async def test_actual_plugin_recall_frozen_and_revocation(setup):
 
 
 @pytest.mark.asyncio
+async def test_formal_memory_correction_replaces_recalled_preference(setup):
+    _, manager, project_id, session, command, begin = setup
+    saved = await command(
+        action="memory_save",
+        project_id=project_id,
+        content="报告使用英文。",
+        confirmed=True,
+    )
+    original = saved.state.records[0]
+    old_run = await begin("报告")
+    assert old_run is not None
+    assert [entry.memory.content for entry in old_run.inspection(16000, "test").entries] == [
+        "报告使用英文。"
+    ]
+    proposed = await command(
+        action="memory_propose",
+        project_id=project_id,
+        record_id=original.record_id,
+        expected_revision=original.revision,
+        content="报告使用中文。",
+    )
+    candidate = next(
+        record for record in proposed.state.records if record.record_id == original.record_id
+    )
+    assert candidate.content == "报告使用英文。"
+    proposal_id = candidate.proposals[-1].proposal_id
+    await command(
+        action="memory_confirm",
+        project_id=project_id,
+        proposal_id=proposal_id,
+        expected_revision=original.revision,
+    )
+    manager.registry.release_run(old_run.lease.lease_id)
+    new_session = manager.service.create_session(session.role_snapshot.role_id)
+    agent = manager.service.factory.create_agent(new_session.id)
+    workspace = manager.store.get_workspace_initialization_by_id(
+        manager._project(project_id)["workspace_id"]
+    ).workspace_ref
+    fresh = await begin_memory_run(
+        manager,
+        session_id=new_session.id,
+        agent_id=agent.id,
+        run_id=new_session.id,
+        workspace=workspace,
+        snapshot=new_session.role_snapshot,
+        query="报告",
+        references=(),
+    )
+    assert fresh is not None
+    assert [entry.memory.content for entry in fresh.inspection(16000, "test").entries] == [
+        "报告使用中文。"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_memory_budget_does_not_truncate_conditions(setup):
     _, m, p, _, cmd, begin = setup
     await cmd(
