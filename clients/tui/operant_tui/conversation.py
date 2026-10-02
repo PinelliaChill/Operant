@@ -84,6 +84,36 @@ class ConversationController:
     def context(self, thread_id: str) -> Any:
         return self.workbench.get_workbench_context(thread_id)
 
+    def resources(self, thread_id: str, **cursors: int) -> Any:
+        return self.workbench.list_workbench_resources(thread_id, **cursors)
+
+    def resource_policy(self, thread_id: str, completed: int, unanswered: int, *, key: str) -> Any:
+        return self.workbench.update_workbench_resource_policy(
+            thread_id,
+            {"completed_ttl_seconds": completed, "unanswered_ttl_seconds": unanswered},
+            idempotency_key=key,
+        )
+
+    def confirm_resources(self, thread_id: str, completed: bool, *, key: str) -> Any:
+        return self.workbench.confirm_workbench_resources(
+            thread_id, {"completed": completed}, idempotency_key=key
+        )
+
+    def pin_resource(self, thread_id: str, resource_id: str, pinned: bool, *, key: str) -> Any:
+        return self.workbench.set_workbench_resource_pin(
+            thread_id, resource_id, {"pinned": pinned}, idempotency_key=key
+        )
+
+    def preview_resource_cleanup(self, thread_id: str, resource_id: str, *, key: str) -> Any:
+        return self.workbench.preview_workbench_resource_cleanup(
+            thread_id, {"resource_ids": [resource_id], "mode": "manual"}, idempotency_key=key
+        )
+
+    def cleanup_resource(self, thread_id: str, resource_id: str, *, key: str) -> Any:
+        return self.workbench.cleanup_workbench_resources(
+            thread_id, {"resource_ids": [resource_id], "mode": "manual"}, idempotency_key=key
+        )
+
     def file_content(self, workspace_id: str, path: str) -> dict[str, Any]:
         if not path.strip():
             raise ValueError("请填写工作区内相对路径")

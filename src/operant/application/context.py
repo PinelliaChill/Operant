@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +81,84 @@ _THREAD_SOURCE_HARD_BYTES = 32_000_000
 _THREAD_SOURCE_HARD_TOKENS = _THREAD_SOURCE_HARD_BYTES // 4
 _REFERENCE_RENDER_HARD_TOKENS = 50_000
 _THREAD_RECENT_ITEM_LIMIT = 20
+_COMPACTION_SUMMARY_MAX_TOKENS = 3_000
+
+
+def compaction_facts(
+    entries: Sequence[tuple[str, str, str]],
+    *,
+    previous: CompactionSummary | None = None,
+) -> dict[str, Any]:
+    """Keep explicit task facts with their source; never infer facts from tool output."""
+
+    fields: dict[str, list[str]] = {
+        "constraints": list(previous.constraints) if previous else [],
+        "decisions": list(previous.decisions) if previous else [],
+        "open_tasks": list(previous.open_tasks) if previous else [],
+    }
+    sources: list[str] = list(previous.workspace_state.get("source_notes", ())) if previous else []
+    user_requirements: list[str] = (
+        list(previous.workspace_state.get("user_requirements", ())) if previous else []
+    )
+    goals: list[str] = []
+    first_user = ""
+    for source, role, body in entries:
+        if role not in {"user", "steering"}:
+            continue
+        for raw_line in body.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            line = redact_public_text(line, max_chars=100_000)
+            if not first_user:
+                first_user = line
+            tagged = f"[{source}] {line}"
+            lower = line.casefold()
+            user_requirements.append(tagged)
+            if re.search(r"(^|\W)(goal|objective)(\W|$)", lower) or "目标" in line:
+                goals.append(tagged)
+            if any(
+                word in lower
+                for word in ("must", "never", "only", "constraint", "should", "please keep")
+            ) or any(
+                word in line for word in ("必须", "不得", "不能", "不要", "仅限", "约束", "请保持")
+            ):
+                fields["constraints"].append(tagged)
+            if any(word in lower for word in ("decided", "decision", "agreed")) or any(
+                word in line for word in ("决定", "已选", "采用")
+            ):
+                fields["decisions"].append(tagged)
+            if any(word in lower for word in ("todo", "pending", "unfinished", "next step")) or any(
+                word in line for word in ("待办", "未完成", "下一步", "继续处理")
+            ):
+                fields["open_tasks"].append(tagged)
+            if any(word in lower for word in ("source:", "reference:", "see ")) or any(
+                word in line for word in ("来源：", "参考：", "依据：")
+            ):
+                sources.append(tagged)
+
+    def unique(values: Sequence[str]) -> tuple[str, ...]:
+        by_body: dict[str, tuple[str, str]] = {}
+        for tagged in values:
+            source, separator, body = tagged.partition("] ")
+            if not separator:
+                source, body = "[prior", tagged
+            if body not in by_body:
+                by_body[body] = (source, source)
+            else:
+                by_body[body] = (by_body[body][0], source)
+        return tuple(
+            f"{first}] {body}" if first == last else f"{first}; {last[1:]}] {body}"
+            for body, (first, last) in by_body.items()
+        )
+
+    active_goal = goals[-1] if goals else (previous.active_goal if previous else first_user)
+    return {
+        "active_goal": active_goal,
+        **{key: unique(values) for key, values in fields.items()},
+        "source_notes": unique(sources),
+        "user_requirements": unique(user_requirements),
+    }
 
 
 class PersistentContextComposer:
@@ -246,6 +325,7 @@ class PersistentContextComposer:
                 resolved=resolved,
                 request_ordinal=request_ordinal,
                 tool_result_stubs=tool_result_stubs,
+                available_input_tokens=_folded_capacity[1],
             )
             if compacted is not None:
                 actual_messages, compaction = compacted
@@ -403,6 +483,14 @@ class PersistentContextComposer:
         # must not repeatedly turn a small Thread into a competing Compaction.
         reference_target = math.floor(available * self.policy.thread_reference_ratio)
         return max(0, min(_REFERENCE_RENDER_HARD_TOKENS, reference_target))
+
+    def _reference_tokens(self, rendered_json: str) -> int:
+        # Provider counting falls back to a UTF-8 byte upper bound when no
+        # exact tokenizer is registered. The selection must use that same
+        # bound or it can admit a reference that later exceeds the window.
+        if self.count_provider_tokens:
+            return len(rendered_json.encode("utf-8"))
+        return _estimate_tokens(rendered_json)
 
     def _resolve_references(
         self,
@@ -580,7 +668,7 @@ class PersistentContextComposer:
             "status": thread_status,
             "workspace_ref": workspace_ref,
         }
-        header_tokens = _estimate_tokens(_json({**header, "items": []}))
+        header_tokens = self._reference_tokens(_json({**header, "items": []}))
         inline_limit = min(reference_token_budget, _REFERENCE_RENDER_HARD_TOKENS)
         full_items: list[dict[str, Any]] = []
         recent_items: list[dict[str, Any]] = []
@@ -588,7 +676,8 @@ class PersistentContextComposer:
         source_digest = hashlib.sha256()
         total_source_bytes = 0
         total_source_tokens = 0
-        active_goal = ""
+        selected_source_tokens = 0
+        semantic_entries: list[tuple[str, str, str]] = []
         compact_required = False
         baseline = self.store.get_active_context_baseline(self.session.id, thread_id)
         baseline_compaction: Compaction | None = None
@@ -635,6 +724,7 @@ class PersistentContextComposer:
                 payload_tokens = math.ceil(payload_bytes / 4)
                 total_source_bytes += payload_bytes
                 total_source_tokens += payload_tokens
+                selected_source_tokens += self._reference_tokens(payload_json)
                 if (
                     total_source_bytes > _THREAD_SOURCE_HARD_BYTES
                     or total_source_tokens > _THREAD_SOURCE_HARD_TOKENS
@@ -643,7 +733,7 @@ class PersistentContextComposer:
                         "thread Context exceeds the Phase 1B source byte safety limit"
                     )
                 estimated_inline_tokens = (
-                    header_tokens + total_source_tokens + len(exact_item_refs) + 1
+                    header_tokens + selected_source_tokens + len(exact_item_refs) + 1
                 )
                 if request.max_tokens is not None and estimated_inline_tokens > request.max_tokens:
                     raise ContextLimitExceeded("referenced Context exceeds its explicit max_tokens")
@@ -666,11 +756,16 @@ class PersistentContextComposer:
                     ).encode("utf-8")
                 )
                 source_digest.update(b"\n")
-                if not active_goal and item.item_type.value in {
-                    "user_message",
-                    "steering",
-                }:
-                    active_goal = str(item.payload.model_dump(mode="json").get("text", ""))
+                if item.item_type.value in {"user_message", "steering", "agent_message"}:
+                    text = getattr(item.payload, "text", None)
+                    if isinstance(text, str):
+                        semantic_entries.append(
+                            (
+                                item.id,
+                                "assistant" if item.item_type.value == "agent_message" else "user",
+                                text,
+                            )
+                        )
 
                 recent_items.append(payload)
                 if len(recent_items) > _THREAD_RECENT_ITEM_LIMIT:
@@ -759,15 +854,27 @@ class PersistentContextComposer:
                 )
                 source_digest.update(b"\n")
 
+        facts = compaction_facts(
+            semantic_entries,
+            previous=None if baseline_compaction is None else baseline_compaction.summary,
+        )
         summary = self._safe_compaction_summary(
             {
-                "active_goal": active_goal,
+                "active_goal": facts["active_goal"],
+                "constraints": facts["constraints"],
+                "decisions": facts["decisions"],
+                "open_tasks": facts["open_tasks"],
                 "completed_steps": (
                     f"Canonical Thread contains {len(exact_item_refs)} committed Items.",
                 ),
-                "workspace_state": {"workspace": self.workspace},
+                "workspace_state": {
+                    "workspace": self.workspace,
+                    "source_notes": facts["source_notes"],
+                    "user_requirements": facts["user_requirements"],
+                },
                 "next_actions": ("Continue from the bounded recent canonical Item selection.",),
-            }
+            },
+            max_tokens=min(_COMPACTION_SUMMARY_MAX_TOKENS, inline_limit),
         )
         summary_json = summary.model_dump_json()
         compaction = Compaction(
@@ -796,7 +903,7 @@ class PersistentContextComposer:
             },
             "items": recent_items,
         }
-        while recent_items and _estimate_tokens(_json(rendered)) > inline_limit:
+        while recent_items and self._reference_tokens(_json(rendered)) > inline_limit:
             recent_items.pop(0)
             rendered["items"] = recent_items
         thread_ref = ContextSourceRef(
@@ -1000,6 +1107,7 @@ class PersistentContextComposer:
         resolved: Sequence[_ResolvedReference],
         request_ordinal: int,
         tool_result_stubs: Sequence[ToolResultStub],
+        available_input_tokens: int | None = None,
     ) -> tuple[list[Message], Compaction] | None:
         source_bounds = self.store.context_revision_cursor_bounds(
             self.agent_id,
@@ -1012,26 +1120,73 @@ class PersistentContextComposer:
             return None
         retain = self.policy.retained_recent_messages
         keep_start = max(1, len(messages) - retain)
-        while keep_start > 1 and messages[keep_start].role is MessageRole.TOOL:
-            keep_start -= 1
+        # A retained Tool result must carry its initiating Assistant call.
+        # An unfinished call must remain visible as well.
+        while keep_start > 1:
+            earlier_calls = {
+                call.id: index
+                for index, message in enumerate(messages[1:keep_start], start=1)
+                for call in message.tool_calls
+            }
+            retained_results = {
+                message.tool_call_id
+                for message in messages[keep_start:]
+                if message.role is MessageRole.TOOL and message.tool_call_id is not None
+            }
+            all_results = {
+                message.tool_call_id
+                for message in messages[1:]
+                if message.role is MessageRole.TOOL and message.tool_call_id is not None
+            }
+            crossing = (retained_results | (set(earlier_calls) - all_results)) & set(earlier_calls)
+            if not crossing:
+                break
+            keep_start = min(earlier_calls[call_id] for call_id in crossing)
         covered = list(messages[1:keep_start])
         if not covered:
             return None
 
-        active_goal = next(
-            (
-                message.content or ""
-                for message in messages
-                if message.role is MessageRole.USER
-                and message.content
-                and not message.content.startswith("Explicit Context references follow.")
-            ),
-            "",
-        )
+        previous: CompactionSummary | None = None
+        semantic_entries: list[tuple[str, str, str]] = []
+        for index, message in enumerate(messages[1:], start=1):
+            content = message.content or ""
+            if content.startswith("Derived append-only Compaction of older messages."):
+                try:
+                    previous = CompactionSummary.model_validate_json(content.split("\n", 1)[1])
+                except (IndexError, ValueError) as exc:
+                    raise ContextCompositionError("prior Compaction summary is unreadable") from exc
+                continue
+            if content.startswith(("Untrusted memory evidence", "Explicit Context references")):
+                continue
+            if message.role in {MessageRole.USER, MessageRole.ASSISTANT}:
+                semantic_entries.append((f"message:{index}", message.role.value, content))
+        facts = compaction_facts(semantic_entries, previous=previous)
+        covered_results = {
+            message.tool_call_id: message for message in covered if message.role is MessageRole.TOOL
+        }
+        tool_pairs = tuple(
+            f"{call.name} ({call.id}) -> "
+            + (
+                "result: "
+                + redact_public_text(covered_results[call.id].content or "", max_chars=160)
+                if call.id in covered_results
+                else "result pending"
+            )
+            for message in covered
+            for call in message.tool_calls
+        )[-8:]
         summary = self._safe_compaction_summary(
             {
-                "active_goal": active_goal,
-                "workspace_state": {"workspace": self.workspace},
+                "active_goal": facts["active_goal"],
+                "constraints": facts["constraints"],
+                "decisions": facts["decisions"],
+                "open_tasks": facts["open_tasks"],
+                "workspace_state": {
+                    "workspace": self.workspace,
+                    "source_notes": facts["source_notes"],
+                    "user_requirements": facts["user_requirements"],
+                    "tool_pairs": tool_pairs,
+                },
                 "artifact_refs": tuple(
                     dict.fromkeys(
                         [
@@ -1052,11 +1207,16 @@ class PersistentContextComposer:
                     CompactionMessageCoverage(
                         role=message.role.value,
                         content_hash=_hash(message.model_dump_json()),
-                        excerpt=(message.content or "")[:240],
                     ).model_dump(mode="json")
                     for message in covered
                 ),
-            }
+            },
+            max_tokens=min(
+                _COMPACTION_SUMMARY_MAX_TOKENS,
+                max(1, available_input_tokens // 2)
+                if available_input_tokens is not None
+                else _COMPACTION_SUMMARY_MAX_TOKENS,
+            ),
         )
         summary_json = summary.model_dump_json()
         compaction = Compaction(
@@ -1081,15 +1241,24 @@ class PersistentContextComposer:
         return [messages[0], compacted_message, *messages[keep_start:]], compaction
 
     @staticmethod
-    def _safe_compaction_summary(value: dict[str, Any]) -> CompactionSummary:
+    def _safe_compaction_summary(
+        value: dict[str, Any], *, max_tokens: int = _COMPACTION_SUMMARY_MAX_TOKENS
+    ) -> CompactionSummary:
+        if _estimate_tokens(_json(value)) > max_tokens:
+            raise ContextLimitExceeded(
+                "Compaction would omit required historical facts; continue in a new Thread "
+                "or explicitly clear Context"
+            )
         safe = redact_public_data(
             value,
-            max_chars=2_000,
-            max_bytes=100_000,
-            max_items=10_000,
+            max_chars=100_000,
+            max_bytes=1_000_000,
+            max_items=100_000,
         )
         if not isinstance(safe, dict):
             raise ContextCompositionError("Compaction summary could not be safely represented")
+        if _estimate_tokens(_json(safe)) > max_tokens:
+            raise ContextLimitExceeded("Compaction summary exceeds its safe input budget")
         return CompactionSummary.model_validate(safe)
 
     def _blocks(

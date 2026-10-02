@@ -26,7 +26,11 @@ from operant.application.client_projection import (
     list_project_projections,
     list_workspace_files,
 )
-from operant.application.context import PersistentContextComposer
+from operant.application.context import (
+    ContextLimitExceeded,
+    PersistentContextComposer,
+    compaction_facts,
+)
 from operant.application.defaults import default_role_presets
 from operant.application.factory import AgentFactory
 from operant.application.security import (
@@ -1041,7 +1045,7 @@ class ApplicationService:
 
         refs: list[ContextSourceRef] = []
         coverage = hashlib.sha256()
-        active_goal = ""
+        semantic_entries: list[tuple[str, str, str]] = []
         for item in items:
             assert item.cursor is not None
             item_hash = hashlib.sha256(
@@ -1067,15 +1071,35 @@ class ApplicationService:
                 ).encode("utf-8")
             )
             coverage.update(b"\n")
-            if item.item_type.value in {"user_message", "steering"}:
-                text = item.payload.model_dump(mode="json").get("text")
+            if item.item_type.value in {"user_message", "steering", "agent_message"}:
+                text = getattr(item.payload, "text", None)
                 if isinstance(text, str):
-                    active_goal = redact_public_text(text, max_chars=500)
+                    semantic_entries.append(
+                        (
+                            item.id,
+                            "assistant" if item.item_type.value == "agent_message" else "user",
+                            text,
+                        )
+                    )
+        facts = compaction_facts(semantic_entries)
         summary = CompactionSummary(
-            active_goal=active_goal,
+            active_goal=facts["active_goal"],
+            constraints=facts["constraints"],
+            decisions=facts["decisions"],
+            open_tasks=facts["open_tasks"],
             completed_steps=(f"Compacted {len(refs)} committed Canonical Thread Items.",),
+            workspace_state={
+                "source_notes": facts["source_notes"],
+                "user_requirements": facts["user_requirements"],
+            },
             next_actions=("Continue from Items appended after the explicit baseline.",),
         )
+        summary_json = summary.model_dump_json()
+        if len(summary_json.encode("utf-8")) > 12_000:
+            raise ContextLimitExceeded(
+                "manual Compaction would omit required facts; explicitly clear Context "
+                "or start a new Thread"
+            )
         compaction = Compaction(
             session_id=session_id,
             agent_id=agent_id,
@@ -1085,7 +1109,7 @@ class ApplicationService:
             source_cursor_end=refs[-1].cursor or 1,
             source_snapshot_hash=coverage.hexdigest(),
             summary=summary,
-            content_hash=hashlib.sha256(summary.model_dump_json().encode("utf-8")).hexdigest(),
+            content_hash=hashlib.sha256(summary_json.encode("utf-8")).hexdigest(),
             covered_item_refs=tuple(refs),
         )
         return compaction.model_copy(update={"id": deterministic_compaction_id(compaction)})
@@ -3444,6 +3468,10 @@ class ApplicationService:
             self.store.update_agent_status(agent.id, AgentStatus.RUNNING)
             cancellation = asyncio.Event()
             self._cancellations[session.id] = cancellation
+            # A different Core may have cancelled this pre-admitted run before
+            # this worker entered the Agent loop. Do not start a model call.
+            if self.store.get_session_run_lease(session.id).cancel_requested:
+                cancellation.set()
             collaboration = (
                 self.workbench.tools_for(thread_id)
                 if self.workbench is not None and bound_history and thread_id is not None
@@ -3660,7 +3688,6 @@ class ApplicationService:
         async def watch_lease() -> None:
             current = run_lease
             while True:
-                await asyncio.sleep(self._session_lease_heartbeat_seconds)
                 renewed = self.store.renew_session_run_lease(
                     current,
                     ttl_seconds=self._session_lease_ttl_seconds,
@@ -3672,6 +3699,7 @@ class ApplicationService:
                 mapped = self._session_run_leases.get(session.id)
                 if mapped is not None and self._same_lease(mapped, run_lease):
                     self._session_run_leases[session.id] = renewed
+                await asyncio.sleep(self._session_lease_heartbeat_seconds)
 
         lease_watcher = asyncio.create_task(watch_lease())
         next_event: asyncio.Future[RuntimeEvent] | None = None
@@ -3679,6 +3707,16 @@ class ApplicationService:
 
         try:
             while True:
+                if cancellation.is_set():
+                    cancel_event = self._persist_runtime_event(
+                        session.id,
+                        agent.id,
+                        RuntimeEvent(event_type="agent.cancelled", turn=0, payload={}),
+                        history_turn=history_turn,
+                    )
+                    yield cancel_event
+                    final_status = AgentStatus.CANCELLED
+                    break
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     timeout_event = RuntimeEvent(
@@ -3764,10 +3802,26 @@ class ApplicationService:
                             "detail": str(runtime_event.payload["detail"]),
                         }
 
-                runtime_event = self._persist_runtime_event(
-                    session.id, agent.id, runtime_event, history_turn=history_turn
-                )
+                try:
+                    runtime_event = self._persist_runtime_event(
+                        session.id, agent.id, runtime_event, history_turn=history_turn
+                    )
+                except ConflictError:
+                    if runtime_event.event_type != "agent.completed":
+                        raise
+                    current_lease = self.store.get_session_run_lease(session.id)
+                    if not current_lease.cancel_requested:
+                        raise
+                    runtime_event = self._persist_runtime_event(
+                        session.id,
+                        agent.id,
+                        RuntimeEvent(event_type="agent.cancelled", turn=runtime_event.turn),
+                        history_turn=history_turn,
+                    )
                 yield runtime_event
+                if runtime_event.event_type == "agent.cancelled":
+                    final_status = AgentStatus.CANCELLED
+                    break
                 if runtime_event.event_type == "model.completed":
                     if self.workbench is not None and bound_history and thread_id is not None:
                         self.workbench.acknowledge_inbox(thread_id)
@@ -3954,15 +4008,26 @@ class ApplicationService:
                     turn_id=history_turn.id,
                     payload=payload,
                 )
-        persisted = self.store.append_event(
-            Event(
-                session_id=session_id,
-                agent_id=agent_id,
-                event_type=sanitized_event.event_type,
-                payload={"turn": sanitized_event.turn, **sanitized_event.payload},
-            ),
-            history_item=history_item,
+        durable_event = Event(
+            session_id=session_id,
+            agent_id=agent_id,
+            event_type=sanitized_event.event_type,
+            payload={"turn": sanitized_event.turn, **sanitized_event.payload},
         )
+        try:
+            persisted = self.store.append_event(durable_event, history_item=history_item)
+        except ConflictError:
+            # A second Core can cancel the Thread before this owner records
+            # its final event. The Thread history is closed, but the Session
+            # event still needs a durable terminal fact for recovery.
+            if (
+                history_item is None
+                or history_turn is None
+                or event.event_type not in {"agent.cancelled", "agent.failed", "agent.timed_out"}
+                or self.get_thread(history_turn.thread_id).status is ThreadStatus.ACTIVE
+            ):
+                raise
+            persisted = self.store.append_event(durable_event)
         return sanitized_event.model_copy(update={"cursor": persisted.cursor})
 
     def _clear_session_approvals(self, session_id: str) -> None:

@@ -144,6 +144,7 @@ class ConversationScreen(Screen[None]):
                 yield Button("移除待发引用", id="conversation-reference-clear")
                 yield Static("无待发引用", id="conversation-references", markup=False)
                 yield Button("上下文详情", id="conversation-context", disabled=True)
+                yield Button("临时资源与保留策略", id="conversation-resources", disabled=True)
                 yield Label("/review 的只读审查角色（可选）")
                 yield Select([], prompt="继承当前角色", id="conversation-review-role")
                 yield Button("压缩上下文", id="conversation-compact", disabled=True)
@@ -276,6 +277,7 @@ class ConversationScreen(Screen[None]):
             )
         self.query_one("#conversation-cancel", Button).disabled = not active
         self.query_one("#conversation-context", Button).disabled = not readable
+        self.query_one("#conversation-resources", Button).disabled = not readable
         self.query_one("#conversation-create", Button).disabled = not self.connected
         for name in (
             "config-load",
@@ -676,6 +678,14 @@ class ConversationScreen(Screen[None]):
                 )
         except Exception as exc:
             self.fail(exc)
+
+    @on(Button.Pressed, "#conversation-resources")
+    async def show_resources(self) -> None:
+        if self.selected is None or not self.connected:
+            return
+        from .resource_screen import ResourceScreen
+
+        await self.app.push_screen(ResourceScreen(self.controller, self.selected["id"]))
 
     async def _load_artifact_page(self, *, reset: bool) -> None:
         if not self.selected or self.artifact_loading:

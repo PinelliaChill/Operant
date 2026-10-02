@@ -82,7 +82,7 @@ def _owned_artifact(
         raise PermissionError("restricted Artifact cannot be referenced")
     if not _text_artifact(artifact):
         raise ValueError("Artifact is not previewable text")
-    if artifact.retention_policy_ref == "context-reference":
+    if artifact.retention_policy_ref in {"context-reference", "context-reference-temporary"}:
         raise PermissionError("internal reference snapshots cannot be referenced")
     if not any(
         (ref.source_type is ArtifactSourceType.THREAD and ref.source_id == thread_id)
@@ -113,7 +113,8 @@ def list_reference_artifacts(
             JOIN artifact_source_refs AS s ON s.artifact_id = a.id
             JOIN artifact_retention_states AS r ON r.artifact_id = a.id
             WHERE a.sequence > ? AND a.sensitivity = 'normal' AND r.lifecycle = 'active'
-              AND a.retention_policy_ref != 'context-reference'
+              AND a.retention_policy_ref NOT IN
+                  ('context-reference','context-reference-temporary')
               AND (a.media_type LIKE 'text/%' OR a.media_type IN
                    ('application/json','application/xml','application/x-yaml'))
               AND ((s.source_type = 'thread' AND s.source_id = ?)
@@ -301,14 +302,19 @@ def create_reference(
         ensure_ascii=False,
         sort_keys=True,
     ).encode()
+    from operant.persistence.resource_governance import ResourcePolicyRepository
+
+    resource_policies = ResourcePolicyRepository(service.store)
+    resource_policies.ensure_snapshot_policy()
     artifact, _ = service.create_artifact(
         content=content,
         media_type="application/json",
         source_refs=(
             ArtifactSourceRef(source_type=ArtifactSourceType.THREAD, source_id=thread_id),
         ),
-        retention_policy_ref="context-reference",
+        retention_policy_ref="context-reference-temporary",
     )
+    resource_policies.observe_snapshot(thread_id)
     if artifact.sensitivity is not ArtifactSensitivity.NORMAL:
         raise PermissionError("restricted reference snapshot")
     summary = f"{source} · {len(content)} bytes · 有界快照，正文按需读取"

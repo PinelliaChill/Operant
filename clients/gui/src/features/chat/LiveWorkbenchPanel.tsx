@@ -7,6 +7,7 @@ import type { ChildAgentView, WorkbenchContext, WorkbenchMessage } from '../../l
 import { StatusBadge } from '../../components/StatusBadge';
 import { messageDeliveryLabel } from './workbenchPresentation';
 import { LiveBtwPanel } from './LiveBtwPanel';
+import { LiveResourcesPanel } from './LiveResourcesPanel';
 import './live-btw.css';
 
 function errorText(error: unknown): string {
@@ -227,5 +228,6 @@ export const LiveWorkbenchPanel: React.FC<{ threadId: string; connected: boolean
       </> : <p className="live-panel-empty">{loading ? '正在读取上下文…' : '暂无上下文详情'}</p>}
     </div>
     {selectedThread?.sessionId && selectedThread.workspaceRef && <LiveBtwPanel sessionId={selectedThread.sessionId} threadId={threadId} workspace={selectedThread.workspaceRef} connected={connected} onPromoted={onChanged} />}
+    <LiveResourcesPanel key={threadId} threadId={threadId} connected={connected} />
   </section>;
 };

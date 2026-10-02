@@ -15,7 +15,7 @@ import operant.api as api_module
 import operant.application.context as context_module
 import operant.application.service as service_module
 from operant.api import create_app
-from operant.application.context import PersistentContextComposer
+from operant.application.context import ContextCompositionError, PersistentContextComposer
 from operant.application.service import ApplicationService
 from operant.domain.context import (
     CompactionSourceType,
@@ -740,7 +740,15 @@ async def test_large_thread_first_request_uses_exact_thread_item_compaction_evid
             Item(
                 thread_id=thread.id,
                 turn_id=turn.id,
-                payload=UserMessagePayload(text=f"canonical-{index}-" + "z" * 800),
+                payload=UserMessagePayload(
+                    text=(
+                        "Please keep the report under two pages. Source: docs/audit.md"
+                        if index == 2
+                        else "Decision: use the approved outline."
+                        if index == 25
+                        else "Repeated progress marker " + "z" * 800
+                    )
+                ),
             )
         )
         for index in range(50)
@@ -770,11 +778,45 @@ async def test_large_thread_first_request_uses_exact_thread_item_compaction_evid
     ]
     assert compaction.source_cursor_start == canonical_items[0].cursor
     assert compaction.source_cursor_end == canonical_items[-1].cursor
+    assert any(
+        "under two pages" in line
+        for line in compaction.summary.workspace_state["user_requirements"]
+    )
+    assert any("approved outline" in line for line in compaction.summary.decisions)
+    assert (
+        sum(
+            "Repeated progress marker" in line
+            for line in compaction.summary.workspace_state["user_requirements"]
+        )
+        == 1
+    )
+    assert "under two pages" in "\n".join(message.content or "" for message in revision.messages)
     assert revision.source_item_ids == tuple(item.id for item in canonical_items)
     assert revision.source_cursor_start == canonical_items[0].cursor
     assert revision.source_cursor_end == canonical_items[-1].cursor
     assert revision.source_cursor_namespace == "items.sequence"
     assert service.list_items(thread.id) == canonical_items
+
+
+@pytest.mark.asyncio
+async def test_dense_unique_thread_facts_fail_without_erasing_history(tmp_path: Path) -> None:
+    service, session = _service(tmp_path, CapturingProvider(), context_window=12_000)
+    thread = service.create_thread(ConversationThread(workspace_ref=str(tmp_path.resolve())))
+    turn = service.create_turn(Turn(thread_id=thread.id))
+    items = [
+        service.append_item(
+            Item(
+                thread_id=thread.id,
+                turn_id=turn.id,
+                payload=UserMessagePayload(text=f"Unique required detail {index}: " + "q" * 800),
+            )
+        )
+        for index in range(50)
+    ]
+    events = await _run(service, session, tmp_path, thread_id=thread.id)
+    assert events[-1].payload == {"error_type": "ContextLimitExceeded"}
+    assert service.list_context_revisions(session.id) == []
+    assert service.list_items(thread.id) == items
 
 
 @pytest.mark.asyncio
@@ -806,12 +848,12 @@ async def test_thread_item_compaction_is_reused_across_requests(
     )
     thread = service.create_thread(ConversationThread(workspace_ref=str(tmp_path.resolve())))
     turn = service.create_turn(Turn(thread_id=thread.id))
-    for index in range(50):
+    for _index in range(50):
         service.append_item(
             Item(
                 thread_id=thread.id,
                 turn_id=turn.id,
-                payload=UserMessagePayload(text=f"canonical-{index}-" + "z" * 800),
+                payload=UserMessagePayload(text="Repeated progress marker " + "z" * 800),
             )
         )
 
@@ -839,12 +881,12 @@ def test_concurrent_thread_item_compaction_is_idempotent_across_revisions(
     agent = service.store.create_agent(session.id)
     thread = service.create_thread(ConversationThread(workspace_ref=str(tmp_path.resolve())))
     turn = service.create_turn(Turn(thread_id=thread.id))
-    for index in range(50):
+    for _index in range(50):
         service.append_item(
             Item(
                 thread_id=thread.id,
                 turn_id=turn.id,
-                payload=UserMessagePayload(text=f"parallel-{index}-" + "z" * 800),
+                payload=UserMessagePayload(text="Repeated progress marker " + "z" * 800),
             )
         )
 
@@ -882,6 +924,61 @@ def test_concurrent_thread_item_compaction_is_idempotent_across_revisions(
     assert len(service.list_context_revisions(session.id)) == 2
     with sqlite3.connect(service.store.path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM compactions").fetchone() == (1,)
+
+
+def test_context_compaction_keeps_tool_call_and_result_together(tmp_path: Path) -> None:
+    service, session = _service(tmp_path, CapturingProvider())
+    agent = service.store.create_agent(session.id)
+    composer = PersistentContextComposer(
+        store=service.store,
+        session=session,
+        agent_id=agent.id,
+        workspace=tmp_path,
+        memory_resolver=lambda _id: (_ for _ in ()).throw(AssertionError()),
+        artifact_reader=lambda _id: b"",
+        artifact_writer=lambda _content: (_ for _ in ()).throw(AssertionError()),
+    )
+    composer.compose(
+        snapshot=session.role_snapshot,
+        messages=(
+            Message(role=MessageRole.SYSTEM, content="system"),
+            Message(role=MessageRole.USER, content="start"),
+        ),
+        tools=(),
+        request_ordinal=1,
+    )
+    call = ToolCall(id="read-1", name="read_file", arguments_json='{"path":"a.txt"}')
+    messages = (
+        Message(role=MessageRole.SYSTEM, content="system"),
+        Message(role=MessageRole.USER, content="goal"),
+        Message(role=MessageRole.ASSISTANT, content="working"),
+        Message(role=MessageRole.USER, content="Please keep it concise."),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(call,)),
+        Message(role=MessageRole.TOOL, tool_call_id=call.id, content="file contents"),
+        Message(role=MessageRole.ASSISTANT, content="read complete"),
+        Message(role=MessageRole.USER, content="continue"),
+        Message(role=MessageRole.ASSISTANT, content="okay"),
+    )
+    compacted = composer._compact(
+        messages=messages, resolved=(), request_ordinal=2, tool_result_stubs=()
+    )
+    assert compacted is not None
+    actual, summary = compacted
+    assert actual[2].tool_calls == (call,)
+    assert actual[3].tool_call_id == call.id
+    assert any(
+        "keep it concise" in text for text in summary.summary.workspace_state["user_requirements"]
+    )
+    malformed = (
+        Message(role=MessageRole.SYSTEM, content="system"),
+        Message(
+            role=MessageRole.USER,
+            content="Derived append-only Compaction of older messages.\n{invalid-json",
+        ),
+        *messages[2:],
+    )
+    with pytest.raises(ContextCompositionError, match="prior Compaction summary is unreadable"):
+        composer._compact(messages=malformed, resolved=(), request_ordinal=2, tool_result_stubs=())
 
 
 @pytest.mark.asyncio
@@ -1082,7 +1179,21 @@ async def test_dynamic_watermark_compacts_append_only_without_changing_thread_hi
         )
     )
 
-    events = await _run(service, session, tmp_path, thread_id=thread.id)
+    events = [
+        event
+        async for event in service.run_session(
+            session.id,
+            user_message=(
+                "Goal: finish the audit.\n"
+                "Please keep the report under two pages.\n"
+                "Decision: use the existing report format.\n"
+                "Next step: verify the final totals.\n"
+                "Source: docs/audit.md"
+            ),
+            workspace=tmp_path,
+            thread_id=thread.id,
+        )
+    ]
     revisions = service.list_context_revisions(session.id)
 
     assert events[-1].event_type == "agent.completed"
@@ -1100,6 +1211,18 @@ async def test_dynamic_watermark_compacts_append_only_without_changing_thread_hi
     assert compaction.source_cursor_start == min(prior_cursors)
     assert compaction.source_cursor_end == max(prior_cursors)
     assert compaction.summary.active_goal
+    requirements = compaction.summary.workspace_state["user_requirements"]
+    assert any("under two pages" in line for line in requirements)
+    assert any("existing report format" in line for line in compaction.summary.decisions)
+    assert any("verify the final totals" in line for line in compaction.summary.open_tasks)
+    sources = compaction.summary.workspace_state["source_notes"]
+    assert any("docs/audit.md" in line for line in sources)
+    assert compaction.summary.workspace_state["tool_pairs"]
+    latest_compaction = service.store.get_compaction(compacted[-1].compaction_id or "")
+    assert any(
+        "under two pages" in line
+        for line in latest_compaction.summary.workspace_state["user_requirements"]
+    )
     assert service.list_items(thread.id) == [item]
 
 

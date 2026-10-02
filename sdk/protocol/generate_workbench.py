@@ -43,6 +43,12 @@ EXPECTED_OPERATION_IDS = {
     "getWorkbenchTerminal",
     "deleteWorkbenchTerminal",
     "listWorkbenchReferenceArtifacts",
+    "listWorkbenchResources",
+    "updateWorkbenchResourcePolicy",
+    "confirmWorkbenchResources",
+    "setWorkbenchResourcePin",
+    "previewWorkbenchResourceCleanup",
+    "cleanupWorkbenchResources",
 }
 OPERATION_MAP = {
     "negotiateWorkbench": "negotiateProtocol",

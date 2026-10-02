@@ -466,14 +466,16 @@ async def test_stale_child_lease_is_not_reclaimed_by_private_message(tmp_path: P
     original = service.workbench
     child = await original.create_child(parent_id, CreateChildAgentRequest(task="initial task"))
     await original.tasks[child.thread_id]
+    uncertain_agent = service.factory.create_agent(child.session_id)
     with service.store._connect() as connection:
         connection.execute(
             "UPDATE workbench_children SET status='running' WHERE thread_id=?",
             (child.thread_id,),
         )
         connection.execute(
-            "UPDATE session_run_leases SET released_at=NULL,expires_at=? WHERE session_id=?",
-            ("2000-01-01T00:00:00+00:00", child.session_id),
+            "UPDATE session_run_leases SET released_at=NULL,expires_at=?,"
+            "generation=generation+1,agent_id=? WHERE session_id=?",
+            ("2000-01-01T00:00:00+00:00", uncertain_agent.id, child.session_id),
         )
     recovered = WorkbenchRuntime(service)
     service.workbench = recovered
@@ -497,6 +499,172 @@ async def test_stale_child_lease_is_not_reclaimed_by_private_message(tmp_path: P
             ).fetchone()
             is None
         )
+
+
+@pytest.mark.asyncio
+async def test_committed_child_result_is_reconciled_after_worker_exit(tmp_path: Path) -> None:
+    service, parent_id, _role_id, _workspace = scope(tmp_path)
+    child = await service.workbench.create_child(parent_id, CreateChildAgentRequest(task="work"))
+    await service.workbench.tasks[child.thread_id]
+    with service.store._connect() as connection:
+        connection.execute(
+            "UPDATE workbench_children SET status='running',result=NULL WHERE thread_id=?",
+            (child.thread_id,),
+        )
+    recovered = WorkbenchRuntime(service)
+    assert recovered.get_child(child.thread_id).status == "completed"
+    assert recovered.get_child(child.thread_id).result == "child result"
+
+
+@pytest.mark.asyncio
+async def test_message_retry_returns_original_after_threads_cancelled(tmp_path: Path) -> None:
+    service, parent_id, _role_id, workspace = scope(tmp_path)
+    child_id = related_sender(service, parent_id, workspace)
+    request = SendAgentMessageRequest(
+        recipient_thread_id=child_id, body="once", idempotency_key="retry-after-cancel"
+    )
+    first = service.workbench.send(parent_id, request)
+    service.workbench.cancel_tree(child_id)
+    repeated = service.workbench.send(parent_id, request)
+    assert repeated.message_id == first.message_id
+    assert len(service.workbench.list_messages(child_id)) == 1
+    with pytest.raises(ConflictError, match="must be active"):
+        service.workbench.send(
+            parent_id,
+            request.model_copy(update={"idempotency_key": "new-after-cancel"}),
+        )
+
+
+@pytest.mark.asyncio
+async def test_other_core_keeps_live_child_owner_and_cancels_it(tmp_path: Path) -> None:
+    provider = BarrierProvider()
+    owner, parent_id, _role_id, _workspace = scope(tmp_path, provider)
+    owner._session_lease_heartbeat_seconds = 0.05
+    child = await owner.workbench.create_child(parent_id, CreateChildAgentRequest(task="wait"))
+    assert await asyncio.wait_for(provider.started.get(), timeout=10) == 1
+    observer = ApplicationService(
+        SQLiteStore(owner.store.path),
+        CompletingProvider(),
+        artifact_root=tmp_path / "other-artifacts",
+    )
+    observer.initialize()
+    assert observer.workbench.get_child(child.thread_id).status == "running"
+    assert observer.workbench.cancel_tree(child.thread_id).status == "cancelled"
+    await asyncio.wait_for(owner.workbench.tasks[child.thread_id], timeout=10)
+    assert provider.calls == 1
+    assert owner.workbench.get_child(child.thread_id).status == "cancelled"
+    assert owner.store.get_session_run_lease(child.session_id).released_at is not None
+    assert any(
+        event.event_type == "agent.cancelled" for event in owner.store.list_events(child.session_id)
+    ), [event.event_type for event in owner.store.list_events(child.session_id)]
+
+
+@pytest.mark.asyncio
+async def test_two_cores_reserve_only_one_private_message_wake(tmp_path: Path) -> None:
+    provider = CompletingProvider()
+    first, parent_id, _role_id, _workspace = scope(tmp_path, provider)
+    child = await first.workbench.create_child(parent_id, CreateChildAgentRequest(task="initial"))
+    await first.workbench.tasks[child.thread_id]
+    second = ApplicationService(
+        SQLiteStore(first.store.path),
+        provider,
+        artifact_root=tmp_path / "other-artifacts",
+    )
+    second.initialize()
+    first.workbench.send(
+        parent_id,
+        SendAgentMessageRequest(
+            recipient_thread_id=child.thread_id,
+            body="one wake",
+            idempotency_key="one-wake",
+        ),
+    )
+    outcomes = await asyncio.gather(
+        first.workbench.wake(child.thread_id),
+        second.workbench.wake(child.thread_id),
+    )
+    assert sorted(outcomes) == ["active_run", "scheduled"]
+    for runtime in (first.workbench, second.workbench):
+        if child.thread_id in runtime.tasks:
+            await runtime.tasks[child.thread_id]
+    assert provider.calls == 2
+    assert first.workbench.list_messages(child.thread_id)[0].delivery_status == "consumed"
+    with first.store._connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT wake_count FROM workbench_wake_counts WHERE thread_id=?",
+                (child.thread_id,),
+            ).fetchone()[0]
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancel_wins_before_agent_completion_is_committed(tmp_path: Path) -> None:
+    service, parent_id, _role_id, _workspace = scope(tmp_path)
+    original = service._persist_runtime_event
+    child_id: str | None = None
+    child_session_id: str | None = None
+
+    def persist_with_cancel(session_id, agent_id, event, **kwargs):  # type: ignore[no-untyped-def]
+        if event.event_type == "agent.completed" and session_id == child_session_id:
+            assert child_id is not None
+            service.workbench.cancel_tree(child_id)
+        return original(session_id, agent_id, event, **kwargs)
+
+    service._persist_runtime_event = persist_with_cancel  # type: ignore[method-assign]
+    child = await service.workbench.create_child(parent_id, CreateChildAgentRequest(task="race"))
+    child_id, child_session_id = child.thread_id, child.session_id
+    await service.workbench.tasks[child.thread_id]
+    assert service.workbench.get_child(child.thread_id).status == "cancelled"
+    assert service.get_thread(child.thread_id).status.value == "cancelled"
+    assert service.store.get_session_run_lease(child.session_id).released_at is not None
+    events = service.store.list_events(child.session_id)
+    assert sum(event.event_type == "agent.cancelled" for event in events) == 1
+    assert not any(event.event_type == "agent.completed" for event in events)
+    assert service.store.get_agent(events[-1].agent_id).status.value == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_committed_completion_preserves_completed_child(tmp_path: Path) -> None:
+    service, parent_id, _role_id, _workspace = scope(tmp_path)
+    child = await service.workbench.create_child(parent_id, CreateChildAgentRequest(task="done"))
+    await service.workbench.tasks[child.thread_id]
+    assert service.workbench.cancel_tree(child.thread_id).status == "completed"
+    assert service.get_thread(child.thread_id).status.value == "active"
+    assert service.store.get_session_run_lease(child.session_id).cancel_requested is False
+    assert [event.event_type for event in service.store.list_events(child.session_id)].count(
+        "agent.completed"
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_parent_cancel_before_completion_is_committed(tmp_path: Path) -> None:
+    service, parent_id, _role_id, workspace = scope(tmp_path)
+    session = thread_session(service, parent_id)
+    original = service._persist_runtime_event
+
+    def persist_with_cancel(session_id, agent_id, event, **kwargs):  # type: ignore[no-untyped-def]
+        if event.event_type == "agent.completed" and session_id == session.id:
+            service.workbench.cancel_tree(parent_id)
+        return original(session_id, agent_id, event, **kwargs)
+
+    service._persist_runtime_event = persist_with_cancel  # type: ignore[method-assign]
+    events = [
+        event
+        async for event in service.run_session(
+            session.id,
+            user_message="finish",
+            workspace=workspace,
+            thread_id=parent_id,
+        )
+    ]
+    assert events[-1].event_type == "agent.cancelled"
+    assert service.get_thread(parent_id).status.value == "cancelled"
+    assert service.store.get_session_run_lease(session.id).released_at is not None
+    assert not any(
+        event.event_type == "agent.completed" for event in service.store.list_events(session.id)
+    )
 
 
 @pytest.mark.asyncio

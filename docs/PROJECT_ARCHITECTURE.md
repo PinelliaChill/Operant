@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-09-28（前四部分主线联调；记录身份：Codex，保留原历史署名）
+> 最后更新：2026-10-02（Beta 任务 2；记录身份：Codex，保留原历史署名）
 >
-> 对应源码：`origin/main@4dd2ec13` 的前四部分，以及 `codex/four-part-integration` 的 Graph 工具权限修复；SQLite 为 v20。本机已安装 App 尚未更新。
+> 对应源码：`codex/beta-reliability-task2`，基线 `main@600d97c`，包含已合并任务 1 和本次任务 2；SQLite 为 v21。本次没有更新已安装 App 或真实用户库。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -23,6 +23,7 @@
 | 当前模块 | 主要源码入口 | 职责 |
 | --- | --- | --- |
 | 会话工作台 | `api_workbench_agents.py`、`api_workbench_context.py` | 子 Agent、定向消息、正式引用与命令 |
+| 临时资源治理 | `api_workbench_resources.py`、`application/resource_governance.py` | 按会话盘点、TTL、Pin、保留锁、预览与安全临时快照回收 |
 | 协作与实际记忆使用 | `api_b2_4.py`、`memory_plugins/recall.py`、`retrieval.py` | 角色编排、消息与记忆召回，记录实际上下文引用 |
 | 整理与治理 | `memory_plugins/governance.py`、`maintenance.py` | 来源、冲突、时效、候选审阅与受控后台整理 |
 | 经验与授权 | `memory_plugins/experience_skills.py`、`experience_runtime.py`、`sharing.py` | 经验 Skill、上下文使用、共享、晋级与撤销 |
@@ -202,6 +203,16 @@ Session 取消、显式 DELETE 与 Core 正常关闭均触发 PTY 回收。Shell
 
 OpenAPI 由 `sdk/protocol/generate_workbench.py` 单源生成 `operant-workbench.openapi.json`、digest 和
 Python/TypeScript Client；WebSocket 帧及一次性 token 不写入通用 REST Command 回执。本节描述当前源码；定向测试覆盖文件边界、Policy/Role、PTY 交互与取消。隔离 GUI/TUI 的文件、引用选择、PTY 与 TUI 配置/Goal/Plan 已经真实联调，证据见[任务 1 验收记录](design/session-workbench/acceptance.md)。GUI 正式模型已按需读取合成文件和普通 Artifact，并在清理后的新基线上完成第二轮；TUI 正式模型也只读取了显式附加的文件。隔离原生 WebView 已核实文件、Diff、历史、审批及终端输入/输出/回收；安装包及跨设备终端未由该结果证明。
+
+## 2.5 Beta 任务 2：可靠性与临时资源治理
+
+- **取消与恢复**：创建和唤醒子任务前先持久预占 Session 租约。取消意图与完成事件由同一 SQLite 写锁排序：取消先提交则持久 `agent.cancelled`，完成先提交则回读 completed。跨 Core 取消由活动 owner 收尾并释放租约；闭合 Thread 后仍保存取消/失败等终态事件。只按本轮租约绑定的 Agent 事件对账，未知模型、工具或审批执行不自动重放。消息同键重试可在取消后回读原结果；唤醒计数与子任务转换原子提交。
+- **长任务压缩**：自动与手动路径保留去重的完整用户原句、目标、约束、决定、未完成项及来源，重复进度保留首末来源。裁剪不拆散工具调用与结果；Canonical History 不删。正式 Provider 引用裁剪与 Token 计数使用同一保守上界；必要事实超过安全摘要预算、旧摘要损坏时显式失败。合成真实长任务和记忆纠正的结果只证明声明的场景，不代表一般化模型质量提升。
+- **资源与保留锁**：SQLite v21 保存 Thread 的 TTL、完成确认和未回复时钟。GUI/TUI 使用新增 `workbench.v1` 生成客户端查看逻辑 UTF-8 payload 字节、归属和保留原因，支持分页、normal Artifact Pin、预览和显式清理。默认确认完成后 1 小时、未回复 3 天，可配置为 1 小时至 1 年；新引用快照重置旧完成时钟，且到期时间不早于自身创建时间。
+- **安全回收**：只自动回收由正式引用入口创建、采用 `context-reference-temporary` 策略且没有 Pin、引用、活动/可恢复 Run 或未知工具结果锁的快照。最终删除在 SQLite 写锁和受管 blob 锁内重验归属与状态；缺失 blob 或删除结果未知进入人工核对，不盲重试。定时扫描使用独立线程、有界批次和轮转游标，关停等待已开始清理到安全边界。专用临时回收不会打开普通 Artifact 的全局物理删除开关。
+- **持续保留**：旧 `context-reference`、普通成果工件、模型输入/压缩、聊天、记忆、审批审计和未知结果证据保留。Browser Profile 只读盘点并沿用既有专用回收，归属不明不参与会话 TTL；PTY、工具快照和运行记录按各自生命周期管理。Provider 内部 Cache 只观测，不作为本地可删除资源。v21 仅允许治理表及新临时快照为空时受限回退，不迁移真实用户库。
+
+详细范围、失败历史、真实模型/客户端证据及日常负载见[任务 2 验收记录](design/beta-reliability/acceptance.md)。本轮在任务 2 停止，后续编排、扩展、远程及安装工作仍按原计划保留。
 
 ## 3. 总体架构
 
@@ -1916,17 +1927,17 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 以下按当前实现重新归纳；原有16项及其当时措辞完整保留在[历史技术债快照](history/PROJECT_ARCHITECTURE-history-20260922.md#18-已知技术债务)。
 已交付的记忆治理/共享、规范历史与Skill安装不再被笼统列为未实现。
 
-1. **规模与I/O**：SQLite、Context与Artifact主要是同步本地I/O；大Graph/Team、长事件流、高并发、超大引用及长期容量缺系统容量基准。B2-4 Host原性能门未达，不把诊断原型或小样本检索收益当产品性能优化。
+1. **规模与I/O**：SQLite、Context与Artifact主要是同步本地I/O；任务 2 已建立 12 会话 / 2400 Item / 20 引用快照的日常基准；大Graph/Team、高并发、超大引用及长期容量仍未作容量承诺。B2-4 Host原性能门未达，不把诊断原型或小样本检索收益当产品性能优化。
 2. **恢复边界**：恢复发生在持久化边界，不支持任意模型流位置续跑；工具待审批Future与BTW取消信号仍有进程内部分。重启后的审批决定不等于原执行自动继续，SSE重连也不能单独证明后台运行仍存活。
 3. **未知副作用**：Coder/Writer/外部动作结果未知须人工核对。Git已提交而SQLite回执未落盘的窗口可能进入outcome_unknown；既有租约、锁与工作树证据保留，不猜测或自动重放。
 4. **Graph与协作**：正式执行器已有八类混合节点与 Live 画布，但尚未覆盖 Human Input/Approval/Wait/Subworkflow/Artifact/Merge 的直接执行；混合图需至少一个 Agent 与匹配的 Team。智能建议尚无持久对话历史；Hook 限本地 application.signal，文件/Git watcher 未接入。会话委派/消息与 Graph Team 是不同运行时，不能混作一个状态权威。
 5. **记忆效果与清理**：召回、治理、共享和小样本质量评测已实现，但不证明普遍收益。原固定复用问题失败与补充条件化成功分开；尚无一般化自动冲突合并或完整容量淘汰。插件专属数据delete与全局历史/缓存治理不同。
-6. **数据与迁移**：当前SQLite v20，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
+6. **数据与迁移**：当前SQLite v21，新增会话临时资源策略，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
 7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布。Task 1 的文件正文、Diff、PTY、显式引用和 TUI 配置/Goal/Plan 已完成隔离入口联调；GUI 正式模型的文件/普通 Artifact 按需读取及有历史清理后的新轮、TUI 显式文件读取已验收。隔离原生 WebView 文件、Diff、历史、审批与终端交互均已核实；任意对象`@`和动态`/`注册仍有缺口。Phase1E冻结协议本身的查询缺口需与后续入口区分。
 8. **权限与公网**：OAuth面向单用户私网，不是多租户或通用公网CSRF方案；loopback仍可无OAuth。Remote配对/E2E不替代所有API鉴权，Gateway/Relay不属于已审计公网托管产品。面向非可信HTTP客户端的Artifact capability签发仍未完成；跨项目操作必须走已实现的显式共享授权，不能由路径推定权限。
 9. **外部能力与隔离**：本机 Chrome 已有真实隔离 Profile 与 Core Job 链路，Agent 工具入口已完成真实模型在临时网页上的观察、导航、非密码输入和点击；macOS Computer 适配器已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；日常 App 操作范围仍需验收。隔离第三方 Tool 已以临时包验证包外文件、网络和环境密钥拒绝，但不代表其他插件类别已有沙箱。GUI 仅有持久 Job 读回和人工核对提示，直接操控和生产 Remote 尚未验收。MCP Streamable HTTP、真实第三方 Server 长时验证、多 Host 发现/通知与移动推送仍有缺口。历史 Docker 隔离测试与真实 Host 模型任务是不同证据；候选中的 Docker skip 及生产 HTTPS Target 限制继续保留。
 10. **扩展与审批**：新增受信 Tool 扩展边界、隔离第三方 Tool 包和两种随 Core 发布的能力适配器，仍缺通用 Command/Event/Provider/Runtime 扩展和第三方能力驱动契约。六项默认 Skill 能从配置的可信根安装，但运行依赖相应 Skill 包与工具环境，不能把安装读回当成文档/幻灯片/PDF 内容质量验收。审批模型默认不开启，启用后失联或重启中的审核保持人工待审；模型不能修改 Policy。
-11. **保留策略与缓存**：Artifact 可 Pin/归档/计划删除/Trash/Restore/显式孤儿修复，物理删除另行启用；新增浏览器临时 Profile 正常关闭即清理、崩溃后一小时回收，但其他事件、规范历史、回执、审计及 Context/Compaction 仍缺统一保留执行器。Provider 缓存目前只做观测，不复制或裁决 Provider 内部缓存；不得按临时 TTL 删除长期知识/审计/恢复证据。
+11. **保留策略与缓存**：Artifact 可 Pin/归档/计划删除/Trash/Restore/显式孤儿修复，物理删除另行启用；新增浏览器临时 Profile 正常关闭即清理、崩溃后一小时回收，任务 2 新增会话资源盘点与临时引用快照 TTL 执行器，其他权威记录保留，不按临时 TTL 物理删除。Provider 缓存目前只做观测，不复制或裁决 Provider 内部缓存；不得按临时 TTL 删除长期知识/审计/恢复证据。
 12. **评测与发布**：价格/首次模型等待等部分遥测未知；缺自动价格发现、一般化统计显著性、Evaluation Run逐Result续跑等，历史Exp19—24学习验收未完成。候选已测本机macOS arm64，不代表Windows/Linux/浏览器矩阵或正式签名WebView。仓库仍缺完整安装向导、Developer ID/公证、DMG和自动更新；本机launcher适配不等于跨设备安装产品。历史安全扫描事项未全部清零。
 
 ## 19. 文档维护规则

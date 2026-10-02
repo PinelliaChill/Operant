@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from operant.api import create_app
-from operant.application.context import PersistentContextComposer
+from operant.application.context import ContextLimitExceeded, PersistentContextComposer
 from operant.application.service import ApplicationService
 from operant.application.slash_commands import SlashCommandRegistry
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
@@ -460,6 +460,97 @@ def test_clear_and_compact_commands_change_future_context_without_rewriting_hist
     after_compact = _compose_thread_context(service, session, thread, tmp_path)
     assert after_compact.revision.compaction_id == compact.compaction_id
     assert service.store.list_items(thread.id) == [old_item, new_item]
+
+
+def test_manual_compaction_keeps_plain_requirements_and_source_in_next_context(
+    tmp_path: Path,
+) -> None:
+    service, session, thread, _ = _sidecar_scope(tmp_path, SidecarProvider())
+    turn = service.create_turn(Turn(thread_id=thread.id))
+    original = (
+        "Goal: prepare the release note.",
+        "Please keep the release note under two pages.",
+        "Decision: use the approved outline.",
+        "Next step: check the version number.",
+        "Source: docs/release.md",
+    )
+    for line in original:
+        service.append_item(
+            Item(thread_id=thread.id, turn_id=turn.id, payload=UserMessagePayload(text=line))
+        )
+    agent = service.factory.create_agent(session.id)
+    baseline = service.append_context_baseline(
+        session_id=session.id,
+        thread_id=thread.id,
+        operation=ContextBaselineOperation.COMPACT,
+        agent_id=agent.id,
+    )
+    assert baseline.compaction_id is not None
+    summary = service.store.get_compaction(baseline.compaction_id).summary
+    assert any("under two pages" in text for text in summary.workspace_state["user_requirements"])
+    assert any("approved outline" in text for text in summary.decisions)
+    assert any("version number" in text for text in summary.open_tasks)
+    assert any("docs/release.md" in text for text in summary.workspace_state["source_notes"])
+    composed = _compose_thread_context(service, session, thread, tmp_path)
+    rendered = "\n".join(message.content or "" for message in composed.messages)
+    assert "under two pages" in rendered
+    assert "docs/release.md" in rendered
+    assert len(service.store.list_items(thread.id)) == 6
+    second = service.append_context_baseline(
+        session_id=session.id,
+        thread_id=thread.id,
+        operation=ContextBaselineOperation.COMPACT,
+        agent_id=service.factory.create_agent(session.id).id,
+    )
+    assert second.compaction_id is not None
+    repeated = service.store.get_compaction(second.compaction_id).summary
+    assert any("under two pages" in text for text in repeated.workspace_state["user_requirements"])
+    assert len(service.store.list_items(thread.id)) == 6
+
+
+def test_manual_compaction_keeps_more_than_eight_distinct_requirements_or_fails_closed(
+    tmp_path: Path,
+) -> None:
+    service, session, thread, _ = _sidecar_scope(tmp_path, SidecarProvider())
+    turn = service.create_turn(Turn(thread_id=thread.id))
+    for index in range(12):
+        service.append_item(
+            Item(
+                thread_id=thread.id,
+                turn_id=turn.id,
+                payload=UserMessagePayload(text=f"Please include section {index} with its source."),
+            )
+        )
+    first = service.append_context_baseline(
+        session_id=session.id,
+        thread_id=thread.id,
+        operation=ContextBaselineOperation.COMPACT,
+        agent_id=service.factory.create_agent(session.id).id,
+    )
+    assert first.compaction_id is not None
+    requirements = service.store.get_compaction(first.compaction_id).summary.workspace_state[
+        "user_requirements"
+    ]
+    for index in range(12):
+        assert any(f"section {index} " in text for text in requirements)
+
+    for index in range(12):
+        service.append_item(
+            Item(
+                thread_id=thread.id,
+                turn_id=turn.id,
+                payload=UserMessagePayload(text=f"Unique required detail {index}: " + "q" * 950),
+            )
+        )
+    with pytest.raises(ContextLimitExceeded, match="would omit required facts"):
+        service.append_context_baseline(
+            session_id=session.id,
+            thread_id=thread.id,
+            operation=ContextBaselineOperation.COMPACT,
+            agent_id=service.factory.create_agent(session.id).id,
+        )
+    assert service.store.get_active_context_baseline(session.id, thread.id).id == first.id
+    assert len(service.store.list_items(thread.id)) == 25
 
 
 @pytest.mark.asyncio
