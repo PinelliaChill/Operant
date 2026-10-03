@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from operant.application.graph import GraphConflictError, GraphRepository
@@ -13,7 +13,15 @@ from operant.application.team import (
     ProjectionApplyResult,
     TeamRepository,
 )
-from operant.domain.graph import GraphWorkflowRun, NodeAttempt, NodeRun, WorkflowDefinition
+from operant.domain.graph import (
+    GraphRunStatus,
+    GraphWorkflowRun,
+    NodeAttempt,
+    NodeRun,
+    NodeRunStatus,
+    NodeSpec,
+    WorkflowDefinition,
+)
 from operant.domain.team import (
     ArtifactBoardUpdate,
     DeliveryStatus,
@@ -60,6 +68,154 @@ class SQLiteGraphRepository(GraphRepository):
 
     def __init__(self, store: SQLiteStore) -> None:
         self.store = store
+
+    @staticmethod
+    def _approval_binding(node_run: NodeRun, spec: NodeSpec, run: GraphWorkflowRun) -> str:
+        return _hash(
+            {
+                "graph_run_id": run.id,
+                "definition": [run.workflow_definition_id, run.workflow_definition_version],
+                "workspace": run.workspace_or_target,
+                "policy": run.policy_snapshot,
+                "node_run_id": node_run.id,
+                "node_id": spec.node_id,
+                "wait_token": node_run.wait_token,
+                "category": spec.metadata.get("category", "graph_approval"),
+                "detail": spec.metadata.get("detail"),
+            }
+        )
+
+    @staticmethod
+    def _approval_projection(row: sqlite3.Row, node_id: str) -> dict[str, Any]:
+        return {
+            "approval_id": str(row["approval_id"]),
+            "graph_run_id": str(row["graph_run_id"]),
+            "node_run_id": str(row["node_run_id"]),
+            "node_id": node_id,
+            "wait_token": str(row["wait_token"]),
+            "action_hash": str(row["action_hash"]),
+            "category": str(row["category"]),
+            "detail": str(row["detail"]),
+            "status": str(row["status"]),
+            "requested_at": str(row["requested_at"]),
+            "expires_at": str(row["expires_at"]),
+            "decided_by": row["decided_by"],
+            "decided_at": row["decided_at"],
+        }
+
+    def ensure_node_approval(
+        self, node_run: NodeRun, spec: NodeSpec, run: GraphWorkflowRun
+    ) -> dict[str, Any]:
+        if (
+            spec.node_kind.value != "approval"
+            or node_run.workflow_run_id != run.id
+            or node_run.status is not NodeRunStatus.WAITING_APPROVAL
+            or not node_run.wait_token
+            or spec.timeout_policy is None
+        ):
+            raise GraphConflictError("Graph approval boundary is not current")
+        action_hash = self._approval_binding(node_run, spec, run)
+        approval_id = "graph_approval_" + action_hash[:32]
+        category = str(spec.metadata.get("category", "graph_approval"))
+        detail = str(spec.metadata["detail"])
+        if not category or len(category) > 100 or not detail or len(detail) > 500:
+            raise GraphConflictError("Graph approval summary is invalid")
+        expires_at = node_run.updated_at + timedelta(seconds=spec.timeout_policy.timeout_seconds)
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """INSERT OR IGNORE INTO graph_node_approvals(
+                    approval_id,graph_run_id,node_run_id,wait_token,action_hash,category,
+                    detail,status,requested_at,expires_at
+                ) VALUES(?,?,?,?,?,?,?,'pending',?,?)""",
+                (
+                    approval_id,
+                    run.id,
+                    node_run.id,
+                    node_run.wait_token,
+                    action_hash,
+                    category,
+                    detail,
+                    node_run.updated_at.isoformat(),
+                    expires_at.isoformat(),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM graph_node_approvals WHERE node_run_id=? AND wait_token=?",
+                (node_run.id, node_run.wait_token),
+            ).fetchone()
+            assert row is not None
+            if row["approval_id"] != approval_id or row["action_hash"] != action_hash:
+                raise GraphConflictError("Graph approval binding changed")
+            if row["status"] == "pending" and expires_at <= datetime.now(timezone.utc):
+                connection.execute(
+                    "UPDATE graph_node_approvals SET status='expired' "
+                    "WHERE approval_id=? AND status='pending'",
+                    (approval_id,),
+                )
+                row = connection.execute(
+                    "SELECT * FROM graph_node_approvals WHERE approval_id=?", (approval_id,)
+                ).fetchone()
+            assert row is not None
+            return self._approval_projection(row, spec.node_id)
+
+    def get_node_approval(self, node_run: NodeRun, spec: NodeSpec) -> dict[str, Any]:
+        run = self.get_run(node_run.workflow_run_id)
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM graph_node_approvals WHERE node_run_id=? AND wait_token=?",
+                (node_run.id, node_run.wait_token),
+            ).fetchone()
+        if row is not None:
+            if row["action_hash"] != self._approval_binding(node_run, spec, run):
+                raise GraphConflictError("Graph approval binding changed")
+            if row["status"] != "pending" or node_run.status is not NodeRunStatus.WAITING_APPROVAL:
+                return self._approval_projection(row, spec.node_id)
+        return self.ensure_node_approval(node_run, spec, run)
+
+    def decide_node_approval(
+        self,
+        node_run: NodeRun,
+        spec: NodeSpec,
+        *,
+        approval_id: str,
+        wait_token: str,
+        approved: bool,
+    ) -> dict[str, Any]:
+        run = self.get_run(node_run.workflow_run_id)
+        if (
+            run.status not in {GraphRunStatus.RUNNING, GraphRunStatus.WAITING_APPROVAL}
+            or node_run.status is not NodeRunStatus.WAITING_APPROVAL
+            or node_run.wait_token != wait_token
+        ):
+            raise GraphConflictError("Graph approval boundary is no longer waiting")
+        binding = self.ensure_node_approval(node_run, spec, run)
+        if binding["approval_id"] != approval_id:
+            raise GraphConflictError("Graph approval ID does not match current boundary")
+        desired = "approved" if approved else "denied"
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM graph_node_approvals WHERE approval_id=?", (approval_id,)
+            ).fetchone()
+            assert row is not None
+            if row["status"] == desired:
+                return self._approval_projection(row, spec.node_id)
+            if row["status"] != "pending" or datetime.fromisoformat(
+                row["expires_at"]
+            ) <= datetime.now(timezone.utc):
+                raise GraphConflictError("Graph approval is expired or already decided")
+            connection.execute(
+                """UPDATE graph_node_approvals
+                SET status=?,decided_by='user',decided_at=?
+                WHERE approval_id=? AND status='pending'""",
+                (desired, _now(), approval_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM graph_node_approvals WHERE approval_id=?", (approval_id,)
+            ).fetchone()
+            assert row is not None
+            return self._approval_projection(row, spec.node_id)
 
     def put_definition(self, definition: WorkflowDefinition) -> None:
         body = _json(definition)
@@ -172,6 +328,16 @@ class SQLiteGraphRepository(GraphRepository):
         if row is None:
             raise KeyError(workflow_run_id)
         return GraphWorkflowRun.model_validate_json(str(row["body"]))
+
+    def list_child_runs(self, parent_run_id: str) -> tuple[GraphWorkflowRun, ...]:
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT body FROM graph_workflow_runs "
+                "WHERE json_extract(body, '$.parent_run_id')=? "
+                "ORDER BY sequence",
+                (parent_run_id,),
+            ).fetchall()
+        return tuple(GraphWorkflowRun.model_validate_json(row["body"]) for row in rows)
 
     def update_run(self, run: GraphWorkflowRun, *, expected_revision: int) -> None:
         with self.store._connect() as connection:

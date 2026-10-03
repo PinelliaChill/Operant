@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-10-02（Beta 任务 2；记录身份：Codex，保留原历史署名）
+> 最后更新：2026-10-03（Beta 任务 3；记录身份：Codex 主线程，保留原历史署名）
 >
-> 对应源码：`codex/beta-reliability-task2`，基线 `main@600d97c`，包含已合并任务 1 和本次任务 2；SQLite 为 v21。本次没有更新已安装 App 或真实用户库。
+> 对应源码：`codex/beta-orchestration-task3`，基线 `main@c5b2b778`，包含已合并任务 1、2 和本次任务 3；SQLite 为 v22。本次没有更新已安装 App 或真实用户库。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -15,7 +15,7 @@
 
 ## 当前版本速览
 
-- **当前源码**：会话工作台、H-03～H-06 编排、H-08/H-09/H-12 配置与任务控制、第四部分受信能力驱动和隔离第三方 Tool 已合并主线。本分支修复 Graph Tool/Script 使用有效 Session 工具权限的问题；本分支的合并状态以 Git 核对。
+- **当前源码**：会话工作台、H-03～H-06 编排、H-08/H-09/H-12 配置与任务控制、第四部分受信能力驱动和隔离第三方 Tool 已合并主线。本分支补齐 Human Input、Approval、Wait、Subworkflow、Artifact、Merge、持久工作流建议对话及文件/Git watcher；合并状态和验收以 Git 与任务 3 记录核对。
 - **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
 - **会话工作台**：[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 提供会话内子 Agent、定向消息、历史树，以及 GUI/TUI 引用、命令和上下文入口，详见 §2.1。
 - **交付边界**：本机候选安装不等于正式签名、公证或自动更新发布；主线合并也不会自动更新已安装 App。历史批次的失败与验收范围仍保留。
@@ -96,8 +96,8 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 | Memory/PluginHost | 两个真实引擎、可信/隔离Host、Ledger/Proposal/CAS、来源权限、迁移、开关及keep/delete | 认证进程内是信任边界；插件SDK目前面向记忆，不是通用扩展平台 |
 | 召回/治理 | 中文及标识符检索、Memory Pack、预算、刷新/撤销；历史搜索、冲突/时效、维护任务与失败处理 | B2-4 Host性能原指标未达；自动治理不等于模型自证或任意冲突自动合并 |
 | 经验与共享 | 经验Skill验证发布/回退、Writer晋级、授权共享/撤销、数据集移交与Remote最小包 | 跨项目共享须显式授权，未合并知识不自动晋级；生产Remote未因此验收 |
-| Graph/Team | 正式 Agent、Tool、Script、Condition、Fan-out、Join、Loop、Timer 执行；Live 画布编辑/连线/版本差异/运行投影；Team消息、Mailbox及任务/工件板、隔离Writer | 混合图至少含一个 Agent 且锁定 Team；Human Input/Approval/Wait/Subworkflow/Artifact/Merge 尚未接入此正式执行器；会话式委派使用独立工作台运行时 |
-| 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile，ASK 自动审核并留审计，模型不可用转人工；Cron/Timer/本地 application.signal Hook 派发正式 Graph Agent | 审批模型默认仍为人工模式；硬 DENY 始终优先。Hook 暂无文件/Git watcher；动态Slash、通用插件驱动仍有缺口 |
+| Graph/Team | 正式执行 14 类节点；Live 画布编辑/连线/版本差异/运行投影；Team消息、Mailbox及任务/工件板、隔离Writer | 每个执行图至少含一个 Agent 且锁定匹配 Team；Writer 需受信 Git worktree，未知写入不重放；会话式委派使用独立工作台运行时 |
+| 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile，ASK 自动审核并留审计，模型不可用转人工；Cron/Timer/应用信号及文件/Git Hook 派发正式 Graph Agent | 审批模型默认仍为人工模式；硬 DENY 始终优先。Watcher 仅本地显式工作区；动态Slash、通用插件驱动仍有缺口 |
 | 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Task 1 已接入文件正文、Diff、本机 PTY、普通 Artifact/会话引用及 TUI 配置、Goal/Plan；隔离 GUI/TUI 正式模型读取和原生 WebView 文件、Diff、历史、审批、终端输入/输出/回收均已验收 |
 | Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | 公网、容器联合流程与完整跨设备产品不外推 |
 | 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；隔离第三方 Tool 包经私有目录、摘要和真实沙箱探测后才启用；Chrome 专用 Profile 经正式 Target/Action Gateway 执行，真实模型已验收临时网页观察、导航、非密码输入和点击 | macOS 临时测试 App 已经真实回环 HTTP Core/Worker/生成客户端完成实际点击；第三方 Command/Event/Provider/Runtime 与驱动未开放，GUI 直接调用和生产远程未验收；临时 Profile 回收不等于全局资源治理 |
@@ -105,7 +105,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
 可复用的最近证据：B2-7范围与负结果见[任务包](design/b2-7/task-package.md)；
 UI关键页面与集中验收见[任务包](design/ui-refine-2-3/task-package.md)。
-本实施树的 H-03～H-06 范围、真实链路与限制见[可操作编排验收记录](design/orchestration-system/acceptance.md)。
+原 H-03～H-06 交付记录见[可操作编排验收](design/orchestration-system/acceptance.md)；本次补齐范围与证据见[Beta 任务 3 验收](design/beta-orchestration/acceptance.md)。
 H-08/H-09/H-12 的实现与验收见[配置、审批与任务控制记录](design/config-approval-task-control/acceptance.md)。
 第四部分本机能力插件的范围、真实链路和未完成边界见[扩展能力与运行治理记录](design/extension-runtime-governance/acceptance.md)。四部分合并后的联调与剩余缺口见[前四部分联调验收](design/four-part-integration/acceptance.md)。
 本机最新安装状态、授权合并事实与后续目标以治理根进度入口核对，不从旧阶段的“未合并”文字推断。
@@ -794,13 +794,16 @@ Condition 只开放不使用 Python `eval` 的受限表达式。Runtime 从已�
 限制；时间和费用必须是有限非负数，Token、子 Agent 与递归深度必须是非负整数，成功终止 Loop 前还要
 满足 required output。时间、Token、费用和子 Agent 数是调用方提供的累计遥测，不冒充自动计量。
 所有入口、实际下游输入和成功输出都在 Attempt/状态写入前按 port required/type 与可持久化 JSON 校验；
-可选源端口缺失会禁用边。Human Input 通过节点 wait token 恢复；Approval Node 只保存等待关联，必须由
-既有 Approval Request/Decision 路径裁决。
+可选源端口缺失会禁用边。Human Input 用精确 wait token 提交输入；Approval Node 的请求、Action Hash、
+有效期与决定持久化在 `graph_node_approvals`。流程决定仅准许下游继续，不授予工具权限；真实动作仍
+必须单独经过 Session 或 Phase45 Gateway。Human Input/Approval 的超时通过显式分支处理，Wait/Timer
+使用持久时钟等待，重启后不会重新计时。
 
 启动 Core 时，Repository 会找出可恢复的 Graph Run，并从 Attempt/Node 已提交事实重算派生路由；
 即使进程在成功 Attempt 与下游推进之间崩溃，也不会重放成功动作。STARTED/UNKNOWN 的幂等 Attempt
 沿用首次 key 重试；未知非幂等写进入 `manual_reconcile_required`。`BoundedGraphExecutor` 现接入 Agent、
-Tool/Script、Condition、Fan-out/Join、Loop、Timer，至少需要一个 Team Agent 节点。Tool/Script 锁定
+Tool/Script、Condition、Fan-out/Join、Loop、Timer、Human Input、Approval、Wait、Subworkflow、Artifact 和
+Merge，至少需要一个 Team Agent 节点。Tool/Script 锁定
 RolePreset 版本，执行前创建正式 Session，并以该 Session 的有效 `RoleSnapshot.tool_policy` 构造工具和扩展；
 配置层收窄的权限因此同样作用于 Graph 动作。动作仍经过 Action Gateway、审批和 Graph Attempt 边界；成功的 Agent Loop 下一轮
 使用新 Agent/Thread 身份。Core 关停先持久 interrupt，明确用户取消才持久 cancel；未知写结果不自动重放。
@@ -809,8 +812,23 @@ Policy ALLOW，命中 Role 的 `shell` 等审批类别仍须绑定当前 Action 
 
 Live 画布从 Core 读取不可变 Definition，编辑已支持节点的常用参数、端口和连线，其余字段随 Definition 保留；保存产生新草稿
 版本，校验与发布回读 Core，运行图只显示 Core 的 NodeRun 状态。模型建议使用正式 ModelProfile 与 Team
-成员生成未持久化候选，先通过同一 Definition/Compiler，展示差异、写入权限与预算；用户应用到画布后仍需
-分别确认保存、发布和运行。该入口目前是单轮建议加已保存版本迭代，不保存对话历史。
+成员生成候选，先通过同一 Definition/Compiler，展示差异、写入权限与预算；用户应用到画布后仍需
+分别确认保存、发布和运行。成功建议以脱敏对话轮次持久化，继续请求包含最近轮次及最新完整候选；
+失败建议不追加历史，单对话最多 40 轮，超出明确拒绝。历史与建议候选不会自行保存、发布或运行 Definition。
+
+Subworkflow 只能执行已发布的固定版本。入场先编译整个子图树，拒绝直接或间接递归、超出根图深度/子
+Agent 上限、扩大 Role/Capability/Plugin 授权及无法支撑的预算。父子 Run、节点与 iteration 持久关联；
+模型请求、重试和循环次数预留互不重叠的预算份额，子图还受其 Definition/节点上限与父图剩余时间约束。
+未用份额不动态借给其他节点。累计 Token/费用/工具调用从持久子 Run 派生，不另写一份账本；取消、
+中断和失败向子图传播，父运行在返回前等待已取消的子任务完成关停；恢复沿用原 child Run 与等待令牌。Run 首次准备固定有效配置和 ModelProfile
+指纹，之后配置变化明确失败，要求创建新 Run。Writer 使用原图工作区的配置收窄权限。
+
+Artifact 节点以有界文本/JSON 或当前 Team/Session 已绑定工件发布到 Artifact Board，核验正文完整性与
+敏感级别。同一正文可复用内容寻址 Blob，节点提交和 Board 归属分别保留。Agent/Tool/Script Writer
+仅接受管理员配置的独立 Git worktree；Gateway 授权后取得 typed workspace/lease。执行必须实际产生
+干净 Git commit，再发布可验证 CommitArtifact；执行证据不冒充已通过测试。Merge 只接受至少两个
+唯一、可达的 typed writer 来源，用户通过既有 MergeRun 接口审查、finalize；节点观察正式终态。
+未知写入或合并结果进入人工核对，不自动重放；容器 writer 尚未接入此 Graph 执行器。
 
 ### Team、Roster、Mailbox 与 Board
 
@@ -900,7 +918,9 @@ workspace root 与镜像摘要；发送前持久 receipt 并原子标为 `sent`�
 Scheduler Leader 持有者才能生成 due RunRequest，Runtime Writer 持有者才能 claim/dispatch；这两个全局租约
 和每个 Job Lease 都绑定 owner、随机 token、单调 fencing 和 TTL。续租最长不超过 Runtime Writer
 到期时间；旧 token/fence 不能续租、取消或提交。Claim 还会原子核对每个 Schedule 的
-`concurrency_limit`，不会因多个 due 请求绕过并发上限。
+`concurrency_limit` 和当前 enabled 状态，暂停后未领取的请求等待恢复，不会因多个 due 请求绕过并发上限。
+内部记忆维护使用 enabled 的 `application.signal` Hook，由维护命令显式入队；没有时钟 occurrence，
+不会为保留手工队列而绕过暂停规则。
 
 Worker 在调用 Gateway 前持久 `side_effect_started`，再用原 RunRequest 幂等键经 Policy/Capability/Audit 创建
 并启动精确 Published Graph Revision。`scheduler_graph_dispatches` 先保留幂等绑定：已 completed 的键重放
@@ -917,6 +937,11 @@ Worker 绑定后调度正式 Graph executor，等待终态再结清 RunRequest�
 未绑定工作区且 Definition 也未固定唯一工作区的 Agent Graph 无法执行。FastAPI lifespan
 运行有界 Coordinator，停机时只释放它持有的精确租约；多 Core 可候选接管，但同时只允许一个
 Leader 和一个 Writer，不是通用多 Writer 或高可用集群。
+
+文件 watcher 仅检查 stat 指纹，不读取正文；Git watcher 仅探测 HEAD commit，未提交修改不会触发。
+watch_path 必须处于显式绝对工作区内，拒绝软链接及根目录。基线、generation 与去重请求在同一
+有 fencing 的事务里保存，暂停/取消期间不派发；重新启用沿用同版本基线，期间有变化可产生一次新事件。探测在线程中有界轮询，慢 Git
+不会阻塞 HTTP，探测后按实际时间重验租约与停机栅栏。它不是递归文件树或跨设备 watcher。
 
 ### Memory
 
@@ -1331,6 +1356,9 @@ SQLiteStore 当前创建以下表：
 | `job_leases` | 保存每个 claimed RunRequest 的带 fencing 执行租约 |
 | `job_attempts` | 保存每次调度尝试、副作用开始标志、结果和安全错误码 |
 | `scheduler_graph_dispatches` | 保存 RunRequest/Idempotency/Action Hash 到唯一 Graph Run 的持久绑定 |
+| `scheduler_watch_baselines` | 保存文件/Git探测指纹、generation、时钟和错误码 |
+| `workflow_suggestion_conversations` / `workflow_suggestion_turns` | 保存脱敏建议对话、固定Team/起点和成功候选轮次 |
+| `graph_node_approvals` | 保存图流程请求、等待令牌、动作Hash、有效期和决定 |
 | `remote_control_hosts` | 保存本地 Remote Host 公钥、能力、开关与在线投影，不保存私钥 |
 | `remote_pairing_challenges` | 保存一次性配对码 hash、本机预授 Scope、TTL 与消费事实，不保存配对码明文 |
 | `remote_devices` / `remote_sessions` | 保存设备公钥/Scope/撤销与会话 Cursor/key ref；会话密钥在独立 0600 key store |
@@ -1618,7 +1646,9 @@ workspace 绝对路径。
 | `GET` | `/v1/graph/runs/{id}/events/stream` | 按 Graph Run Cursor 回放已提交事件 |
 | `POST` | `/v1/graph/runs/{id}/resume` | 从安全持久边界恢复；拒绝强制重放未知副作用 |
 | `POST` | `/v1/graph/runs/{id}/cancel` | 取消 Graph Run 并持久传播节点终态 |
-| `POST` | `/v1/graph/runs/{id}/nodes/{node_id}/input` | 用 wait token 提交 Human Input；不处理 Approval |
+| `POST` | `/v1/graph/runs/{id}/nodes/{node_id}/input` | 用必需的精确 wait token 提交 Human Input |
+| `GET/POST` | `/v1/graph/runs/{id}/nodes/{node_id}/approval[/decision]` | 读取持久流程审批或提交绑定 ID/token 的决定，决定返回 CommandReceipt |
+| `GET` | `/v1/graph/workflows/suggestion-conversations[/{id}]` | 读取脱敏建议对话与候选，重启后继续 |
 | `POST` | `/v1/teams/definitions` | 保存版本化本地 Team Definition |
 | `POST` | `/v1/teams/runs` | 原子绑定 Graph Run 并创建 Team Run/Roster/初始事件；同一 Graph 仅一个 Team |
 | `GET` | `/v1/teams/runs/{id}` | 查询 Team Run 与 Roster Projection |
@@ -1641,7 +1671,8 @@ workspace 绝对路径。
 | `GET` | `/v1/mcp/servers/{id}/tools` | 查询已发现的最新工具 Schema 快照 |
 | `GET` | `/v1/mcp/action-receipts/{action_hash}` | 查询 result_available/status 等安全回执事实，不返回结果正文 |
 | `POST` | `/v1/mcp/servers/{id}/tools/{name}/call` | 重验 Schema/Action/Policy/Lease；completed 回放，unknown 禁止重放 |
-| `POST/GET/PUT` | `/v1/schedules[/{id}]` | 创建、查询或追加版本化 Cron/单次 Timer/application.signal Hook Schedule |
+| `POST/GET/PUT` | `/v1/schedules[/{id}]` | 创建、查询或追加版本化 Cron/单次 Timer/application.signal、file.changed、git.head.changed Hook Schedule |
+| `GET` | `/v1/schedules/{id}/watch-status` | 读取 watcher 初始化、generation、探测时钟与安全错误码 |
 | `POST` | `/v1/schedules/{id}/status` | 切换 enabled/paused/cancelled 投影 |
 | `POST` | `/v1/schedules/{id}/trigger` | 用调用方幂等键创建手工 RunRequest |
 | `POST` | `/v1/schedules/{id}/hook` | 本地调用方以稳定事件 ID 发送 application.signal 并复用持久 RunRequest |
@@ -1930,9 +1961,9 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 1. **规模与I/O**：SQLite、Context与Artifact主要是同步本地I/O；任务 2 已建立 12 会话 / 2400 Item / 20 引用快照的日常基准；大Graph/Team、高并发、超大引用及长期容量仍未作容量承诺。B2-4 Host原性能门未达，不把诊断原型或小样本检索收益当产品性能优化。
 2. **恢复边界**：恢复发生在持久化边界，不支持任意模型流位置续跑；工具待审批Future与BTW取消信号仍有进程内部分。重启后的审批决定不等于原执行自动继续，SSE重连也不能单独证明后台运行仍存活。
 3. **未知副作用**：Coder/Writer/外部动作结果未知须人工核对。Git已提交而SQLite回执未落盘的窗口可能进入outcome_unknown；既有租约、锁与工作树证据保留，不猜测或自动重放。
-4. **Graph与协作**：正式执行器已有八类混合节点与 Live 画布，但尚未覆盖 Human Input/Approval/Wait/Subworkflow/Artifact/Merge 的直接执行；混合图需至少一个 Agent 与匹配的 Team。智能建议尚无持久对话历史；Hook 限本地 application.signal，文件/Git watcher 未接入。会话委派/消息与 Graph Team 是不同运行时，不能混作一个状态权威。
+4. **Graph与协作**：正式执行器和 Live 画布支持 14 类节点，执行图仍需至少一个 Agent 与匹配的 Team。Subworkflow 使用固定版本和保守预算预留；Graph writer 仅支持管理员配置的 Git worktree。工作流建议对话持久化但不自行发布；文件/Git watcher 在本地工作区运行。会话委派/消息与 Graph Team 是不同运行时，不能混作一个状态权威。
 5. **记忆效果与清理**：召回、治理、共享和小样本质量评测已实现，但不证明普遍收益。原固定复用问题失败与补充条件化成功分开；尚无一般化自动冲突合并或完整容量淘汰。插件专属数据delete与全局历史/缓存治理不同。
-6. **数据与迁移**：当前SQLite v21，新增会话临时资源策略，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
+6. **数据与迁移**：当前SQLite v22，保留会话临时资源策略，新增图审批、建议对话和 watcher 基线，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
 7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布。Task 1 的文件正文、Diff、PTY、显式引用和 TUI 配置/Goal/Plan 已完成隔离入口联调；GUI 正式模型的文件/普通 Artifact 按需读取及有历史清理后的新轮、TUI 显式文件读取已验收。隔离原生 WebView 文件、Diff、历史、审批与终端交互均已核实；任意对象`@`和动态`/`注册仍有缺口。Phase1E冻结协议本身的查询缺口需与后续入口区分。
 8. **权限与公网**：OAuth面向单用户私网，不是多租户或通用公网CSRF方案；loopback仍可无OAuth。Remote配对/E2E不替代所有API鉴权，Gateway/Relay不属于已审计公网托管产品。面向非可信HTTP客户端的Artifact capability签发仍未完成；跨项目操作必须走已实现的显式共享授权，不能由路径推定权限。
 9. **外部能力与隔离**：本机 Chrome 已有真实隔离 Profile 与 Core Job 链路，Agent 工具入口已完成真实模型在临时网页上的观察、导航、非密码输入和点击；macOS Computer 适配器已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；日常 App 操作范围仍需验收。隔离第三方 Tool 已以临时包验证包外文件、网络和环境密钥拒绝，但不代表其他插件类别已有沙箱。GUI 仅有持久 Job 读回和人工核对提示，直接操控和生产 Remote 尚未验收。MCP Streamable HTTP、真实第三方 Server 长时验证、多 Host 发现/通知与移动推送仍有缺口。历史 Docker 隔离测试与真实 Host 模型任务是不同证据；候选中的 Docker skip 及生产 HTTPS Target 限制继续保留。

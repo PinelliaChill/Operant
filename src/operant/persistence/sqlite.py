@@ -114,6 +114,24 @@ from operant.memory_plugins.b25_schema import schema_contracts as b25_schema_con
 from operant.memory_plugins.b26_schema import schema_contracts as b26_schema_contracts
 from operant.memory_plugins.management_schema import schema_contracts as b23_schema_contracts
 from operant.memory_plugins.recall_schema import schema_contracts as b24_schema_contracts
+from operant.persistence.automation_schema import (
+    downgrade as downgrade_automation,
+)
+from operant.persistence.automation_schema import (
+    schema_contracts as automation_schema_contracts,
+)
+from operant.persistence.automation_schema import (
+    upgrade as upgrade_automation,
+)
+from operant.persistence.graph_boundary_schema import (
+    downgrade as downgrade_graph_boundaries,
+)
+from operant.persistence.graph_boundary_schema import (
+    schema_contracts as graph_boundary_schema_contracts,
+)
+from operant.persistence.graph_boundary_schema import (
+    upgrade as upgrade_graph_boundaries,
+)
 from operant.persistence.resource_governance import (
     downgrade as downgrade_resource_governance,
 )
@@ -259,6 +277,7 @@ class WorkflowExecutionLease:
 
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
+        22: "a5f500b2f8e40669c5470ac1f529dae7157f846620c50cf921bf180fb84d3dfb",
         21: "1aa28a25987bd6da49bbf7cdc49293038f3a8e30f488388ae0f10140b7a3400c",
         20: "c4a8218693db68e469c7bb9e33617d6ef6187e2a8ce11360c145d5498c5f9948",
         19: "658d0732a8e13f06b09192329e93d7590c07bb35b06721ab8cd2a620618a2d6a",
@@ -282,6 +301,7 @@ class SQLiteStore:
         14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
+        22: "19d538d88ff2780bd4ef94ca843198a434ac6364951794e4ad3e7c6de7976430",
         21: "164a2941edbcdf482027b7de89a70035181ed1e2818c81d33f4357f33871d565",
         20: "2a0db4224e32f0968e6aae795c28e33a885722c35cc9948aca9195830f55e571",
         19: "3f071878abbe04dd52be28b86ccbbfe7043fe3102e27fa62bb4dc2e448dc7c1b",
@@ -652,7 +672,18 @@ class SQLiteStore:
                 upgrade_resource_governance,
                 downgrade_resource_governance,
             ),
+            build(22, "graph_boundaries_automation", self._upgrade_v22, self._downgrade_v22),
         )
+
+    @staticmethod
+    def _upgrade_v22(connection: sqlite3.Connection) -> None:
+        upgrade_graph_boundaries(connection)
+        upgrade_automation(connection)
+
+    @staticmethod
+    def _downgrade_v22(connection: sqlite3.Connection) -> None:
+        downgrade_automation(connection)
+        downgrade_graph_boundaries(connection)
 
     def _ensure_migration_table(self) -> None:
         with self._connect() as connection:
@@ -2177,6 +2208,9 @@ class SQLiteStore:
             tables.update(task_control_schema_contracts()[0])
         if version >= 21:
             tables.update(resource_governance_schema_contracts()[0])
+        if version >= 22:
+            tables.update(graph_boundary_schema_contracts()[0])
+            tables.update(automation_schema_contracts()[0])
         return tables
 
     @staticmethod
@@ -2454,6 +2488,9 @@ class SQLiteStore:
             contract.update(task_control_schema_contracts()[1])
         if version >= 21:
             contract.update(resource_governance_schema_contracts()[1])
+        if version >= 22:
+            contract.update(graph_boundary_schema_contracts()[1])
+            contract.update(automation_schema_contracts()[1])
         return contract
 
     @classmethod
@@ -2728,6 +2765,9 @@ class SQLiteStore:
                 upgrade_task_control(connection)
             if version >= 21:
                 upgrade_resource_governance(connection)
+            if version >= 22:
+                upgrade_graph_boundaries(connection)
+                upgrade_automation(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -2938,6 +2978,9 @@ class SQLiteStore:
             contract.update(task_control_schema_contracts()[2])
         if version >= 21:
             contract.update(resource_governance_schema_contracts()[2])
+        if version >= 22:
+            contract.update(graph_boundary_schema_contracts()[2])
+            contract.update(automation_schema_contracts()[2])
         return contract
 
     @staticmethod
@@ -3157,6 +3200,9 @@ class SQLiteStore:
             contract.update(task_control_schema_contracts()[3])
         if version >= 21:
             contract.update(resource_governance_schema_contracts()[3])
+        if version >= 22:
+            contract.update(graph_boundary_schema_contracts()[3])
+            contract.update(automation_schema_contracts()[3])
         return contract
 
     @staticmethod
@@ -3590,6 +3636,9 @@ class SQLiteStore:
             contract.update(task_control_schema_contracts()[5])
         if version >= 21:
             contract.update(resource_governance_schema_contracts()[5])
+        if version >= 22:
+            contract.update(graph_boundary_schema_contracts()[5])
+            contract.update(automation_schema_contracts()[5])
         return contract
 
     @staticmethod
@@ -3852,6 +3901,9 @@ class SQLiteStore:
             indexes.update(task_control_schema_contracts()[4])
         if version >= 21:
             indexes.update(resource_governance_schema_contracts()[4])
+        if version >= 22:
+            indexes.update(graph_boundary_schema_contracts()[4])
+            indexes.update(automation_schema_contracts()[4])
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:

@@ -24,6 +24,7 @@ from operant.domain.multiwriter import (
     WriterLease,
     WriterWorkspace,
 )
+from operant.persistence.graph_team import SQLiteGraphRepository
 from operant.persistence.multiwriter import SQLiteMultiWriterRepository
 
 
@@ -174,17 +175,9 @@ class MultiWriterRuntime:
         definition: WorkflowDefinition,
         leases: tuple[WriterLease, ...],
     ) -> MergeRun:
-        policy = self._merge_policy(definition, merge.merge_node_id)
-        artifacts = tuple(self.repository.get_artifact(item) for item in merge.artifact_ids)
+        policy, artifacts, workspaces = self._merge_inputs(merge, definition=definition)
         if merge.strategy is not policy.strategy:
             raise GraphConflictError("merge strategy does not match the frozen Merge node")
-        if len({artifact.writer_workspace_id for artifact in artifacts}) != len(artifacts):
-            raise GraphConflictError("merge requires artifacts from distinct writer workspaces")
-        workspaces = tuple(
-            self.repository.get_workspace(artifact.writer_workspace_id) for artifact in artifacts
-        )
-        if {workspace.writer_key for workspace in workspaces} != set(policy.source_writer_keys):
-            raise GraphConflictError("merge artifacts do not cover the Merge node writer set")
         if any(artifact.base_revision != merge.base_revision for artifact in artifacts):
             raise GraphConflictError("merge contains an artifact with a stale base revision")
         if merge.target_isolation_ref in {workspace.isolation_ref for workspace in workspaces}:
@@ -215,11 +208,7 @@ class MultiWriterRuntime:
             raise GraphConflictError("terminal merge runs cannot be finalized again")
         if merge.status is MergeRunStatus.RUNNING:
             raise GraphConflictError("running merge result is unknown and requires reconciliation")
-        policy = self._merge_policy(definition, merge.merge_node_id)
-        artifacts = tuple(self.repository.get_artifact(item) for item in merge.artifact_ids)
-        workspaces = tuple(
-            self.repository.get_workspace(artifact.writer_workspace_id) for artifact in artifacts
-        )
+        policy, artifacts, workspaces = self._merge_inputs(merge, definition=definition)
         self._assert_workspace_leases(workspaces, leases)
         conflicts = self.repository.list_conflicts(merge.graph_run_id)
         if any(conflict.status is WriterConflictStatus.OPEN for conflict in conflicts):
@@ -278,6 +267,8 @@ class MultiWriterRuntime:
     ) -> MergeRun:
         if status is MergeRunStatus.SUCCEEDED and result_artifact_ref is None:
             raise GraphConflictError("successful merge reconciliation requires a result ref")
+        merge = self.repository.get_merge_run(merge_run_id)
+        self._merge_inputs(merge)
         return self.repository.reconcile_merge_run(
             merge_run_id,
             expected_revision=expected_revision,
@@ -366,6 +357,55 @@ class MultiWriterRuntime:
             raise GraphConflictError("one current writer lease is required per merge artifact")
         for lease in by_workspace.values():
             self.repository.assert_lease(lease)
+
+    def _merge_inputs(
+        self, merge: MergeRun, *, definition: WorkflowDefinition | None = None
+    ) -> tuple[MergeNodePolicy, tuple[PatchCommitArtifact, ...], tuple[WriterWorkspace, ...]]:
+        """Bind every merge artifact to a typed writer in this exact Graph Run."""
+
+        graph_repository = SQLiteGraphRepository(self.repository.store)
+        run = graph_repository.get_run(merge.graph_run_id)
+        frozen = graph_repository.get_definition(
+            run.workflow_definition_id, run.workflow_definition_version
+        )
+        if definition is not None and (
+            definition.workflow_id != frozen.workflow_id or definition.version != frozen.version
+        ):
+            raise GraphConflictError("merge definition differs from the Graph Run")
+        policy = self._merge_policy(frozen, merge.merge_node_id)
+        artifacts = tuple(self.repository.get_artifact(item) for item in merge.artifact_ids)
+        if len({artifact.writer_workspace_id for artifact in artifacts}) != len(artifacts):
+            raise GraphConflictError("merge requires artifacts from distinct writer workspaces")
+        workspaces = tuple(
+            self.repository.get_workspace(artifact.writer_workspace_id) for artifact in artifacts
+        )
+        if len(workspaces) != len(policy.source_writer_keys) or {
+            workspace.writer_key for workspace in workspaces
+        } != set(policy.source_writer_keys):
+            raise GraphConflictError("merge artifacts do not cover the Merge node writer set")
+        specs = {node.node_id: node for node in frozen.nodes}
+        for workspace in workspaces:
+            if workspace.graph_run_id != merge.graph_run_id:
+                raise GraphConflictError("merge artifact belongs to another Graph Run")
+            try:
+                node_run = graph_repository.get_node_run(workspace.node_run_id)
+            except KeyError as exc:
+                raise GraphConflictError("merge writer node binding is missing") from exc
+            spec = specs.get(node_run.node_id)
+            writer = None if spec is None else spec.writer_policy
+            if (
+                node_run.workflow_run_id != merge.graph_run_id
+                or spec is None
+                or spec.node_kind is NodeKind.MERGE
+                or not spec.writes_workspace
+                or writer is None
+                or writer.writer_key != workspace.writer_key
+                or writer.isolation_kind != workspace.isolation_kind
+                or writer.isolation_ref != workspace.isolation_ref
+                or writer.ownership_paths != workspace.ownership_paths
+            ):
+                raise GraphConflictError("merge writer node binding differs from the frozen Graph")
+        return policy, artifacts, workspaces
 
     @staticmethod
     def _merge_policy(definition: WorkflowDefinition, node_id: str) -> MergeNodePolicy:

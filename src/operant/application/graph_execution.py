@@ -14,10 +14,11 @@ import asyncio
 import hashlib
 import inspect
 import json
+import subprocess
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -29,10 +30,23 @@ from operant.application.graph import (
     _evaluate_condition,
     _is_safe_expression,
 )
+from operant.application.graph_artifacts import publish_graph_artifact
+from operant.application.multiwriter import MultiWriterRuntime
+from operant.application.phase45_gateway import Phase45ActionGateway
+from operant.application.subworkflow import (
+    aggregate_usage,
+    child_budget,
+    reservation_slots,
+    root_run,
+    validate_budget_tree,
+    validate_subgraph_tree,
+)
 from operant.application.team import TeamRepository, TeamRuntime
 from operant.domain.graph import (
     AttemptResult,
     AttemptSideEffectState,
+    BoundaryKind,
+    BoundaryResolution,
     GraphRunStatus,
     GraphWorkflowRun,
     IdempotencyClass,
@@ -50,6 +64,15 @@ from operant.domain.models import (
     Session,
     ToolPolicy,
 )
+from operant.domain.multiwriter import (
+    MergeRunStatus,
+    PatchCommitArtifact,
+    WriterArtifactKind,
+    WriterIsolationKind,
+    WriterLease,
+    WriterWorkspace,
+)
+from operant.domain.security import Capability, PolicyDecision
 from operant.domain.team import (
     RosterEntry,
     RosterMemberStatus,
@@ -60,7 +83,11 @@ from operant.domain.team import (
     TeamTask,
     TeamTaskStatus,
 )
-from operant.domain.threads import ConversationThread
+from operant.domain.threads import ArtifactSourceRef, ArtifactSourceType, ConversationThread
+from operant.persistence.graph_team import SQLiteGraphRepository
+from operant.persistence.multiwriter import SQLiteMultiWriterRepository
+from operant.persistence.sqlite import NotFoundError
+from operant.protocol import redact_public_text
 from operant.runtime.loop import RuntimeEvent
 from operant.tools.extensions import ToolExtension
 from operant.tools.workspace import ToolError, WorkspaceTools
@@ -133,6 +160,7 @@ class _PreparedService(Protocol):
         *,
         budget_overrides: dict[str, Any] | None = None,
         thread_id: str | None = None,
+        _configuration_workspace_ref: str | None = None,
     ) -> Session: ...
 
     def create_thread(self, thread: ConversationThread) -> ConversationThread: ...
@@ -142,6 +170,10 @@ class _PreparedService(Protocol):
     def cancel_session(self, session_id: str) -> bool: ...
 
     def run_session(self, session_id: str, **kwargs: Any) -> AsyncIterator[RuntimeEvent]: ...
+
+    def get_artifact(self, artifact_id: str, *, verify: bool = True) -> Any: ...
+
+    def create_artifact(self, **kwargs: Any) -> tuple[Any, bool]: ...
 
 
 class BoundedGraphExecutor:
@@ -169,6 +201,11 @@ class BoundedGraphExecutor:
         self._run_locks: dict[str, asyncio.Lock] = {}
         self._state_lock = asyncio.Lock()
         self._active_tasks: dict[str, dict[str, asyncio.Task[_NodeExecution]]] = {}
+        self._child_tasks: dict[str, asyncio.Task[GraphExecutionResult]] = {}
+        self._stopping_child_tasks: dict[str, set[asyncio.Task[GraphExecutionResult]]] = {}
+        self.writer_runtime: MultiWriterRuntime | None = None
+        self.writer_gateway: Phase45ActionGateway | None = None
+        self._writer_leases: dict[str, WriterLease] = {}
         self._active_sessions: dict[str, set[str]] = {}
         self._cancel_requested: set[str] = set()
 
@@ -185,8 +222,20 @@ class BoundedGraphExecutor:
         self._validate_supported_definition(run, definition)
         try:
             self.graph_runtime.validate_run(definition, input=run.input)
+            root = root_run(self.graph_repository, run)
+            root_definition = self.graph_repository.get_definition(
+                root.workflow_definition_id, root.workflow_definition_version
+            )
+            validate_subgraph_tree(self.graph_repository, root_definition)
+            validate_budget_tree(
+                self.graph_repository,
+                root.model_copy(update={"started_at": None}),
+                root_definition,
+            )
+            self._freeze_or_validate_configuration(root, root_definition)
+            run = self.graph_repository.get_run(run.id)
         except Exception as exc:
-            raise GraphExecutionError("Graph Definition cannot be validated for execution") from exc
+            raise GraphExecutionError(f"Graph admission failed: {exc}") from exc
         expected_team_id, expected_team_version = self._team_reference(run, definition)
         existing_team_id = run.team_run_id
         if existing_team_id is not None:
@@ -232,6 +281,7 @@ class BoundedGraphExecutor:
         # role drift from being discovered after a partial roster exists.
         role_bindings = self._role_bindings(definition, team_definition)
         member_count = len(role_bindings)
+        reservation_count = reservation_slots(definition)
         shared_budget = run.budget_snapshot
         action_allowance = sum(
             node.retry_policy.max_attempts
@@ -247,15 +297,16 @@ class BoundedGraphExecutor:
         ):
             raise GraphExecutionError("Graph tool-call budget cannot fund bounded actions")
         if member_count and (
-            shared_budget.max_turns < member_count
+            shared_budget.max_turns < reservation_count
             or (
                 shared_budget.max_output_tokens is not None
-                and shared_budget.max_output_tokens < member_count
+                and shared_budget.max_output_tokens < reservation_count
             )
         ):
             raise GraphExecutionError("Graph budget cannot fund one request per Agent node")
         for node, role, _member in role_bindings:
             self._validate_node_workspace(node, workspace)
+            self._workspace_for_node(run, definition, node)
             self._validate_role_head(role)
             if (set(role.tool_policy.allowed_tools) - READ_ONLY_AGENT_TOOLS) and (
                 node.idempotency_class is IdempotencyClass.PURE or not node.writes_workspace
@@ -267,6 +318,8 @@ class BoundedGraphExecutor:
                 _validate_budget(node.budget)
         for node in definition.nodes:
             self._validate_node_workspace(node, workspace)
+            if node.writer_policy is not None:
+                self._workspace_for_node(run, definition, node)
             if node.node_kind not in {NodeKind.TOOL, NodeKind.SCRIPT}:
                 continue
             role_id = cast(str, node.metadata["role_id"])
@@ -299,20 +352,28 @@ class BoundedGraphExecutor:
         )
         roster: list[RosterEntry] = []
         for node, role, member in role_bindings:
-            thread = self.service.create_thread(ConversationThread(workspace_ref=workspace))
+            thread = self.service.create_thread(
+                ConversationThread(workspace_ref=self._workspace_for_node(run, definition, node))
+            )
             budget = node.budget or role.budget
             overrides = budget.model_dump(mode="json")
             # Reserve a disjoint share before concurrent Provider calls. A
             # completion-time total alone detects overspend after it happened.
-            overrides["max_turns"] = min(budget.max_turns, shared_budget.max_turns // member_count)
+            overrides["max_turns"] = min(
+                budget.max_turns, shared_budget.max_turns // reservation_count
+            )
             for key in ("max_output_tokens", "max_tool_calls", "max_cost_usd"):
                 total = getattr(shared_budget, key)
                 if total is None:
                     continue
                 if key == "max_tool_calls":
-                    share = (total - action_allowance) // member_count
+                    share = (total - action_allowance) // reservation_count
                 else:
-                    share = total / member_count if key == "max_cost_usd" else total // member_count
+                    share = (
+                        total / reservation_count
+                        if key == "max_cost_usd"
+                        else total // reservation_count
+                    )
                 local = getattr(budget, key)
                 overrides[key] = share if local is None else min(local, share)
             if overrides.get("max_output_tokens") is None:
@@ -321,6 +382,7 @@ class BoundedGraphExecutor:
                 role.id,
                 budget_overrides=overrides,
                 thread_id=thread.id,
+                _configuration_workspace_ref=workspace,
             )
             self._validate_created_session(session, role, node)
             agent = self.service.factory.create_agent(session.id)
@@ -388,7 +450,7 @@ class BoundedGraphExecutor:
             )
 
     async def run(self, run_id: str) -> GraphExecutionResult:
-        """Drive ready Agent nodes until the Graph reaches a durable terminal state."""
+        """Drive ready nodes and durable boundaries to a terminal state."""
 
         lock = self._run_locks.setdefault(run_id, asyncio.Lock())
         async with lock:
@@ -411,6 +473,9 @@ class BoundedGraphExecutor:
                     GraphRunStatus.MANUAL_RECONCILE_REQUIRED,
                 }:
                     self.graph_runtime.fail_run(run_id)
+                for node in self.graph_repository.list_node_runs(run_id):
+                    self._stop_child(run_id, node, cancel=True)
+                await self._drain_child_tasks(run_id)
                 return self._result(run_id)
 
     def cancel(self, run_id: str) -> GraphWorkflowRun:
@@ -418,6 +483,8 @@ class BoundedGraphExecutor:
 
         self.graph_repository.get_run(run_id)
         self._cancel_requested.add(run_id)
+        for node in self.graph_repository.list_node_runs(run_id):
+            self._stop_child(run_id, node, cancel=True)
         for session_id in tuple(self._active_sessions.get(run_id, ())):
             try:
                 self.service.cancel_session(session_id)
@@ -436,6 +503,8 @@ class BoundedGraphExecutor:
         """Fence a shutdown before stopping live Sessions and node tasks."""
 
         self.graph_repository.get_run(run_id)
+        for node in self.graph_repository.list_node_runs(run_id):
+            self._stop_child(run_id, node, cancel=False)
         interrupted = self.graph_runtime.interrupt_run(run_id)
         for session_id in tuple(self._active_sessions.get(run_id, ())):
             with suppress(Exception):
@@ -468,7 +537,11 @@ class BoundedGraphExecutor:
             run = self.graph_runtime.recover(run_id)
         if run.status in {GraphRunStatus.CREATED, GraphRunStatus.QUEUED}:
             run = self.graph_runtime.start_run(run_id)
-        if run.status is not GraphRunStatus.RUNNING:
+        if run.status not in {
+            GraphRunStatus.RUNNING,
+            GraphRunStatus.WAITING_INPUT,
+            GraphRunStatus.WAITING_APPROVAL,
+        }:
             return self._result(run_id)
 
         active = self._active_tasks.setdefault(run_id, {})
@@ -482,17 +555,31 @@ class BoundedGraphExecutor:
                     GraphRunStatus.CANCELLED,
                     GraphRunStatus.MANUAL_RECONCILE_REQUIRED,
                 }:
+                    for node in self.graph_repository.list_node_runs(run_id):
+                        self._stop_child(run_id, node, cancel=True)
                     await self._drain_tasks(active)
+                    await self._drain_child_tasks(run_id)
                     return self._result(run_id)
-                if run.status is not GraphRunStatus.RUNNING:
-                    # WAITING states are not supported by an Agent-only
-                    # executor. Preserve that durable state for the API.
+                if run.status is GraphRunStatus.INTERRUPTED:
+                    for node in self.graph_repository.list_node_runs(run_id):
+                        self._stop_child(run_id, node, cancel=False)
                     await self._drain_tasks(active)
+                    await self._drain_child_tasks(run_id)
                     return self._result(run_id)
                 if run_id in self._cancel_requested:
                     self.cancel(run_id)
                     continue
 
+                node_runs = self.graph_repository.list_node_runs(run_id)
+                await self._advance_boundaries(run_id, definition, node_runs)
+                run = self.graph_repository.get_run(run_id)
+                if run.status in {
+                    GraphRunStatus.COMPLETED,
+                    GraphRunStatus.FAILED,
+                    GraphRunStatus.CANCELLED,
+                    GraphRunStatus.MANUAL_RECONCILE_REQUIRED,
+                }:
+                    continue
                 node_runs = self.graph_repository.list_node_runs(run_id)
                 ready = [
                     node
@@ -524,6 +611,7 @@ class BoundedGraphExecutor:
                 if active:
                     done, _pending = await asyncio.wait(
                         tuple(active.values()),
+                        timeout=0.1,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
@@ -548,6 +636,17 @@ class BoundedGraphExecutor:
                 if any(node.status is NodeRunStatus.RETRY_WAIT for node in node_runs):
                     await asyncio.sleep(0.05)
                     continue
+                if any(
+                    node.status
+                    in {
+                        NodeRunStatus.WAITING_INPUT,
+                        NodeRunStatus.WAITING_APPROVAL,
+                        NodeRunStatus.WAITING,
+                    }
+                    for node in node_runs
+                ):
+                    await asyncio.sleep(0.1)
+                    continue
                 # A running graph with no active or ready node cannot make
                 # progress. Mark it failed explicitly instead of returning a
                 # misleading success or leaving a silent background task.
@@ -555,7 +654,20 @@ class BoundedGraphExecutor:
         except asyncio.CancelledError:
             if self.graph_repository.get_run(run_id).status is GraphRunStatus.RUNNING:
                 self.graph_runtime.interrupt_run(run_id)
+            for node in self.graph_repository.list_node_runs(run_id):
+                self._stop_child(run_id, node, cancel=False)
             await self._drain_tasks(active)
+            await self._drain_child_tasks(run_id)
+            raise
+        except Exception:
+            self.graph_runtime.fail_run(run_id)
+            for session_id in tuple(self._active_sessions.get(run_id, ())):
+                with suppress(Exception):
+                    self.service.cancel_session(session_id)
+            for node in self.graph_repository.list_node_runs(run_id):
+                self._stop_child(run_id, node, cancel=True)
+            await self._drain_tasks(active)
+            await self._drain_child_tasks(run_id)
             raise
         finally:
             if not active:
@@ -610,11 +722,18 @@ class BoundedGraphExecutor:
             # can revoke its lease before run_session admits a Provider call.
             if self.graph_repository.get_run(run_id).status is not GraphRunStatus.RUNNING:
                 return self._skip_after_graph_state(run_id, node, roster_entry, agent.id)
+            if node.writer_policy is not None:
+                await self._prepare_writer(
+                    run_id,
+                    node_run,
+                    node,
+                    self._workspace_for_node(run, definition, node),
+                )
             self._require_existing_agent_parameter()
             stream = self.service.run_session(
                 session.id,
                 user_message=message,
-                workspace=self._workspace_for_run(run, definition),
+                workspace=self._workspace_for_node(run, definition, node),
                 thread_id=roster_entry.thread_id,
                 memory_run_id=run.id,
                 _agent_instance_id=agent.id,
@@ -721,6 +840,22 @@ class BoundedGraphExecutor:
 
         output_refs = self._output_refs(node, events)
         try:
+            if node.writer_policy is not None:
+                evidence_artifact_id = self._record_writer_execution_evidence(
+                    run_id=run_id,
+                    attempt_id=attempt.id,
+                    session_id=session.id,
+                    observation="Agent events: " + ", ".join(event.event_type for event in events),
+                )
+                output_refs["writer_artifact_id"] = await self._publish_writer_commit(
+                    run_id,
+                    node_run,
+                    node,
+                    attempt.id,
+                    self._workspace_for_node(run, definition, node),
+                    evidence_artifact_id,
+                    session.id,
+                )
             async with self._state_lock:
                 completed = self.graph_runtime.complete_attempt(
                     attempt,
@@ -858,6 +993,7 @@ class BoundedGraphExecutor:
             }
             exit_loop = _evaluate_condition(node.loop_policy.exit_expression, values)  # type: ignore[union-attr]
             output = self._control_outputs(node, node_run.input_refs)
+            family_usage = aggregate_usage(self.graph_repository, run)
             signature = hashlib.sha256(
                 json.dumps(
                     {**run.input, **node_run.input_refs}, sort_keys=True, default=str
@@ -875,8 +1011,8 @@ class BoundedGraphExecutor:
                     progress_signature=signature,
                     output_refs=output,
                     elapsed_seconds=elapsed,
-                    output_tokens=run.consumed_output_tokens,
-                    cost_usd=run.consumed_cost_usd,
+                    output_tokens=int(family_usage["consumed_output_tokens"]),
+                    cost_usd=float(family_usage["consumed_cost_usd"]),
                 )
             return _NodeExecution(node.node_id, None, None, completed.status)
         if node.node_kind is NodeKind.TIMER:
@@ -885,6 +1021,19 @@ class BoundedGraphExecutor:
             await asyncio.sleep(max(0.0, delay - elapsed))
         if node.node_kind in {NodeKind.TOOL, NodeKind.SCRIPT}:
             return await self._execute_action_node(run_id, node_run, node)
+        if node.node_kind in {
+            NodeKind.HUMAN_INPUT,
+            NodeKind.APPROVAL,
+            NodeKind.WAIT,
+            NodeKind.SUBWORKFLOW,
+            NodeKind.MERGE,
+        }:
+            boundary = BoundaryKind(node.node_kind.value)
+            async with self._state_lock:
+                waiting = self.graph_runtime.enter_boundary(node_run.id, boundary)
+            return _NodeExecution(node.node_id, None, None, waiting.status)
+        if node.node_kind is NodeKind.ARTIFACT:
+            return await self._execute_artifact_node(run_id, node_run, node)
         output = self._control_outputs(node, node_run.input_refs)
         async with self._state_lock:
             attempt = self.graph_runtime.start_attempt(
@@ -892,6 +1041,227 @@ class BoundedGraphExecutor:
             )
             completed = self.graph_runtime.complete_attempt(
                 attempt, succeeded=True, output_refs=output
+            )
+        return _NodeExecution(node.node_id, attempt.id, None, completed.status)
+
+    async def _advance_boundaries(
+        self, run_id: str, definition: WorkflowDefinition, node_runs: tuple[NodeRun, ...]
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        for node_run in node_runs:
+            if node_run.status not in {
+                NodeRunStatus.WAITING_INPUT,
+                NodeRunStatus.WAITING_APPROVAL,
+                NodeRunStatus.WAITING,
+            }:
+                continue
+            node = self._node_spec(definition, node_run.node_id)
+            token = node_run.wait_token
+            if token is None:
+                raise GraphExecutionError("durable Graph boundary has no wait token")
+            if node.timeout_policy is not None and now >= node_run.updated_at + timedelta(
+                seconds=node.timeout_policy.timeout_seconds
+            ):
+                if node.node_kind is NodeKind.SUBWORKFLOW:
+                    self._stop_child(run_id, node_run, cancel=True)
+                async with self._state_lock:
+                    self.graph_runtime.timeout_boundary(node_run.id, wait_token=token)
+                continue
+            if node.node_kind is NodeKind.WAIT:
+                delay = float(node.metadata["delay_seconds"])
+                if now >= node_run.updated_at + timedelta(seconds=delay):
+                    output = self._control_outputs(node, node_run.input_refs)
+                    async with self._state_lock:
+                        self.graph_runtime.resolve_boundary(
+                            node_run.id, BoundaryResolution(wait_token=token, payload=output)
+                        )
+                continue
+            if node.node_kind is NodeKind.APPROVAL:
+                approval = cast(SQLiteGraphRepository, self.graph_repository).ensure_node_approval(
+                    node_run, node, self.graph_repository.get_run(run_id)
+                )
+                if approval["status"] in {"approved", "denied"}:
+                    accepted = approval["status"] == "approved"
+                    output = self._control_outputs(node, node_run.input_refs) if accepted else {}
+                    async with self._state_lock:
+                        self.graph_runtime.resolve_boundary(
+                            node_run.id,
+                            BoundaryResolution(wait_token=token, accepted=accepted, payload=output),
+                        )
+                    continue
+            if node.node_kind is NodeKind.SUBWORKFLOW:
+                await self._advance_subworkflow(run_id, node_run, node)
+                continue
+            if node.node_kind is NodeKind.MERGE:
+                merges = [
+                    item
+                    for item in SQLiteMultiWriterRepository(self.service.store).list_merge_runs(
+                        run_id
+                    )
+                    if item.merge_node_id == node.node_id
+                ]
+                if len(merges) > 1:
+                    raise GraphExecutionError("Merge node has conflicting Merge Runs")
+                if merges:
+                    merge = merges[0]
+                    if merge.status is MergeRunStatus.SUCCEEDED:
+                        output = {"result_artifact_ref": merge.result_artifact_ref}
+                        output = {
+                            port.name: output[port.name]
+                            for port in node.output_ports
+                            if port.name in output
+                        }
+                        async with self._state_lock:
+                            self.graph_runtime.resolve_boundary(
+                                node_run.id,
+                                BoundaryResolution(wait_token=token, payload=output),
+                            )
+                    elif merge.status is MergeRunStatus.OUTCOME_UNKNOWN:
+                        self.graph_runtime._mark_run_manual_reconcile(run_id)
+                    elif merge.status in {MergeRunStatus.FAILED, MergeRunStatus.ROLLED_BACK}:
+                        async with self._state_lock:
+                            self.graph_runtime.resolve_boundary(
+                                node_run.id,
+                                BoundaryResolution(wait_token=token, accepted=False),
+                            )
+                continue
+
+    async def _advance_subworkflow(self, run_id: str, node_run: NodeRun, node: NodeSpec) -> None:
+        parent, _definition = self._load_run_definition(run_id)
+        child_definition = self.graph_repository.get_definition(
+            cast(str, node.subworkflow_id), cast(int, node.subworkflow_version)
+        )
+        child_id = self._child_run_id(run_id, node_run)
+        try:
+            child = self.graph_repository.get_run(child_id)
+        except KeyError:
+            child = self.graph_runtime.create_run(
+                child_definition,
+                input=node_run.input_refs,
+                workspace_or_target=parent.workspace_or_target,
+                run_id=child_id,
+                budget_snapshot=child_budget(parent, _definition, node, child_definition),
+                parent_run_id=run_id,
+                parent_node_run_id=node_run.id,
+                parent_node_iteration=node_run.iteration,
+            )
+        if (
+            child.workflow_definition_id != child_definition.workflow_id
+            or child.workflow_definition_version != child_definition.version
+            or child.workspace_or_target != parent.workspace_or_target
+            or child.input != node_run.input_refs
+            or child.parent_run_id != run_id
+            or child.parent_node_run_id != node_run.id
+            or child.parent_node_iteration != node_run.iteration
+        ):
+            raise GraphExecutionError("Subworkflow child binding changed")
+        if child.status not in {
+            GraphRunStatus.COMPLETED,
+            GraphRunStatus.FAILED,
+            GraphRunStatus.CANCELLED,
+            GraphRunStatus.MANUAL_RECONCILE_REQUIRED,
+        }:
+            child_task = self._child_tasks.get(child_id)
+            if child_task is None:
+                if child.status is GraphRunStatus.INTERRUPTED:
+                    self.validate_resume(child_id)
+                child_task = asyncio.create_task(self.run(child_id))
+                self._child_tasks[child_id] = child_task
+            if not child_task.done():
+                return
+            self._child_tasks.pop(child_id, None)
+            try:
+                child = child_task.result().run
+            except Exception:
+                child = self.graph_runtime.fail_run(child_id)
+        if child.status is GraphRunStatus.COMPLETED:
+            outputs = dict(child.output)
+            for result in self.graph_repository.list_node_runs(child_id):
+                if result.status is NodeRunStatus.SUCCEEDED:
+                    outputs.update(result.output_refs)
+            outputs.setdefault("child_run_id", child_id)
+            outputs = {
+                port.name: outputs[port.name] for port in node.output_ports if port.name in outputs
+            }
+            async with self._state_lock:
+                self.graph_runtime.resolve_boundary(
+                    node_run.id,
+                    BoundaryResolution(wait_token=cast(str, node_run.wait_token), payload=outputs),
+                )
+        elif child.status is GraphRunStatus.MANUAL_RECONCILE_REQUIRED:
+            self.graph_runtime._mark_run_manual_reconcile(run_id)
+        elif child.status in {GraphRunStatus.FAILED, GraphRunStatus.CANCELLED}:
+            async with self._state_lock:
+                self.graph_runtime.resolve_boundary(
+                    node_run.id,
+                    BoundaryResolution(wait_token=cast(str, node_run.wait_token), accepted=False),
+                )
+
+    @staticmethod
+    def _child_run_id(run_id: str, node_run: NodeRun) -> str:
+        return (
+            "graph_run_"
+            + hashlib.sha256(f"{run_id}:{node_run.id}:{node_run.iteration}".encode()).hexdigest()[
+                :32
+            ]
+        )
+
+    def _stop_child(self, run_id: str, node_run: NodeRun, *, cancel: bool) -> None:
+        try:
+            _, definition = self._load_run_definition(run_id)
+            spec = self._node_spec(definition, node_run.node_id)
+        except (KeyError, GraphExecutionError):
+            return
+        if spec.node_kind is not NodeKind.SUBWORKFLOW:
+            return
+        child_id = self._child_run_id(run_id, node_run)
+        try:
+            self.graph_repository.get_run(child_id)
+        except KeyError:
+            return
+        if cancel:
+            self.cancel(child_id)
+        else:
+            self.interrupt(child_id)
+        task = self._child_tasks.pop(child_id, None)
+        if task is not None:
+            self._stopping_child_tasks.setdefault(run_id, set()).add(task)
+            if not task.done():
+                task.cancel()
+
+    async def _drain_child_tasks(self, run_id: str) -> None:
+        tasks = self._stopping_child_tasks.pop(run_id, set())
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _execute_artifact_node(
+        self, run_id: str, node_run: NodeRun, node: NodeSpec
+    ) -> _NodeExecution:
+        run = self.graph_repository.get_run(run_id)
+        roster = self._current_roster(cast(str, run.team_run_id))
+        if not roster:
+            raise GraphExecutionError("Artifact publication requires a prepared Team")
+        session_ids = {self._load_agent(entry.agent_instance_id).session_id for entry in roster}
+        async with self._state_lock:
+            attempt = self.graph_runtime.start_attempt(
+                node_run.id, worker_id=f"graph-executor:{run_id}"
+            )
+            attempt = self.graph_runtime.mark_side_effect_started(attempt.id)
+        output = publish_graph_artifact(
+            service=self.service,
+            team_repository=self.team_repository,
+            run=run,
+            node_run=node_run,
+            node=node,
+            publisher_id=roster[0].agent_instance_id,
+            session_ids=session_ids,
+        )
+        async with self._state_lock:
+            completed = self.graph_runtime.complete_attempt(
+                attempt,
+                succeeded=True,
+                output_refs=output,
+                side_effect_state=AttemptSideEffectState.COMMITTED,
             )
         return _NodeExecution(node.node_id, attempt.id, None, completed.status)
 
@@ -935,9 +1305,13 @@ class BoundedGraphExecutor:
             else cast(dict[str, Any], node.metadata.get("arguments", {}))
         )
         arguments = cast(dict[str, Any], self._bind_inputs(arguments, node_run.input_refs))
-        workspace = self._workspace_for_run(run, definition)
+        workspace = self._workspace_for_node(run, definition, node)
         thread = self.service.create_thread(ConversationThread(workspace_ref=workspace))
-        session = self.service.create_session(role.id, thread_id=thread.id)
+        session = self.service.create_session(
+            role.id,
+            thread_id=thread.id,
+            _configuration_workspace_ref=self._workspace_for_run(run, definition),
+        )
         self._validate_created_session(session, role, node)
         policy = session.role_snapshot.tool_policy
         tools = WorkspaceTools(
@@ -970,6 +1344,10 @@ class BoundedGraphExecutor:
         try:
             if self.graph_repository.get_run(run_id).status is not GraphRunStatus.RUNNING:
                 raise GraphExecutionError("Graph stopped before action dispatch")
+            if node.writer_policy is not None:
+                async with self._state_lock:
+                    attempt = self.graph_runtime.mark_side_effect_started(attempt.id)
+                await self._prepare_writer(run_id, node_run, node, workspace)
             if tools.is_side_effecting(name):
                 claim = gateway.reserve_tool_action(
                     tool_call_id=attempt.id, name=name, arguments=arguments
@@ -1005,8 +1383,9 @@ class BoundedGraphExecutor:
                     gateway.authorize_tool_action(claim)
                     if self.graph_repository.get_run(run_id).status is not GraphRunStatus.RUNNING:
                         raise GraphExecutionError("Graph stopped before action execution")
-                    async with self._state_lock:
-                        attempt = self.graph_runtime.mark_side_effect_started(attempt.id)
+                    if attempt.side_effect_state is AttemptSideEffectState.NOT_STARTED:
+                        async with self._state_lock:
+                            attempt = self.graph_runtime.mark_side_effect_started(attempt.id)
                     dispatched = True
                     result = await tools.execute(
                         name,
@@ -1028,6 +1407,22 @@ class BoundedGraphExecutor:
             except (ValueError, TypeError):
                 payload = result
             output = self._control_outputs(node, {"result": payload})
+            if node.writer_policy is not None:
+                evidence_artifact_id = self._record_writer_execution_evidence(
+                    run_id=run_id,
+                    attempt_id=attempt.id,
+                    session_id=session.id,
+                    observation=result,
+                )
+                output["writer_artifact_id"] = await self._publish_writer_commit(
+                    run_id,
+                    node_run,
+                    node,
+                    attempt.id,
+                    workspace,
+                    evidence_artifact_id,
+                    session.id,
+                )
             async with self._state_lock:
                 completed = self.graph_runtime.complete_attempt(
                     attempt,
@@ -1252,6 +1647,12 @@ class BoundedGraphExecutor:
             NodeKind.JOIN,
             NodeKind.LOOP,
             NodeKind.TIMER,
+            NodeKind.HUMAN_INPUT,
+            NodeKind.APPROVAL,
+            NodeKind.WAIT,
+            NodeKind.SUBWORKFLOW,
+            NodeKind.ARTIFACT,
+            NodeKind.MERGE,
         }
         unsupported = [node.node_id for node in definition.nodes if node.node_kind not in supported]
         if unsupported:
@@ -1286,6 +1687,33 @@ class BoundedGraphExecutor:
                     raise GraphExecutionError(f"timer {node.node_id} needs a bounded delay_seconds")
                 if delay > run.budget_snapshot.timeout_seconds:
                     raise GraphExecutionError(f"timer {node.node_id} exceeds Graph timeout")
+            if node.node_kind is NodeKind.WAIT:
+                delay = metadata.get("delay_seconds")
+                if (
+                    isinstance(delay, bool)
+                    or not isinstance(delay, (int, float))
+                    or not 0 <= delay <= run.budget_snapshot.timeout_seconds
+                ):
+                    raise GraphExecutionError(f"wait {node.node_id} needs bounded delay_seconds")
+            if node.node_kind is NodeKind.HUMAN_INPUT and (
+                not isinstance(metadata.get("prompt"), str) or not metadata["prompt"].strip()
+            ):
+                raise GraphExecutionError(f"human input {node.node_id} needs a prompt")
+            if node.node_kind is NodeKind.APPROVAL and (
+                not isinstance(metadata.get("detail"), str) or not metadata["detail"].strip()
+            ):
+                raise GraphExecutionError(f"approval {node.node_id} needs a detail")
+            if (
+                node.node_kind is NodeKind.SUBWORKFLOW
+                and node.subworkflow_id == definition.workflow_id
+            ):
+                raise GraphExecutionError("recursive Subworkflow is not allowed")
+            if node.node_kind is NodeKind.ARTIFACT and (
+                node.idempotency_class is not IdempotencyClass.IDEMPOTENT or node.writes_workspace
+            ):
+                raise GraphExecutionError(
+                    "Artifact node requires an idempotent publication contract"
+                )
             if node.node_kind is NodeKind.TOOL:
                 name = metadata.get("tool_name")
                 if (
@@ -1325,6 +1753,47 @@ class BoundedGraphExecutor:
                     raise GraphExecutionError(
                         f"action {node.node_id} requires a non-pure writer contract"
                     )
+
+    def _freeze_or_validate_configuration(
+        self, root: GraphWorkflowRun, definition: WorkflowDefinition
+    ) -> None:
+        from operant.application.configuration import ConfigService, workspace_scope_id
+
+        workspace = self._workspace_for_run(root, definition)
+        project_id = None
+        with suppress(NotFoundError):
+            project_id = self.service.store.get_workspace_initialization(
+                workspace_scope_id(workspace)
+            ).id
+        fingerprints: dict[str, str] = {}
+        configuration = ConfigService(self.service.store)
+        for role_id, version in definition.locked_role_versions.items():
+            role = self.service.get_role(role_id, version)
+            self._validate_role_head(role)
+            effective = configuration.effective(
+                role, project_id=project_id, workspace_ref=workspace
+            )
+            profile = self.service.store.get_model_profile(
+                str(effective.values["model_profile_id"])
+            )
+            fingerprints[role_id] = hashlib.sha256(
+                json.dumps(
+                    {"values": effective.values, "profile": profile.model_dump(mode="json")},
+                    sort_keys=True,
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+        key = "__operant_config_fingerprints"
+        prior = root.policy_snapshot.get(key)
+        if prior is not None:
+            if prior != fingerprints:
+                raise GraphExecutionError("frozen Graph configuration changed; create a new Run")
+            return
+        updated = self.graph_runtime._save_run(
+            root, policy_snapshot={**root.policy_snapshot, key: fingerprints}
+        )
+        if updated.policy_snapshot[key] != fingerprints:
+            raise GraphExecutionError("Graph configuration freeze was not committed")
 
     def _team_reference(
         self,
@@ -1366,8 +1835,275 @@ class BoundedGraphExecutor:
             raise GraphExecutionError("Graph workspace must be an existing directory")
         return str(resolved)
 
+    def _workspace_for_node(
+        self, run: GraphWorkflowRun, definition: WorkflowDefinition, node: NodeSpec
+    ) -> str:
+        graph_workspace = self._workspace_for_run(run, definition)
+        writer = node.writer_policy
+        if writer is None:
+            return graph_workspace
+        if (
+            writer.isolation_kind is not WriterIsolationKind.WORKTREE
+            or node.idempotency_class is not IdempotencyClass.NON_IDEMPOTENT
+            or not node.writes_workspace
+        ):
+            raise GraphExecutionError("typed writer requires a non-idempotent worktree contract")
+        runtime = self.writer_runtime
+        resolver = (
+            None if runtime is None else getattr(runtime.artifact_adapter, "workspace_path", None)
+        )
+        if not callable(resolver) or self.writer_gateway is None:
+            raise GraphExecutionError("trusted multi-writer adapter and Gateway are required")
+        try:
+            path = Path(resolver(writer.isolation_ref))
+            resolved = path.resolve(strict=True)
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            raise GraphExecutionError("writer isolation reference is not trusted") from exc
+        if not path.is_absolute() or not resolved.is_dir() or str(resolved) == graph_workspace:
+            raise GraphExecutionError("writer isolation must be a separate absolute worktree")
+        if (
+            node.workspace_or_target is not None
+            and Path(node.workspace_or_target).resolve() != resolved
+        ):
+            raise GraphExecutionError("writer node workspace differs from trusted isolation")
+        return str(resolved)
+
+    @staticmethod
+    def _git_bytes(workspace: str, *arguments: str) -> bytes:
+        try:
+            completed = subprocess.run(
+                ("git", *arguments),
+                cwd=workspace,
+                capture_output=True,
+                timeout=30,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise GraphExecutionError("trusted writer Git evidence is unavailable") from exc
+        if len(completed.stdout) > 16 * 1024 * 1024:
+            raise GraphExecutionError("writer Git evidence exceeds 16 MiB")
+        return completed.stdout
+
+    async def _guard_graph_side_effect(
+        self,
+        run_id: str,
+        *,
+        operation: str,
+        target_id: str,
+        arguments: dict[str, Any],
+        idempotency_key: str,
+        workspace: str,
+    ) -> None:
+        gateway = self.writer_gateway
+        if gateway is None:
+            raise GraphExecutionError("Graph Action Gateway is unavailable")
+        while True:
+            if self.graph_repository.get_run(run_id).status is not GraphRunStatus.RUNNING:
+                raise GraphExecutionError("Graph stopped before side effect")
+            action, result, _evaluation = gateway.guard(
+                tool="multiwriter" if operation.startswith("writer_") else "graph_artifact",
+                operation=operation.removeprefix("writer_"),
+                target_id=target_id,
+                arguments=arguments,
+                capabilities=(Capability.WORKSPACE_WRITE,),
+                idempotency_key=idempotency_key,
+                workspace=workspace,
+            )
+            if result.decision.value == PolicyDecision.ALLOW.value and result.lease is not None:
+                gateway.consume(result.lease, action)
+                return
+            if result.decision.value != PolicyDecision.ASK.value or not result.approval_id:
+                raise GraphExecutionError("Graph side effect was denied by Policy")
+            approval_id = result.approval_id
+            while True:
+                if self.graph_repository.get_run(run_id).status is not GraphRunStatus.RUNNING:
+                    raise GraphExecutionError("Graph stopped during side-effect approval")
+                approval = gateway.phase_repository.get_phase45_approval(approval_id)
+                if approval["status"] == "approved":
+                    break
+                if approval["status"] != "pending":
+                    raise GraphExecutionError("Graph side-effect approval was rejected or expired")
+                await asyncio.sleep(0.2)
+
+    async def _prepare_writer(
+        self, run_id: str, node_run: NodeRun, node: NodeSpec, workspace: str
+    ) -> tuple[WriterWorkspace, WriterLease]:
+        runtime = self.writer_runtime
+        policy = node.writer_policy
+        if runtime is None or policy is None:
+            raise GraphExecutionError("typed writer runtime is unavailable")
+        existing_lease = self._writer_leases.get(node_run.id)
+        workspace_id = (
+            "writer_workspace_"
+            + hashlib.sha256(f"{run_id}:{node_run.id}:{node_run.iteration}".encode()).hexdigest()[
+                :32
+            ]
+        )
+        if existing_lease is not None:
+            runtime.repository.assert_lease(existing_lease)
+            return runtime.repository.get_workspace(workspace_id), existing_lease
+        if self._git_bytes(workspace, "status", "--porcelain"):
+            raise GraphExecutionError("typed writer isolation must start from a clean worktree")
+        base_revision = self._git_bytes(workspace, "rev-parse", "HEAD").decode().strip()
+        try:
+            existing = runtime.repository.get_workspace(workspace_id)
+        except NotFoundError:
+            existing = None
+        if existing is not None:
+            raise GraphExecutionError(
+                "writer lease outcome is unknown; manual reconciliation required"
+            )
+        writer = WriterWorkspace(
+            writer_workspace_id=workspace_id,
+            graph_run_id=run_id,
+            node_run_id=node_run.id,
+            writer_key=policy.writer_key,
+            isolation_kind=policy.isolation_kind,
+            isolation_ref=policy.isolation_ref,
+            base_revision=base_revision,
+            ownership_paths=policy.ownership_paths,
+        )
+        await self._guard_graph_side_effect(
+            run_id,
+            operation="writer_create_workspace",
+            target_id=workspace_id,
+            arguments={
+                "graph_run_id": run_id,
+                "node_run_id": node_run.id,
+                "writer_key": policy.writer_key,
+                "isolation_kind": policy.isolation_kind.value,
+                "isolation_ref": policy.isolation_ref,
+                "base_revision": base_revision,
+                "ownership_paths": policy.ownership_paths,
+            },
+            idempotency_key=f"multiwriter:create:{workspace_id}",
+            workspace=workspace,
+        )
+        runtime.create_workspace(writer)
+        owner = f"graph-executor:{run_id}:{node_run.id}"
+        await self._guard_graph_side_effect(
+            run_id,
+            operation="writer_acquire_lease",
+            target_id=workspace_id,
+            arguments={"owner": owner, "ttl_seconds": 3600},
+            idempotency_key=f"multiwriter:acquire:{workspace_id}:{owner}",
+            workspace=workspace,
+        )
+        lease = runtime.acquire_lease(workspace_id, owner=owner, ttl_seconds=3600)
+        self._writer_leases[node_run.id] = lease
+        return writer, lease
+
+    async def _publish_writer_commit(
+        self,
+        run_id: str,
+        node_run: NodeRun,
+        node: NodeSpec,
+        attempt_id: str,
+        workspace: str,
+        evidence_artifact_id: str,
+        session_id: str,
+    ) -> str:
+        runtime = self.writer_runtime
+        lease = self._writer_leases.get(node_run.id)
+        if runtime is None or lease is None:
+            raise GraphExecutionError("writer lease is unavailable after execution")
+        writer = runtime.repository.get_workspace(lease.writer_workspace_id)
+        runtime.repository.assert_lease(lease)
+        if self._git_bytes(workspace, "status", "--porcelain"):
+            raise GraphExecutionError("typed writer must commit all changes before publishing")
+        result_revision = self._git_bytes(workspace, "rev-parse", "HEAD").decode().strip()
+        if result_revision == writer.base_revision:
+            raise GraphExecutionError("typed writer produced no commit")
+        diff = self._git_bytes(workspace, "diff", "--binary", writer.base_revision, result_revision)
+        paths = tuple(
+            sorted(
+                item.decode()
+                for item in self._git_bytes(
+                    workspace, "diff", "--name-only", "-z", writer.base_revision, result_revision
+                ).split(b"\0")
+                if item
+            )
+        )
+        evidence_record = self.service.get_artifact(evidence_artifact_id, verify=True)
+        if not any(
+            ref.source_type is ArtifactSourceType.SESSION and ref.source_id == session_id
+            for ref in evidence_record.source_refs
+        ):
+            raise GraphExecutionError("writer execution evidence belongs to another Session")
+        artifact = PatchCommitArtifact(
+            writer_artifact_id="writer_artifact_"
+            + hashlib.sha256(attempt_id.encode()).hexdigest()[:32],
+            writer_workspace_id=writer.writer_workspace_id,
+            artifact_kind=WriterArtifactKind.COMMIT,
+            artifact_ref=f"git:{result_revision}",
+            artifact_sha256=hashlib.sha256(diff).hexdigest(),
+            base_revision=writer.base_revision,
+            result_revision=result_revision,
+            changed_paths=paths,
+            test_evidence_refs=(evidence_artifact_id,),
+        )
+        await self._guard_graph_side_effect(
+            run_id,
+            operation="writer_publish_artifact",
+            target_id=writer.writer_workspace_id,
+            arguments={
+                "writer_artifact_id": artifact.writer_artifact_id,
+                "artifact_kind": artifact.artifact_kind.value,
+                "artifact_ref": artifact.artifact_ref,
+                "artifact_sha256": artifact.artifact_sha256,
+                "base_revision": artifact.base_revision,
+                "result_revision": artifact.result_revision,
+                "changed_paths": artifact.changed_paths,
+                "lease_fencing": lease.fencing,
+            },
+            idempotency_key=f"multiwriter:artifact:{artifact.writer_artifact_id}",
+            workspace=workspace,
+        )
+        runtime.publish_artifact(artifact, lease=lease)
+        await self._guard_graph_side_effect(
+            run_id,
+            operation="writer_release_lease",
+            target_id=writer.writer_workspace_id,
+            arguments={"owner": lease.owner, "fencing": lease.fencing},
+            idempotency_key=f"multiwriter:release:{writer.writer_workspace_id}:{lease.fencing}",
+            workspace=workspace,
+        )
+        runtime.repository.release_lease(lease)
+        self._writer_leases.pop(node_run.id, None)
+        return artifact.writer_artifact_id
+
+    def _record_writer_execution_evidence(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        session_id: str,
+        observation: str,
+    ) -> str:
+        body = json.dumps(
+            {
+                "kind": "graph_writer_execution_receipt",
+                "graph_run_id": run_id,
+                "attempt_id": attempt_id,
+                "observation": redact_public_text(observation, max_chars=100_000),
+                "claim": "execution evidence; test success requires separate review",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode()
+        artifact, _created = self.service.create_artifact(
+            content=body,
+            media_type="application/json",
+            source_refs=(
+                ArtifactSourceRef(source_type=ArtifactSourceType.SESSION, source_id=session_id),
+            ),
+        )
+        return str(artifact.id)
+
     @staticmethod
     def _validate_node_workspace(node: NodeSpec, workspace: str) -> None:
+        if node.writer_policy is not None:
+            return
         if node.workspace_or_target is None:
             return
         candidate = Path(node.workspace_or_target)
@@ -1470,9 +2206,10 @@ class BoundedGraphExecutor:
         node_states = {node.node_id: node for node in self.graph_repository.list_node_runs(run.id)}
         for entry in entries:
             thread = self.service.get_thread(entry.thread_id)
-            if (
-                thread.workspace_ref is None
-                or str(Path(thread.workspace_ref).resolve()) != workspace
+            if thread.workspace_ref is None or str(
+                Path(thread.workspace_ref).resolve()
+            ) != self._workspace_for_node(
+                run, definition, self._node_spec(definition, entry.member_id)
             ):
                 raise GraphExecutionError(
                     "prepared Thread workspace does not match Graph workspace"
@@ -1702,7 +2439,7 @@ class BoundedGraphExecutor:
         ):
             raise GraphExecutionError("side-effecting Agent tools require a writer node contract")
         thread = self.service.get_thread(entry.thread_id)
-        workspace = self._workspace_for_run(run, definition)
+        workspace = self._workspace_for_node(run, definition, node)
         if thread.workspace_ref is None or str(Path(thread.workspace_ref).resolve()) != workspace:
             raise GraphExecutionError("prepared Thread workspace does not match Graph workspace")
 

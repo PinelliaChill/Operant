@@ -350,6 +350,88 @@ class SQLiteSchedulerStore:
                 raise SchedulerConflictError("hook schedule changed or is not enabled")
             return self._insert_or_get_request(connection, request)
 
+    def observe_watch(
+        self,
+        schedule: ScheduleDefinition,
+        *,
+        fingerprint: str | None,
+        error_code: str | None,
+        leader_lease: SchedulerLease,
+        observed_at: datetime,
+    ) -> RunRequest | None:
+        """Persist one fenced observation and enqueue a change in the same transaction."""
+        now = require_aware_utc(observed_at, field="observed_at")
+        with self._transaction() as connection:
+            self._assert_authority(connection, leader_lease, now)
+            head = connection.execute(
+                "SELECT current_version, status FROM schedule_heads WHERE schedule_id=?",
+                (schedule.id,),
+            ).fetchone()
+            if (
+                head is None
+                or int(head["current_version"]) != schedule.version
+                or head["status"] != ScheduleStatus.ENABLED.value
+            ):
+                raise SchedulerConflictError("watch schedule changed or is not enabled")
+            row = connection.execute(
+                "SELECT fingerprint, generation FROM scheduler_watch_baselines "
+                "WHERE schedule_id=? AND schedule_version=?",
+                (schedule.id, schedule.version),
+            ).fetchone()
+            if error_code is not None:
+                if row is None:
+                    connection.execute(
+                        "INSERT INTO scheduler_watch_baselines VALUES (?,?,?,?,?,?)",
+                        (schedule.id, schedule.version, "", 0, _dt(now), error_code),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE scheduler_watch_baselines SET observed_at=?, error_code=? "
+                        "WHERE schedule_id=? AND schedule_version=?",
+                        (_dt(now), error_code, schedule.id, schedule.version),
+                    )
+                return None
+            assert fingerprint is not None
+            if row is None:
+                connection.execute(
+                    "INSERT INTO scheduler_watch_baselines VALUES (?,?,?,?,?,NULL)",
+                    (schedule.id, schedule.version, fingerprint, 0, _dt(now)),
+                )
+                return None
+            if row["fingerprint"] == fingerprint or not row["fingerprint"]:
+                connection.execute(
+                    "UPDATE scheduler_watch_baselines SET fingerprint=?, observed_at=?, "
+                    "error_code=NULL WHERE schedule_id=? AND schedule_version=?",
+                    (fingerprint, _dt(now), schedule.id, schedule.version),
+                )
+                return None
+            generation = int(row["generation"]) + 1
+            key = f"watch:{schedule.id}:v{schedule.version}:g{generation}:{fingerprint}"
+            request = self._request_for(schedule, now, now, idempotency_key=key)
+            queued = self._insert_or_get_request(connection, request)
+            connection.execute(
+                "UPDATE scheduler_watch_baselines SET fingerprint=?, generation=?, "
+                "observed_at=?, error_code=NULL WHERE schedule_id=? AND schedule_version=?",
+                (fingerprint, generation, _dt(now), schedule.id, schedule.version),
+            )
+            return queued
+
+    def get_watch_status(self, schedule_id: str, version: int) -> dict[str, object]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT fingerprint, generation, observed_at, error_code FROM "
+                "scheduler_watch_baselines WHERE schedule_id=? AND schedule_version=?",
+                (schedule_id, version),
+            ).fetchone()
+        if row is None:
+            return {"initialized": False, "generation": 0, "observed_at": None, "error_code": None}
+        return {
+            "initialized": bool(row["fingerprint"]),
+            "generation": row["generation"],
+            "observed_at": row["observed_at"],
+            "error_code": row["error_code"],
+        }
+
     def replay_dead_letter(
         self,
         request_id: str,
@@ -553,7 +635,7 @@ class SQLiteSchedulerStore:
                 "JOIN schedule_definitions d ON d.schedule_id=r.schedule_id "
                 "AND d.version=r.schedule_version "
                 "WHERE r.status IN ('queued','retry_wait') AND r.available_at<=? "
-                "AND r.cancel_requested=0 AND h.status!='cancelled' "
+                "AND r.cancel_requested=0 AND h.status='enabled' "
                 "ORDER BY r.available_at, r.created_at, r.request_id LIMIT 100",
                 (_dt(current_time),),
             ).fetchall()

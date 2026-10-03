@@ -16,6 +16,7 @@ export interface WriterArtifactView {
   writerArtifactId: string;
   writerWorkspaceId: string;
   artifactKind: string;
+  baseRevision: string;
   changedPaths: string[];
   testEvidenceRefs: string[];
 }
@@ -29,6 +30,9 @@ export interface WriterConflictView {
 export interface MergeRunView {
   mergeRunId: string;
   mergeNodeId: string;
+  artifactIds: string[];
+  targetIsolationRef: string;
+  baseRevision: string;
   status: string;
   resultArtifactRef?: string;
   errorCode?: string;
@@ -94,6 +98,7 @@ export async function loadMultiWriterProjection(
         writerArtifactId: text(value.writer_artifact_id, 'writer_artifact_id'),
         writerWorkspaceId: text(value.writer_workspace_id, 'writer_workspace_id'),
         artifactKind: text(value.artifact_kind, 'artifact_kind'),
+        baseRevision: text(value.base_revision, 'base_revision'),
         changedPaths: strings(value.changed_paths),
         testEvidenceRefs: strings(value.test_evidence_refs),
       };
@@ -111,6 +116,9 @@ export async function loadMultiWriterProjection(
       return {
         mergeRunId: text(value.merge_run_id, 'merge_run_id'),
         mergeNodeId: text(value.merge_node_id, 'merge_node_id'),
+        artifactIds: strings(value.artifact_ids),
+        targetIsolationRef: text(value.target_isolation_ref, 'target_isolation_ref'),
+        baseRevision: text(value.base_revision, 'base_revision'),
         status: text(value.status, 'merge status'),
         resultArtifactRef: typeof value.result_artifact_ref === 'string'
           ? value.result_artifact_ref : undefined,
