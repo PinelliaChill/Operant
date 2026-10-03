@@ -204,8 +204,25 @@ async def test_parent_restart_retains_child_token_and_never_duplicates_child(tmp
     )
     task = asyncio.create_task(executor.run(run.id))
     child, human = await _wait_child(graphs, run.id)
+    for _ in range(100):
+        root_agent = next(
+            node for node in graphs.list_node_runs(run.id) if node.node_id == "root-agent"
+        )
+        if (
+            root_agent.status is NodeRunStatus.SUCCEEDED
+            and graphs.get_run(child.id).status is GraphRunStatus.WAITING_INPUT
+        ):
+            break
+        await asyncio.sleep(0.02)
+    else:
+        task.cancel()
+        pytest.fail("root Agent and child Human Input did not settle before restart")
+    assert len(provider.calls) == 1
+    old_child_task = executor._child_tasks.get(child.id)
+    assert old_child_task is not None
     executor.interrupt(run.id)
     await task
+    assert old_child_task.done(), "parent run returned before the child stopped"
     service.close()
     restarted = RecordingService(
         SQLiteStore(service.store.path), provider, artifact_root=tmp_path / "artifacts"
@@ -226,6 +243,54 @@ async def test_parent_restart_retains_child_token_and_never_duplicates_child(tmp
     assert result.run.status is GraphRunStatus.COMPLETED
     assert [item.id for item in graphs.list_child_runs(run.id)] == [child.id]
     assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_parent_interrupt_waits_for_delayed_child_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _service_value, _role, _provider, graphs, _teams, _runtime, executor, _parent, _child, run = (
+        _family(tmp_path, human=True)
+    )
+    cancellation_entered = asyncio.Event()
+    release_cancellation = asyncio.Event()
+    original_run_locked = executor._run_locked
+
+    async def delayed_child_shutdown(run_id: str):
+        try:
+            return await original_run_locked(run_id)
+        except asyncio.CancelledError:
+            if run_id != run.id:
+                cancellation_entered.set()
+                await release_cancellation.wait()
+            raise
+
+    monkeypatch.setattr(executor, "_run_locked", delayed_child_shutdown)
+    parent_task = asyncio.create_task(executor.run(run.id))
+    child, _human = await _wait_child(graphs, run.id)
+    for _ in range(100):
+        root_agent = next(
+            node for node in graphs.list_node_runs(run.id) if node.node_id == "root-agent"
+        )
+        if root_agent.status is NodeRunStatus.SUCCEEDED:
+            break
+        await asyncio.sleep(0.02)
+    else:
+        parent_task.cancel()
+        pytest.fail("root Agent did not settle before interruption")
+    child_task = executor._child_tasks.get(child.id)
+    assert child_task is not None
+    try:
+        executor.interrupt(run.id)
+        await asyncio.wait_for(cancellation_entered.wait(), 5)
+        await asyncio.sleep(0)
+        assert not parent_task.done(), "parent returned while child shutdown was still pending"
+    finally:
+        release_cancellation.set()
+    result = await asyncio.wait_for(parent_task, 5)
+    assert result.status is GraphRunStatus.INTERRUPTED
+    assert child_task.done()
+    assert graphs.get_run(child.id).status is GraphRunStatus.INTERRUPTED
 
 
 @pytest.mark.asyncio

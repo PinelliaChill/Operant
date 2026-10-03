@@ -97,7 +97,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 | 召回/治理 | 中文及标识符检索、Memory Pack、预算、刷新/撤销；历史搜索、冲突/时效、维护任务与失败处理 | B2-4 Host性能原指标未达；自动治理不等于模型自证或任意冲突自动合并 |
 | 经验与共享 | 经验Skill验证发布/回退、Writer晋级、授权共享/撤销、数据集移交与Remote最小包 | 跨项目共享须显式授权，未合并知识不自动晋级；生产Remote未因此验收 |
 | Graph/Team | 正式执行 14 类节点；Live 画布编辑/连线/版本差异/运行投影；Team消息、Mailbox及任务/工件板、隔离Writer | 每个执行图至少含一个 Agent 且锁定匹配 Team；Writer 需受信 Git worktree，未知写入不重放；会话式委派使用独立工作台运行时 |
-| 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile，ASK 自动审核并留审计，模型不可用转人工；Cron/Timer/本地 application.signal Hook 派发正式 Graph Agent | 审批模型默认仍为人工模式；硬 DENY 始终优先。Hook 暂无文件/Git watcher；动态Slash、通用插件驱动仍有缺口 |
+| 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile，ASK 自动审核并留审计，模型不可用转人工；Cron/Timer/应用信号及文件/Git Hook 派发正式 Graph Agent | 审批模型默认仍为人工模式；硬 DENY 始终优先。Watcher 仅本地显式工作区；动态Slash、通用插件驱动仍有缺口 |
 | 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Task 1 已接入文件正文、Diff、本机 PTY、普通 Artifact/会话引用及 TUI 配置、Goal/Plan；隔离 GUI/TUI 正式模型读取和原生 WebView 文件、Diff、历史、审批、终端输入/输出/回收均已验收 |
 | Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | 公网、容器联合流程与完整跨设备产品不外推 |
 | 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；隔离第三方 Tool 包经私有目录、摘要和真实沙箱探测后才启用；Chrome 专用 Profile 经正式 Target/Action Gateway 执行，真实模型已验收临时网页观察、导航、非密码输入和点击 | macOS 临时测试 App 已经真实回环 HTTP Core/Worker/生成客户端完成实际点击；第三方 Command/Event/Provider/Runtime 与驱动未开放，GUI 直接调用和生产远程未验收；临时 Profile 回收不等于全局资源治理 |
@@ -820,7 +820,7 @@ Subworkflow 只能执行已发布的固定版本。入场先编译整个子图�
 Agent 上限、扩大 Role/Capability/Plugin 授权及无法支撑的预算。父子 Run、节点与 iteration 持久关联；
 模型请求、重试和循环次数预留互不重叠的预算份额，子图还受其 Definition/节点上限与父图剩余时间约束。
 未用份额不动态借给其他节点。累计 Token/费用/工具调用从持久子 Run 派生，不另写一份账本；取消、
-中断和失败向子图传播，恢复沿用原 child Run 与等待令牌。Run 首次准备固定有效配置和 ModelProfile
+中断和失败向子图传播，父运行在返回前等待已取消的子任务完成关停；恢复沿用原 child Run 与等待令牌。Run 首次准备固定有效配置和 ModelProfile
 指纹，之后配置变化明确失败，要求创建新 Run。Writer 使用原图工作区的配置收窄权限。
 
 Artifact 节点以有界文本/JSON 或当前 Team/Session 已绑定工件发布到 Artifact Board，核验正文完整性与
@@ -918,7 +918,9 @@ workspace root 与镜像摘要；发送前持久 receipt 并原子标为 `sent`�
 Scheduler Leader 持有者才能生成 due RunRequest，Runtime Writer 持有者才能 claim/dispatch；这两个全局租约
 和每个 Job Lease 都绑定 owner、随机 token、单调 fencing 和 TTL。续租最长不超过 Runtime Writer
 到期时间；旧 token/fence 不能续租、取消或提交。Claim 还会原子核对每个 Schedule 的
-`concurrency_limit`，不会因多个 due 请求绕过并发上限。
+`concurrency_limit` 和当前 enabled 状态，暂停后未领取的请求等待恢复，不会因多个 due 请求绕过并发上限。
+内部记忆维护使用 enabled 的 `application.signal` Hook，由维护命令显式入队；没有时钟 occurrence，
+不会为保留手工队列而绕过暂停规则。
 
 Worker 在调用 Gateway 前持久 `side_effect_started`，再用原 RunRequest 幂等键经 Policy/Capability/Audit 创建
 并启动精确 Published Graph Revision。`scheduler_graph_dispatches` 先保留幂等绑定：已 completed 的键重放

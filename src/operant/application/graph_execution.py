@@ -202,6 +202,7 @@ class BoundedGraphExecutor:
         self._state_lock = asyncio.Lock()
         self._active_tasks: dict[str, dict[str, asyncio.Task[_NodeExecution]]] = {}
         self._child_tasks: dict[str, asyncio.Task[GraphExecutionResult]] = {}
+        self._stopping_child_tasks: dict[str, set[asyncio.Task[GraphExecutionResult]]] = {}
         self.writer_runtime: MultiWriterRuntime | None = None
         self.writer_gateway: Phase45ActionGateway | None = None
         self._writer_leases: dict[str, WriterLease] = {}
@@ -474,6 +475,7 @@ class BoundedGraphExecutor:
                     self.graph_runtime.fail_run(run_id)
                 for node in self.graph_repository.list_node_runs(run_id):
                     self._stop_child(run_id, node, cancel=True)
+                await self._drain_child_tasks(run_id)
                 return self._result(run_id)
 
     def cancel(self, run_id: str) -> GraphWorkflowRun:
@@ -556,11 +558,13 @@ class BoundedGraphExecutor:
                     for node in self.graph_repository.list_node_runs(run_id):
                         self._stop_child(run_id, node, cancel=True)
                     await self._drain_tasks(active)
+                    await self._drain_child_tasks(run_id)
                     return self._result(run_id)
                 if run.status is GraphRunStatus.INTERRUPTED:
                     for node in self.graph_repository.list_node_runs(run_id):
                         self._stop_child(run_id, node, cancel=False)
                     await self._drain_tasks(active)
+                    await self._drain_child_tasks(run_id)
                     return self._result(run_id)
                 if run_id in self._cancel_requested:
                     self.cancel(run_id)
@@ -653,6 +657,7 @@ class BoundedGraphExecutor:
             for node in self.graph_repository.list_node_runs(run_id):
                 self._stop_child(run_id, node, cancel=False)
             await self._drain_tasks(active)
+            await self._drain_child_tasks(run_id)
             raise
         except Exception:
             self.graph_runtime.fail_run(run_id)
@@ -662,6 +667,7 @@ class BoundedGraphExecutor:
             for node in self.graph_repository.list_node_runs(run_id):
                 self._stop_child(run_id, node, cancel=True)
             await self._drain_tasks(active)
+            await self._drain_child_tasks(run_id)
             raise
         finally:
             if not active:
@@ -1218,8 +1224,15 @@ class BoundedGraphExecutor:
         else:
             self.interrupt(child_id)
         task = self._child_tasks.pop(child_id, None)
-        if task is not None and not task.done():
-            task.cancel()
+        if task is not None:
+            self._stopping_child_tasks.setdefault(run_id, set()).add(task)
+            if not task.done():
+                task.cancel()
+
+    async def _drain_child_tasks(self, run_id: str) -> None:
+        tasks = self._stopping_child_tasks.pop(run_id, set())
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _execute_artifact_node(
         self, run_id: str, node_run: NodeRun, node: NodeSpec
