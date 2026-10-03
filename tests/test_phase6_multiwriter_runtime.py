@@ -315,6 +315,113 @@ def test_merge_uses_isolated_adapter_and_rolls_back_on_failure(tmp_path: Path) -
     assert adapter.rolled_back is False
 
 
+def test_merge_rejects_artifacts_from_another_graph_run_at_every_entry(tmp_path: Path) -> None:
+    graph = definition()
+    runtime, repository, _adapter, first_run, _first_workspaces = setup_runtime(tmp_path, graph)
+    graph_repository = SQLiteGraphRepository(repository.store)
+    second_run = GraphRuntime(graph_repository).create_run(graph)
+    second_nodes = {item.node_id: item for item in graph_repository.list_node_runs(second_run.id)}
+    workspaces = {}
+    for key in ("a", "b"):
+        policy = next(item.writer_policy for item in graph.nodes if item.node_id == f"writer-{key}")
+        assert policy is not None
+        workspaces[key] = runtime.create_workspace(
+            WriterWorkspace(
+                graph_run_id=second_run.id,
+                node_run_id=second_nodes[f"writer-{key}"].id,
+                writer_key=key,
+                isolation_kind=policy.isolation_kind,
+                isolation_ref=f"run-b:{policy.isolation_ref}",
+                base_revision="abcdef0",
+                ownership_paths=policy.ownership_paths,
+            )
+        )
+    leases = tuple(
+        runtime.acquire_lease(workspaces[key].writer_workspace_id, owner=f"coder-{key}")
+        for key in ("a", "b")
+    )
+    artifacts = tuple(
+        runtime.publish_artifact(
+            artifact(workspaces[key], f"src/{key}/main.py"), lease=leases[index]
+        )
+        for index, key in enumerate(("a", "b"))
+    )
+    forged = MergeRun(
+        graph_run_id=first_run.id,
+        merge_node_id="merge",
+        artifact_ids=tuple(item.writer_artifact_id for item in artifacts),
+        target_isolation_ref="worktree:merge-target",
+        base_revision="abcdef0",
+    )
+    with pytest.raises(GraphConflictError, match="another Graph Run"):
+        runtime.create_merge_run(forged, definition=graph, leases=leases)
+
+    persisted = repository.create_merge_run(forged)
+    with pytest.raises(GraphConflictError, match="another Graph Run"):
+        runtime.finalize_merge_run(
+            persisted.merge_run_id, definition=graph, leases=leases, review_approved=True
+        )
+    with pytest.raises(GraphConflictError, match="another Graph Run"):
+        runtime.reconcile_merge_run(
+            persisted.merge_run_id,
+            expected_revision=persisted.expected_revision,
+            status=MergeRunStatus.SUCCEEDED,
+            result_artifact_ref="git:forged",
+        )
+    assert repository.get_merge_run(persisted.merge_run_id).status is MergeRunStatus.CREATED
+
+
+def test_merge_rejects_workspace_bound_to_wrong_writer_node(tmp_path: Path) -> None:
+    graph = definition()
+    store = SQLiteStore(tmp_path / "wrong-node.sqlite3")
+    store.initialize()
+    graph_repository = SQLiteGraphRepository(store)
+    graph_repository.put_definition(graph)
+    run = GraphRuntime(graph_repository).create_run(graph)
+    nodes = {item.node_id: item for item in graph_repository.list_node_runs(run.id)}
+    repository = SQLiteMultiWriterRepository(store)
+    runtime = MultiWriterRuntime(
+        repository, artifact_adapter=FakeArtifactAdapter(), merge_adapter=FakeMergeAdapter()
+    )
+    workspaces = {}
+    for key, wrong_key in (("a", "b"), ("b", "a")):
+        policy = next(item.writer_policy for item in graph.nodes if item.node_id == f"writer-{key}")
+        assert policy is not None
+        workspaces[key] = runtime.create_workspace(
+            WriterWorkspace(
+                graph_run_id=run.id,
+                node_run_id=nodes[f"writer-{wrong_key}"].id,
+                writer_key=key,
+                isolation_kind=policy.isolation_kind,
+                isolation_ref=policy.isolation_ref,
+                base_revision="abcdef0",
+                ownership_paths=policy.ownership_paths,
+            )
+        )
+    leases = tuple(
+        runtime.acquire_lease(workspaces[key].writer_workspace_id, owner=f"coder-{key}")
+        for key in ("a", "b")
+    )
+    artifacts = tuple(
+        runtime.publish_artifact(
+            artifact(workspaces[key], f"src/{key}/main.py"), lease=leases[index]
+        )
+        for index, key in enumerate(("a", "b"))
+    )
+    with pytest.raises(GraphConflictError, match="node binding"):
+        runtime.create_merge_run(
+            MergeRun(
+                graph_run_id=run.id,
+                merge_node_id="merge",
+                artifact_ids=tuple(item.writer_artifact_id for item in artifacts),
+                target_isolation_ref="worktree:merge-target",
+                base_revision="abcdef0",
+            ),
+            definition=graph,
+            leases=leases,
+        )
+
+
 def test_expired_lease_cannot_finalize_merge(tmp_path: Path) -> None:
     runtime, _, _, _, workspaces = setup_runtime(tmp_path, definition())
     lease = runtime.acquire_lease(workspaces["a"].writer_workspace_id, owner="coder-a")
@@ -643,14 +750,24 @@ def test_only_one_running_merge_is_admitted_per_target(tmp_path: Path) -> None:
 def test_expired_merge_owner_requires_manual_reconciliation_and_releases_target(
     tmp_path: Path,
 ) -> None:
-    _runtime, repository, adapter, run, _workspaces = setup_runtime(tmp_path, definition())
+    runtime, repository, adapter, run, workspaces = setup_runtime(tmp_path, definition())
+    leases = tuple(
+        runtime.acquire_lease(workspaces[key].writer_workspace_id, owner=f"coder-{key}")
+        for key in ("a", "b")
+    )
+    artifacts = tuple(
+        runtime.publish_artifact(
+            artifact(workspaces[key], f"src/{key}/main.py"), lease=leases[index]
+        )
+        for index, key in enumerate(("a", "b"))
+    )
     now = datetime.now(timezone.utc)
     first = repository.create_merge_run(
         MergeRun(
             merge_run_id="crashed-merge",
             graph_run_id=run.id,
             merge_node_id="merge",
-            artifact_ids=("artifact-a", "artifact-b"),
+            artifact_ids=tuple(item.writer_artifact_id for item in artifacts),
             target_isolation_ref="worktree:recovery-target",
             base_revision="abcdef0",
             created_at=now,

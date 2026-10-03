@@ -235,8 +235,9 @@ starting 并启动 transport；请求取消会关闭 transport 并 fenced 地收
 ## Scheduler 边界
 
 Phase 5A Scheduler 只调度本地 SQLite 中已发布的 Graph Workflow Revision。它不是 Shell、不是任意函数执行器，
-也不会给 Graph 中任意节点或 MCP 工具自动授权。Graph IR 里的 Timer 节点仍被 Compiler 拒绝；
-Schedule Timer 是独立的单次绝对 UTC 触发。
+也不会给 Graph 中任意节点或 MCP 工具自动授权。Graph Timer/Wait 是有界、持久的图内等待；
+Schedule Timer 是独立的单次绝对 UTC 触发。暂停调度停止新入队和领取尚未执行的队列请求，
+已有执行仍按其取消与租约边界收口；恢复保留原请求和监控基线。
 
 Cron 只支持受限五段表达式和 IANA 时区，用 UTC occurrence 遍历并映射到本地时间，使 DST gap 不伪造
 时刻、fold 中的两次真实发生保持可区分。停机后的 due occurrence 只按 `skip`、`fire_once` 或有界
@@ -257,6 +258,19 @@ Scheduler 派发本身还要经 Phase 4 Policy/Capability/Audit；后台调度�
 重放返回同一 Graph Run；pending 绑定按稳定 Graph Run ID 恢复已提交 Run，确定未提交时用原绑定安全
 创建，只有冲突或无法确定的 create/start/完成异常才转人工核对。FastAPI 停机只释放当前
 Coordinator 精确持有的租约；崩溃接管仍以 SQLite 已提交事实和 fencing 为准。
+
+文件/Git Hook 只观察显式绝对工作区内的元数据或 Git HEAD，不读取文件正文，不接收公网 webhook。
+路径越界、根目录和符号链接失败会持久显示；观察基线和事件入队使用同一租约与状态版本检查。
+
+## Graph 编排边界
+
+Human Input 与流程 Approval 绑定具体 NodeRun、等待 token 和冻结定义；流程同意不会授予工具权限，
+所有实际副作用继续经过 Action Gateway。固定版本 Subworkflow 在执行前检查整棵图的角色、能力、
+插件、深度和子 Agent 上限；循环每轮有独立子 Run、等待 token 和预算份额。父子使用冻结配置指纹，
+预算不借用其他分支的额度，取消和重启沿持久父子绑定处理。
+
+Artifact 发布校验内容哈希、当前 Run/Session/Team 归属和不可变元数据；相同内容与冲突的类型、
+敏感度或来源不能覆盖既有工件。智能工作流建议保存脱敏对话和候选，仍需显式保存、校验与发布。
 
 ## Web 与 API 部署边界
 

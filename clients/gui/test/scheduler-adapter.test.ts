@@ -5,6 +5,7 @@ import {
   mapRunRequests,
   mapSchedule,
   mapSchedules,
+  mapWatchStatus,
   schedulerError,
 } from '../src/live45/schedulerAdapter.ts';
 
@@ -44,16 +45,26 @@ test('scheduler adapter maps exact Phase 5A schedule fields', () => {
   assert.deepEqual(mapSchedules({ items: [schedule] }), [mapSchedule(schedule)]);
   assert.deepEqual(mapSchedule(schedule), {
     id: 'schedule-1', version: 2, name: 'Nightly', triggerKind: 'cron',
-    cronExpression: '0 3 * * *', timerAt: null, timezoneName: 'Asia/Shanghai',
+    cronExpression: '0 3 * * *', timerAt: null, hookEventType: null, watchPath: null, timezoneName: 'Asia/Shanghai',
     workflowId: 'workflow-1', workflowVersion: 4, status: 'enabled',
     dispatchIdempotency: 'idempotent', createdAt: '2026-09-03T00:00:00Z',
   });
 });
 
-test('scheduler adapter accepts only the supported application signal Hook', () => {
+test('scheduler adapter validates application, file, and Git hook projections', () => {
   const hook = { ...schedule, trigger_kind: 'hook', cron_expression: null, hook_event_type: 'application.signal' };
   assert.equal(mapSchedule(hook).triggerKind, 'hook');
+  assert.equal(mapSchedule({ ...hook, hook_event_type: 'file.changed', watch_path: '/tmp/project/file.txt' }).watchPath, '/tmp/project/file.txt');
+  assert.equal(mapSchedule({ ...hook, hook_event_type: 'git.head.changed', watch_path: '/tmp/project' }).hookEventType, 'git.head.changed');
+  assert.throws(() => mapSchedule({ ...hook, hook_event_type: 'file.changed' }), /watch_path/);
   assert.throws(() => mapSchedule({ ...hook, hook_event_type: null }), /hook_event_type/);
+});
+
+test('watch status uses the Core generation and preserves explicit watcher errors', () => {
+  assert.deepEqual(mapWatchStatus({ schedule_id: 's', schedule_version: 3, initialized: false, generation: 2, observed_at: null, error_code: 'watch_path_missing' }), {
+    scheduleId: 's', scheduleVersion: 3, initialized: false, generation: 2, observedAt: null, errorCode: 'watch_path_missing',
+  });
+  assert.throws(() => mapWatchStatus({ schedule_id: 's', schedule_version: 3, generation: 2 }), /initialized/);
 });
 
 test('scheduler adapter maps queue and dead-letter facts without deriving state', () => {

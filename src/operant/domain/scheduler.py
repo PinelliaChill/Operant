@@ -74,7 +74,8 @@ class ScheduleDefinition(BaseModel):
     trigger_kind: TriggerKind
     cron_expression: str | None = Field(default=None, min_length=1, max_length=200)
     timer_at: datetime | None = None
-    hook_event_type: Literal["application.signal"] | None = None
+    hook_event_type: Literal["application.signal", "file.changed", "git.head.changed"] | None = None
+    watch_path: str | None = Field(default=None, max_length=4096)
     timezone_name: str = Field(min_length=1, max_length=100)
     misfire_policy: MisfirePolicy = MisfirePolicy.FIRE_ONCE
     max_catch_up: int = Field(default=10, ge=1, le=1_000)
@@ -109,13 +110,31 @@ class ScheduleDefinition(BaseModel):
     @model_validator(mode="after")
     def validate_trigger(self) -> ScheduleDefinition:
         if self.trigger_kind is TriggerKind.CRON:
-            if self.cron_expression is None or self.timer_at is not None or self.hook_event_type:
+            if (
+                self.cron_expression is None
+                or self.timer_at is not None
+                or self.hook_event_type
+                or self.watch_path
+            ):
                 raise ValueError("cron schedules require cron_expression only")
         elif self.trigger_kind is TriggerKind.TIMER:
-            if self.timer_at is None or self.cron_expression is not None or self.hook_event_type:
+            if (
+                self.timer_at is None
+                or self.cron_expression is not None
+                or self.hook_event_type
+                or self.watch_path
+            ):
                 raise ValueError("timer schedules require timer_at only")
-        elif self.hook_event_type != "application.signal" or self.cron_expression or self.timer_at:
-            raise ValueError("hook schedules require application.signal only")
+        elif self.cron_expression or self.timer_at:
+            raise ValueError("hook schedules cannot include cron or timer fields")
+        elif self.hook_event_type == "application.signal":
+            if self.watch_path is not None:
+                raise ValueError("application.signal cannot include watch_path")
+        elif self.hook_event_type in {"file.changed", "git.head.changed"}:
+            if not self.watch_path:
+                raise ValueError("file and Git hooks require watch_path")
+        else:
+            raise ValueError("hook schedules require a supported hook_event_type")
         if self.retry_base_seconds > self.retry_max_seconds:
             raise ValueError("retry_base_seconds cannot exceed retry_max_seconds")
         return self

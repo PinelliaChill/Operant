@@ -68,6 +68,7 @@ from operant.runtime.scheduler_integration import (
     SQLiteGraphDispatchRegistry,
     fastapi_scheduler_lifespan,
 )
+from operant.runtime.scheduler_watch import SchedulerWatchService
 from operant.skills import SkillDiscovery, SkillDiscoveryLimits
 
 _SECRET_REF_PATTERN = r"^[A-Z][A-Z0-9_]{1,127}$"
@@ -314,6 +315,7 @@ def install_phase45_routes(
         store=scheduler_store,
         trigger_service=trigger_service,
         worker=scheduler_worker,
+        watch_service=SchedulerWatchService(scheduler_store),
         owner=f"operant-core-{os.getpid()}",
     )
     app.state.security_repository = repository
@@ -1229,6 +1231,20 @@ def install_phase45_routes(
             return scheduler_store.get_schedule(schedule_id).model_dump(mode="json")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="schedule not found") from exc
+
+    @app.get("/v1/schedules/{schedule_id}/watch-status", operation_id="getScheduleWatchStatus")
+    async def get_schedule_watch_status(schedule_id: str) -> dict[str, Any]:
+        try:
+            schedule = scheduler_store.get_schedule(schedule_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="schedule not found") from exc
+        if schedule.hook_event_type not in {"file.changed", "git.head.changed"}:
+            raise HTTPException(status_code=409, detail="schedule is not a file or Git watcher")
+        return {
+            "schedule_id": schedule.id,
+            "schedule_version": schedule.version,
+            **scheduler_store.get_watch_status(schedule.id, schedule.version),
+        }
 
     @app.post("/v1/schedules/{schedule_id}/status", operation_id="setScheduleStatus")
     async def set_schedule_status(schedule_id: str, body: ScheduleStatusBody) -> dict[str, Any]:

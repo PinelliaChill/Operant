@@ -7,7 +7,7 @@ from typing import Any
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
 
 from .controller import ClientController, CommandKeys, error_view, layout_for_width
@@ -58,6 +58,8 @@ class OperantTui(App[None]):
         self.command_keys = CommandKeys()
         self.pending_cancel_run_id: str | None = None
         self.stream_run_id: str | None = None
+        self.node_runs: list[Any] = []
+        self.graph_approval: Any = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -68,7 +70,7 @@ class OperantTui(App[None]):
                 yield Input(placeholder="Session ID", id="session-id")
                 yield Button("读取待审批", id="load-approvals")
                 yield ListView(id="approval-list")
-            with Vertical(id="main", classes="pane"):
+            with VerticalScroll(id="main", classes="pane"):
                 yield Label("Graph 运行")
                 yield Input(placeholder="Graph Run ID", id="run-id")
                 with Container():
@@ -78,6 +80,17 @@ class OperantTui(App[None]):
                     yield Button("取消…", id="cancel", variant="error")
                 yield Static("尚未读取运行投影。", id="run-status")
                 yield ListView(id="node-list")
+                yield Label("等待中的人工输入")
+                yield Input(placeholder="节点 ID（从上方投影复制）", id="graph-input-node")
+                yield Input(placeholder="输入内容", id="graph-input-value")
+                yield Button("提交人工输入", id="graph-input-submit", variant="primary")
+                yield Label("Graph 流程审批")
+                yield Input(placeholder="审批节点 ID", id="graph-approval-node")
+                yield Button("读取节点审批", id="graph-approval-load")
+                yield Static("尚未读取审批。", id="graph-approval-detail")
+                with Horizontal():
+                    yield Button("批准流程", id="graph-approval-allow", variant="success")
+                    yield Button("拒绝流程", id="graph-approval-deny", variant="error")
             with Vertical(id="inspector", classes="pane"):
                 yield Label("连接与错误")
                 yield Static("颜色不是唯一状态信号。", id="error")
@@ -114,6 +127,9 @@ class OperantTui(App[None]):
     def _set_mutations_enabled(self, enabled: bool) -> None:
         self.query_one("#resume", Button).disabled = not enabled
         self.query_one("#cancel", Button).disabled = not enabled
+        self.query_one("#graph-input-submit", Button).disabled = not enabled
+        self.query_one("#graph-approval-allow", Button).disabled = not enabled
+        self.query_one("#graph-approval-deny", Button).disabled = not enabled
 
     async def _refresh(self) -> None:
         run_id = self.query_one("#run-id", Input).value
@@ -127,6 +143,11 @@ class OperantTui(App[None]):
         self._set_mutations_enabled(True)
 
     async def _render_projection(self, run: Any, nodes: list[Any]) -> None:
+        self.node_runs = nodes
+        self.graph_approval = None
+        self.query_one("#graph-approval-detail", Static).update(
+            "投影已刷新；决定前请重新读取审批。"
+        )
         self.query_one("#run-status", Static).update(
             f"[{projection_field(run, 'status', 'unknown')}] "
             f"revision {projection_field(run, 'revision', '—')} · 当前节点 "
@@ -145,6 +166,122 @@ class OperantTui(App[None]):
                 for node in nodes
             ]
         )
+        waiting = [
+            str(projection_field(node, "node_id"))
+            for node in nodes
+            if projection_field(node, "status") == "waiting_input"
+        ]
+        self.query_one("#graph-input-node", Input).placeholder = (
+            "等待输入：" + "、".join(waiting) if waiting else "当前无等待输入节点"
+        )
+        approvals = [
+            str(projection_field(node, "node_id"))
+            for node in nodes
+            if projection_field(node, "status") == "waiting_approval"
+        ]
+        self.query_one("#graph-approval-node", Input).placeholder = (
+            "等待审批：" + "、".join(approvals) if approvals else "当前无等待审批节点"
+        )
+
+    @on(Button.Pressed, "#graph-approval-load")
+    async def load_graph_approval(self) -> None:
+        run_id = self.query_one("#run-id", Input).value.strip()
+        node_id = self.query_one("#graph-approval-node", Input).value.strip()
+        node = next(
+            (item for item in self.node_runs if projection_field(item, "node_id") == node_id), None
+        )
+        if node is None or projection_field(node, "status") != "waiting_approval":
+            self._show_error(ValueError("请先刷新投影并选择等待审批的节点"))
+            return
+        try:
+            approval = await asyncio.to_thread(self.controller.graph_node_approval, run_id, node_id)
+            if projection_field(approval, "node_run_id") != projection_field(
+                node, "id"
+            ) or projection_field(approval, "wait_token") != projection_field(node, "wait_token"):
+                raise ValueError("审批与当前节点等待令牌不匹配，请刷新投影")
+            self.graph_approval = approval
+            category = projection_field(approval, "category")
+            status = projection_field(approval, "status")
+            self.query_one("#graph-approval-detail", Static).update(
+                f"{category} [{status}]\n"
+                f"{projection_field(approval, 'detail')}\n"
+                f"Action Hash: {projection_field(approval, 'action_hash')}\n"
+                f"截止: {projection_field(approval, 'expires_at')}"
+            )
+        except Exception as exc:
+            self._show_error(exc)
+
+    async def _decide_graph_approval(self, approved: bool) -> None:
+        approval = self.graph_approval
+        run_id = self.query_one("#run-id", Input).value.strip()
+        node_id = self.query_one("#graph-approval-node", Input).value.strip()
+        node = next(
+            (item for item in self.node_runs if projection_field(item, "node_id") == node_id), None
+        )
+        if (
+            approval is None
+            or projection_field(approval, "status") != "pending"
+            or node is None
+            or projection_field(node, "wait_token") != projection_field(approval, "wait_token")
+        ):
+            self._show_error(ValueError("审批信息已过期，请重新读取 Core 投影和审批"))
+            return
+        approval_id = str(projection_field(approval, "approval_id"))
+        wait_token = str(projection_field(approval, "wait_token"))
+        action = f"graph-approval:{approval_id}:{approved}"
+        try:
+            await asyncio.to_thread(
+                self.controller.decide_graph_node_approval,
+                run_id,
+                node_id,
+                approval_id,
+                wait_token,
+                approved,
+                idempotency_key=self.command_keys.get(action),
+            )
+            self.command_keys.release(action)
+            await self._refresh()
+        except Exception as exc:
+            self._show_error(exc)
+
+    @on(Button.Pressed, "#graph-approval-allow")
+    async def allow_graph_approval(self) -> None:
+        await self._decide_graph_approval(True)
+
+    @on(Button.Pressed, "#graph-approval-deny")
+    async def deny_graph_approval(self) -> None:
+        await self._decide_graph_approval(False)
+
+    @on(Button.Pressed, "#graph-input-submit")
+    async def submit_graph_input(self) -> None:
+        run_id = self.query_one("#run-id", Input).value.strip()
+        node_id = self.query_one("#graph-input-node", Input).value.strip()
+        value = self.query_one("#graph-input-value", Input).value
+        node = next(
+            (item for item in self.node_runs if projection_field(item, "node_id") == node_id), None
+        )
+        if node is None or projection_field(node, "status") != "waiting_input":
+            self._show_error(ValueError("请先刷新投影并选择等待输入的节点"))
+            return
+        wait_token = projection_field(node, "wait_token")
+        if not isinstance(wait_token, str) or not wait_token:
+            self._show_error(ValueError("Core 未提供该节点的等待令牌，请刷新投影"))
+            return
+        action = f"graph-input:{run_id}:{node_id}:{wait_token}"
+        try:
+            await asyncio.to_thread(
+                self.controller.provide_graph_input,
+                run_id,
+                node_id,
+                wait_token,
+                value,
+                idempotency_key=self.command_keys.get(action),
+            )
+            self.command_keys.release(action)
+            self.query_one("#graph-input-value", Input).value = ""
+            await self._refresh()
+        except Exception as exc:
+            self._show_error(exc)
 
     @on(Button.Pressed, "#refresh")
     async def refresh_projection(self) -> None:

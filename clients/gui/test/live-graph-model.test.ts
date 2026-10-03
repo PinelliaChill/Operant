@@ -11,6 +11,20 @@ test('new live nodes use Phase23 ports and required kind fields', () => {
   assert.equal(loop.loop_policy?.on_limit_node_id, loop.node_id);
   const timer = newNode('timer', 2);
   assert.equal(timer.metadata?.delay_seconds, 0);
+  const input = newNode('human_input', 3);
+  assert.equal(input.timeout_policy?.on_timeout_node_id, null);
+  assert.equal(newNode('wait', 4).metadata?.delay_seconds, 0);
+  const child = newNode('subworkflow', 5);
+  assert.equal(child.subworkflow_version, 1);
+  assert.equal(child.output_ports?.[0]?.name, 'child_run_id');
+  const artifact = newNode('artifact', 6);
+  assert.deepEqual(artifact.input_ports?.map((port) => port.name), ['artifact_id', 'content']);
+  assert.equal(artifact.output_ports?.[0]?.name, 'artifact_id');
+  assert.equal(artifact.idempotency_class, 'idempotent');
+  assert.equal(newNode('approval', 7).output_ports?.[0]?.name, 'approved');
+  const merge = newNode('merge', 8);
+  assert.equal(merge.writes_workspace, true);
+  assert.equal(merge.output_ports?.[0]?.name, 'result_artifact_ref');
 });
 
 test('definition difference keeps server baseline separate from local edits', () => {

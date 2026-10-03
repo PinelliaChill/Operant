@@ -245,6 +245,21 @@ class TriggerService:
             not isinstance(workspace, str) or not Path(workspace).is_absolute()
         ):
             raise SchedulerValidationError("scheduled workspace must be an absolute path")
+        if schedule.hook_event_type in {"file.changed", "git.head.changed"}:
+            if not isinstance(workspace, str):
+                raise SchedulerValidationError("watch hooks require an absolute workflow workspace")
+            root = Path(workspace)
+            watched = Path(schedule.watch_path or "")
+            if (
+                not root.is_absolute()
+                or not watched.is_absolute()
+                or ".." in root.parts
+                or ".." in watched.parts
+                or root == Path(root.anchor)
+                or watched == root
+                or not watched.is_relative_to(root)
+            ):
+                raise SchedulerValidationError("watch_path must be inside the workflow workspace")
         if self._workflow_repository is not None:
             try:
                 definition = self._workflow_repository.get_definition(
@@ -332,7 +347,10 @@ class TriggerService:
             raise SchedulerValidationError("hook event_id must contain 1-200 characters")
         current = require_aware_utc(now or datetime.now(timezone.utc), field="now")
         schedule = self._repository.get_schedule(schedule_id)
-        if schedule.trigger_kind is not TriggerKind.HOOK:
+        if (
+            schedule.trigger_kind is not TriggerKind.HOOK
+            or schedule.hook_event_type != "application.signal"
+        ):
             raise SchedulerConflictError("schedule is not an application.signal hook")
         if schedule.status is not ScheduleStatus.ENABLED:
             raise SchedulerConflictError("hook schedule is not enabled")

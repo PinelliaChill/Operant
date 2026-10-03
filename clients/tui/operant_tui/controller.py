@@ -144,6 +144,47 @@ class ClientController:
             idempotency_key=idempotency_key,
         )
 
+    def provide_graph_input(
+        self, run_id: str, node_id: str, wait_token: str, value: str, *, idempotency_key: str
+    ) -> Any:
+        if not run_id.strip() or not node_id.strip() or not wait_token.strip() or not value.strip():
+            raise ValueError("Graph Run、等待节点、wait token 和输入都不能为空")
+        return self.phase23.provide_node_input(
+            run_id.strip(),
+            node_id.strip(),
+            {"wait_token": wait_token, "value": value},
+            idempotency_key=idempotency_key,
+        )
+
+    def graph_node_approval(self, run_id: str, node_id: str) -> Any:
+        if not run_id.strip() or not node_id.strip():
+            raise ValueError("Graph Run 和审批节点 ID 不能为空")
+        return self.phase23.get_graph_node_approval(run_id.strip(), node_id.strip())
+
+    def decide_graph_node_approval(
+        self,
+        run_id: str,
+        node_id: str,
+        approval_id: str,
+        wait_token: str,
+        approved: bool,
+        *,
+        idempotency_key: str,
+    ) -> Any:
+        if (
+            not run_id.strip()
+            or not node_id.strip()
+            or not approval_id.strip()
+            or not wait_token.strip()
+        ):
+            raise ValueError("审批请求身份和等待令牌不能为空")
+        return self.phase23.decide_graph_node_approval(
+            run_id.strip(),
+            node_id.strip(),
+            {"approval_id": approval_id, "wait_token": wait_token, "approved": approved},
+            idempotency_key=idempotency_key,
+        )
+
     def cancel_graph(self, run_id: str, *, idempotency_key: str) -> Any:
         run_id = run_id.strip()
         if not run_id:

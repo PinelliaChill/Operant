@@ -278,7 +278,8 @@ def test_migrations_are_atomic_reject_corruption_and_support_explicit_empty_roll
         ("gap", "DELETE FROM schema_migrations WHERE version=2", "version gap"),
         (
             "future",
-            "INSERT INTO schema_migrations VALUES (22, 'future', 'future', 'now')",
+            "INSERT INTO schema_migrations VALUES "
+            f"({max(SQLiteStore._FROZEN_MIGRATION_CHECKSUMS) + 1}, 'future', 'future', 'now')",
             "newer than this build",
         ),
     ):

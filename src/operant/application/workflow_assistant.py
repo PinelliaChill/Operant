@@ -10,7 +10,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from operant.application.graph import GraphCompilationError, GraphCompiler
-from operant.domain.graph import NodeKind, WorkflowDefinition, WorkflowDefinitionStatus
+from operant.domain.graph import (
+    IdempotencyClass,
+    NodeKind,
+    WorkflowDefinition,
+    WorkflowDefinitionStatus,
+)
 from operant.domain.messages import Message, MessageRole
 from operant.domain.models import Budget, RoleSnapshot, RoleStatus, ToolPolicy
 from operant.domain.team import TeamDefinition
@@ -29,6 +34,7 @@ class WorkflowSuggestionRequest(BaseModel):
     team_version: int = Field(ge=1)
     base_workflow_id: str | None = Field(default=None, max_length=300)
     base_version: int | None = Field(default=None, ge=1)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=300)
 
 
 class WorkflowSuggestion(BaseModel):
@@ -52,17 +58,37 @@ _SUPPORTED_KINDS = frozenset(
         NodeKind.JOIN,
         NodeKind.LOOP,
         NodeKind.TIMER,
+        NodeKind.HUMAN_INPUT,
+        NodeKind.APPROVAL,
+        NodeKind.WAIT,
+        NodeKind.SUBWORKFLOW,
+        NodeKind.ARTIFACT,
+        NodeKind.MERGE,
     }
 )
 _SYSTEM = """You design an Operant Workflow draft. Return a single JSON object only.
 Keys: name, description, nodes, edges. Do not add Markdown or commentary.
 Use only the provided Team Agent member ids, exactly once each, as agent nodes.
 Each agent has metadata role_id and role_version from the supplied roster.
-Allowed node kinds: agent, tool, script, condition, fan_out, join, loop, timer.
+Node objects use node_id and node_kind (not id, kind or type); required ports use
+input_ports/output_ports arrays of objects with name, value_type and required.
+Example node: {"node_id":"<exact Team node_id>","node_kind":"agent",
+"input_ports":[],"output_ports":[{"name":"result","value_type":"string"}],
+"metadata":{"role_id":"<roster role_id>","role_version":1,"task":"task text"}}.
+Edges use edge_id, source_node, source_port, target_node, target_port.
+Do not invent fields. If no dependencies are needed, return an empty edges array.
+Allowed node kinds: agent, tool, script, condition, fan_out, join, loop, timer,
+human_input, approval, wait, subworkflow, artifact, merge.
 Tool metadata: tool_name, arguments, role_id, role_version.
 Script metadata: argv (array), cwd, timeout_seconds, role_id, role_version.
 Condition metadata: expression; use true/false output ports.
 Timer metadata: delay_seconds. Loop needs a bounded loop_policy.
+Wait metadata: delay_seconds. Human input metadata: prompt. Approval metadata: detail.
+Human input and approval need timeout_policy.on_timeout_node_id and an outgoing timeout edge.
+Subworkflow pins subworkflow_id and subworkflow_version. Merge needs writes_workspace
+and merge_policy with explicit source_writer_keys. Artifact publication is idempotent;
+its metadata needs content or a current-run artifact_id, and may include title,
+media_type, and sensitivity.
 Every edge refers to declared source/output and target/input ports.
 Use JSON-compatible values. Keep the graph small. Never include secrets.
 The draft will only be saved and run after human confirmation."""
@@ -126,6 +152,7 @@ async def suggest_workflow(
     team: TeamDefinition,
     base: WorkflowDefinition | None,
     next_version: int,
+    history: tuple[dict[str, Any], ...] = (),
 ) -> WorkflowSuggestion:
     """Return a validated candidate without writing a Definition or starting a Run."""
     coordinator = next(
@@ -192,6 +219,11 @@ async def suggest_workflow(
         "instruction": safe_instruction,
         "team": roster,
         "base_definition": base_context,
+        "conversation_history": [
+            {"instruction": turn["instruction"], "changes": turn["changes"]}
+            for turn in history[-8:]
+        ],
+        "previous_candidate": history[-1]["definition"] if history else None,
     }
     messages = (
         Message(role=MessageRole.SYSTEM, content=_SYSTEM),
@@ -259,6 +291,14 @@ async def suggest_workflow(
             "expression",
             "delay_seconds",
             "outputs",
+            "source_node_id",
+            "prompt",
+            "detail",
+            "artifact_id",
+            "content",
+            "title",
+            "media_type",
+            "sensitivity",
         ):
             if key in node:
                 metadata[key] = node.pop(key)
@@ -283,6 +323,12 @@ async def suggest_workflow(
             if metadata.get("role_id") not in role_versions:
                 raise WorkflowSuggestionError("action node must use a Team role")
             metadata["role_version"] = role_versions[metadata["role_id"]]
+        elif node.get("node_kind") == NodeKind.ARTIFACT.value:
+            node["idempotency_class"] = IdempotencyClass.IDEMPOTENT.value
+            node["writes_workspace"] = False
+        elif node.get("node_kind") == NodeKind.MERGE.value:
+            node["idempotency_class"] = IdempotencyClass.IDEMPOTENT.value
+            node["writes_workspace"] = True
     if {
         node.get("node_id")
         for node in payload["nodes"]

@@ -758,6 +758,7 @@ class ApplicationService:
         project_id: str | None = None,
         workspace_ref: str | None = None,
         config_overrides: dict[str, Any] | None = None,
+        _configuration_workspace_ref: str | None = None,
     ) -> Session:
         if (role_id is None) == (new_role is None):
             raise ValueError("provide exactly one of role_id or new_role")
@@ -781,8 +782,9 @@ class ApplicationService:
             if workspace_ref is not None and thread.workspace_ref != workspace_ref:
                 raise ValueError("workspace_ref differs from the bound Thread workspace")
             workspace_ref = thread.workspace_ref
-        if project_id is None and workspace_ref is not None:
-            workspace_hash = workspace_scope_id(workspace_ref)
+        configuration_workspace = _configuration_workspace_ref or workspace_ref
+        if project_id is None and configuration_workspace is not None:
+            workspace_hash = workspace_scope_id(configuration_workspace)
             # A Thread can be bound to a workspace before it is registered as a Project.
             with suppress(NotFoundError):
                 project_id = self.store.get_workspace_initialization(workspace_hash).id
@@ -796,7 +798,7 @@ class ApplicationService:
         config = ConfigService(self.store).effective(
             self.get_role(role_id),
             project_id=project_id,
-            workspace_ref=workspace_ref,
+            workspace_ref=configuration_workspace,
             run_overrides=ConfigPatch.model_validate(run_patch),
         )
         normalized_workspace_ref = workspace_ref

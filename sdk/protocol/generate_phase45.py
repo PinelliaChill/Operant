@@ -51,6 +51,7 @@ EXPECTED_OPERATION_IDS = {
     "updateSchedule",
     "listSchedules",
     "getSchedule",
+    "getScheduleWatchStatus",
     "setScheduleStatus",
     "triggerSchedule",
     "signalScheduleHook",

@@ -39,15 +39,31 @@ export function nodePosition(node: Node, index: number): Point {
 
 export function newNode(kind: Kind, index: number): Node {
   const base = `${kind}_${crypto.randomUUID().slice(0, 8)}`;
+  const needsTimeout = kind === 'human_input' || kind === 'approval';
   return {
     node_id: base,
     node_kind: kind,
-    input_ports: [{ name: 'input', value_type: 'any', required: false }],
+    input_ports: kind === 'artifact' ? [
+      { name: 'artifact_id', value_type: 'any', required: false },
+      { name: 'content', value_type: 'any', required: false },
+    ] : [{ name: 'input', value_type: 'any', required: false }],
     output_ports: kind === 'condition' ? [
       { name: 'true', value_type: 'any', required: false },
       { name: 'false', value_type: 'any', required: false },
-    ] : [{ name: 'output', value_type: 'any', required: false }],
-    metadata: { canvas_position: { x: 70 + (index % 4) * 270, y: 65 + Math.floor(index / 4) * 160 }, ...(kind === 'timer' ? { delay_seconds: 0 } : {}) },
+    ] : [{ name: kind === 'approval' ? 'approved' : kind === 'subworkflow' ? 'child_run_id' : kind === 'artifact' ? 'artifact_id' : kind === 'merge' ? 'result_artifact_ref' : 'output', value_type: 'any', required: false }],
+    metadata: {
+      canvas_position: { x: 70 + (index % 4) * 270, y: 65 + Math.floor(index / 4) * 160 },
+      ...(['timer', 'wait'].includes(kind) ? { delay_seconds: 0 } : {}),
+      ...(kind === 'artifact' ? { media_type: 'text/plain' } : {}),
+    },
+    ...(kind === 'artifact' ? { idempotency_class: 'idempotent' as const } : {}),
+    ...(needsTimeout ? { timeout_policy: { timeout_seconds: 300, on_timeout_node_id: null } } : {}),
+    ...(kind === 'subworkflow' ? { subworkflow_id: '', subworkflow_version: 1 } : {}),
+    ...(kind === 'merge' ? {
+      writes_workspace: true,
+      idempotency_class: 'non_idempotent' as const,
+      merge_policy: { strategy: 'three_way', source_writer_keys: [], require_review: true, rollback_on_failure: true },
+    } : {}),
     ...(kind === 'loop' ? { loop_policy: { max_iterations: 3, max_wall_seconds: 300, max_output_tokens: 2000, max_cost_usd: 1, max_subagents: 0, max_recursion_depth: 1, exit_expression: 'False', on_limit_node_id: base } } : {}),
   };
 }

@@ -7,6 +7,7 @@ export type ScheduleStatusInput = Phase45.ScheduleStatusBody;
 export type GeneratedSchedulerClient = Pick<Phase45Client,
   | 'negotiateProtocol'
   | 'listSchedules'
+  | 'getScheduleWatchStatus'
   | 'listSchedulerQueue'
   | 'listDeadLetter'
   | 'createSchedule'
@@ -36,6 +37,10 @@ export class SchedulerClient {
 
   listSchedules(): Promise<Record<string, unknown>> {
     return this.generated.listSchedules();
+  }
+
+  getWatchStatus(scheduleId: string): Promise<Record<string, unknown>> {
+    return this.generated.getScheduleWatchStatus(scheduleId);
   }
 
   listQueue(): Promise<Record<string, unknown>> {
