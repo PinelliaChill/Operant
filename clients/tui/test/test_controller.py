@@ -33,6 +33,22 @@ class FakePhase23:
         self.calls.append(("cancel", run_id, idempotency_key))
         return object()
 
+    def provide_node_input(
+        self, run_id: str, node_id: str, body: object, *, idempotency_key: str
+    ) -> object:
+        self.calls.append(("input", run_id, node_id, body, idempotency_key))
+        return object()
+
+    def get_graph_node_approval(self, run_id: str, node_id: str) -> object:
+        self.calls.append(("approval", run_id, node_id))
+        return {"approval_id": "approval-1", "wait_token": "wait-1"}
+
+    def decide_graph_node_approval(
+        self, run_id: str, node_id: str, body: object, *, idempotency_key: str
+    ) -> object:
+        self.calls.append(("decision", run_id, node_id, body, idempotency_key))
+        return object()
+
 
 class ControllerTests(unittest.TestCase):
     def test_layout_breakpoints(self) -> None:
@@ -71,6 +87,38 @@ class ControllerTests(unittest.TestCase):
         )
         self.assertIn("重新读取完整投影", view.message)
         self.assertFalse(view.safe_to_retry)
+
+    def test_graph_human_input_and_approval_use_authoritative_wait_token(self) -> None:
+        phase23 = FakePhase23()
+        controller = ClientController(
+            "http://127.0.0.1:8000",
+            phase1e=object(),
+            phase23=phase23,
+            phase45=object(),
+            phase56=object(),
+        )
+        controller.provide_graph_input(
+            "run-1", "human", "wait-1", "answer", idempotency_key="input-key"
+        )
+        controller.graph_node_approval("run-1", "approve")
+        controller.decide_graph_node_approval(
+            "run-1", "approve", "approval-1", "wait-1", True, idempotency_key="decision-key"
+        )
+        self.assertEqual(
+            phase23.calls[0],
+            ("input", "run-1", "human", {"wait_token": "wait-1", "value": "answer"}, "input-key"),
+        )
+        self.assertEqual(phase23.calls[1], ("approval", "run-1", "approve"))
+        self.assertEqual(
+            phase23.calls[2],
+            (
+                "decision",
+                "run-1",
+                "approve",
+                {"approval_id": "approval-1", "wait_token": "wait-1", "approved": True},
+                "decision-key",
+            ),
+        )
 
     def test_manual_reconcile_is_never_presented_as_safe_retry(self) -> None:
         view = error_view(

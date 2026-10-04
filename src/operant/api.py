@@ -3698,6 +3698,8 @@ def create_app(
         artifact_adapter=phase56_writer_artifact_adapter,
         merge_adapter=phase56_merge_adapter,
     )
+    app.state.b24_graph_executor.writer_runtime = app.state.multiwriter_runtime
+    app.state.b24_graph_executor.writer_gateway = app.state.phase45_action_gateway
     install_beta_container_routes(
         app,
         store,

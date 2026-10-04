@@ -36,6 +36,7 @@ from operant.domain.graph import (
     new_graph_id,
     utc_now,
 )
+from operant.domain.models import Budget
 
 
 class GraphCompilationError(ValueError):
@@ -140,6 +141,8 @@ class GraphRepository(Protocol):
 
     def get_run(self, run_id: str) -> GraphWorkflowRun: ...
 
+    def list_child_runs(self, parent_run_id: str) -> tuple[GraphWorkflowRun, ...]: ...
+
     def update_run(self, run: GraphWorkflowRun, *, expected_revision: int) -> None: ...
 
     def list_node_runs(self, run_id: str) -> tuple[NodeRun, ...]: ...
@@ -195,6 +198,10 @@ class InMemoryGraphRepository:
 
     def get_run(self, run_id: str) -> GraphWorkflowRun:
         return self._runs[run_id]
+
+    def list_child_runs(self, parent_run_id: str) -> tuple[GraphWorkflowRun, ...]:
+        with self._lock:
+            return tuple(run for run in self._runs.values() if run.parent_run_id == parent_run_id)
 
     def update_run(self, run: GraphWorkflowRun, *, expected_revision: int) -> None:
         with self._lock:
@@ -263,6 +270,13 @@ class InMemoryGraphRepository:
 class GraphCompiler:
     def compile(self, definition: WorkflowDefinition) -> CompiledWorkflow:
         issues: list[CompilationIssue] = []
+        if any(key.startswith("__operant_") for key in definition.default_policy):
+            issues.append(
+                CompilationIssue(
+                    code="reserved_runtime_policy",
+                    message="Workflow policy cannot supply reserved runtime facts",
+                )
+            )
         nodes: dict[str, NodeSpec] = {}
         edges: dict[str, EdgeSpec] = {}
         for node in definition.nodes:
@@ -550,6 +564,7 @@ class GraphCompiler:
             for node in nodes.values()
             if node.writes_workspace and node.node_kind is not NodeKind.MERGE
         ]
+        issues.extend(self._validate_merge_sources(writer_nodes, nodes, outgoing))
         if len(writer_nodes) > 1:
             if any(node.writer_policy is None for node in writer_nodes):
                 issues.append(
@@ -617,6 +632,59 @@ class GraphCompiler:
                 node_id: tuple(edge.edge_id for edge in outgoing[node_id]) for node_id in nodes
             },
         )
+
+    @staticmethod
+    def _validate_merge_sources(
+        writers: list[NodeSpec],
+        nodes: dict[str, NodeSpec],
+        outgoing: dict[str, list[EdgeSpec]],
+    ) -> list[CompilationIssue]:
+        """Every Merge source must name one typed writer that flows into that Merge."""
+
+        issues: list[CompilationIssue] = []
+        by_key: dict[str, list[NodeSpec]] = defaultdict(list)
+        for writer in writers:
+            if writer.writer_policy is not None:
+                by_key[writer.writer_policy.writer_key].append(writer)
+        for merge in nodes.values():
+            if merge.node_kind is not NodeKind.MERGE or merge.merge_policy is None:
+                continue
+            source_keys = merge.merge_policy.source_writer_keys
+            if len(source_keys) < 2 or len(set(source_keys)) != len(source_keys):
+                issues.append(
+                    CompilationIssue(
+                        code="invalid_merge_sources",
+                        message=f"merge {merge.node_id} requires at least two unique writer keys",
+                        node_id=merge.node_id,
+                    )
+                )
+            for key in sorted(set(source_keys)):
+                matches = by_key.get(key, [])
+                if len(matches) != 1:
+                    issues.append(
+                        CompilationIssue(
+                            code="merge_source_writer_missing"
+                            if not matches
+                            else "merge_source_writer_ambiguous",
+                            message=(
+                                f"merge {merge.node_id} source {key!r} must identify "
+                                "exactly one typed workspace writer"
+                            ),
+                            node_id=merge.node_id,
+                        )
+                    )
+                elif not _node_reaches(matches[0].node_id, merge.node_id, outgoing):
+                    issues.append(
+                        CompilationIssue(
+                            code="writer_not_connected_to_merge",
+                            message=(
+                                f"writer {matches[0].node_id} must flow into merge node "
+                                f"{merge.node_id}"
+                            ),
+                            node_id=matches[0].node_id,
+                        )
+                    )
+        return issues
 
     @staticmethod
     def _validate_multi_writer(
@@ -695,18 +763,6 @@ class GraphCompiler:
                 )
             )
             return issues
-        merge = candidates[0]
-        for writer in writers:
-            if not _node_reaches(writer.node_id, merge.node_id, outgoing):
-                issues.append(
-                    CompilationIssue(
-                        code="writer_not_connected_to_merge",
-                        message=(
-                            f"writer {writer.node_id} must flow into merge node {merge.node_id}"
-                        ),
-                        node_id=writer.node_id,
-                    )
-                )
         return issues
 
 
@@ -910,9 +966,56 @@ class GraphRuntime:
         workspace_or_target: str | None = None,
         legacy_workflow_run_id: str | None = None,
         run_id: str | None = None,
+        budget_snapshot: Budget | None = None,
+        parent_run_id: str | None = None,
+        parent_node_run_id: str | None = None,
+        parent_node_iteration: int = 0,
     ) -> GraphWorkflowRun:
         compiled = self.validate_run(definition, input=input)
         run_input = input or {}
+        if parent_run_id is None:
+            if parent_node_run_id is not None or parent_node_iteration != 0:
+                raise GraphStateError("child binding requires a parent Run")
+            if budget_snapshot is not None:
+                raise GraphStateError("root budget comes from the published definition")
+        else:
+            from operant.application.subworkflow import child_budget
+
+            parent = self.repository.get_run(parent_run_id)
+            parent_node = self.repository.get_node_run(parent_node_run_id or "")
+            parent_definition = self.repository.get_definition(
+                parent.workflow_definition_id, parent.workflow_definition_version
+            )
+            spec = next(
+                item for item in parent_definition.nodes if item.node_id == parent_node.node_id
+            )
+            if (
+                parent_node.workflow_run_id != parent.id
+                or parent_node.status is not NodeRunStatus.WAITING
+                or parent_node.iteration != parent_node_iteration
+                or spec.node_kind is not NodeKind.SUBWORKFLOW
+                or spec.subworkflow_id != definition.workflow_id
+                or spec.subworkflow_version != definition.version
+                or workspace_or_target != parent.workspace_or_target
+                or run_input != parent_node.input_refs
+                or budget_snapshot is None
+            ):
+                raise GraphStateError("child Run must bind its waiting pinned parent node")
+            maximum = child_budget(
+                parent.model_copy(update={"started_at": None}), parent_definition, spec, definition
+            )
+            for key, limit in maximum.model_dump().items():
+                supplied = getattr(budget_snapshot, key)
+                if limit is not None and (supplied is None or supplied > limit):
+                    raise GraphStateError("child budget exceeds the parent reservation")
+            remaining = child_budget(parent, parent_definition, spec, definition)
+            budget_snapshot = budget_snapshot.model_copy(
+                update={
+                    "timeout_seconds": min(
+                        budget_snapshot.timeout_seconds, remaining.timeout_seconds
+                    )
+                }
+            )
         run = GraphWorkflowRun(
             id=run_id or new_graph_id("graph_run"),
             workflow_definition_id=definition.workflow_id,
@@ -920,7 +1023,10 @@ class GraphRuntime:
             input=run_input,
             workspace_or_target=workspace_or_target,
             legacy_workflow_run_id=legacy_workflow_run_id,
-            budget_snapshot=definition.default_budget,
+            budget_snapshot=budget_snapshot or definition.default_budget,
+            parent_run_id=parent_run_id,
+            parent_node_run_id=parent_node_run_id,
+            parent_node_iteration=parent_node_iteration,
             policy_snapshot=definition.default_policy,
         )
         self.repository.put_definition(definition)
@@ -1222,6 +1328,7 @@ class GraphRuntime:
             BoundaryKind.HUMAN_INPUT: NodeKind.HUMAN_INPUT,
             BoundaryKind.WAIT: NodeKind.WAIT,
             BoundaryKind.SUBWORKFLOW: NodeKind.SUBWORKFLOW,
+            BoundaryKind.MERGE: NodeKind.MERGE,
         }[boundary]
         if spec.node_kind is not expected:
             raise GraphStateError(f"node is not a {expected.value} boundary")
@@ -1230,6 +1337,7 @@ class GraphRuntime:
             BoundaryKind.HUMAN_INPUT: NodeRunStatus.WAITING_INPUT,
             BoundaryKind.WAIT: NodeRunStatus.WAITING,
             BoundaryKind.SUBWORKFLOW: NodeRunStatus.WAITING,
+            BoundaryKind.MERGE: NodeRunStatus.WAITING,
         }[boundary]
         updated = self._save_node(node_run, status=status, wait_token=f"wait_{uuid4().hex}")
         self._refresh_run_activity_status(node_run.workflow_run_id)
@@ -1984,7 +2092,7 @@ class GraphRuntime:
                 NodeRunStatus.SKIPPED,
                 NodeRunStatus.FAILED,
             }:
-                self._save_node(node, status=NodeRunStatus.PENDING, active_attempt_id=None)
+                self._reset_loop_occurrence(node, status=NodeRunStatus.PENDING)
         for target in targets:
             self._ready_node_by_spec_id(run_id, target, allow_reset=True)
             target_node = next(
@@ -2043,7 +2151,25 @@ class GraphRuntime:
             and node.status
             in {NodeRunStatus.SUCCEEDED, NodeRunStatus.SKIPPED, NodeRunStatus.FAILED}
         ):
-            self._save_node(node, status=NodeRunStatus.READY, active_attempt_id=None)
+            if allow_reset and node.status is not NodeRunStatus.PENDING:
+                self._reset_loop_occurrence(node, status=NodeRunStatus.READY)
+            else:
+                self._save_node(node, status=NodeRunStatus.READY, active_attempt_id=None)
+
+    def _reset_loop_occurrence(self, node: NodeRun, *, status: NodeRunStatus) -> NodeRun:
+        # A new bounded occurrence must not reuse a completed child, approval,
+        # writer binding or output from the preceding iteration.
+        return self._save_node(
+            node,
+            status=status,
+            iteration=node.iteration + 1,
+            retry_count=0,
+            active_attempt_id=None,
+            output_refs={},
+            wait_token=None,
+            worker_id=None,
+            lease_id=None,
+        )
 
     def _finish_if_terminal(self, run_id: str) -> None:
         run = self.repository.get_run(run_id)

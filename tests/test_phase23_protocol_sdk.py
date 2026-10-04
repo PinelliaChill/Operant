@@ -179,3 +179,26 @@ def test_client_encodes_team_and_viewer_scope() -> None:
     assert transport.requests[2].url == (
         "http://core.test/v1/teams/runs/team%2Frun/messages?viewer_id=agent%2Fone"
     )
+
+
+def test_graph_node_contract_covers_runtime_kinds_and_exact_boundary_tokens() -> None:
+    from operant.domain.graph import NodeKind
+
+    document = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    schemas = document["components"]["schemas"]
+    node_properties = schemas["NodeSpec"]["properties"]
+    assert set(node_properties["node_kind"]["enum"]) == {kind.value for kind in NodeKind}
+    assert {"writer_policy", "merge_policy", "subworkflow_id", "subworkflow_version"} <= set(
+        node_properties
+    )
+    assert "wait_token" in schemas["NodeInputRequest"]["required"]
+    assert {"approval_id", "wait_token", "approved"} == set(
+        schemas["DecideGraphNodeApprovalRequest"]["required"]
+    )
+    decision = document["paths"]["/v1/graph/runs/{run_id}/nodes/{node_id}/approval/decision"][
+        "post"
+    ]
+    assert decision["operationId"] == "decideGraphNodeApproval"
+    assert decision["responses"]["202"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CommandReceipt"
+    }

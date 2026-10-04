@@ -19,11 +19,13 @@ import {
   mapRunRequests,
   mapSchedule,
   mapSchedules,
+  mapWatchStatus,
   schedulerError,
   type RunRequestStatus,
   type ScheduleStatus,
   type TriggerKind,
   type LiveRunRequest,
+  type LiveWatchStatus,
 } from '../../live45/schedulerAdapter';
 import { createSchedulerClient } from '../../live45/createSchedulerClient';
 import type { ScheduleCreateInput } from '../../live45/schedulerClient';
@@ -102,6 +104,7 @@ export const LiveSchedulesView: React.FC = () => {
   const keys = useRef(new SchedulerIdempotencyKeys());
   const queryEpoch = useRef(0);
   const [snapshot, setSnapshot] = useState(emptySchedulerSnapshot);
+  const [watchStatuses, setWatchStatuses] = useState<Record<string, LiveWatchStatus>>({});
   const [error, setError] = useState<ReturnType<typeof schedulerError> | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -109,6 +112,8 @@ export const LiveSchedulesView: React.FC = () => {
   const [replayConfirmed, setReplayConfirmed] = useState(false);
   const [name, setName] = useState('');
   const [triggerKind, setTriggerKind] = useState<TriggerKind>('cron');
+  const [hookEventType, setHookEventType] = useState<'application.signal' | 'file.changed' | 'git.head.changed'>('application.signal');
+  const [watchPath, setWatchPath] = useState('');
   const [cronExpression, setCronExpression] = useState('0 3 * * *');
   const [timerAt, setTimerAt] = useState(localDateTime);
   const [hookEventIds, setHookEventIds] = useState<Record<string, string>>({});
@@ -126,9 +131,12 @@ export const LiveSchedulesView: React.FC = () => {
         client.listQueue(),
         client.listDeadLetter(),
       ]);
+      const schedules = mapSchedules(schedulesValue);
+      const watcherEntries = await Promise.all(schedules.filter((item) => item.triggerKind === 'hook' && item.hookEventType !== 'application.signal').map(async (item) => [item.id, mapWatchStatus(await client.getWatchStatus(item.id))] as const));
       if (epoch !== queryEpoch.current) return;
+      setWatchStatuses(Object.fromEntries(watcherEntries));
       setSnapshot(finishSchedulerLoad(
-        mapSchedules(schedulesValue),
+        schedules,
         mapRunRequests(queueValue),
         mapRunRequests(deadLetterValue),
       ));
@@ -157,7 +165,7 @@ export const LiveSchedulesView: React.FC = () => {
   const createInputValid = Boolean(name.trim() && workflowId.trim() && activeWorkspace.trim())
     && Number.isSafeInteger(parsedWorkflowVersion)
     && parsedWorkflowVersion >= 1
-    && (triggerKind === 'cron' ? Boolean(cronExpression.trim()) : triggerKind === 'timer' ? !Number.isNaN(timerDate.getTime()) : true);
+    && (triggerKind === 'cron' ? Boolean(cronExpression.trim()) : triggerKind === 'timer' ? !Number.isNaN(timerDate.getTime()) : hookEventType === 'application.signal' || (watchPath.startsWith('/') && watchPath !== activeWorkspace.trim()));
 
   const updateStatus = async (scheduleId: string, version: number, status: ScheduleStatus) => {
     const action = `status:${scheduleId}:v${version}:${status}`;
@@ -255,12 +263,13 @@ export const LiveSchedulesView: React.FC = () => {
     setBusyAction(action);
     setError(null);
     try {
-      const request: ScheduleCreateInput = {
+      const request: ScheduleCreateInput & { watch_path?: string | null } = {
         name: name.trim(),
         trigger_kind: triggerKind,
         cron_expression: triggerKind === 'cron' ? cronExpression.trim() : null,
         timer_at: triggerKind === 'timer' ? timerDate.toISOString() : null,
-        hook_event_type: triggerKind === 'hook' ? 'application.signal' : null,
+        hook_event_type: triggerKind === 'hook' ? hookEventType : null,
+        watch_path: triggerKind === 'hook' && hookEventType !== 'application.signal' ? watchPath.trim() : null,
         timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         workflow_id: workflowId.trim(),
         workflow_version: parsedWorkflowVersion,
@@ -384,13 +393,14 @@ export const LiveSchedulesView: React.FC = () => {
                           <StatusBadge status={schedule.status === 'enabled' ? 'active' : schedule.status} size="sm" />
                         </div>
                         <p className="scheduler-rule">
-                          {schedule.triggerKind === 'cron' ? schedule.cronExpression : schedule.triggerKind === 'timer' ? `单次 ${formatDateTime(schedule.timerAt ?? '')}` : '本地应用信号 · application.signal'}
+                          {schedule.triggerKind === 'cron' ? schedule.cronExpression : schedule.triggerKind === 'timer' ? `单次 ${formatDateTime(schedule.timerAt ?? '')}` : schedule.hookEventType === 'file.changed' ? `文件变化 · ${schedule.watchPath}` : schedule.hookEventType === 'git.head.changed' ? `Git HEAD 变化 · ${schedule.watchPath}` : '本地应用信号 · application.signal'}
                           <span> · {schedule.timezoneName}</span>
                         </p>
                         <p className="scheduler-target">{schedule.workflowId} · Workflow v{schedule.workflowVersion} · 调度 v{schedule.version}</p>
+                        {watchStatuses[schedule.id] && <p className="scheduler-target" role="status">Watcher：{watchStatuses[schedule.id].errorCode ? `错误 ${watchStatuses[schedule.id].errorCode}` : watchStatuses[schedule.id].initialized ? `已初始化 · generation ${watchStatuses[schedule.id].generation}` : '等待初始化'}{watchStatuses[schedule.id].observedAt ? ` · 观察于 ${formatDateTime(watchStatuses[schedule.id].observedAt ?? '')}` : ''}</p>}
                       </div>
                       <div className="scheduler-card-actions">
-                        {schedule.triggerKind === 'hook' ? <>
+                        {schedule.triggerKind === 'hook' && schedule.hookEventType === 'application.signal' ? <>
                           <label className="scheduler-hook-event">事件 ID<input className="input" value={hookEventIds[schedule.id] ?? ''} onChange={(event) => setHookEventIds((current) => ({ ...current, [schedule.id]: event.target.value }))} placeholder="应用事件的稳定 ID" maxLength={200} disabled={mutationsDisabled || schedule.status !== 'enabled'} /></label>
                           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void signalHook(schedule.id, schedule.name)} disabled={mutationsDisabled || schedule.status !== 'enabled' || !hookEventIds[schedule.id]?.trim()}>{busyAction?.startsWith(`hook:${schedule.id}:`) ? '提交中…' : '发送应用信号'}</button>
                         </> : <button
@@ -461,9 +471,9 @@ export const LiveSchedulesView: React.FC = () => {
           <fieldset><legend>触发类型</legend><div className="scheduler-segmented">
             <button type="button" className={`btn btn-sm ${triggerKind === 'cron' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'cron'} onClick={() => setTriggerKind('cron')}>Cron</button>
             <button type="button" className={`btn btn-sm ${triggerKind === 'timer' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'timer'} onClick={() => setTriggerKind('timer')}>单次 Timer</button>
-            <button type="button" className={`btn btn-sm ${triggerKind === 'hook' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'hook'} onClick={() => setTriggerKind('hook')}>应用 Hook</button>
+            <button type="button" className={`btn btn-sm ${triggerKind === 'hook' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'hook'} onClick={() => setTriggerKind('hook')}>事件 Hook</button>
           </div></fieldset>
-          {triggerKind === 'cron' ? <label>Cron 表达式<input className="input" value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label> : triggerKind === 'timer' ? <label>触发时间<input type="datetime-local" className="input" value={timerAt} onChange={(event) => setTimerAt(event.target.value)} /></label> : <p className="scheduler-form-note">独立的 application.signal Hook。创建后输入稳定事件 ID，可重复发送而不重复创建 RunRequest。</p>}
+          {triggerKind === 'cron' ? <label>Cron 表达式<input className="input" value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label> : triggerKind === 'timer' ? <label>触发时间<input type="datetime-local" className="input" value={timerAt} onChange={(event) => setTimerAt(event.target.value)} /></label> : <><label>事件来源<select className="input" value={hookEventType} onChange={(event) => setHookEventType(event.target.value as typeof hookEventType)}><option value="application.signal">应用信号</option><option value="file.changed">文件变化</option><option value="git.head.changed">Git HEAD 变化</option></select></label>{hookEventType === 'application.signal' ? <p className="scheduler-form-note">创建后输入稳定事件 ID，可重复发送而不重复创建 RunRequest。</p> : <label>监控路径<input className="input" value={watchPath} onChange={(event) => setWatchPath(event.target.value)} placeholder={hookEventType === 'file.changed' ? '工作区内文件的绝对路径' : '工作区内 Git 仓库目录的绝对路径'} /><small className="scheduler-form-note">路径须在当前工作区内；Core 会检查实际路径与符号链接。</small></label>}</>}
           <label>已发布 Workflow ID<input className="input" value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} placeholder="例如 builtin.coding-review" /></label>
           <label>Workflow 版本<input type="number" min="1" step="1" className="input" value={workflowVersion} onChange={(event) => setWorkflowVersion(event.target.value)} /></label>
           <p className="scheduler-form-note">运行工作区：{activeWorkspace || '请先在会话页选择一个 Core 项目'}</p>

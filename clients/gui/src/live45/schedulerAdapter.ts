@@ -10,6 +10,8 @@ export interface LiveSchedule {
   triggerKind: TriggerKind;
   cronExpression: string | null;
   timerAt: string | null;
+  hookEventType: 'application.signal' | 'file.changed' | 'git.head.changed' | null;
+  watchPath: string | null;
   timezoneName: string;
   workflowId: string;
   workflowVersion: number;
@@ -33,6 +35,28 @@ export interface LiveRunRequest {
   replayOfRequestId: string | null;
   lastErrorCode: string | null;
   updatedAt: string | null;
+}
+
+export interface LiveWatchStatus {
+  scheduleId: string;
+  scheduleVersion: number;
+  initialized: boolean;
+  generation: number;
+  observedAt: string | null;
+  errorCode: string | null;
+}
+
+export function mapWatchStatus(value: unknown): LiveWatchStatus {
+  const item = record(value, 'watch status');
+  if (typeof item.initialized !== 'boolean') throw new TypeError('watch status.initialized is missing');
+  return {
+    scheduleId: string(item.schedule_id, 'watch status.schedule_id'),
+    scheduleVersion: integer(item.schedule_version, 'watch status.schedule_version'),
+    initialized: item.initialized,
+    generation: integer(item.generation, 'watch status.generation'),
+    observedAt: optionalString(item.observed_at, 'watch status.observed_at'),
+    errorCode: optionalString(item.error_code, 'watch status.error_code'),
+  };
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -78,8 +102,13 @@ export function mapSchedule(value: unknown): LiveSchedule {
   const triggerKind = string(item.trigger_kind, 'schedule.trigger_kind') as TriggerKind;
   if (!scheduleStatuses.has(status)) throw new TypeError(`unsupported schedule.status: ${status}`);
   if (!triggerKinds.has(triggerKind)) throw new TypeError(`unsupported schedule.trigger_kind: ${triggerKind}`);
-  if (triggerKind === 'hook' && item.hook_event_type !== 'application.signal') {
+  const hookEventType = optionalString(item.hook_event_type, 'schedule.hook_event_type');
+  if (triggerKind === 'hook' && !['application.signal', 'file.changed', 'git.head.changed'].includes(hookEventType ?? '')) {
     throw new TypeError('unsupported schedule.hook_event_type');
+  }
+  const watchPath = optionalString(item.watch_path, 'schedule.watch_path');
+  if (triggerKind === 'hook' && hookEventType !== 'application.signal' && !watchPath) {
+    throw new TypeError('schedule.watch_path is required for file/Git triggers');
   }
   const dispatchIdempotency = string(
     item.dispatch_idempotency,
@@ -95,6 +124,8 @@ export function mapSchedule(value: unknown): LiveSchedule {
     triggerKind,
     cronExpression: optionalString(item.cron_expression, 'schedule.cron_expression'),
     timerAt: optionalString(item.timer_at, 'schedule.timer_at'),
+    hookEventType: hookEventType as LiveSchedule['hookEventType'],
+    watchPath,
     timezoneName: string(item.timezone_name, 'schedule.timezone_name'),
     workflowId: string(item.workflow_id, 'schedule.workflow_id'),
     workflowVersion: integer(item.workflow_version, 'schedule.workflow_version'),

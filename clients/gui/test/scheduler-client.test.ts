@@ -21,6 +21,7 @@ function generatedDouble(overrides: Partial<GeneratedSchedulerClient> = {}): {
       min_client_version: 'phase45.v1', capabilities: [],
     }) as GeneratedSchedulerClient['negotiateProtocol'],
     listSchedules: result('listSchedules') as GeneratedSchedulerClient['listSchedules'],
+    getScheduleWatchStatus: result('getScheduleWatchStatus') as GeneratedSchedulerClient['getScheduleWatchStatus'],
     listSchedulerQueue: result('listSchedulerQueue') as GeneratedSchedulerClient['listSchedulerQueue'],
     listDeadLetter: result('listDeadLetter') as GeneratedSchedulerClient['listDeadLetter'],
     createSchedule: result('createSchedule') as GeneratedSchedulerClient['createSchedule'],
@@ -44,6 +45,7 @@ test('scheduler adapter delegates every operation to generated Phase45Client met
 
   await client.negotiateProtocol(true);
   await client.listSchedules();
+  await client.getWatchStatus('schedule-1');
   await client.listQueue();
   await client.listDeadLetter();
   await client.createSchedule(schedule, 'create-key');
@@ -54,24 +56,24 @@ test('scheduler adapter delegates every operation to generated Phase45Client met
   await client.replayDeadLetter('request-1', 'replay-key');
 
   assert.deepEqual(calls.map((call) => call.method), [
-    'negotiateProtocol', 'listSchedules', 'listSchedulerQueue', 'listDeadLetter',
+    'negotiateProtocol', 'listSchedules', 'getScheduleWatchStatus', 'listSchedulerQueue', 'listDeadLetter',
     'createSchedule', 'setScheduleStatus', 'triggerSchedule', 'signalScheduleHook',
     'cancelRunRequest', 'replayDeadLetter',
   ]);
   assert.deepEqual(calls[0]?.args, [true]);
-  assert.deepEqual(calls[4]?.args, [schedule, { idempotencyKey: 'create-key' }]);
-  assert.deepEqual(calls[5]?.args, [
+  assert.deepEqual(calls[5]?.args, [schedule, { idempotencyKey: 'create-key' }]);
+  assert.deepEqual(calls[6]?.args, [
     'schedule-1', { status: 'paused', expected_version: 2 }, { idempotencyKey: 'status-key' },
   ]);
-  assert.deepEqual(calls[6]?.args, [
+  assert.deepEqual(calls[7]?.args, [
     'schedule-1', { idempotency_key: 'trigger-key' }, { idempotencyKey: 'trigger-key' },
   ]);
-  assert.deepEqual(calls[7]?.args, [
+  assert.deepEqual(calls[8]?.args, [
     'schedule-1', { event_type: 'application.signal', event_id: 'event-1' },
     { idempotencyKey: 'hook-key' },
   ]);
-  assert.deepEqual(calls[8]?.args, ['request-1', { idempotencyKey: 'cancel-key' }]);
-  assert.deepEqual(calls[9]?.args, [
+  assert.deepEqual(calls[9]?.args, ['request-1', { idempotencyKey: 'cancel-key' }]);
+  assert.deepEqual(calls[10]?.args, [
     'request-1', { idempotency_key: 'replay-key' }, { idempotencyKey: 'replay-key' },
   ]);
 });

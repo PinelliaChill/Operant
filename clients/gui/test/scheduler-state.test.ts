@@ -12,7 +12,7 @@ import type { LiveRunRequest, LiveSchedule } from '../src/live45/schedulerAdapte
 
 const schedule: LiveSchedule = {
   id: 'schedule-1', version: 1, name: 'Nightly', triggerKind: 'cron',
-  cronExpression: '0 3 * * *', timerAt: null, timezoneName: 'UTC',
+  cronExpression: '0 3 * * *', timerAt: null, hookEventType: null, watchPath: null, timezoneName: 'UTC',
   workflowId: 'workflow-1', workflowVersion: 1, status: 'enabled',
   dispatchIdempotency: 'idempotent', createdAt: null,
 };

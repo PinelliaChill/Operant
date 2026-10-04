@@ -16,6 +16,7 @@ from operant.api import create_app
 from operant.application.security import PolicyEngine
 from operant.domain.messages import ModelResponse, ModelUsage, ProviderEvent
 from operant.domain.models import ModelProfile
+from operant.domain.scheduler import ScheduleStatus, TriggerKind
 from operant.domain.security import PolicyBundle, PolicyDecision
 from operant.domain.threads import ConversationThread, Item, Turn, UserMessagePayload
 
@@ -164,6 +165,36 @@ def _queued_job(client, project, profile):
     job = next(item for item in projection.json()["jobs"] if item["job_id"] == job_id)
     assert job["run_request_id"]
     return job_id, job
+
+
+def test_maintenance_manual_queue_has_no_automatic_schedule_occurrence(tmp_path):
+    app = create_app(tmp_path / "core.sqlite3")
+    provider = ControlledProvider()
+    with TestClient(app) as client:
+        project, _install, profile = setup(client, app, tmp_path, provider)
+        _stop_scheduler(client, app)
+        job_id, job = _queued_job(client, project, profile)
+
+        schedule_id = "maintenance_schedule_" + job_id.removeprefix("maintenance_")
+        schedule = app.state.scheduler_store.get_schedule(schedule_id)
+        assert schedule.status is ScheduleStatus.ENABLED
+        assert schedule.trigger_kind is TriggerKind.HOOK
+        assert schedule.hook_event_type == "application.signal"
+        assert [request.id for request in app.state.scheduler_store.list_requests()] == [
+            job["run_request_id"]
+        ]
+
+        leader = app.state.scheduler_store.acquire_authority(
+            "scheduler_leader", owner="maintenance-test", ttl_seconds=30
+        )
+        assert (
+            app.state.scheduler_coordinator.trigger_service.materialize_all_due(leader_lease=leader)
+            == ()
+        )
+        assert [request.id for request in app.state.scheduler_store.list_requests()] == [
+            job["run_request_id"]
+        ]
+        assert provider.calls == 0
 
 
 @pytest.mark.parametrize("decision", [PolicyDecision.DENY, PolicyDecision.ASK])

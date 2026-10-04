@@ -23,11 +23,11 @@ test('maps writer state without requiring or exposing lease tokens', async () =>
     }],
     [{
       writer_artifact_id: 'artifact-1', writer_workspace_id: 'workspace-1',
-      artifact_kind: 'patch', changed_paths: ['src/a/main.py'],
+      artifact_kind: 'patch', base_revision: 'abcdef012345', changed_paths: ['src/a/main.py'],
       test_evidence_refs: ['pytest'],
     }],
     [{ conflict_id: 'conflict-1', status: 'open', paths: ['src/a/main.py'] }],
-    [{ merge_run_id: 'merge-1', merge_node_id: 'merge', status: 'review_required' }],
+    [{ merge_run_id: 'merge-1', merge_node_id: 'merge', artifact_ids: ['artifact-1', 'artifact-2'], target_isolation_ref: '/tmp/merge', base_revision: 'abcdef012345', status: 'review_required' }],
   ];
   const calls: string[] = [];
   const next = async (runId: string) => {

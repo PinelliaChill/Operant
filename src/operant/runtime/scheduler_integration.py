@@ -31,6 +31,7 @@ from operant.runtime.scheduler import (
     SchedulerActionGateway,
     WorkflowDispatch,
 )
+from operant.runtime.scheduler_watch import SchedulerWatchService
 
 
 def utc_now() -> datetime:
@@ -474,6 +475,7 @@ class SchedulerCoordinator:
         store: SQLiteSchedulerStore,
         trigger_service: TriggerService,
         worker: SchedulerWorkerPort,
+        watch_service: SchedulerWatchService | None = None,
         owner: str,
         interval_seconds: float = 1.0,
         lease_ttl_seconds: int = 30,
@@ -492,6 +494,7 @@ class SchedulerCoordinator:
         self.store = store
         self.trigger_service = trigger_service
         self.worker = worker
+        self.watch_service = watch_service
         self.owner = owner
         self.interval_seconds = interval_seconds
         self.lease_ttl_seconds = lease_ttl_seconds
@@ -526,7 +529,7 @@ class SchedulerCoordinator:
         try:
             while not self.stop_event.is_set():
                 try:
-                    self.run_cycle()
+                    await self.run_cycle_async()
                     self.last_error_code = None
                 except Exception as exc:
                     self.last_error_code = f"scheduler.{type(exc).__name__}"
@@ -539,13 +542,52 @@ class SchedulerCoordinator:
         now = require_aware_utc(self.clock(), field="scheduler clock")
         leader, writer = self._ensure_leases(now)
         materialized = self.trigger_service.materialize_all_due(leader_lease=leader, now=now)
+        watched = (
+            self.watch_service.materialize_all(leader_lease=leader, now=now)
+            if self.watch_service is not None
+            else ()
+        )
         dispatched = 0
         for _ in range(self.max_dispatches_per_cycle):
             request: RunRequest | None = self.worker.run_one(writer)
             if request is None:
                 break
             dispatched += 1
-        return SchedulerCycleResult(materialized=len(materialized), dispatched=dispatched)
+        return SchedulerCycleResult(
+            materialized=len(materialized) + len(watched), dispatched=dispatched
+        )
+
+    async def run_cycle_async(self) -> SchedulerCycleResult:
+        """Keep slow filesystem and Git probes off the API/model event loop."""
+        now = require_aware_utc(self.clock(), field="scheduler clock")
+        leader, _writer = self._ensure_leases(now)
+        materialized = self.trigger_service.materialize_all_due(leader_lease=leader, now=now)
+        watched = (
+            await asyncio.to_thread(
+                self.watch_service.materialize_all,
+                leader_lease=leader,
+                now=now,
+                should_stop=self.stop_event.is_set,
+            )
+            if self.watch_service is not None
+            else ()
+        )
+        if self.stop_event.is_set():
+            return SchedulerCycleResult(materialized=len(materialized) + len(watched), dispatched=0)
+        # A slow probe may consume the old lease. Renew with the actual time
+        # before dispatch; observe_watch already fences each write after probing.
+        _leader, writer = self._ensure_leases(
+            require_aware_utc(self.clock(), field="scheduler clock")
+        )
+        dispatched = 0
+        for _ in range(self.max_dispatches_per_cycle):
+            request: RunRequest | None = self.worker.run_one(writer)
+            if request is None:
+                break
+            dispatched += 1
+        return SchedulerCycleResult(
+            materialized=len(materialized) + len(watched), dispatched=dispatched
+        )
 
     def _ensure_leases(self, now: datetime) -> tuple[SchedulerLease, SchedulerLease]:
         if self._leader_lease is None or self._writer_lease is None:

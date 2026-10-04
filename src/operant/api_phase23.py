@@ -4,11 +4,12 @@ import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Path as ApiPath
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,7 +54,11 @@ from operant.domain.team import (
 )
 from operant.persistence.graph_team import SQLiteGraphRepository, SQLiteTeamRepository
 from operant.persistence.sqlite import NotFoundError, SQLiteStore
-from operant.protocol import redact_public_data
+from operant.persistence.workflow_suggestions import (
+    SQLiteWorkflowSuggestionRepository,
+    SuggestionConflictError,
+)
+from operant.protocol import redact_public_data, redact_public_text
 
 MAX_CURSOR = 2**63 - 1
 
@@ -84,7 +89,31 @@ class ResumeGraphRunRequest(BaseModel):
 class NodeInputRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     value: Any
-    approval_id: str | None = Field(default=None, max_length=300)
+    wait_token: str = Field(min_length=1, max_length=300)
+
+
+class GraphNodeApprovalDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval_id: str = Field(min_length=1, max_length=300)
+    wait_token: str = Field(min_length=1, max_length=300)
+    approved: bool
+
+
+class GraphNodeApprovalProjection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval_id: str
+    graph_run_id: str
+    node_run_id: str
+    node_id: str
+    wait_token: str
+    action_hash: str
+    category: str
+    detail: str
+    status: str
+    requested_at: str
+    expires_at: str
+    decided_by: str | None
+    decided_at: str | None
 
 
 class RosterBinding(BaseModel):
@@ -176,8 +205,26 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
     team_repository = SQLiteTeamRepository(store)
     team_runtime = TeamRuntime(team_repository)
     compiler = GraphCompiler()
+    suggestion_repository = SQLiteWorkflowSuggestionRepository(store.path)
     for run_id in graph_repository.list_recoverable_run_ids():
-        graph_runtime.recover(run_id)
+        recovered = graph_runtime.recover(run_id)
+        definition = graph_repository.get_definition(
+            recovered.workflow_definition_id, recovered.workflow_definition_version
+        )
+        if (
+            definition.default_policy.get("b24_executor")
+            and recovered.started_at is not None
+            and recovered.status
+            not in {
+                GraphRunStatus.COMPLETED,
+                GraphRunStatus.FAILED,
+                GraphRunStatus.CANCELLED,
+                GraphRunStatus.MANUAL_RECONCILE_REQUIRED,
+            }
+        ):
+            # Recovery reconstructs committed facts; it does not admit a new
+            # executor. Preserve an explicit resumable fence until that command.
+            graph_runtime.interrupt_run(run_id)
 
     app.state.graph_repository = graph_repository
     app.state.graph_runtime = graph_runtime
@@ -204,21 +251,49 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
             raise HTTPException(
                 status_code=422, detail="base workflow id and version must be paired"
             )
+        conversation = None
+        history: tuple[dict[str, Any], ...] = ()
+        if body.conversation_id is not None:
+            try:
+                conversation = suggestion_repository.get(body.conversation_id)
+            except KeyError as exc:
+                raise HTTPException(
+                    status_code=404, detail="suggestion conversation not found"
+                ) from exc
+            if (conversation["team_id"], conversation["team_version"]) != (
+                body.team_id,
+                body.team_version,
+            ):
+                raise HTTPException(status_code=409, detail="conversation Team binding differs")
+            if body.base_workflow_id is not None and (body.base_workflow_id, body.base_version) != (
+                conversation["base_workflow_id"],
+                conversation["base_version"],
+            ):
+                raise HTTPException(status_code=409, detail="conversation base binding differs")
+            history = tuple(conversation["turns"])
         team = team_repository.get_team_definition(body.team_id, body.team_version)
         if team is None:
             raise HTTPException(status_code=404, detail="Team Definition not found")
         base = None
-        if body.base_workflow_id is not None and body.base_version is not None:
+        base_workflow_id = (
+            conversation["base_workflow_id"] if conversation is not None else body.base_workflow_id
+        )
+        base_version = (
+            conversation["base_version"] if conversation is not None else body.base_version
+        )
+        if base_workflow_id is not None and base_version is not None:
             try:
-                base = graph_repository.get_definition(body.base_workflow_id, body.base_version)
+                base = graph_repository.get_definition(base_workflow_id, base_version)
             except KeyError as exc:
                 raise HTTPException(
                     status_code=404, detail="base Workflow Definition not found"
                 ) from exc
+        if history:
+            base = WorkflowDefinition.model_validate(history[-1]["definition"])
         with store._connect() as connection:
             row = connection.execute(
                 "SELECT MAX(version) AS version FROM workflow_definitions WHERE workflow_id = ?",
-                (body.base_workflow_id or "",),
+                (base_workflow_id or "",),
             ).fetchone()
         next_version = int(row["version"] or 0) + 1
         try:
@@ -228,6 +303,7 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
                 team=team,
                 base=base,
                 next_version=next_version,
+                history=history,
             )
         except WorkflowSuggestionError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -250,7 +326,63 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
             raise HTTPException(
                 status_code=422, detail="suggested Workflow changed during public redaction"
             ) from exc
-        return cast(dict[str, Any], safe_response)
+        for node in safe_definition.nodes:
+            if node.node_kind is not NodeKind.SUBWORKFLOW:
+                continue
+            assert node.subworkflow_id is not None and node.subworkflow_version is not None
+            try:
+                child = graph_repository.get_definition(
+                    node.subworkflow_id, node.subworkflow_version
+                )
+            except KeyError as exc:
+                raise HTTPException(
+                    status_code=422, detail="suggested Subworkflow version does not exist"
+                ) from exc
+            if child.status is not WorkflowDefinitionStatus.PUBLISHED:
+                raise HTTPException(
+                    status_code=422, detail="suggested Subworkflow version is not published"
+                )
+        try:
+            conversation_id, turn_id = suggestion_repository.append(
+                conversation_id=body.conversation_id,
+                expected_turn_count=len(history),
+                team_id=body.team_id,
+                team_version=body.team_version,
+                base_workflow_id=base_workflow_id,
+                base_version=base_version,
+                instruction=redact_public_text(body.instruction, max_chars=8_000),
+                suggestion=cast(dict[str, Any], safe_response),
+            )
+        except SuggestionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            **cast(dict[str, Any], safe_response),
+            "conversation_id": conversation_id,
+            "turn_id": turn_id,
+        }
+
+    @app.get(
+        "/v1/graph/workflows/suggestion-conversations",
+        operation_id="listWorkflowSuggestionConversations",
+    )
+    async def list_workflow_suggestion_conversations(
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> dict[str, Any]:
+        return {"items": suggestion_repository.list(limit=limit)}
+
+    @app.get(
+        "/v1/graph/workflows/suggestion-conversations/{conversation_id}",
+        operation_id="getWorkflowSuggestionConversation",
+    )
+    async def get_workflow_suggestion_conversation(
+        conversation_id: str = ApiPath(min_length=1, max_length=300),
+    ) -> dict[str, Any]:
+        try:
+            return suggestion_repository.get(conversation_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="suggestion conversation not found"
+            ) from exc
 
     @app.post("/v1/graph/workflows/drafts", status_code=202)
     async def create_workflow_draft(
@@ -398,7 +530,10 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
 
     def graph_run_projection(run_id: str) -> dict[str, Any]:
         run = graph_repository.get_run(run_id)
+        from operant.application.subworkflow import aggregate_usage
+
         result = run.model_dump(mode="json")
+        result.update(aggregate_usage(graph_repository, run))
         result["current_node_ids"] = [
             node.node_id
             for node in graph_repository.list_node_runs(run_id)
@@ -534,7 +669,11 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
         )
         return _receipt(request, "graph_run", run_id, recovery=recovery)
 
-    @app.post("/v1/graph/runs/{run_id}/nodes/{node_id}/input", status_code=202)
+    @app.post(
+        "/v1/graph/runs/{run_id}/nodes/{node_id}/input",
+        status_code=202,
+        operation_id="provideNodeInput",
+    )
     async def provide_node_input(
         run_id: str, node_id: str, body: NodeInputRequest, request: Request
     ) -> dict[str, Any]:
@@ -554,16 +693,96 @@ def install_phase23_routes(app: FastAPI, store: SQLiteStore) -> None:
                 status_code=409,
                 detail="Approval nodes must be resolved by the durable Approval command",
             )
-        if spec.node_kind is not NodeKind.HUMAN_INPUT or node.wait_token is None:
+        if (
+            spec.node_kind is not NodeKind.HUMAN_INPUT
+            or node.status is not NodeRunStatus.WAITING_INPUT
+            or node.wait_token != body.wait_token
+        ):
             raise HTTPException(status_code=409, detail="Graph node is not waiting for input")
+        if spec.timeout_policy is not None and datetime.now(timezone.utc) >= (
+            node.updated_at + timedelta(seconds=spec.timeout_policy.timeout_seconds)
+        ):
+            raise HTTPException(status_code=409, detail="Graph input boundary has expired")
+        output_names = {port.name for port in spec.output_ports if port.name != "timeout"}
+        if len(output_names) == 1:
+            payload = {next(iter(output_names)): body.value}
+        elif isinstance(body.value, dict) and set(body.value) <= output_names:
+            payload = body.value
+        else:
+            raise HTTPException(status_code=422, detail="Graph input must match output ports")
         try:
             graph_runtime.resolve_boundary(
                 node.id,
-                BoundaryResolution(wait_token=node.wait_token, payload={"value": body.value}),
+                BoundaryResolution(wait_token=body.wait_token, payload=payload),
             )
         except (GraphConflictError, GraphStateError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if definition.default_policy.get("b24_executor"):
+            app.state.b24_schedule_graph(run_id)
         return _receipt(request, "node_run", node.id, recovery="replay_events")
+
+    @app.get(
+        "/v1/graph/runs/{run_id}/nodes/{node_id}/approval",
+        operation_id="getGraphNodeApproval",
+    )
+    async def get_graph_node_approval(run_id: str, node_id: str) -> GraphNodeApprovalProjection:
+        try:
+            run = graph_repository.get_run(run_id)
+            definition = graph_repository.get_definition(
+                run.workflow_definition_id, run.workflow_definition_version
+            )
+            node = next(
+                item for item in graph_repository.list_node_runs(run_id) if item.node_id == node_id
+            )
+            spec = next(item for item in definition.nodes if item.node_id == node_id)
+            if spec.node_kind is not NodeKind.APPROVAL:
+                raise GraphStateError("node is not an Approval boundary")
+            return GraphNodeApprovalProjection.model_validate(
+                graph_repository.get_node_approval(node, spec)
+            )
+        except (KeyError, StopIteration) as exc:
+            raise HTTPException(status_code=404, detail="Graph approval not found") from exc
+        except (GraphConflictError, GraphStateError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        "/v1/graph/runs/{run_id}/nodes/{node_id}/approval/decision",
+        status_code=202,
+        operation_id="decideGraphNodeApproval",
+    )
+    async def decide_graph_node_approval(
+        run_id: str,
+        node_id: str,
+        body: GraphNodeApprovalDecisionRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        try:
+            run = graph_repository.get_run(run_id)
+            definition = graph_repository.get_definition(
+                run.workflow_definition_id, run.workflow_definition_version
+            )
+            node = next(
+                item for item in graph_repository.list_node_runs(run_id) if item.node_id == node_id
+            )
+            spec = next(item for item in definition.nodes if item.node_id == node_id)
+            if spec.node_kind is not NodeKind.APPROVAL:
+                raise GraphStateError("node is not an Approval boundary")
+            approval = graph_repository.decide_node_approval(
+                node,
+                spec,
+                approval_id=body.approval_id,
+                wait_token=body.wait_token,
+                approved=body.approved,
+            )
+        except (KeyError, StopIteration) as exc:
+            raise HTTPException(status_code=404, detail="Graph approval not found") from exc
+        except (GraphConflictError, GraphStateError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if definition.default_policy.get("b24_executor"):
+            app.state.b24_schedule_graph(run_id)
+        return _receipt(
+            request, "graph_node_approval", approval["approval_id"], recovery="replay_events"
+        )
 
     @app.post("/v1/teams/definitions", status_code=202)
     async def create_team_definition(
