@@ -465,7 +465,7 @@ class BoundedGraphExecutor:
                     self._run_locked(run_id),
                     timeout=max(0.001, run.budget_snapshot.timeout_seconds - elapsed),
                 )
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 if self.graph_repository.get_run(run_id).status not in {
                     GraphRunStatus.COMPLETED,
                     GraphRunStatus.FAILED,

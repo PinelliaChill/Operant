@@ -252,18 +252,18 @@ async def test_parent_interrupt_waits_for_delayed_child_cancellation(
     _service_value, _role, _provider, graphs, _teams, _runtime, executor, _parent, _child, run = (
         _family(tmp_path, human=True)
     )
-    cancellation_entered = asyncio.Event()
-    release_cancellation = asyncio.Event()
+    shutdown_requested = asyncio.Event()
+    shutdown_entered = asyncio.Event()
+    release_shutdown = asyncio.Event()
     original_run_locked = executor._run_locked
 
     async def delayed_child_shutdown(run_id: str):
         try:
             return await original_run_locked(run_id)
-        except asyncio.CancelledError:
-            if run_id != run.id:
-                cancellation_entered.set()
-                await release_cancellation.wait()
-            raise
+        finally:
+            if run_id != run.id and shutdown_requested.is_set():
+                shutdown_entered.set()
+                await release_shutdown.wait()
 
     monkeypatch.setattr(executor, "_run_locked", delayed_child_shutdown)
     parent_task = asyncio.create_task(executor.run(run.id))
@@ -272,7 +272,10 @@ async def test_parent_interrupt_waits_for_delayed_child_cancellation(
         root_agent = next(
             node for node in graphs.list_node_runs(run.id) if node.node_id == "root-agent"
         )
-        if root_agent.status is NodeRunStatus.SUCCEEDED:
+        if (
+            root_agent.status is NodeRunStatus.SUCCEEDED
+            and graphs.get_run(child.id).status is GraphRunStatus.WAITING_INPUT
+        ):
             break
         await asyncio.sleep(0.02)
     else:
@@ -280,17 +283,69 @@ async def test_parent_interrupt_waits_for_delayed_child_cancellation(
         pytest.fail("root Agent did not settle before interruption")
     child_task = executor._child_tasks.get(child.id)
     assert child_task is not None
+    assert not child_task.done()
     try:
+        shutdown_requested.set()
         executor.interrupt(run.id)
-        await asyncio.wait_for(cancellation_entered.wait(), 5)
+        await asyncio.wait_for(shutdown_entered.wait(), 5)
         await asyncio.sleep(0)
         assert not parent_task.done(), "parent returned while child shutdown was still pending"
     finally:
-        release_cancellation.set()
+        release_shutdown.set()
     result = await asyncio.wait_for(parent_task, 5)
     assert result.status is GraphRunStatus.INTERRUPTED
     assert child_task.done()
     assert graphs.get_run(child.id).status is GraphRunStatus.INTERRUPTED
+
+
+@pytest.mark.asyncio
+async def test_graph_timeout_persists_failed_run_on_python_310(tmp_path: Path):
+    service, role = _service(tmp_path, RecordingProvider())
+    graphs, teams, runtime, executor = _executor(service)
+    teams.put_team_definition(_team("timeout", role.id, ("root-agent",)))
+    definition = _definition(
+        role.id,
+        role.version,
+        team_id="timeout",
+        nodes=(
+            _node("root-agent", role.id, role.version),
+            NodeSpec(
+                node_id="human",
+                node_kind=NodeKind.HUMAN_INPUT,
+                output_ports=(
+                    PortSpec(name="answer", value_type="string"),
+                    PortSpec(name="timeout", value_type="bool", required=False),
+                ),
+                timeout_policy=TimeoutPolicy(timeout_seconds=30, on_timeout_node_id="fallback"),
+                metadata={"prompt": "Wait for input beyond the Graph budget"},
+            ),
+            NodeSpec(
+                node_id="fallback",
+                node_kind=NodeKind.JOIN,
+                input_ports=(PortSpec(name="timeout", value_type="bool"),),
+            ),
+        ),
+        edges=(
+            EdgeSpec(
+                edge_id="human-timeout",
+                source_node="human",
+                source_port="timeout",
+                target_node="fallback",
+                target_port="timeout",
+            ),
+        ),
+        budget=Budget(
+            max_turns=8,
+            timeout_seconds=1,
+            max_output_tokens=20,
+            max_tool_calls=0,
+        ),
+    )
+    run = runtime.create_run(definition, workspace_or_target=str(tmp_path))
+    result = await asyncio.wait_for(executor.run(run.id), 5)
+    assert result.status is GraphRunStatus.FAILED
+    assert graphs.get_run(run.id).status is GraphRunStatus.FAILED
+    assert all(node.status is not NodeRunStatus.WAITING_INPUT for node in result.node_runs)
 
 
 @pytest.mark.asyncio
