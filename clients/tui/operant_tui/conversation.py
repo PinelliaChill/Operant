@@ -34,12 +34,27 @@ def history_lines(items: list[dict[str, Any]]) -> list[str]:
 
 class ConversationController:
     def __init__(
-        self, controller: Any, *, b2: Any = None, workbench: Any = None, phase3: Any = None
+        self,
+        controller: Any,
+        *,
+        b2: Any = None,
+        workbench: Any = None,
+        phase3: Any = None,
+        phase56: Any = None,
     ) -> None:
         self.core = controller
         self.b2 = b2 or B2Client(controller.core_url)
         self._workbench = workbench
         self._phase3 = phase3
+        self._phase56 = phase56
+
+    @property
+    def phase56(self) -> Any:
+        if self._phase56 is None:
+            from sdk.python_client.phase56_generated import Phase56Client
+
+            self._phase56 = Phase56Client(self.core.core_url)
+        return self._phase56
 
     @property
     def phase3(self) -> Any:
@@ -73,6 +88,30 @@ class ConversationController:
 
     def commands(self) -> dict[str, Any]:
         return self.workbench.list_workbench_commands()
+
+    def extension_commands(self) -> dict[str, Any]:
+        return self.phase56.list_extension_commands()
+
+    def extension_command(
+        self, thread_id: str, name: str, arguments: dict[str, Any], *, key: str
+    ) -> dict[str, Any]:
+        return self.phase56.execute_extension_command(
+            thread_id,
+            {"command": name, "arguments": arguments, "idempotency_key": key},
+            idempotency_key=key,
+        )
+
+    def skill_commands(self, thread_id: str) -> dict[str, Any]:
+        return self.phase56.list_skill_commands(thread_id)
+
+    def skill_command(
+        self, thread_id: str, name: str, arguments: dict[str, Any], *, key: str
+    ) -> dict[str, Any]:
+        return self.phase56.execute_skill_command(
+            thread_id,
+            {"command": name, "arguments": arguments, "idempotency_key": key},
+            idempotency_key=key,
+        )
 
     def command(
         self, thread_id: str, text: str, *, key: str, reviewer_role_id: str | None = None

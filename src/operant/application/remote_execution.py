@@ -38,6 +38,23 @@ def _matches_evidence(actual: Any, expected: Any) -> bool:
     return bool(actual == expected)
 
 
+_LOCAL_OBSERVATION_GENERATION = "job.v1"
+
+
+def observation_hash_for_job(
+    job: RemoteExecutionJob, *, target_ref: str, body: dict[str, Any]
+) -> str:
+    """Bind local observations to one completed observe job, even if pixels are unchanged."""
+    payload: dict[str, Any] = {
+        "target_id": job.target_id,
+        "target_ref": target_ref,
+        "body": body,
+    }
+    if job.arguments.get("observation_generation") == _LOCAL_OBSERVATION_GENERATION:
+        payload["observe_job_id"] = job.job_id
+    return canonical_action_hash(payload)
+
+
 class RemoteAuthorization(Protocol):
     def authorize(
         self,
@@ -214,6 +231,35 @@ class RemoteExecutionController:
         now: datetime,
         extra_capabilities: Sequence[Capability] = (),
     ) -> RemoteExecutionJob:
+        target = self.repository.get_target(target_id)
+        if target.policy_ref.startswith("local-control:") and capability in {
+            RemoteCapability.BROWSER_NAVIGATE,
+            RemoteCapability.BROWSER_SUBMIT,
+            RemoteCapability.BROWSER_SCREENSHOT,
+            RemoteCapability.COMPUTER_INPUT,
+            RemoteCapability.COMPUTER_SCREENSHOT,
+            RemoteCapability.CLIPBOARD_READ,
+            RemoteCapability.CLIPBOARD_WRITE,
+        }:
+            observation_hash = arguments.get("observation_hash")
+            target_ref = arguments.get("target_ref")
+            if not isinstance(observation_hash, str) or not isinstance(target_ref, str):
+                raise ConflictError("local action requires a bound observation")
+            observation = self.repository.get_observation(target_id, observation_hash)
+            if observation.target_ref != target_ref:
+                raise ConflictError("observation target binding does not match")
+            if observation.expires_at <= now.astimezone(timezone.utc):
+                raise ConflictError("observation is expired; observe again before acting")
+            arguments = {
+                **arguments,
+                "observation_content_hash": canonical_action_hash(
+                    {
+                        "target_id": observation.target_id,
+                        "target_ref": observation.target_ref,
+                        "body": observation.body,
+                    }
+                ),
+            }
         security_capability = self._security_capability(capability)
         action = self.authorization.authorize(
             tool="remote_target_job",
@@ -266,6 +312,12 @@ class RemoteExecutionController:
             if kind == "browser"
             else RemoteCapability.COMPUTER_OBSERVE
         )
+        target = self.repository.get_target(target_id)
+        focus_capabilities = (
+            (Capability.COMPUTER_INPUT,)
+            if kind == "computer" and target.policy_ref.startswith("local-control:")
+            else ()
+        )
         return self.create_job(
             target_id=target_id,
             lease_id=lease_id,
@@ -273,10 +325,18 @@ class RemoteExecutionController:
             lease_fencing=lease_fencing,
             capability=capability,
             operation=f"observe_{kind}",
-            arguments={"target_ref": target_ref},
+            arguments={
+                "target_ref": target_ref,
+                **(
+                    {"observation_generation": _LOCAL_OBSERVATION_GENERATION}
+                    if target.policy_ref.startswith("local-control:")
+                    else {}
+                ),
+            },
             idempotency_key=idempotency_key,
             idempotency=RemoteActionIdempotency.IDEMPOTENT,
             now=now,
+            extra_capabilities=focus_capabilities,
         )
 
     def act(
@@ -292,10 +352,15 @@ class RemoteExecutionController:
         if kind not in {"browser", "computer"}:
             raise ValueError("action kind must be browser or computer")
         expected = (
-            {RemoteCapability.BROWSER_NAVIGATE, RemoteCapability.BROWSER_SUBMIT}
+            {
+                RemoteCapability.BROWSER_NAVIGATE,
+                RemoteCapability.BROWSER_SUBMIT,
+                RemoteCapability.BROWSER_SCREENSHOT,
+            }
             if kind == "browser"
             else {
                 RemoteCapability.COMPUTER_INPUT,
+                RemoteCapability.COMPUTER_SCREENSHOT,
                 RemoteCapability.CLIPBOARD_READ,
                 RemoteCapability.CLIPBOARD_WRITE,
             }
@@ -316,6 +381,12 @@ class RemoteExecutionController:
             "arguments": request.arguments,
             "postcondition": request.postcondition,
         }
+        target = self.repository.get_target(request.target_id)
+        focus_capabilities = (
+            (Capability.COMPUTER_INPUT,)
+            if kind == "computer" and target.policy_ref.startswith("local-control:")
+            else ()
+        )
         job = self.create_job(
             target_id=request.target_id,
             lease_id=lease_id,
@@ -327,6 +398,7 @@ class RemoteExecutionController:
             idempotency_key=request.idempotency_key,
             idempotency=request.idempotency,
             now=now,
+            extra_capabilities=focus_capabilities,
         )
         receipt = self.repository.reserve_action_receipt(
             CapabilityActionReceipt(
@@ -401,12 +473,8 @@ class RemoteExecutionController:
             now=now,
         )
         if observation_body is not None and observation_target_ref is not None:
-            observation_hash = canonical_action_hash(
-                {
-                    "target_id": target_id,
-                    "target_ref": observation_target_ref,
-                    "body": observation_body,
-                }
+            observation_hash = observation_hash_for_job(
+                job, target_ref=observation_target_ref, body=observation_body
             )
             self.repository.record_observation(
                 CapabilityObservation(
@@ -446,6 +514,7 @@ class RemoteExecutionController:
         now: datetime,
         idempotency_key: str,
     ) -> tuple[RemoteExecutionJob, ...]:
+        self._require_no_unknown_on_lease(target_id, lease_id)
         self.authorization.authorize(
             tool="remote_target_connector",
             operation="poll",
@@ -462,6 +531,17 @@ class RemoteExecutionController:
             now=now,
             limit=limit,
         )
+
+    def _require_no_unknown_on_lease(self, target_id: str, lease_id: str) -> None:
+        """A checked unknown still requires a new fenced lease before more work."""
+        with self.repository.store._connect() as connection:
+            unknown = connection.execute(
+                "SELECT 1 FROM remote_execution_jobs WHERE target_id=? AND lease_id=? "
+                "AND status='manual_reconcile_required' LIMIT 1",
+                (target_id, lease_id),
+            ).fetchone()
+        if unknown is not None:
+            raise ConflictError("unknown remote action requires a new fenced lease")
 
     def cancel_job(self, job_id: str, *, now: datetime, idempotency_key: str) -> RemoteExecutionJob:
         job = self.repository.get_job(job_id)
@@ -482,16 +562,22 @@ class RemoteExecutionController:
         now: datetime,
         limit: int = 8,
     ) -> tuple[RemoteExecutionResult, ...]:
-        jobs = self.repository.poll_jobs(
-            target_id=connector.target_id,
-            lease_id=connector.lease_id,
-            token=connector.lease_token,
-            fencing=connector.lease_fencing,
-            now=now,
-            limit=limit,
-        )
+        if not 1 <= limit <= 32:
+            raise ValueError("invalid remote job dispatch limit")
         results: list[RemoteExecutionResult] = []
-        for job in jobs:
+        for _ in range(limit):
+            self._require_no_unknown_on_lease(connector.target_id, connector.lease_id)
+            jobs = self.repository.poll_jobs(
+                target_id=connector.target_id,
+                lease_id=connector.lease_id,
+                token=connector.lease_token,
+                fencing=connector.lease_fencing,
+                now=now,
+                limit=1,
+            )
+            if not jobs:
+                break
+            job = jobs[0]
             try:
                 outcome = connector.execute(job)
                 result = self.complete_job(
@@ -524,4 +610,6 @@ class RemoteExecutionController:
                     now=now,
                 )
             results.append(result)
+            if result.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED:
+                break
         return tuple(results)

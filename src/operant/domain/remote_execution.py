@@ -46,8 +46,10 @@ class RemoteCapability(str, Enum):
     BROWSER_OBSERVE = "browser.observe"
     BROWSER_NAVIGATE = "browser.navigate"
     BROWSER_SUBMIT = "browser.submit"
+    BROWSER_SCREENSHOT = "browser.screenshot"
     COMPUTER_OBSERVE = "computer.observe"
     COMPUTER_INPUT = "computer.input"
+    COMPUTER_SCREENSHOT = "computer.screenshot"
     CLIPBOARD_READ = "computer.clipboard.read"
     CLIPBOARD_WRITE = "computer.clipboard.write"
 

@@ -6,10 +6,12 @@ and a short-lived lease token, and it stops on an unknown completion outcome.
 
 from __future__ import annotations
 
+import base64
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -53,15 +55,36 @@ BROWSER_PLUGIN = LocalCapabilityPlugin(
             RemoteCapability.BROWSER_OBSERVE,
             RemoteCapability.BROWSER_NAVIGATE,
             RemoteCapability.BROWSER_SUBMIT,
+            RemoteCapability.BROWSER_SCREENSHOT,
         }
     ),
-    operations=frozenset({"observe_browser", "navigate", "click", "fill"}),
+    operations=frozenset(
+        {"observe_browser", "navigate", "click", "fill", "press_key", "capture_viewport"}
+    ),
 )
 COMPUTER_PLUGIN = LocalCapabilityPlugin(
     plugin_id="operant.macos.computer",
     protocol_version="phase56.v1",
-    capabilities=frozenset({RemoteCapability.COMPUTER_OBSERVE, RemoteCapability.COMPUTER_INPUT}),
-    operations=frozenset({"observe_computer", "click_button"}),
+    capabilities=frozenset(
+        {
+            RemoteCapability.COMPUTER_OBSERVE,
+            RemoteCapability.COMPUTER_INPUT,
+            RemoteCapability.COMPUTER_SCREENSHOT,
+            RemoteCapability.CLIPBOARD_READ,
+            RemoteCapability.CLIPBOARD_WRITE,
+        }
+    ),
+    operations=frozenset(
+        {
+            "observe_computer",
+            "click_button",
+            "type_text",
+            "press_key",
+            "capture_window",
+            "read_clipboard",
+            "write_clipboard",
+        }
+    ),
 )
 
 
@@ -103,6 +126,8 @@ class LocalCapabilityWorker:
         self._verified = False
         self._last_renewed = 0.0
         self.lifecycle_check = lifecycle_check
+        self._paused = Event()
+        self._closed = False
 
     def _url(self, path: str) -> str:
         return f"{self.core_origin}{path}"
@@ -127,6 +152,8 @@ class LocalCapabilityWorker:
         return target
 
     def poll_once(self) -> tuple[RemoteExecutionResult, ...]:
+        if self._closed or self._paused.is_set():
+            return ()
         if self.lifecycle_check is not None:
             self.lifecycle_check()
         if not self._verified:
@@ -149,7 +176,7 @@ class LocalCapabilityWorker:
                 "lease_id": self.connector.lease_id,
                 "token": self.connector.lease_token,
                 "fencing": self.connector.lease_fencing,
-                "limit": 8,
+                "limit": 1,
                 "idempotency_key": f"local-plugin-poll:{uuid4().hex}",
             },
         )
@@ -160,6 +187,7 @@ class LocalCapabilityWorker:
         results: list[RemoteExecutionResult] = []
         for item in items:
             job = RemoteExecutionJob.model_validate(item)
+            artifact_bytes: bytes | None = None
             disabled = False
             if self.lifecycle_check is not None:
                 try:
@@ -179,7 +207,9 @@ class LocalCapabilityWorker:
                 )
             else:
                 try:
-                    result = self.connector.execute(job).result
+                    outcome = self.connector.execute(job)
+                    result = outcome.result
+                    artifact_bytes = outcome.artifact_bytes
                 except RemoteOutcomeUnknown:
                     potentially_side_effecting = job.capability in {
                         RemoteCapability.BROWSER_NAVIGATE,
@@ -198,6 +228,11 @@ class LocalCapabilityWorker:
                         ),
                         error_code="plugin.outcome_unknown",
                     )
+            if result.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED:
+                # The completion acknowledgement can fail. Stop this process
+                # before sending it, so a caller cannot poll another job on
+                # the old lease while the first outcome remains uncertain.
+                self.pause()
             completion = self.client.post(
                 self._url(
                     f"/v1/remote-targets/{self.connector.target_id}/jobs/{job.job_id}/complete"
@@ -211,6 +246,11 @@ class LocalCapabilityWorker:
                     "status": result.status.value,
                     "artifact_ref": result.artifact_ref,
                     "artifact_sha256": result.artifact_sha256,
+                    "artifact_base64": (
+                        base64.b64encode(artifact_bytes).decode("ascii")
+                        if artifact_bytes is not None
+                        else None
+                    ),
                     "postcondition": result.postcondition,
                     "error_code": result.error_code,
                 },
@@ -221,16 +261,39 @@ class LocalCapabilityWorker:
             if acknowledged.job_id != job.job_id or acknowledged.status is not result.status:
                 raise RemoteOutcomeUnknown("Core returned a mismatched capability receipt")
             results.append(result)
+            if result.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED:
+                break
         return tuple(results)
 
     def run(self, *, poll_interval_seconds: float = 0.5) -> None:
         if not 0.1 <= poll_interval_seconds <= 30:
             raise ValueError("poll interval is out of bounds")
-        while True:
+        while not self._paused.is_set() and not self._closed:
             self.poll_once()
-            time.sleep(poll_interval_seconds)
+            self._paused.wait(poll_interval_seconds)
+
+    def pause(self) -> None:
+        """Stop polling for handoff while keeping the dedicated browser alive."""
+        self._paused.set()
+
+    def resume(self, *, lease_id: str, lease_token: str, lease_fencing: int) -> None:
+        """Bind a new fenced lease after the manager has released the old one."""
+        if self._closed or not self._paused.is_set():
+            raise ValueError("worker must be paused and open before resume")
+        if not lease_id or len(lease_token) < 16 or lease_fencing <= self.connector.lease_fencing:
+            raise ValueError("resumed worker requires a newer fenced lease")
+        self.connector.lease_id = lease_id
+        self.connector.lease_token = lease_token
+        self.connector.lease_fencing = lease_fencing
+        self._verified = False
+        self._last_renewed = 0.0
+        self._paused.clear()
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._paused.set()
         if isinstance(self.connector, LocalBrowserConnector):
             self.connector.browser.close()
         if self._owns_client:

@@ -159,6 +159,11 @@ from operant.persistence.sqlite import (
     SQLiteStore,
     WorkflowExecutionLease,
 )
+from operant.plugins.local_extensions import (
+    ExtensionModelProvider,
+    dispatch_persisted_runtime_event,
+    registry_for_database,
+)
 from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
 from operant.providers.base import ModelProvider
 from operant.runtime.loop import AgentLoop, RuntimeEvent, ToolActionClaim
@@ -591,7 +596,8 @@ class ApplicationService:
         if session_lease_ttl_seconds <= 0:
             raise ValueError("session lease TTL must be positive")
         self.store = store
-        self.provider = provider
+        self.extension_registry = registry_for_database(store.path)
+        self.provider = ExtensionModelProvider(provider, self.extension_registry)
         self.tool_extension_factory = tool_extension_factory
         # These are instance-owned so a service cannot inherit a manager or
         # factory from another ApplicationService instance.
@@ -3359,11 +3365,29 @@ class ApplicationService:
         references: Collection[ReferenceRequest] = (),
         _admission_granted: bool = False,
         memory_enabled: bool = True,
+        selected_skill_ids: Collection[str] | None = None,
+        expected_skill_digests: Mapping[str, str] | None = None,
         memory_run_id: str | None = None,
         _agent_instance_id: str | None = None,
         _collaboration_context: Callable[[], str] | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         session = self.get_session(session_id)
+        if selected_skill_ids is not None:
+            if not memory_enabled:
+                raise ValueError("explicit Skill invocation requires the memory runtime")
+            if not selected_skill_ids:
+                raise ValueError("explicit Skill invocation requires a selected Skill")
+            source = session.role_snapshot.config_sources.get("skill_ids")
+            if (
+                source
+                and source != f"role_base:{session.role_snapshot.role_id}"
+                and not set(selected_skill_ids).issubset(session.role_snapshot.skill_ids)
+            ):
+                raise PermissionError("Skill is outside the frozen Session binding")
+            if expected_skill_digests is not None and set(expected_skill_digests) != set(
+                selected_skill_ids
+            ):
+                raise PermissionError("selected Skill digest binding changed")
         if session.role_snapshot.config_workspace_ref is not None and (
             str(Path(workspace).resolve(strict=True)) != session.role_snapshot.config_workspace_ref
         ):
@@ -3507,16 +3531,23 @@ class ApplicationService:
                     normalized_workspace,
                     agent.id,
                     selected_ids=(
-                        session.role_snapshot.skill_ids
+                        selected_skill_ids
+                        if selected_skill_ids is not None
+                        else session.role_snapshot.skill_ids
                         if session.role_snapshot.config_sources.get("skill_ids")
                         and session.role_snapshot.config_sources.get("skill_ids")
                         != f"role_base:{session.role_snapshot.role_id}"
                         else None
                     ),
+                    expected_digests=(
+                        dict(expected_skill_digests) if expected_skill_digests is not None else None
+                    ),
                 )
                 if manager is not None and memory_enabled
                 else ""
             )
+            if selected_skill_ids is not None and not skill_context:
+                raise ValueError("explicit Skill invocation has no authorized Skill context")
             experience_run = None
             if manager is not None:
                 from operant.memory_plugins.experience_runtime import begin_experience_run
@@ -3821,6 +3852,24 @@ class ApplicationService:
                         history_turn=history_turn,
                     )
                 yield runtime_event
+                extension_results = await dispatch_persisted_runtime_event(
+                    self.extension_registry,
+                    event_type=runtime_event.event_type,
+                    turn=runtime_event.turn,
+                    payload=runtime_event.payload,
+                )
+                for extension_result in extension_results:
+                    extension_event = self._persist_runtime_event(
+                        session.id,
+                        agent.id,
+                        RuntimeEvent(
+                            event_type="extension.runtime_dispatched",
+                            turn=runtime_event.turn,
+                            payload=extension_result,
+                        ),
+                        history_turn=history_turn,
+                    )
+                    yield extension_event
                 if runtime_event.event_type == "agent.cancelled":
                     final_status = AgentStatus.CANCELLED
                     break

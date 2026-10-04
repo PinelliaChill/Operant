@@ -1859,16 +1859,72 @@ class MemoryManager:
         elif cmd.action == "artifact_restore":
             self.service.restore_artifact(artifact_id, capability=token)
 
+    def list_invocable_skills(self, workspace: str) -> list[dict[str, str]]:
+        """List installed project Skills whose managed bytes still match the grant."""
+        from operant.plugins.protocol import compute_package_digest
+        from operant.skills import SkillDiscovery
+
+        state = self._load()
+        project = next(
+            (
+                p
+                for p in state["projects"]
+                if not p["archived"]
+                and self.store.get_workspace_initialization_by_id(p["workspace_id"]).workspace_ref
+                == workspace
+            ),
+            None,
+        )
+        if project is None:
+            return []
+        eligible = [
+            skill
+            for skill in state["skills"]
+            if skill["state"] == "installed"
+            and project["project_id"] in skill.get("project_ids", [])
+        ]
+        skills_root = self.root / "skills"
+        if not eligible or not skills_root.is_dir():
+            return []
+        candidates = {
+            candidate.relative_directory: candidate
+            for candidate in SkillDiscovery((skills_root,)).discover().candidates
+        }
+        result: list[dict[str, str]] = []
+        for skill in eligible:
+            skill_id = str(skill["skill_id"])
+            candidate = candidates.get(skill_id)
+            if candidate is None:
+                continue
+            if compute_package_digest(self.root / "skills" / skill_id) != state.get(
+                "skill_digests", {}
+            ).get(skill_id):
+                continue
+            result.append(
+                {
+                    "skill_id": skill_id,
+                    "name": candidate.name,
+                    "description": candidate.description,
+                    "digest": str(state["skill_digests"][skill_id]),
+                }
+            )
+        return result
+
     def begin_skill_run(
-        self, workspace: str, run_id: str, selected_ids: Collection[str] | None = None
+        self,
+        workspace: str,
+        run_id: str,
+        selected_ids: Collection[str] | None = None,
+        expected_digests: dict[str, str] | None = None,
     ) -> str:
         from operant.plugins.protocol import compute_package_digest
         from operant.skills import SkillDiscovery
 
+        state = self._load() if expected_digests is not None else self._state
         project = next(
             (
                 p
-                for p in self._state["projects"]
+                for p in state["projects"]
                 if not p["archived"]
                 and self.store.get_workspace_initialization_by_id(p["workspace_id"]).workspace_ref
                 == workspace
@@ -1879,7 +1935,7 @@ class MemoryManager:
             return ""
         selected = [
             s
-            for s in self._state["skills"]
+            for s in state["skills"]
             if s["state"] == "installed" and project["project_id"] in s.get("project_ids", [])
         ]
         if selected_ids is not None:
@@ -1890,12 +1946,18 @@ class MemoryManager:
                     "package_unavailable", "bound Skill is not enabled for this project"
                 )
             selected = [skill for skill in selected if skill["skill_id"] in requested]
+            if expected_digests is not None and set(expected_digests) != requested:
+                raise PermissionError("selected Skill digest binding changed")
         content = []
         snapshot_ids = set()
         for skill in selected:
-            if compute_package_digest(self.root / "skills" / skill["skill_id"]) != self._state[
-                "skill_digests"
-            ].get(skill["skill_id"]):
+            if expected_digests is not None and state.get("skill_digests", {}).get(
+                skill["skill_id"]
+            ) != expected_digests.get(skill["skill_id"]):
+                raise PermissionError("selected Skill digest changed after approval")
+            if compute_package_digest(self.root / "skills" / skill["skill_id"]) != state.get(
+                "skill_digests", {}
+            ).get(skill["skill_id"]):
                 raise PluginError("package_unavailable", "installed Skill contents changed")
             candidates = SkillDiscovery((self.root / "skills",)).discover().candidates
             candidate = next(

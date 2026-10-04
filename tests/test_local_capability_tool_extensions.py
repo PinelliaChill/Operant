@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,8 @@ from operant.domain.security import Capability
 from operant.persistence.sqlite import SQLiteStore
 from operant.plugins.capability_registry import CapabilityPluginRegistry
 from operant.providers.openai_compatible import OpenAICompatibleProvider
-from operant.remote.local_worker import BROWSER_PLUGIN
+from operant.remote.local_worker import BROWSER_PLUGIN, COMPUTER_PLUGIN
+from operant.remote.operator import CapabilityLeaseBinding
 from operant.remote.tool_extensions import local_capability_tool_extensions
 from operant.tools.workspace import WorkspaceTools
 
@@ -60,6 +62,67 @@ def test_local_browser_tool_refuses_incomplete_lease(
             tmp_path / "core.sqlite3",
             ToolPolicy(allowed_tools=("ext_browser_observe",)),
         )
+
+
+def test_manager_binding_exposes_granted_tool_without_process_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key in ("TARGET_ID", "LEASE_ID", "LEASE_FENCING", "LEASE_TOKEN"):
+        monkeypatch.delenv(f"OPERANT_BROWSER_{key}", raising=False)
+    registry = CapabilityPluginRegistry(tmp_path / "capability-plugins")
+    registry.install(BROWSER_PLUGIN.plugin_id, ("http://127.0.0.1:8765",))
+    registry.set_enabled(BROWSER_PLUGIN.plugin_id, True)
+    binding = CapabilityLeaseBinding(
+        target_id="target-test",
+        lease_id="lease-test",
+        token="test-lease-token-123456",
+        fencing=1,
+    )
+    extensions = local_capability_tool_extensions(
+        tmp_path / "core.sqlite3",
+        ToolPolicy(allowed_tools=("ext_browser_observe", "ext_browser_capture_viewport")),
+        bindings={"browser": binding},
+        core_origin="http://127.0.0.1:8000",
+    )
+    assert set(extensions) == {"ext_browser_observe", "ext_browser_capture_viewport"}
+    assert "test-lease-token" not in repr(extensions)
+
+
+@pytest.mark.parametrize(
+    ("plugin_id", "binding_kind", "tool_name", "allowed_target"),
+    [
+        (BROWSER_PLUGIN.plugin_id, "browser", "ext_browser_observe", "http://127.0.0.1:8765"),
+        (COMPUTER_PLUGIN.plugin_id, "computer", "ext_computer_observe", "com.apple.TextEdit"),
+    ],
+)
+def test_tool_closure_rejects_old_generation_after_quick_disable_enable(
+    tmp_path: Path,
+    plugin_id: str,
+    binding_kind: str,
+    tool_name: str,
+    allowed_target: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = CapabilityPluginRegistry(tmp_path / "capability-plugins")
+    registry.install(plugin_id, (allowed_target,))
+    registry.set_enabled(plugin_id, True)
+    binding = CapabilityLeaseBinding(
+        target_id="target", lease_id="lease", token="test-lease-token-123456", fencing=1
+    )
+    extensions = local_capability_tool_extensions(
+        tmp_path / "core.sqlite3",
+        ToolPolicy(allowed_tools=(tool_name,)),
+        bindings={binding_kind: binding},
+        core_origin="http://127.0.0.1:8000",
+    )
+    monkeypatch.setattr(
+        "operant.remote.tool_extensions._client",
+        lambda _origin: pytest.fail("stale binding reached Core transport"),
+    )
+    registry.set_enabled(plugin_id, False)
+    registry.set_enabled(plugin_id, True)
+    with pytest.raises(PermissionError, match="authorization changed"):
+        asyncio.run(extensions[tool_name].execute({}))
 
 
 def test_role_cli_grants_and_revokes_versioned_extension_tool(

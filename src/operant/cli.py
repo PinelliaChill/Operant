@@ -51,6 +51,7 @@ evaluation_app = typer.Typer(no_args_is_help=True, help="管理并顺序运行�
 evaluation_suite_app = typer.Typer(no_args_is_help=True, help="创建和查询 Evaluation Suite。")
 evaluation_result_app = typer.Typer(no_args_is_help=True, help="查询 Evaluation Result。")
 capability_plugin_app = typer.Typer(no_args_is_help=True, help="管理内置浏览器与电脑能力插件。")
+extension_app = typer.Typer(no_args_is_help=True, help="管理本机隔离扩展包。")
 app.add_typer(model_app, name="model")
 app.add_typer(role_app, name="role")
 app.add_typer(session_app, name="session")
@@ -60,6 +61,7 @@ evaluation_app.add_typer(evaluation_suite_app, name="suite")
 evaluation_app.add_typer(evaluation_result_app, name="result")
 app.add_typer(evaluation_app, name="evaluation")
 app.add_typer(capability_plugin_app, name="capability-plugin")
+app.add_typer(extension_app, name="extension")
 app.add_typer(browser_app, name="capability-browser")
 app.add_typer(computer_app, name="capability-computer")
 console = Console()
@@ -179,6 +181,75 @@ def _external_tool_registry() -> Any:
     from operant.plugins.external_tool import ExternalToolRegistry
 
     return ExternalToolRegistry(database_path().expanduser().resolve().parent / "external-tools")
+
+
+@extension_app.command("inspect", help="检查本地扩展清单与摘要，不安装。")
+def inspect_extension(source: Path = typer.Option(..., "--source")) -> None:
+    from operant.plugins.external_tool import ExternalToolRegistry
+
+    manifest, digest = ExternalToolRegistry.inspect(source)
+    if manifest.host_api_version != "operant-local-extension.v1":
+        raise typer.BadParameter("请使用 capability-plugin inspect-external-tool 检查旧 Tool 包")
+    console.print_json(
+        json.dumps(
+            {"manifest": manifest.model_dump(mode="json"), "package_digest": digest},
+            ensure_ascii=False,
+        )
+    )
+
+
+@extension_app.command("install", help="按已核对摘要安装，默认禁用。")
+def install_extension(
+    source: Path = typer.Option(..., "--source"),
+    expected_sha256: str = typer.Option(..., "--expected-sha256"),
+) -> None:
+    from operant.plugins.external_tool import ExternalToolRegistry
+    from operant.plugins.local_extensions import public_record
+
+    manifest, digest = ExternalToolRegistry.inspect(source)
+    if manifest.host_api_version != "operant-local-extension.v1" or digest != expected_sha256:
+        raise typer.BadParameter("扩展协议或包摘要不匹配")
+    record = _external_tool_registry().install(source, expected_digest=expected_sha256)
+    console.print_json(json.dumps(public_record(record), ensure_ascii=False))
+
+
+@extension_app.command("enable", help="沙箱验证通过后按类别授权启用。")
+def enable_extension(
+    plugin_id: str,
+    grant: list[str] = typer.Option(
+        ..., "--grant", help="可重复指定 tool/command/event/provider/runtime/capability_driver。"
+    ),
+) -> None:
+    from operant.plugins.local_extensions import public_record
+
+    record = _external_tool_registry().set_enabled(plugin_id, True, granted_categories=tuple(grant))
+    console.print_json(json.dumps(public_record(record), ensure_ascii=False))
+
+
+@extension_app.command("disable", help="停用并阻止后续调用。")
+def disable_extension(plugin_id: str) -> None:
+    from operant.plugins.local_extensions import public_record
+
+    record = _external_tool_registry().set_enabled(plugin_id, False)
+    console.print_json(json.dumps(public_record(record), ensure_ascii=False))
+
+
+@extension_app.command("list", help="查看扩展类别、版本和授权状态。")
+def list_extensions() -> None:
+    from operant.plugins.local_extensions import public_record
+
+    console.print_json(
+        json.dumps(
+            [public_record(record) for record in _external_tool_registry().list()],
+            ensure_ascii=False,
+        )
+    )
+
+
+@extension_app.command("uninstall", help="卸载已禁用扩展代码。")
+def uninstall_extension(plugin_id: str) -> None:
+    _external_tool_registry().uninstall(plugin_id)
+    console.print(f"已卸载 {plugin_id}；受管理数据目录保留供人工核对。")
 
 
 @capability_plugin_app.command(
@@ -412,7 +483,13 @@ def capability_worker(
         )
 
     def check_lifecycle() -> None:
-        registry.get(plugin_id, require_enabled=True)
+        current = registry.get(plugin_id, require_enabled=True)
+        if (
+            current.generation != record.generation
+            or current.source_digest != record.source_digest
+            or current.allowed_targets != record.allowed_targets
+        ):
+            raise PermissionError("capability plugin authorization changed; restart Worker")
 
     worker.lifecycle_check = check_lifecycle
     try:

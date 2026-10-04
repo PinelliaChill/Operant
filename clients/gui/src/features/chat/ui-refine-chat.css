@@ -61,6 +61,9 @@
 .ui-chat .live-command-suggestions button { display: flex; justify-content: space-between; gap: 12px; min-width: 0; border: 0; background: transparent; padding: 8px; color: var(--text-primary); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
 .ui-chat .live-command-suggestions button:hover, .ui-chat .live-command-suggestions button:focus-visible { background: var(--accent-subtle); }
 .ui-chat .live-command-suggestions small { color: var(--text-secondary); }
+.ui-chat .live-extension-arguments { display: grid; gap: 6px; width: 100%; min-width: 0; font-size: 12px; color: var(--text-primary); }
+.ui-chat .live-extension-arguments .input { min-height: 70px; }
+.ui-chat .live-extension-arguments small { color: var(--text-secondary); overflow-wrap: anywhere; max-height: 80px; overflow-y: auto; }
 .ui-chat .live-reviewer-role { display: grid; gap: 5px; padding: 4px 0 10px; color: var(--text-secondary); font-size: var(--font-size-xs); }
 .ui-chat .live-reviewer-role .select { max-width: 420px; }
 .ui-chat .live-reviewer-role span { color: var(--text-secondary); }

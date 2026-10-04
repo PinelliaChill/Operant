@@ -49,6 +49,111 @@ def _job(
     )
 
 
+def test_browser_viewport_capture_is_bound_to_observation_and_keeps_png_out_of_receipt() -> None:
+    class FakeBrowser:
+        def observe(self) -> dict[str, object]:
+            return {"url": "about:blank", "title": "Example"}
+
+        def capture_viewport(self, *, expected_observation: dict[str, object]) -> bytes:
+            assert expected_observation == self.observe()
+            return (
+                b"\x89PNG\r\n\x1a\n"
+                + b"\x00" * 8
+                + (50).to_bytes(4, "big")
+                + (30).to_bytes(4, "big")
+            )
+
+    connector = LocalBrowserConnector(
+        target_id="local-browser-test",
+        lease_id="lease-test",
+        lease_token="test-token-1234567890",
+        lease_fencing=1,
+        browser=FakeBrowser(),  # type: ignore[arg-type]
+    )
+    current_hash = observation_hash(
+        connector.target_id, connector.target_id, connector.browser.observe()
+    )
+    rejected = connector.execute(
+        _job(
+            RemoteCapability.BROWSER_SCREENSHOT,
+            "capture_viewport",
+            {"observation_hash": "0" * 64, "arguments": {}},
+        )
+    )
+    assert rejected.result.status is RemoteJobStatus.FAILED
+    captured = connector.execute(
+        _job(
+            RemoteCapability.BROWSER_SCREENSHOT,
+            "capture_viewport",
+            {"observation_hash": current_hash, "arguments": {}},
+        )
+    )
+    assert captured.result.status is RemoteJobStatus.SUCCEEDED
+    assert captured.result.postcondition["width"] == 50
+    assert captured.result.postcondition["post_observation_hash"] == current_hash
+    assert captured.artifact_bytes is not None
+    assert "artifact_bytes" not in captured.result.model_dump_json()
+
+
+def test_browser_input_seal_stays_bound_to_one_observation_generation() -> None:
+    class FakeBrowser:
+        fills = 0
+
+        def observe(self) -> dict[str, object]:
+            return {"url": "about:blank", "elements": [{"selector": "#draft"}]}
+
+        def fill(
+            self, selector: str, value: str, *, expected_observation: dict[str, object]
+        ) -> dict[str, object]:
+            assert selector == "#draft" and value == "safe synthetic text"
+            assert expected_observation == self.observe()
+            self.fills += 1
+            return {"filled": True}
+
+    browser = FakeBrowser()
+    connector = LocalBrowserConnector(
+        target_id="local-browser-test",
+        lease_id="lease-test",
+        lease_token="test-token-1234567890",
+        lease_fencing=1,
+        browser=browser,  # type: ignore[arg-type]
+    )
+    content_hash = observation_hash(connector.target_id, connector.target_id, browser.observe())
+    old_generation, fresh_generation = "1" * 64, "2" * 64
+
+    def sealed(observation_generation: str) -> str:
+        return seal_browser_input(
+            "safe synthetic text",
+            token=connector.lease_token,
+            target_id=connector.target_id,
+            lease_id=connector.lease_id,
+            fencing=connector.lease_fencing,
+            observation_hash=observation_generation,
+            selector="#draft",
+            idempotency_key="fill-3",
+        )
+
+    def request(value_sealed: str) -> RemoteExecutionJob:
+        return _job(
+            RemoteCapability.BROWSER_SUBMIT,
+            "fill",
+            {
+                "observation_hash": fresh_generation,
+                "observation_content_hash": content_hash,
+                "arguments": {"selector": "#draft", "value_sealed": value_sealed},
+            },
+        )
+
+    rejected = connector.execute(request(sealed(old_generation)))
+    assert rejected.result.status is RemoteJobStatus.FAILED
+    assert browser.fills == 0
+    assert (
+        connector.execute(request(sealed(fresh_generation))).result.status
+        is RemoteJobStatus.SUCCEEDED
+    )
+    assert browser.fills == 1
+
+
 def test_browser_policy_rejects_private_and_unapproved_hosts() -> None:
     policy = BrowserTargetPolicy(frozenset({"https://10.0.0.1"}))
     with pytest.raises(BrowserTargetError, match="approved origin"):
@@ -300,6 +405,17 @@ def test_real_chrome_observe_navigate_click_and_stale_guard() -> None:
             current_hash = observation_hash(
                 "local-browser-test", "local-browser-test", navigated.result.postcondition
             )
+            screenshot = connector.execute(
+                _job(
+                    RemoteCapability.BROWSER_SCREENSHOT,
+                    "capture_viewport",
+                    {"observation_hash": current_hash, "arguments": {}},
+                )
+            )
+            assert screenshot.result.status is RemoteJobStatus.SUCCEEDED
+            assert screenshot.artifact_bytes is not None
+            assert screenshot.artifact_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+            assert screenshot.result.postcondition["post_observation_hash"] == current_hash
             protected = connector.execute(
                 _job(
                     RemoteCapability.BROWSER_SUBMIT,

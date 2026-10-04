@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-10-04（Beta 任务 3；记录身份：Codex 主线程，保留原历史署名）
+> 最后更新：2026-10-04（Beta 任务 4；记录身份：Codex 主线程，保留原历史署名）
 >
-> 对应源码：`codex/beta-orchestration-task3`，基线 `main@c5b2b778`，包含已合并任务 1、2 和本次任务 3；SQLite 为 v22。本次没有更新已安装 App 或真实用户库。
+> 对应源码：`codex/beta-local-extensions-task4`，基线 `main@8384a4e3`，包含已合并任务 1～3 和本次任务 4；SQLite 为 v22。本次没有更新已安装 App 或真实用户库。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -15,7 +15,7 @@
 
 ## 当前版本速览
 
-- **当前源码**：会话工作台、H-03～H-06 编排、H-08/H-09/H-12 配置与任务控制、第四部分受信能力驱动和隔离第三方 Tool 已合并主线。本分支补齐 Human Input、Approval、Wait、Subworkflow、Artifact、Merge、持久工作流建议对话及文件/Git watcher；合并状态和验收以 Git 与任务 3 记录核对。
+- **当前源码**：会话工作台、H-03～H-06 编排、H-08/H-09/H-12 配置与任务控制、受信能力驱动和隔离第三方 Tool 已合并主线。本分支补齐六类隔离扩展、动态命令和本机控制 GUI、日常输入、截图/剪贴板与接管；合并状态和验收以 Git 与扩展验收记录核对。
 - **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
 - **会话工作台**：[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 提供会话内子 Agent、定向消息、历史树，以及 GUI/TUI 引用、命令和上下文入口，详见 §2.1。
 - **交付边界**：本机候选安装不等于正式签名、公证或自动更新发布；主线合并也不会自动更新已安装 App。历史批次的失败与验收范围仍保留。
@@ -97,10 +97,10 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 | 召回/治理 | 中文及标识符检索、Memory Pack、预算、刷新/撤销；历史搜索、冲突/时效、维护任务与失败处理 | B2-4 Host性能原指标未达；自动治理不等于模型自证或任意冲突自动合并 |
 | 经验与共享 | 经验Skill验证发布/回退、Writer晋级、授权共享/撤销、数据集移交与Remote最小包 | 跨项目共享须显式授权，未合并知识不自动晋级；生产Remote未因此验收 |
 | Graph/Team | 正式执行 14 类节点；Live 画布编辑/连线/版本差异/运行投影；Team消息、Mailbox及任务/工件板、隔离Writer | 每个执行图至少含一个 Agent 且锁定匹配 Team；Writer 需受信 Git worktree，未知写入不重放；会话式委派使用独立工作台运行时 |
-| 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile，ASK 自动审核并留审计，模型不可用转人工；Cron/Timer/应用信号及文件/Git Hook 派发正式 Graph Agent | 审批模型默认仍为人工模式；硬 DENY 始终优先。Watcher 仅本地显式工作区；动态Slash、通用插件驱动仍有缺口 |
+| 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile；Cron/Timer/应用信号及文件/Git Hook；六类本地隔离扩展、动态 Slash 与客户端安装管理 | 审批模型默认仍为人工模式；硬 DENY 始终优先。Watcher 仅本地显式工作区；扩展代码不进入 Core 进程 |
 | 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Task 1 已接入文件正文、Diff、本机 PTY、普通 Artifact/会话引用及 TUI 配置、Goal/Plan；隔离 GUI/TUI 正式模型读取和原生 WebView 文件、Diff、历史、审批、终端输入/输出/回收均已验收 |
 | Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | 公网、容器联合流程与完整跨设备产品不外推 |
-| 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；隔离第三方 Tool 包经私有目录、摘要和真实沙箱探测后才启用；Chrome 专用 Profile 经正式 Target/Action Gateway 执行，真实模型已验收临时网页观察、导航、非密码输入和点击 | macOS 临时测试 App 已经真实回环 HTTP Core/Worker/生成客户端完成实际点击；第三方 Command/Event/Provider/Runtime 与驱动未开放，GUI 直接调用和生产远程未验收；临时 Profile 回收不等于全局资源治理 |
+| 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；Core 管理会话、观察、输入、截图/剪贴板及人工接管；六类隔离扩展可接入正式服务与能力提案 | Beta 任务 4 的真实验收范围以扩展验收记录为准；生产远程仍属任务 5，不从本机回环推定跨设备完成 |
 | 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证 | 非正式签名/公证发布，无完整安装向导、DMG或自动更新；本机启动适配另有安装记录 |
 
 可复用的最近证据：B2-7范围与负结果见[任务包](design/b2-7/task-package.md)；
@@ -160,6 +160,8 @@ Docker 检查有 1 项跳过。上述为原实现批次的验证结果，历史�
 
 ## 2.3 本机能力插件增量
 
+以下原始增量描述保留第四部分交付时的范围；Beta 任务 4 的当前实现见 2.3.1。
+
 `plugins/capability_registry.py` 仅允许显式安装随 Core 发布的 Chrome Browser 与 macOS Computer 适配器，记录版本、源码摘要和目标白名单。默认禁用；启用前和 Worker 每次取任务前重验源码摘要及状态，禁用后不再接收新任务。`plugins/external_tool.py` 为独立的第三方 Tool 包入口：只复制 `manifest.json`/`plugin.py` 到私有目录，绑定摘要、版本和工具命名空间，默认禁用；启用与每次调用前用实际 macOS 沙箱探测文件/网络拒绝，其他平台没有隔离器则拒绝启用。代码不进入 Core 进程；进程不继承 Core 凭据环境，输入/输出、CPU/内存/时长受限，返回内容标为不可信。真实临时包的包外文件、回环网络和环境密钥负例通过；格式与命令见[第三方 Tool 包说明](design/extension-runtime-governance/external-tool-package.md)。`tools/extensions.py` 提供版本化的工具注册边界；Role 工具白名单和 Host 注入必须同时满足才能向 Agent 暴露工具，CLI `role add --extension-tool` / `role update --enable-extension-tool`、`--disable-extension-tool` 提供显式版本化授权。副作用工具仍经 Agent 工具回执、Policy/Approval；内置 Browser/Computer 另经 Core Capability Gateway。Agent 侧审计与 `model.completed` 事件只存扩展参数摘要，活动轮次内才持有执行参数。记忆 PluginHost 仍是独立的记忆 SDK；第三方 Command/Event/Provider/Runtime 与驱动不因 Tool 包交付而被宣称完成。
 
 第三方 Tool 的托管 data/state/logs/tmp 按安装 ID 分区。卸载后旧数据保留供检查；同名插件重装获得新目录和新 Role 授权名，不能继承旧数据或授权。
@@ -169,6 +171,24 @@ Docker 检查有 1 项跳过。上述为原实现批次的验证结果，历史�
 新 Profile 在 Chrome 启动前于其目录外写所有权记录，避免 Chrome 启动或退出时重新写目录造成无标记残留。退出时只向仍可确认存活的专用进程组发终止信号，确认整个组消失后才删除 Profile；若父进程已退出但组仍在，则保留目录和归属记录。预览与一小时后回收都检查主 PID 及进程组；启动时没有成功记录 PID 的目录保守保留供人工核对。当前尚有一次旧失败运行留下的无标记 Profile，约 4.4 MB；不按名称猜测归属并自动删除，详情见[验收记录](design/extension-runtime-governance/acceptance.md)。
 
 macOS Computer 适配器只观察前台白名单 App 的窗口/按钮，并以同一窗口和观察哈希执行指定按钮点击；窗口/按钮文本脱敏，原文只在本机短暂复核，变化哈希保证脱敏后仍能识别窗口变化。系统设置、终端、钥匙串和已列入保护集的密码管理器硬拒绝。无辅助功能权限时明确失败。当前没有键盘输入、剪贴板、屏幕截图或通用电脑控制。两种适配器均需先经现有 Target 管理流程注册、授予 Lease，再运行本机 Worker；本部分新增按 Job ID 读取持久结果的 Phase56 Schema/生成客户端，以及浏览器和电脑的正式协议 CLI。Agent 可通过显式 Role 工具白名单和只在进程环境中注入的目标租约使用类型化工具；`gpt-6-luna` 已经正式 Session 完成真实 Chrome 临时网页的观察、导航、非密码输入和点击，三次有副作用动作经测试场景内逐项审批。Live Remote 页面可按 Job ID 读取持久回执并提示人工核对，不发起能力动作。GUI 直接操控、日常电脑 App 的操作范围、第三方 Command/Event/Provider/Runtime 与驱动仍未验收，不能将此增量说成完整 H-15/H-16 或已验收跨设备产品。
+
+### 2.3.1 Beta 任务 4：本机操控与六类扩展
+
+`operant-local-extension.v1` 清单在旧 Tool 包兼容入口上增加 Command、Event、Provider、Runtime、Capability Driver；每类显式授权，安装 ID 绑定授权名、摘要和数据目录。`plugins/local_extensions.py` 统一隔离调用，第三方代码仍仅在受限子进程运行。Command 在会话中生成正式事件和历史项，API 用持久 Command Journal 回读成功结果，未知结果阻止同键重放；GUI/TUI 从服务端读取命令注册版本。Event 只获得脱敏持久事件的有限字段。Provider 仅能选择同来源且经 Discovery 确认的模型，不能改变凭据、安全策略或系统提示。Runtime 只能收窄当前输出预算。Capability Driver 只能提出类型化动作，不能直接获得租约或操控接口；提案与实际动作分别经 Action Gateway，同键审批复用固定提案。
+
+`api_extensions.py` 提供本机安装前检查、摘要绑定安装、分类授权、停用、卸载、命令和驱动发现。GUI 的扩展面板及动态 Slash 使用这些正式接口；客户端安装状态来自 Core，不用本地缓存代替。卸载保留旧安装数据供检查，重新安装不继承旧授权。Linux 尚无已验收的隔离器时拒绝启用。
+
+`api_skill_commands.py` 的 Thread 级 `skill-commands` Query 和 Command 提供 `/skill:<安装 ID>`；GUI/TUI 复用动态命令补全、JSON 参数及反馈。发现和执行重新读取持久项目授权、启用状态、冻结 Role 绑定及包摘要，审批摘要绑定本轮读取的 Skill 上下文。显式调用 `disable-model-invocation` Skill 不改变自动注入规则，也不修改 Role 或扩大工具权限；调用经正式 Session Run、预算与取消链路，事件和 Thread 历史保留安装 ID、摘要和命令来源。持久 Journal 只回放已有结果，未知状态不能自动重放。
+
+`application/local_control.py` 与 `api_local_control.py` 管理 Core 所有的本机会话；内置适配器仍经 Target、短期 Lease/fencing、观察哈希和持久 Job/Receipt 执行。GUI 可选择白名单 App、观察、发送有界动作、读取证据、暂停并接管、重新授权恢复及关闭。恢复必须重新观察；停用会关闭会话。Chrome 增加固定按键和视口 PNG；macOS 增加非密码输入、固定按键、精确窗口 PNG 及有界剪贴板读写。选择的 App 参与目标身份绑定，不能用同键重开到另一目标；系统敏感 App 仍硬拒绝。
+
+安装、启停、卸载和未知结果人工核对使用持久 `command_executions` 收据；审批完成后以同键提交，已成功的同键请求在 Core 重启后也返回原结果。指纹不同的请求拒绝，执行结果不明时不自动重放。会话、租约和证据正文仍是有界临时状态；持久管理收据不把已关闭会话恢复成运行中。
+
+每次本机观测 Job 产生独立观察代次，即使页面或窗口内容不变也生成新证据；旧证据不续期。Worker 另以 Core 从该证据计算的内容摘要核对当前界面，密封输入仍绑定观察代次。内置插件的持久 `generation` 在安装及实际启停时变化；会话、Agent Tool 和独立 Worker 都核对它，跨 CLI/API 快速停用再启用也不能继续使用旧租约。
+
+输入由租约密钥加密封装，SQLite 不保存输入明文。PNG/剪贴板正文只保留在五分钟有效期的有界内存缓存，到期拒绝读取并由后台循环主动清除；读证据前检查 Core 的成功回执、摘要与对应能力审批。非幂等未知动作使会话失败，持久未知列表跨会话、跨 Core 重启阻止开新会话。操作者核对实际效果后，提交结果及说明摘要形成审计；原任务保留 `manual_reconcile_required`，不自动重放。真实验收结果和支持的日常范围见[扩展验收记录](design/extension-runtime-governance/acceptance.md)。
+
+独立 Worker 和 Core 派发每次只领取一个 Job；非幂等结果未知后立即停发该目标，未执行的后续 Job 保持排队。Worker 在发回执前即暂停，即使回执断线也不能继续操作。Core 从持久 Job 检查同目标、同租约的未知状态，重启或记录人工核对不使旧租约恢复；后续工作须重新授权取得新的 fencing。原未知 Job 不自动重放，旧排队 Job 按租约撤销或过期进入终态。
 
 ## 2.4 日常工作台补齐：文件、终端与客户端入口
 

@@ -31,6 +31,32 @@ def thread(tid="parent", parent=None):
 
 
 class ConversationTests(unittest.TestCase):
+    def test_extension_commands_use_generated_phase56_client_and_same_retry_key(self):
+        calls = []
+
+        class Phase56:
+            def list_extension_commands(self):
+                return {
+                    "registry_version": "operant-local-extension.v1",
+                    "commands": [{"name": "ext_demo_status__abc123def456"}],
+                }
+
+            def execute_extension_command(self, thread_id, request, *, idempotency_key):
+                calls.append((thread_id, request, idempotency_key))
+                return {"command": request["command"], "status": "completed", "result": {}}
+
+        controller = ConversationController(SimpleNamespace(), b2=object(), phase56=Phase56())
+        self.assertEqual(
+            controller.extension_commands()["commands"][0]["name"],
+            "ext_demo_status__abc123def456",
+        )
+        controller.extension_command(
+            "thread-1", "ext_demo_status__abc123def456", {"label": "today"}, key="retry-1"
+        )
+        self.assertEqual(calls[0][0], "thread-1")
+        self.assertEqual(calls[0][1]["arguments"], {"label": "today"})
+        self.assertEqual(calls[0][1]["idempotency_key"], calls[0][2])
+
     def test_configuration_uses_effective_scope_revision_and_replace_patch(self):
         calls = []
 
@@ -272,6 +298,12 @@ class ConversationScreenTests(unittest.IsolatedAsyncioTestCase):
             def commands(self):
                 return {"commands": []}
 
+            def extension_commands(self):
+                return {"commands": []}
+
+            def skill_commands(self, tid):
+                return {"commands": []}
+
             def catalog(self):
                 return {"projects": [], "roles": [], "threads": [thread()]}
 
@@ -352,6 +384,12 @@ class ConversationScreenTests(unittest.IsolatedAsyncioTestCase):
             def commands(self):
                 return {"commands": []}
 
+            def extension_commands(self):
+                return {"commands": []}
+
+            def skill_commands(self, tid):
+                return {"commands": []}
+
             def catalog(self):
                 return {"projects": [], "roles": [], "threads": [thread()]}
 
@@ -416,6 +454,12 @@ class ConversationScreenTests(unittest.IsolatedAsyncioTestCase):
             saves = []
 
             def commands(self):
+                return {"commands": []}
+
+            def extension_commands(self):
+                return {"commands": []}
+
+            def skill_commands(self, tid):
                 return {"commands": []}
 
             def catalog(self):
@@ -559,6 +603,12 @@ class ConversationScreenTests(unittest.IsolatedAsyncioTestCase):
             def commands(self):
                 return {"commands": []}
 
+            def extension_commands(self):
+                return {"commands": []}
+
+            def skill_commands(self, tid):
+                return {"commands": []}
+
             def child_agents(self, parent):
                 return [{"thread_id": "child", "status": self.task_status}]
 
@@ -600,6 +650,12 @@ class ConversationScreenTests(unittest.IsolatedAsyncioTestCase):
             fail = False
 
             def commands(self):
+                return {"commands": []}
+
+            def extension_commands(self):
+                return {"commands": []}
+
+            def skill_commands(self, tid):
                 return {"commands": []}
 
             def collaboration(self, tid):

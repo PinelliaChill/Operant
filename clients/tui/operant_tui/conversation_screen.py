@@ -239,8 +239,22 @@ class ConversationScreen(Screen[None]):
         await self.refresh_catalog()
         self.set_interval(3, self.refresh_active)
         try:
-            registry = await asyncio.to_thread(self.controller.commands)
-            self.command_registry = registry["commands"]
+            registry, extension_registry = await asyncio.gather(
+                asyncio.to_thread(self.controller.commands),
+                asyncio.to_thread(self.controller.extension_commands),
+            )
+            self.command_registry = [
+                *registry["commands"],
+                *(
+                    {
+                        "canonical_name": f"/{command['name']}",
+                        "aliases": [],
+                        "extension_name": command["name"],
+                        "parameters": command["parameters"],
+                    }
+                    for command in extension_registry["commands"]
+                ),
+            ]
             self.query_one("#conversation-command-choice", Select).set_options(
                 [(c["canonical_name"], c["canonical_name"]) for c in self.command_registry]
             )
@@ -430,6 +444,7 @@ class ConversationScreen(Screen[None]):
         try:
             history = await asyncio.to_thread(self.controller.history, thread)
             collaboration = await asyncio.to_thread(self.controller.collaboration, thread["id"])
+            skills = await asyncio.to_thread(self.controller.skill_commands, thread["id"])
             parent_children = (
                 await asyncio.to_thread(self.controller.child_agents, thread["parent_thread_id"])
                 if thread.get("parent_thread_id") is not None
@@ -441,6 +456,19 @@ class ConversationScreen(Screen[None]):
             return
         if version != self.selection_version:
             return
+        self.command_registry = [c for c in self.command_registry if not c.get("skill_name")]
+        self.command_registry.extend(
+            {
+                "canonical_name": f"/{command['command']}",
+                "aliases": [],
+                "skill_name": command["command"],
+                "parameters": command["parameters"],
+            }
+            for command in skills["commands"]
+        )
+        self.query_one("#conversation-command-choice", Select).set_options(
+            [(c["canonical_name"], c["canonical_name"]) for c in self.command_registry]
+        )
         task_states = {
             child["thread_id"]: child["status"]
             for child in [*collaboration["children"], *parent_children]
@@ -614,6 +642,69 @@ class ConversationScreen(Screen[None]):
             self.status("清理将从下一轮上下文移除旧消息，历史仍保留。再次执行以确认。")
             return
         self.pending_clear = None
+        token, _, raw_arguments = message.partition(" ")
+        skill = next(
+            (
+                command
+                for command in self.command_registry
+                if command.get("skill_name") and command["canonical_name"] == token
+            ),
+            None,
+        )
+        if skill is not None:
+            try:
+                arguments = json.loads(raw_arguments) if raw_arguments.strip() else {}
+                if (
+                    not isinstance(arguments, dict)
+                    or set(arguments) != {"prompt"}
+                    or not isinstance(arguments["prompt"], str)
+                    or not 1 <= len(arguments["prompt"]) <= 4000
+                ):
+                    raise ValueError("Skill 参数必须是仅含 prompt 的 JSON 对象（1–4000 字符）")
+                action = f"skill-command:{thread_id}:{message}"
+                result = await asyncio.to_thread(
+                    self.controller.skill_command,
+                    thread_id,
+                    skill["skill_name"],
+                    arguments,
+                    key=self.keys.get(action),
+                )
+                self.keys.release(action)
+                if self.selected and self.selected["id"] == thread_id:
+                    await self.load_selected()
+                    self.status(f"[{result['status']}] {result.get('result', '')[:500]}")
+            except Exception as exc:
+                self.fail(exc)
+            return
+        extension = next(
+            (
+                command
+                for command in self.command_registry
+                if command.get("extension_name") and command["canonical_name"] == token
+            ),
+            None,
+        )
+        if extension is not None:
+            try:
+                arguments = json.loads(raw_arguments) if raw_arguments.strip() else {}
+                if not isinstance(arguments, dict):
+                    raise ValueError("扩展命令参数必须是 JSON 对象")
+                action = f"extension-command:{thread_id}:{message}"
+                result = await asyncio.to_thread(
+                    self.controller.extension_command,
+                    thread_id,
+                    extension["extension_name"],
+                    arguments,
+                    key=self.keys.get(action),
+                )
+                self.keys.release(action)
+                self.status(
+                    f"[{result['status']}] "
+                    + json.dumps(result.get("result", {}), ensure_ascii=False)[:500]
+                )
+            except Exception as exc:
+                self.fail(exc)
+            return
         selected_role = self.query_one("#conversation-review-role", Select).value
         reviewer = selected_role if isinstance(selected_role, str) else None
         action = f"command:{thread_id}:{message}:{reviewer}"

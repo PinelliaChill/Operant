@@ -33,11 +33,14 @@ from operant.api_b2 import B2Cancellation, B2Discovery, install_b2_routes
 from operant.api_b2_3 import install_b2_3_routes
 from operant.api_beta import install_beta_container_routes, install_beta_gateway_routes
 from operant.api_configuration import install_configuration_routes
+from operant.api_extensions import install_extension_routes
+from operant.api_local_control import install_local_control_routes
 from operant.api_phase23 import install_phase23_routes
 from operant.api_phase45 import install_phase45_routes
 from operant.api_phase56_control import Authorizer, install_phase56_control_routes
 from operant.api_phase56_target import install_phase56_target_routes
 from operant.api_phase56_writer import install_phase56_writer_routes
+from operant.api_skill_commands import install_skill_command_routes
 from operant.api_task_control import install_task_control_routes
 from operant.api_workbench_agents import install_workbench_agent_routes
 from operant.api_workbench_context import install_workbench_context_routes
@@ -1522,6 +1525,14 @@ def create_app(
         }:
             # These routes own durable bounded command journals. Do not persist
             # a second snapshot or truncate their typed projection results.
+            return await call_next(request)
+        if request.url.path.startswith(("/v1/local-control/", "/v1/extensions")) or (
+            request.url.path.startswith("/v1/workbench/threads/")
+            and request.url.path.endswith(("/extension-commands", "/skill-commands"))
+        ):
+            # These commands own their fenced Job/lifecycle journals. In
+            # particular, ASK must not become a permanently replayed failed
+            # generic receipt that prevents the approved exact action.
             return await call_next(request)
         if (
             request.method == "POST"
@@ -3690,6 +3701,19 @@ def create_app(
             connection_registry=gateway_connection_repository,
         )
     install_phase56_target_routes(app, store, action_gateway=app.state.phase45_action_gateway)
+    install_local_control_routes(app, service, app.state.phase45_action_gateway, local_authorizer)
+    install_extension_routes(
+        app,
+        service,
+        action_gateway=app.state.phase45_action_gateway,
+        local_authorizer=local_authorizer,
+    )
+    install_skill_command_routes(
+        app,
+        service,
+        action_gateway=app.state.phase45_action_gateway,
+        local_authorizer=local_authorizer,
+    )
     install_phase56_writer_routes(
         app,
         store,

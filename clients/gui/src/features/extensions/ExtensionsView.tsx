@@ -1,10 +1,4 @@
-/**
- * 插件与MCP中心（v8：MCP Server 与插件配置）
- * - 支持 Model Context Protocol (MCP) Server (stdio / sse) 与系统插件管理；
- * - 页头「+ 添加 插件/MCP」弹窗：配置服务名称、协议模式、启动命令或 SSE 端点；
- * - 卡片列表：展示 MCP 状态、可用工具数、启动命令/URL、版本与启停开关；
- * - 提供「测试连接」交互，验证 MCP 进程/端点健康度。
- */
+/** Live 扩展页使用正式 Core Client 管理本地驱动、外部扩展和 MCP。 */
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -35,6 +29,8 @@ import {
 } from '../../live45/phase45State';
 import { buildMcpServerRequest } from '../../live45/mcpForm';
 import { McpSafetyPanels } from './McpSafetyPanels';
+import { LocalExtensionsPanel } from './LocalExtensionsPanel';
+import { LocalControlPanel } from './LocalControlPanel';
 import './live-extensions.css';
 import { LiveManagementView } from '../management/LiveManagementView';
 
@@ -454,8 +450,11 @@ const LiveExtensionsView: React.FC = () => {
   if (phase === 'loading' && servers.length === 0) return <div className="live-route-state" role="status"><RefreshCw size={22} aria-hidden="true" /><h1>正在读取 MCP Projection…</h1><p>Live 模式不会用演示插件填充页面。</p></div>;
 
   return <div className="section-view" data-client-mode="live">
-    <header className="section-header mcp-live-header"><div><h1 className="section-title">MCP 服务</h1><p className="section-sub">Phase 5A MCP 配置、审批、调用 Receipt 与生命周期；所有副作用仍由 Action Gateway 裁决。</p></div><div className="mcp-live-actions"><Link className="btn btn-secondary" to="/projects?tab=plugins"><Puzzle size={14} aria-hidden="true" />记忆插件</Link><button type="button" className="btn btn-secondary" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} aria-hidden="true" />刷新</button><button type="button" className="btn btn-primary" onClick={() => setModalOpen(true)} disabled={sideEffectsDisabled}><Plus size={14} aria-hidden="true" />添加 MCP</button></div></header>
+    <header className="section-header mcp-live-header"><div><h1 className="section-title">扩展与本机操控</h1><p className="section-sub">管理本地扩展、浏览器和桌面操作，以及 MCP 服务；所有副作用由 Action Gateway 裁决。</p></div><div className="mcp-live-actions"><Link className="btn btn-secondary" to="/projects?tab=plugins"><Puzzle size={14} aria-hidden="true" />记忆插件</Link><button type="button" className="btn btn-secondary" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} aria-hidden="true" />刷新</button><button type="button" className="btn btn-primary" onClick={() => setModalOpen(true)} disabled={sideEffectsDisabled}><Plus size={14} aria-hidden="true" />添加 MCP</button></div></header>
     <div className="section-scroll"><div className="section-inner">
+      <LocalExtensionsPanel />
+      <LocalControlPanel />
+      <section className="local-panel" aria-labelledby="mcp-section-title"><h2 id="mcp-section-title">MCP 服务</h2><p>查看连接状态、调用工具及审批结果。</p></section>
       <div className="mcp-route-alerts" aria-live="polite">{unavailableMessage && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{unavailableMessage}</div>}{error && !unavailableMessage && !mcpIntervention && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{error.code}：{error.message}</div>}{actionLabel && <div className="live-alert" role="status">{actionLabel}处理中，请等待 Core 确认。</div>}{toolError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{toolError}</div>}</div>
       <McpSafetyPanels
         intervention={mcpIntervention}

@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -34,6 +35,9 @@ class CapabilityPluginRecord(BaseModel):
     allowed_targets: tuple[str, ...] = Field(min_length=1, max_length=100)
     state: Literal["disabled", "enabled"] = "disabled"
     installed_at: AwareDatetime
+    # Old v1 registry records predate this field. Their first real state
+    # transition receives a fresh generation and invalidates old bindings.
+    generation: str = Field(default="legacy", pattern=r"^(?:legacy|[0-9a-f]{32})$")
 
 
 _PLUGIN_BY_ID: dict[str, LocalCapabilityPlugin] = {
@@ -150,6 +154,7 @@ class CapabilityPluginRegistry:
             source_digest=_source_digest(plugin_id),
             allowed_targets=targets,
             installed_at=datetime.now(timezone.utc),
+            generation=uuid4().hex,
         )
         with self._locked():
             records = self._read()
@@ -180,9 +185,14 @@ class CapabilityPluginRegistry:
             record = records.get(plugin_id)
             if record is None:
                 raise KeyError(plugin_id)
-            if record.source_digest != _source_digest(plugin_id):
+            if enabled and record.source_digest != _source_digest(plugin_id):
                 raise ValueError("bundled capability plugin source changed; reinstall is required")
-            updated = record.model_copy(update={"state": "enabled" if enabled else "disabled"})
+            state = "enabled" if enabled else "disabled"
+            updated = (
+                record.model_copy(update={"state": state, "generation": uuid4().hex})
+                if record.state != state
+                else record
+            )
             records[plugin_id] = updated
             self._write(records)
             return updated

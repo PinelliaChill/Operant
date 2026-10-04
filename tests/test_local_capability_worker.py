@@ -751,7 +751,10 @@ def test_simulated_computer_plugin_uses_core_gateway_and_durable_result(tmp_path
         assert not failures
 
 
-def test_unknown_browser_click_requires_manual_reconciliation_even_if_marked_idempotent() -> None:
+@pytest.mark.parametrize("ack_fails", [False, True])
+def test_unknown_browser_click_requires_manual_reconciliation_even_if_marked_idempotent(
+    ack_fails: bool,
+) -> None:
     target = RemoteTargetRegistration(
         target_id="browser-test",
         display_name="Browser test",
@@ -779,7 +782,14 @@ def test_unknown_browser_click_requires_manual_reconciliation_even_if_marked_ide
         idempotency_key="click-test",
         idempotency=RemoteActionIdempotency.IDEMPOTENT,
     )
+    later = job.model_copy(
+        update={
+            "job_id": "remote_job_later_after_unknown",
+            "idempotency_key": "click-after-unknown",
+        }
+    )
     submitted: list[dict[str, object]] = []
+    polled_limits: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
@@ -787,9 +797,16 @@ def test_unknown_browser_click_requires_manual_reconciliation_even_if_marked_ide
         if request.url.path.endswith("/renew"):
             return httpx.Response(200, json={})
         if request.url.path.endswith("/poll"):
-            return httpx.Response(200, json={"items": [job.model_dump(mode="json")]})
+            polled_limits.append(json.loads(request.content)["limit"])
+            # Even a malformed overfull page must not execute the second job.
+            return httpx.Response(
+                200,
+                json={"items": [job.model_dump(mode="json"), later.model_dump(mode="json")]},
+            )
         payload = json.loads(request.content)
         submitted.append(payload)
+        if ack_fails:
+            raise httpx.ConnectError("synthetic completion acknowledgement lost", request=request)
         result = RemoteExecutionResult(
             result_id=payload["result_id"],
             job_id=job.job_id,
@@ -804,20 +821,32 @@ def test_unknown_browser_click_requires_manual_reconciliation_even_if_marked_ide
         lease_id = "lease-test"
         lease_token = "token-test-1234567890"
         lease_fencing = 1
+        calls: list[str] = []
 
-        def execute(self, _: RemoteExecutionJob) -> None:
+        def execute(self, candidate: RemoteExecutionJob) -> None:
+            self.calls.append(candidate.job_id)
             raise RemoteOutcomeUnknown("unknown click outcome")
 
         def cancel(self, _: str) -> None:
             pass
 
+    connector = UnknownConnector()
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         worker = LocalCapabilityWorker(
             core_origin="http://127.0.0.1:8000",
             plugin=BROWSER_PLUGIN,
-            connector=UnknownConnector(),  # type: ignore[arg-type]
+            connector=connector,  # type: ignore[arg-type]
             client=client,
         )
-        result = worker.poll_once()[0]
-    assert result.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+        if ack_fails:
+            with pytest.raises(httpx.ConnectError, match="acknowledgement lost"):
+                worker.poll_once()
+        else:
+            result = worker.poll_once()[0]
+        assert worker.poll_once() == ()
+    if not ack_fails:
+        assert result.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
     assert submitted[0]["status"] == "manual_reconcile_required"
+    assert len(submitted) == 1
+    assert connector.calls == [job.job_id]
+    assert polled_limits == [1]
