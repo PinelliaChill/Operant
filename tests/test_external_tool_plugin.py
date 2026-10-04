@@ -149,6 +149,17 @@ def test_external_tool_source_directory_is_pinned_and_not_a_symlink(tmp_path: Pa
     assert registry.install(source, expected_digest=digest).package_digest == digest
 
 
+def test_external_tool_current_directory_remains_valid_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "print('{}')\n")
+    registry = ExternalToolRegistry(tmp_path / "external-tools")
+    monkeypatch.chdir(source)
+    manifest, digest = registry.inspect(Path("."))
+    assert manifest.plugin_id == "sample_tool"
+    assert registry.install(Path("."), expected_digest=digest).package_digest == digest
+
+
 def test_external_tool_rejects_unbound_package_files(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "print('{}')\n")
     registry = ExternalToolRegistry(tmp_path / "external-tools")

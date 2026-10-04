@@ -192,7 +192,11 @@ def _source_package_bytes(source: Path) -> tuple[bytes, bytes]:
     if ".." in Path(requested).parts:
         raise ValueError("external Tool source path may not traverse directories")
     candidate = os.path.abspath(requested)
-    parent = os.path.abspath(os.path.dirname(requested))
+    parent = (
+        os.path.dirname(os.getcwd())
+        if os.path.normpath(requested) == "."
+        else os.path.abspath(os.path.dirname(requested))
+    )
     if not candidate.startswith(parent.rstrip(os.sep) + os.sep):
         raise ValueError("external Tool source path leaves its selected parent")
     try:
