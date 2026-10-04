@@ -188,16 +188,23 @@ def _regular_bytes(path: Path, maximum: int) -> bytes:
 def _source_package_bytes(source: Path) -> tuple[bytes, bytes]:
     """Read only the two named files beneath one pinned, non-symlink directory."""
 
-    expanded = source.expanduser()
-    if ".." in expanded.parts:
+    requested = os.path.expanduser(os.fspath(source))
+    if ".." in Path(requested).parts:
         raise ValueError("external Tool source path may not traverse directories")
+    candidate = os.path.abspath(requested)
+    parent = os.path.abspath(os.path.dirname(requested))
+    if not candidate.startswith(parent.rstrip(os.sep) + os.sep):
+        raise ValueError("external Tool source path leaves its selected parent")
     try:
-        directory = os.open(expanded, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        directory = os.open(candidate, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as exc:
         raise ValueError("external Tool source must be a real directory") from exc
     try:
-        if not stat.S_ISDIR(os.fstat(directory).st_mode):
+        directory_info = os.fstat(directory)
+        if not stat.S_ISDIR(directory_info.st_mode):
             raise ValueError("external Tool source must be a directory")
+        if directory_info.st_uid not in {os.getuid(), 0} or directory_info.st_mode & 0o022:
+            raise PermissionError("external Tool source directory is not trusted")
         contents: list[bytes] = []
         for name, maximum in (("manifest.json", _MAX_MANIFEST), ("plugin.py", _MAX_SCRIPT)):
             try:

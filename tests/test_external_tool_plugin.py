@@ -139,6 +139,10 @@ def test_external_tool_source_directory_is_pinned_and_not_a_symlink(tmp_path: Pa
         registry.inspect(source)
     (source / "plugin.py").unlink()
     (source / "plugin.py").write_text("print('{}')\n")
+    source.chmod(0o777)
+    with pytest.raises(PermissionError, match="not trusted"):
+        registry.inspect(source)
+    source.chmod(0o700)
     assert registry.list() == ()
     manifest, digest = registry.inspect(source)
     assert manifest.plugin_id == "sample_tool"
