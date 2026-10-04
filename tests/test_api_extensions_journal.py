@@ -17,6 +17,49 @@ from operant.plugins.external_tool import ExternalToolRegistry
 from operant.plugins.protocol import SandboxEvidence, SandboxProbe
 
 
+def test_extension_http_inspect_and_install_use_validated_source(tmp_path: Path) -> None:
+    source = _source(tmp_path / "source")
+    alias = tmp_path / "source-alias"
+    alias.symlink_to(source, target_is_directory=True)
+    registry = ExternalToolRegistry(tmp_path / "external-tools")
+    store = SQLiteStore(tmp_path / "core.sqlite3")
+    store.initialize()
+    service = SimpleNamespace(extension_registry=registry, store=store)
+
+    class Gateway:
+        def guard(self, **_kwargs: Any) -> tuple[Any, Any, Any]:
+            return (
+                SimpleNamespace(action_hash="a" * 64, policy_version="test"),
+                SimpleNamespace(decision=PolicyDecision.ALLOW, lease=object()),
+                None,
+            )
+
+        def consume(self, _lease: Any, _action: Any) -> None:
+            return None
+
+    app = FastAPI()
+    api_extensions.install_extension_routes(
+        app, service, action_gateway=Gateway(), local_authorizer=lambda _request: True
+    )
+    client = TestClient(app)
+    blocked = client.post("/v1/extensions/inspect", json={"source": str(alias)})
+    assert blocked.status_code == 400
+    inspected = client.post("/v1/extensions/inspect", json={"source": str(source)})
+    assert inspected.status_code == 200, inspected.text
+    digest = inspected.json()["package_digest"]
+    installed = client.post(
+        "/v1/extensions/install",
+        json={
+            "source": str(source),
+            "expected_sha256": digest,
+            "idempotency_key": "validated-source-once",
+        },
+    )
+    assert installed.status_code == 200, installed.text
+    assert installed.json()["package_digest"] == digest
+    assert registry.get("sample_ext").package_digest == digest
+
+
 def test_extension_command_journal_replays_success_and_blocks_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

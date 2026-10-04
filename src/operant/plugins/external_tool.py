@@ -185,6 +185,40 @@ def _regular_bytes(path: Path, maximum: int) -> bytes:
         return content
 
 
+def _source_package_bytes(source: Path) -> tuple[bytes, bytes]:
+    """Read only the two named files beneath one pinned, non-symlink directory."""
+
+    expanded = source.expanduser()
+    if ".." in expanded.parts:
+        raise ValueError("external Tool source path may not traverse directories")
+    try:
+        directory = os.open(expanded, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise ValueError("external Tool source must be a real directory") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(directory).st_mode):
+            raise ValueError("external Tool source must be a directory")
+        contents: list[bytes] = []
+        for name, maximum in (("manifest.json", _MAX_MANIFEST), ("plugin.py", _MAX_SCRIPT)):
+            try:
+                descriptor = os.open(
+                    name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+                )
+            except OSError as exc:
+                raise ValueError("external Tool package contains an invalid file") from exc
+            with os.fdopen(descriptor, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+                    raise ValueError("external Tool package contains an invalid file")
+                content = stream.read(maximum + 1)
+                if len(content) > maximum:
+                    raise ValueError("external Tool package file is too large")
+                contents.append(content)
+        return contents[0], contents[1]
+    finally:
+        os.close(directory)
+
+
 def _digest(manifest: bytes, script: bytes) -> str:
     value = hashlib.sha256()
     for name, content in (
@@ -322,16 +356,12 @@ class ExternalToolRegistry:
 
     @staticmethod
     def inspect(source: Path) -> tuple[ExternalToolManifest, str]:
-        source = source.expanduser().resolve(strict=True)
-        manifest_bytes = _regular_bytes(source / "manifest.json", _MAX_MANIFEST)
-        script_bytes = _regular_bytes(source / "plugin.py", _MAX_SCRIPT)
+        manifest_bytes, script_bytes = _source_package_bytes(source)
         manifest = ExternalToolManifest.model_validate_json(manifest_bytes)
         return manifest, _digest(manifest_bytes, script_bytes)
 
     def install(self, source: Path, *, expected_digest: str | None = None) -> ExternalToolRecord:
-        source = source.expanduser().resolve(strict=True)
-        manifest_bytes = _regular_bytes(source / "manifest.json", _MAX_MANIFEST)
-        script_bytes = _regular_bytes(source / "plugin.py", _MAX_SCRIPT)
+        manifest_bytes, script_bytes = _source_package_bytes(source)
         manifest = ExternalToolManifest.model_validate_json(manifest_bytes)
         package_digest = _digest(manifest_bytes, script_bytes)
         if expected_digest is not None and expected_digest != package_digest:

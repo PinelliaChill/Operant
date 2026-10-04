@@ -134,3 +134,7 @@ GUI 已实际完成六类包检查、安装及授权、动态 Slash 命令发现
 最终管理链路已通过实际 GUI Modal：六类同源包取消/Escape 保持 installed，确认经 ASK 后卸载；会话 `local-control-7afab5459f30f2f1317ee0c8` 取消保持 active 且无 Job，确认经 ASK 与原幂等键完成 closed；浏览器驱动经 GUI 停用、确认卸载。主线程独立正式 HTTP 回读 `gui/management-final-main-readback.json` 为 passed：插件和外部扩展列表为空、全部会话 closed、未知 Job 列表为空。`gui/source-manifest-delivery.json` 固定 441 份生产输入，相对最终后端冻结仅两处确认 Modal 的 GUI 文件变化；未受影响的模型、TextEdit 与协议证据继续有效。整组功能场景已覆盖，最终完整 CI 与正常 PR 合并仍为交付门禁。
 
 `gui/modal-cleanup-final.json` 保存上述新 Modal 的取消/确认、GUI ASK、同键重试及最终状态；前端生产代码已冻结，Modal 改动后的 GUI 145/145、类型、构建、diff 全通过。专用会话 Chrome 已回收，`agent-browser --session task4-gui close` 返回 Browser closed，session list 已无该会话；临时 Tauri 与 TextEdit 亦已退出，用户日常 Chrome 与其他会话保留。
+
+首轮冻结提交 `5a6a720` 的 CI `37204778544` 已完成：Python 3.10/3.12 各 1293 通过、16 跳过、1 警告，TUI 各 32，GUI 145/类型/构建通过。CodeQL 三个分析作业成功，但汇总检查 `111443664434` 报 alert 40（ref `refs/pull/37/head`）源路径注入；查询 merge ref 的空结果不能排除该告警。已在全部作业汇总后修复：inspect/install 固定已打开的目录 FD，只读固定 manifest.json/plugin.py，O_NOFOLLOW/O_NONBLOCK 和普通文件/长度校验拒绝符号链接、`..` 及 FIFO；保留可信本地来源和原协议。14 项定向通过、2 个 opt-in 跳过；另开实际 macOS 隔离器后旧 Tool 与六类扩展两项真实复验通过，正式 HTTP 检查/安装回归通过，Ruff/mypy/diff 通过。原受限沙箱哨兵权限失败保留。模型消费、GUI 命令及本机控制逻辑未变，复用未受影响证据；修复后的完整 CI 与 CodeQL 消除仍须新 HEAD 确认。
+
+最终路径修复包 `package-final-04/wheel-smoke.json` 为 passed：新 wheel SHA-256 `c6e4b974b0e3d61680fa15901260370992096c7e42c5220a77e7702e969d4e04`，仓库外 site-packages 导入，合法来源 inspect/install 摘要匹配，符号链接和 FIFO 拒绝、正式路由齐全。`source-manifest-delivery-codeql.json` 固定最终生产输入；与前一冻结相比仅 external_tool.py 的源文件读取边界改变。
