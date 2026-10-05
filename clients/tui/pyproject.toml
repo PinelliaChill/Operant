@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "operant-tui"
 version = "0.1.0"
 description = "Textual client for an Operant Core"
+license = { text = "PolyForm-Noncommercial-1.0.0" }
 requires-python = ">=3.10"
 dependencies = [
   "operant-agent==0.1.0",
@@ -19,6 +20,11 @@ operant-tui = "operant_tui.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["operant_tui"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../LICENSE" = "operant_tui/licensing/LICENSE"
+"../../COMMERCIAL.md" = "operant_tui/licensing/COMMERCIAL.md"
+"../../licenses" = "operant_tui/licensing/licenses"
 
 [tool.uv.sources]
 operant-agent = { path = "../..", editable = true }
