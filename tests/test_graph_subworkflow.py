@@ -133,8 +133,9 @@ async def test_child_uses_disjoint_budget_and_aggregate_is_restart_stable(tmp_pa
     assert aggregate_usage(graphs, graphs.get_run(run.id))["consumed_output_tokens"] == 6
     assert graphs.get_run(run.id).consumed_output_tokens == 3
     service.close()
+    restarted_provider = RecordingProvider()
     restarted = RecordingService(
-        SQLiteStore(service.store.path), RecordingProvider(), artifact_root=tmp_path / "artifacts"
+        SQLiteStore(service.store.path), restarted_provider, artifact_root=tmp_path / "artifacts"
     )
     restarted.initialize()
     restarted_graphs, _teams, _runtime, second = _executor(restarted)
@@ -145,7 +146,7 @@ async def test_child_uses_disjoint_budget_and_aggregate_is_restart_stable(tmp_pa
         == 6
     )
     assert (await second.run(run.id)).run.status is GraphRunStatus.COMPLETED
-    assert not restarted.provider.calls
+    assert not restarted_provider.calls
 
 
 def test_invalid_pinned_grants_and_reservations_fail_before_provider(tmp_path: Path):

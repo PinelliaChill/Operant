@@ -4,14 +4,18 @@ import base64
 import binascii
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from operant.application.phase45_gateway import Phase45ActionGateway
-from operant.application.remote_execution import RemoteAuthorization, RemoteExecutionController
+from operant.application.remote_execution import (
+    RemoteAuthorization,
+    RemoteExecutionController,
+    observation_hash_for_job,
+)
 from operant.domain.remote_execution import (
     CapabilityActionRequest,
     CapabilityManifest,
@@ -24,8 +28,9 @@ from operant.domain.remote_execution import (
 from operant.domain.security import ActionRequest, Capability, PolicyDecision
 from operant.persistence.remote_execution import SQLiteRemoteExecutionRepository
 from operant.persistence.sqlite import ConflictError, IdempotencyConflictError, SQLiteStore
-from operant.protocol import canonical_action_hash, redact_public_text
+from operant.protocol import redact_public_text
 from operant.remote.sealed_input import valid_sealed_browser_input
+from operant.remote.transient_artifacts import TransientCapabilityArtifacts
 
 T = TypeVar("T")
 
@@ -150,6 +155,68 @@ def _validate_local_capability_action(kind: str, action: CapabilityActionRequest
             or not 1 <= len(selector) <= 500
         ):
             raise ValueError("browser click arguments are invalid")
+    elif (kind, action.operation) in {
+        ("browser", "capture_viewport"),
+        ("computer", "capture_window"),
+        ("computer", "read_clipboard"),
+    }:
+        expected = {
+            "capture_viewport": RemoteCapability.BROWSER_SCREENSHOT,
+            "capture_window": RemoteCapability.COMPUTER_SCREENSHOT,
+            "read_clipboard": RemoteCapability.CLIPBOARD_READ,
+        }[action.operation]
+        if action.capability is not expected or action.arguments:
+            raise ValueError("capability capture arguments are invalid")
+    elif kind in {"browser", "computer"} and action.operation == "press_key":
+        expected_key_capability = (
+            RemoteCapability.BROWSER_SUBMIT
+            if kind == "browser"
+            else RemoteCapability.COMPUTER_INPUT
+        )
+        key = action.arguments.get("key")
+        if (
+            action.capability is not expected_key_capability
+            or set(action.arguments) != {"key"}
+            or key
+            not in {
+                "Tab",
+                "Return",
+                "Enter",
+                "Escape",
+                "ArrowUp",
+                "ArrowDown",
+                "ArrowLeft",
+                "ArrowRight",
+                "Backspace",
+                "Delete",
+                "Home",
+                "End",
+                "PageUp",
+                "PageDown",
+            }
+        ):
+            raise ValueError("capability key arguments are invalid")
+    elif kind == "computer" and action.operation in {"type_text", "write_clipboard"}:
+        expected_input_capability = (
+            RemoteCapability.COMPUTER_INPUT
+            if action.operation == "type_text"
+            else RemoteCapability.CLIPBOARD_WRITE
+        )
+        expected_keys = (
+            {"element_name", "value_sealed"}
+            if action.operation == "type_text"
+            else {"value_sealed"}
+        )
+        label = action.arguments.get("element_name", "clipboard")
+        if (
+            action.capability is not expected_input_capability
+            or set(action.arguments) != expected_keys
+            or not isinstance(label, str)
+            or not 1 <= len(label) <= 200
+            or redact_public_text(label) != label
+            or not valid_sealed_browser_input(action.arguments.get("value_sealed"))
+        ):
+            raise ValueError("computer sealed input arguments are invalid")
     elif kind == "computer" and action.operation == "click_button":
         if action.capability is not RemoteCapability.COMPUTER_INPUT or set(action.arguments) != {
             "button_name"
@@ -217,6 +284,9 @@ def install_phase56_target_routes(
     app.state.remote_execution_repository = repository
     app.state.remote_execution_controller = controller
     app.state.remote_execution_reconciled_jobs = tuple(item.job_id for item in reconciled)
+    artifacts = TransientCapabilityArtifacts()
+    app.state.local_capability_artifacts = artifacts
+    app.router.add_event_handler("shutdown", artifacts.clear)
 
     def now() -> datetime:
         return datetime.now(timezone.utc)
@@ -281,12 +351,10 @@ def install_phase56_target_routes(
             and isinstance(postcondition.get("target_ref"), str)
             and isinstance(postcondition.get("observation"), dict)
         ):
-            observation_hash = canonical_action_hash(
-                {
-                    "target_id": job.target_id,
-                    "target_ref": postcondition["target_ref"],
-                    "body": postcondition["observation"],
-                }
+            observation_hash = observation_hash_for_job(
+                job,
+                target_ref=cast(str, postcondition["target_ref"]),
+                body=cast(dict[str, Any], postcondition["observation"]),
             )
             response["observation"] = call(
                 lambda: repository.get_observation(job.target_id, observation_hash)
@@ -451,6 +519,18 @@ def install_phase56_target_routes(
         response: dict[str, Any] = {"result": completed.model_dump(mode="json")}
         job = repository.get_job(job_id)
         if (
+            artifact_bytes is not None
+            and completed.status is RemoteJobStatus.SUCCEEDED
+            and completed.artifact_ref == f"local-capability:{job_id}"
+        ):
+            if job.capability in {
+                RemoteCapability.BROWSER_SCREENSHOT,
+                RemoteCapability.COMPUTER_SCREENSHOT,
+            }:
+                artifacts.put(job_id, artifact_bytes, "image/png")
+            elif job.capability is RemoteCapability.CLIPBOARD_READ:
+                artifacts.put(job_id, artifact_bytes, "text/plain")
+        if (
             job.capability
             in {
                 RemoteCapability.BROWSER_OBSERVE,
@@ -458,12 +538,10 @@ def install_phase56_target_routes(
             }
             and completed.status is RemoteJobStatus.SUCCEEDED
         ):
-            observation_hash = canonical_action_hash(
-                {
-                    "target_id": target_id,
-                    "target_ref": completed.postcondition["target_ref"],
-                    "body": completed.postcondition["observation"],
-                }
+            observation_hash = observation_hash_for_job(
+                job,
+                target_ref=cast(str, completed.postcondition["target_ref"]),
+                body=cast(dict[str, Any], completed.postcondition["observation"]),
             )
             response["observation"] = repository.get_observation(
                 target_id, observation_hash

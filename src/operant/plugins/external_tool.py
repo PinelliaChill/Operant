@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -45,6 +45,15 @@ _MAX_MANIFEST = 16_384
 _MAX_SCRIPT = 1_000_000
 _MAX_REQUEST = 32_768
 _MAX_RESPONSE = 65_536
+ExtensionCategory = Literal["tool", "command", "event", "provider", "runtime", "capability_driver"]
+_CATEGORY_FIELDS: dict[ExtensionCategory, str] = {
+    "tool": "tools",
+    "command": "commands",
+    "event": "events",
+    "provider": "providers",
+    "runtime": "runtimes",
+    "capability_driver": "capability_drivers",
+}
 _RUNNER = """import resource, runpy, sys
 def cap(kind, limit):
     soft, hard = resource.getrlimit(kind)
@@ -64,24 +73,56 @@ class ExternalToolManifest(BaseModel):
 
     plugin_id: str
     version: str
-    host_api_version: Literal["operant-tool-extension.v1"]
-    tools: tuple[ToolDefinition, ...] = Field(min_length=1, max_length=16)
+    host_api_version: Literal["operant-tool-extension.v1", "operant-local-extension.v1"]
+    tools: tuple[ToolDefinition, ...] = Field(default=(), max_length=16)
+    commands: tuple[ToolDefinition, ...] = Field(default=(), max_length=16)
+    events: tuple[ToolDefinition, ...] = Field(default=(), max_length=16)
+    providers: tuple[ToolDefinition, ...] = Field(default=(), max_length=8)
+    runtimes: tuple[ToolDefinition, ...] = Field(default=(), max_length=8)
+    capability_drivers: tuple[ToolDefinition, ...] = Field(default=(), max_length=8)
+
+    def operations(self, category: ExtensionCategory) -> tuple[ToolDefinition, ...]:
+        return cast(tuple[ToolDefinition, ...], getattr(self, _CATEGORY_FIELDS[category]))
 
     @model_validator(mode="after")
     def validate_package(self) -> ExternalToolManifest:
         if not _PLUGIN_ID.fullmatch(self.plugin_id) or not _VERSION.fullmatch(self.version):
             raise ValueError("external Tool identity or version is invalid")
-        names = [tool.name for tool in self.tools]
+        if self.host_api_version == "operant-tool-extension.v1":
+            if not self.tools or any(
+                self.operations(category) for category in _CATEGORY_FIELDS if category != "tool"
+            ):
+                raise ValueError("legacy external Tool package only supports tools")
+        elif not any(self.operations(category) for category in _CATEGORY_FIELDS):
+            raise ValueError("local extension must export at least one operation")
+        definitions = [
+            (category, definition)
+            for category in _CATEGORY_FIELDS
+            for definition in self.operations(category)
+        ]
+        names = [definition.name for _, definition in definitions]
         if len(names) != len(set(names)):
-            raise ValueError("external Tool names must be unique")
-        for tool in self.tools:
+            raise ValueError("external extension operation names must be unique")
+        for category, tool in definitions:
             if (
                 not EXTENSION_TOOL_NAME.fullmatch(tool.name)
                 or len(tool.name) > 85
                 or not tool.name.startswith(f"ext_{self.plugin_id}_")
                 or tool.name.startswith(("ext_browser_", "ext_computer_"))
             ):
-                raise ValueError("external Tool name must use its package namespace")
+                raise ValueError("external extension name must use its package namespace")
+            if category == "event" and set(tool.parameters.get("properties", {})) != {
+                "payload_json"
+            }:
+                raise ValueError("event adapter accepts only a bounded payload_json")
+            if category == "provider" and set(tool.parameters.get("properties", {})) != {
+                "payload_json"
+            }:
+                raise ValueError("provider adapter accepts only a bounded payload_json")
+            if category == "runtime" and set(tool.parameters.get("properties", {})) != {
+                "payload_json"
+            }:
+                raise ValueError("runtime adapter accepts only a bounded payload_json")
             if not 1 <= len(tool.description) <= 240 or any(
                 ord(character) < 32 for character in tool.description
             ):
@@ -123,6 +164,7 @@ class ExternalToolRecord(BaseModel):
     state: Literal["disabled", "enabled"] = "disabled"
     installed_at: AwareDatetime
     sandbox_evidence_ref: str | None = None
+    granted_categories: tuple[ExtensionCategory, ...] = ()
 
     def granted_name(self, tool_name: str) -> str:
         return f"{tool_name}__{self.installation_id}"
@@ -143,6 +185,51 @@ def _regular_bytes(path: Path, maximum: int) -> bytes:
         return content
 
 
+def _source_package_bytes(source: Path) -> tuple[bytes, bytes]:
+    """Read only the two named files beneath one pinned, non-symlink directory."""
+
+    requested = os.path.expanduser(os.fspath(source))
+    if ".." in Path(requested).parts:
+        raise ValueError("external Tool source path may not traverse directories")
+    candidate = os.path.abspath(requested)
+    parent = (
+        os.path.dirname(os.getcwd())
+        if os.path.normpath(requested) == "."
+        else os.path.abspath(os.path.dirname(requested))
+    )
+    if not candidate.startswith(parent.rstrip(os.sep) + os.sep):
+        raise ValueError("external Tool source path leaves its selected parent")
+    try:
+        directory = os.open(candidate, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise ValueError("external Tool source must be a real directory") from exc
+    try:
+        directory_info = os.fstat(directory)
+        if not stat.S_ISDIR(directory_info.st_mode):
+            raise ValueError("external Tool source must be a directory")
+        if directory_info.st_uid not in {os.getuid(), 0} or directory_info.st_mode & 0o022:
+            raise PermissionError("external Tool source directory is not trusted")
+        contents: list[bytes] = []
+        for name, maximum in (("manifest.json", _MAX_MANIFEST), ("plugin.py", _MAX_SCRIPT)):
+            try:
+                descriptor = os.open(
+                    name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+                )
+            except OSError as exc:
+                raise ValueError("external Tool package contains an invalid file") from exc
+            with os.fdopen(descriptor, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+                    raise ValueError("external Tool package contains an invalid file")
+                content = stream.read(maximum + 1)
+                if len(content) > maximum:
+                    raise ValueError("external Tool package file is too large")
+                contents.append(content)
+        return contents[0], contents[1]
+    finally:
+        os.close(directory)
+
+
 def _digest(manifest: bytes, script: bytes) -> str:
     value = hashlib.sha256()
     for name, content in (
@@ -156,7 +243,9 @@ def _digest(manifest: bytes, script: bytes) -> str:
     return value.hexdigest()
 
 
-def _validate_arguments(definition: ToolDefinition, arguments: dict[str, Any]) -> None:
+def _validate_arguments(
+    definition: ToolDefinition, arguments: dict[str, Any], *, max_string: int = 4_000
+) -> None:
     schema = definition.parameters
     properties = schema["properties"]
     required = schema["required"]
@@ -165,7 +254,7 @@ def _validate_arguments(definition: ToolDefinition, arguments: dict[str, Any]) -
     for key, value in arguments.items():
         kind = properties[key]["type"]
         if kind == "string":
-            valid = isinstance(value, str) and len(value) <= 4_000
+            valid = isinstance(value, str) and len(value) <= max_string
         elif kind == "integer":
             valid = isinstance(value, int) and not isinstance(value, bool)
         elif kind == "number":
@@ -278,16 +367,12 @@ class ExternalToolRegistry:
 
     @staticmethod
     def inspect(source: Path) -> tuple[ExternalToolManifest, str]:
-        source = source.expanduser().resolve(strict=True)
-        manifest_bytes = _regular_bytes(source / "manifest.json", _MAX_MANIFEST)
-        script_bytes = _regular_bytes(source / "plugin.py", _MAX_SCRIPT)
+        manifest_bytes, script_bytes = _source_package_bytes(source)
         manifest = ExternalToolManifest.model_validate_json(manifest_bytes)
         return manifest, _digest(manifest_bytes, script_bytes)
 
     def install(self, source: Path, *, expected_digest: str | None = None) -> ExternalToolRecord:
-        source = source.expanduser().resolve(strict=True)
-        manifest_bytes = _regular_bytes(source / "manifest.json", _MAX_MANIFEST)
-        script_bytes = _regular_bytes(source / "plugin.py", _MAX_SCRIPT)
+        manifest_bytes, script_bytes = _source_package_bytes(source)
         manifest = ExternalToolManifest.model_validate_json(manifest_bytes)
         package_digest = _digest(manifest_bytes, script_bytes)
         if expected_digest is not None and expected_digest != package_digest:
@@ -342,19 +427,44 @@ class ExternalToolRegistry:
                 raise PermissionError("external Tool package is disabled")
             return record
 
-    def set_enabled(self, plugin_id: str, enabled: bool) -> ExternalToolRecord:
+    def set_enabled(
+        self,
+        plugin_id: str,
+        enabled: bool,
+        *,
+        granted_categories: tuple[ExtensionCategory, ...] | None = None,
+    ) -> ExternalToolRecord:
         with self._locked():
             records = self._read()
             record = records[plugin_id]
             package = self._verify(record)
             evidence_ref = record.sandbox_evidence_ref
+            grants = record.granted_categories
             if enabled:
+                if granted_categories is None:
+                    grants = (
+                        ("tool",)
+                        if record.manifest.host_api_version == "operant-tool-extension.v1"
+                        else ()
+                    )
+                else:
+                    if len(granted_categories) != len(set(granted_categories)) or any(
+                        category not in _CATEGORY_FIELDS or not record.manifest.operations(category)
+                        for category in granted_categories
+                    ):
+                        raise ValueError("extension grants must name exported categories once")
+                    grants = granted_categories
+                if not grants:
+                    raise ValueError("enable requires an explicit exported category grant")
                 evidence = self._probe(package, record.installation_id)
                 evidence_ref = evidence.evidence_ref
+            else:
+                grants = ()
             updated = record.model_copy(
                 update={
                     "state": "enabled" if enabled else "disabled",
                     "sandbox_evidence_ref": evidence_ref,
+                    "granted_categories": grants,
                 }
             )
             records[plugin_id] = updated
@@ -403,6 +513,7 @@ class ExternalToolRegistry:
         arguments: dict[str, Any],
         *,
         installation_id: str,
+        category: ExtensionCategory = "tool",
     ) -> dict[str, Any]:
         with self._locked():
             record = self._read()[plugin_id]
@@ -411,16 +522,32 @@ class ExternalToolRegistry:
             package = self._verify(record)
             if record.state != "enabled":
                 raise PermissionError("external Tool package is disabled")
+            if category not in record.granted_categories and not (
+                category == "tool"
+                and record.manifest.host_api_version == "operant-tool-extension.v1"
+                and not record.granted_categories
+            ):
+                raise PermissionError("extension category is not granted")
             definition = next(
-                (tool for tool in record.manifest.tools if tool.name == tool_name), None
+                (tool for tool in record.manifest.operations(category) if tool.name == tool_name),
+                None,
             )
             if definition is None:
                 raise ValueError("external Tool is not exported by this package")
-            _validate_arguments(definition, arguments)
+            _validate_arguments(
+                definition,
+                arguments,
+                max_string=24_000 if category in {"provider", "runtime"} else 4_000,
+            )
             payload = json.dumps(
                 {
-                    "host_api_version": "operant-tool-extension.v1",
+                    "host_api_version": record.manifest.host_api_version,
                     "tool": tool_name,
+                    **(
+                        {"category": category}
+                        if record.manifest.host_api_version == "operant-local-extension.v1"
+                        else {}
+                    ),
                     "arguments": arguments,
                 },
                 ensure_ascii=False,
@@ -499,18 +626,18 @@ class ExternalToolRegistry:
                         b"Operation not permitted",
                         b"can't open file",
                     )
-                    category = next(
+                    error_category = next(
                         (item.decode() for item in categories if item in diagnostic), "unknown"
                     )
-                    if category == "unknown":
+                    if error_category == "unknown":
                         exception = re.search(rb"(?m)^([A-Za-z][A-Za-z0-9]*Error):", diagnostic)
                         if exception is not None:
-                            category = exception.group(1).decode("ascii")
-                    if category == "ValueError":
+                            error_category = exception.group(1).decode("ascii")
+                    if error_category == "ValueError":
                         limit = re.search(rb"RLIMIT_[A-Z]+", diagnostic)
                         if limit is not None:
-                            category = f"ValueError:{limit.group().decode('ascii')}"
-                    raise RuntimeError(f"isolated external Tool failed ({category})")
+                            error_category = f"ValueError:{limit.group().decode('ascii')}"
+                    raise RuntimeError(f"isolated external Tool failed ({error_category})")
                 output.seek(0)
                 response = output.read(_MAX_RESPONSE + 1)
             if len(response) > _MAX_RESPONSE:
@@ -551,7 +678,10 @@ def installed_external_tool_extensions(
     registry = ExternalToolRegistry(root)
     result: dict[str, ToolExtension] = {}
     for record in registry.list():
-        if record.state != "enabled":
+        if record.state != "enabled" or (
+            "tool" not in record.granted_categories
+            and record.manifest.host_api_version != "operant-tool-extension.v1"
+        ):
             continue
         if not requested.intersection(
             record.granted_name(tool.name) for tool in record.manifest.tools

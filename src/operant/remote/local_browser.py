@@ -6,6 +6,8 @@ neither callers nor page content can supply JavaScript or CDP method names.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import ipaddress
 import json
@@ -457,7 +459,11 @@ class _Cdp:
             try:
                 message = response_queue.get(timeout=15)
             except queue.Empty as exc:
-                if method in {"Page.navigate", "Input.dispatchMouseEvent"}:
+                if method in {
+                    "Page.navigate",
+                    "Input.dispatchMouseEvent",
+                    "Input.dispatchKeyEvent",
+                }:
                     raise RemoteOutcomeUnknown("browser action outcome is unknown") from exc
                 raise BrowserTargetError("browser observation timed out") from exc
             if "error" in message:
@@ -666,9 +672,11 @@ class IsolatedChromeBrowser:
             ".filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;})"
             ".slice(0,100).map(e=>({selector:selectorFor(e),tag:e.tagName.toLowerCase(),"
             "type:(e.type||'text').toLowerCase()}));"
+            "const active=document.activeElement;"
             "return {url:location.href,title:document.title,"
             "text:(document.body?.innerText||'').slice(0,12000),"
-            "form_state_sha256,elements,fields};"
+            "form_state_sha256,elements,fields,"
+            "active_selector:active&&active!==document.body?selectorFor(active):null};"
             "})()"
         )
         if not isinstance(body, dict):
@@ -817,6 +825,80 @@ class IsolatedChromeBrowser:
         except Exception as exc:
             raise RemoteOutcomeUnknown("browser input outcome is unknown") from exc
 
+    def capture_viewport(self, *, expected_observation: dict[str, Any]) -> bytes:
+        """Capture only this isolated Chrome tab's visible viewport."""
+        if self.observe() != expected_observation:
+            raise BrowserTargetError("browser page changed before the screenshot")
+        assert self._cdp is not None
+        payload = self._cdp.call(
+            "Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False}
+        ).get("data")
+        if not isinstance(payload, str):
+            raise BrowserTargetError("browser returned no viewport screenshot")
+        try:
+            image = base64.b64decode(payload, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise BrowserTargetError("browser screenshot is invalid") from exc
+        if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) > 16_777_216:
+            raise BrowserTargetError("browser screenshot is not a bounded PNG")
+        if self.observe() != expected_observation:
+            raise BrowserTargetError("browser page changed during the screenshot")
+        return image
+
+    def press_key(self, key: str, *, expected_observation: dict[str, Any]) -> dict[str, Any]:
+        key_codes = {
+            "Tab": ("Tab", 9),
+            "Return": ("Enter", 13),
+            "Enter": ("Enter", 13),
+            "Escape": ("Escape", 27),
+            "ArrowUp": ("ArrowUp", 38),
+            "ArrowDown": ("ArrowDown", 40),
+            "ArrowLeft": ("ArrowLeft", 37),
+            "ArrowRight": ("ArrowRight", 39),
+            "Backspace": ("Backspace", 8),
+            "Delete": ("Delete", 46),
+            "Home": ("Home", 36),
+            "End": ("End", 35),
+            "PageUp": ("PageUp", 33),
+            "PageDown": ("PageDown", 34),
+        }
+        if key not in key_codes:
+            raise BrowserTargetError("browser key is outside the approved set")
+        if self.observe() != expected_observation:
+            raise BrowserTargetError("browser page changed before the key")
+        assert self._cdp is not None
+        active = expected_observation.get("active_selector")
+        known = {
+            item.get("selector")
+            for group in ("elements", "fields")
+            for item in expected_observation.get(group, [])
+            if isinstance(item, dict)
+        }
+        if key not in {"Tab", "Escape"} and active not in known:
+            raise BrowserTargetError("browser focused element is outside the observation")
+        protocol_key, code = key_codes[key]
+        try:
+            self._cdp.grant_mutations()
+            if self._proxy is not None:
+                self._proxy.grant_mutations()
+            for event_type in ("keyDown", "keyUp"):
+                self._cdp.call(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": event_type,
+                        "key": protocol_key,
+                        "code": protocol_key,
+                        "windowsVirtualKeyCode": code,
+                        "nativeVirtualKeyCode": code,
+                    },
+                )
+        except Exception as exc:
+            raise RemoteOutcomeUnknown("browser key outcome is unknown") from exc
+        try:
+            return self.observe()
+        except BrowserTargetError as exc:
+            raise RemoteOutcomeUnknown("browser key outcome is unknown") from exc
+
 
 class LocalBrowserConnector:
     """Execute approved browser jobs through the remote target receipt machinery."""
@@ -846,6 +928,8 @@ class LocalBrowserConnector:
         target_ref = job.arguments.get("target_ref")
         if target_ref != self.target_id:
             raise BrowserTargetError("browser job changed its target reference")
+        artifact_bytes: bytes | None = None
+        postcondition: dict[str, Any]
         try:
             if (
                 job.capability is RemoteCapability.BROWSER_OBSERVE
@@ -855,10 +939,12 @@ class LocalBrowserConnector:
                 postcondition = {"target_ref": target_ref, "observation": observation}
             else:
                 expected_hash = job.arguments.get("observation_hash")
+                content_hash = job.arguments.get("observation_content_hash", expected_hash)
                 current = self.browser.observe()
                 if (
                     not isinstance(expected_hash, str)
-                    or observation_hash(self.target_id, str(target_ref), current) != expected_hash
+                    or not isinstance(content_hash, str)
+                    or observation_hash(self.target_id, str(target_ref), current) != content_hash
                 ):
                     raise BrowserTargetError("browser page changed since the approved observation")
                 arguments = job.arguments.get("arguments")
@@ -896,13 +982,34 @@ class LocalBrowserConnector:
                     except Exception as exc:
                         raise BrowserTargetError("browser input envelope cannot be opened") from exc
                     postcondition = self.browser.fill(selector, value, expected_observation=current)
+                elif (
+                    job.capability is RemoteCapability.BROWSER_SUBMIT
+                    and job.operation == "press_key"
+                ):
+                    key = arguments.get("key")
+                    if not isinstance(key, str):
+                        raise BrowserTargetError("browser key is required")
+                    postcondition = self.browser.press_key(key, expected_observation=current)
+                elif (
+                    job.capability is RemoteCapability.BROWSER_SCREENSHOT
+                    and job.operation == "capture_viewport"
+                    and not arguments
+                ):
+                    artifact_bytes = self.browser.capture_viewport(expected_observation=current)
+                    postcondition = {
+                        "media_type": "image/png",
+                        "width": int.from_bytes(artifact_bytes[16:20], "big"),
+                        "height": int.from_bytes(artifact_bytes[20:24], "big"),
+                    }
                 else:
                     raise BrowserTargetError("browser operation is not supported")
                 postcondition = {
                     **postcondition,
                     "pre_observation_hash": expected_hash,
                     "post_observation_hash": observation_hash(
-                        self.target_id, str(target_ref), postcondition
+                        self.target_id,
+                        str(target_ref),
+                        current if artifact_bytes is not None else postcondition,
                     ),
                 }
         except BrowserTargetError as exc:
@@ -920,8 +1027,17 @@ class LocalBrowserConnector:
                 job_id=job.job_id,
                 result_idempotency_key=f"local-browser:{job.job_id}",
                 status=RemoteJobStatus.SUCCEEDED,
+                artifact_ref=(
+                    f"local-capability:{job.job_id}" if artifact_bytes is not None else None
+                ),
+                artifact_sha256=(
+                    hashlib.sha256(artifact_bytes).hexdigest()
+                    if artifact_bytes is not None
+                    else None
+                ),
                 postcondition=cast(dict[str, JsonValue], postcondition),
-            )
+            ),
+            artifact_bytes=artifact_bytes,
         )
 
     def cancel(self, job_id: str) -> None:

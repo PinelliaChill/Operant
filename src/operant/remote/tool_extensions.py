@@ -31,8 +31,18 @@ _BROWSER_NAMES = (
     "ext_browser_navigate",
     "ext_browser_fill",
     "ext_browser_click",
+    "ext_browser_press_key",
+    "ext_browser_capture_viewport",
 )
-_COMPUTER_NAMES = ("ext_computer_observe", "ext_computer_click_button")
+_COMPUTER_NAMES = (
+    "ext_computer_observe",
+    "ext_computer_click_button",
+    "ext_computer_type_text",
+    "ext_computer_press_key",
+    "ext_computer_capture_window",
+    "ext_computer_read_clipboard",
+    "ext_computer_write_clipboard",
+)
 _ToolSpec = tuple[
     str,
     str,
@@ -100,6 +110,19 @@ def _text() -> dict[str, str]:
     return {"type": "string"}
 
 
+def _current_binding_record(
+    registry: CapabilityPluginRegistry, original: CapabilityPluginRecord
+) -> CapabilityPluginRecord:
+    current = registry.get(original.plugin_id, require_enabled=True)
+    if (
+        current.generation != original.generation
+        or current.source_digest != original.source_digest
+        or current.allowed_targets != original.allowed_targets
+    ):
+        raise PermissionError("capability plugin authorization changed; obtain a new lease binding")
+    return current
+
+
 def _tool(
     record: CapabilityPluginRecord,
     *,
@@ -123,7 +146,11 @@ def _tool(
 
 
 def local_capability_tool_extensions(
-    database_path: Path, policy: ToolPolicy
+    database_path: Path,
+    policy: ToolPolicy,
+    *,
+    bindings: dict[str, CapabilityLeaseBinding] | None = None,
+    core_origin: str | None = None,
 ) -> dict[str, ToolExtension]:
     """Expose only installed, enabled adapters with an explicit local lease."""
     requested = set(policy.allowed_tools)
@@ -133,11 +160,13 @@ def local_capability_tool_extensions(
     registry = CapabilityPluginRegistry(
         database_path.expanduser().resolve().parent / "capability-plugins"
     )
-    origin = _validate_core_origin(os.environ.get("OPERANT_CORE_ORIGIN", "http://127.0.0.1:8000"))
+    origin = _validate_core_origin(
+        core_origin or os.environ.get("OPERANT_CORE_ORIGIN", "http://127.0.0.1:8000")
+    )
     extensions: dict[str, ToolExtension] = {}
 
     if requested.intersection(_BROWSER_NAMES):
-        browser_binding = _binding("BROWSER")
+        browser_binding = bindings.get("browser") if bindings is not None else _binding("BROWSER")
         try:
             browser_record = registry.get(BROWSER_PLUGIN.plugin_id, require_enabled=True)
         except (KeyError, PermissionError):
@@ -145,7 +174,7 @@ def local_capability_tool_extensions(
         if browser_binding is not None and browser_record is not None:
 
             def browser_operator() -> BrowserCapabilityOperator:
-                current = registry.get(BROWSER_PLUGIN.plugin_id, require_enabled=True)
+                current = _current_binding_record(registry, browser_record)
                 return BrowserCapabilityOperator(
                     _client(origin),
                     browser_binding,
@@ -171,6 +200,18 @@ def local_capability_tool_extensions(
             async def browser_click(arguments: dict[str, Any]) -> dict[str, Any]:
                 _required_arguments(arguments, {"selector", "observation_hash", "idempotency_key"})
                 return await asyncio.to_thread(lambda: browser_operator().act("click", **arguments))
+
+            async def browser_capture(arguments: dict[str, Any]) -> dict[str, Any]:
+                _required_arguments(arguments, {"observation_hash", "idempotency_key"})
+                return await asyncio.to_thread(
+                    lambda: browser_operator().act("capture_viewport", **arguments)
+                )
+
+            async def browser_key(arguments: dict[str, Any]) -> dict[str, Any]:
+                _required_arguments(arguments, {"key", "observation_hash", "idempotency_key"})
+                return await asyncio.to_thread(
+                    lambda: browser_operator().act("press_key", **arguments)
+                )
 
             browser_specs: tuple[_ToolSpec, ...] = (
                 (
@@ -214,6 +255,22 @@ def local_capability_tool_extensions(
                     True,
                     browser_click,
                 ),
+                (
+                    "ext_browser_capture_viewport",
+                    "Capture the visible viewport of the dedicated browser tab.",
+                    {"observation_hash": _text(), "idempotency_key": _text()},
+                    Capability.BROWSER_SCREENSHOT,
+                    True,
+                    browser_capture,
+                ),
+                (
+                    "ext_browser_press_key",
+                    "Press a supported single key in the dedicated browser tab.",
+                    {"key": _text(), "observation_hash": _text(), "idempotency_key": _text()},
+                    Capability.BROWSER_SUBMIT,
+                    True,
+                    browser_key,
+                ),
             )
             for name, description, properties, capability, side_effecting, execute in browser_specs:
                 if name in requested:
@@ -228,7 +285,9 @@ def local_capability_tool_extensions(
                     )
 
     if requested.intersection(_COMPUTER_NAMES):
-        computer_binding = _binding("COMPUTER")
+        computer_binding = (
+            bindings.get("computer") if bindings is not None else _binding("COMPUTER")
+        )
         try:
             computer_record = registry.get(COMPUTER_PLUGIN.plugin_id, require_enabled=True)
         except (KeyError, PermissionError):
@@ -236,7 +295,7 @@ def local_capability_tool_extensions(
         if computer_binding is not None and computer_record is not None:
 
             def computer_operator() -> ComputerCapabilityOperator:
-                current = registry.get(COMPUTER_PLUGIN.plugin_id, require_enabled=True)
+                current = _current_binding_record(registry, computer_record)
                 return ComputerCapabilityOperator(
                     _client(origin), computer_binding, frozenset(current.allowed_targets)
                 )
@@ -252,6 +311,17 @@ def local_capability_tool_extensions(
                 return await asyncio.to_thread(
                     lambda: computer_operator().click_button(**arguments)
                 )
+
+            def computer_action(
+                operation: str, keys: set[str]
+            ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+                async def execute(arguments: dict[str, Any]) -> dict[str, Any]:
+                    _required_arguments(arguments, keys)
+                    return await asyncio.to_thread(
+                        lambda: computer_operator().act(operation, **arguments)
+                    )
+
+                return execute
 
             computer_specs: tuple[_ToolSpec, ...] = (
                 (
@@ -273,6 +343,56 @@ def local_capability_tool_extensions(
                     Capability.COMPUTER_INPUT,
                     True,
                     computer_click,
+                ),
+                (
+                    "ext_computer_type_text",
+                    "Enter non-secret text into a named field in the approved App.",
+                    {
+                        "element_name": _text(),
+                        "value": _text(),
+                        "observation_hash": _text(),
+                        "idempotency_key": _text(),
+                    },
+                    Capability.COMPUTER_INPUT,
+                    True,
+                    computer_action(
+                        "type_text",
+                        {"element_name", "value", "observation_hash", "idempotency_key"},
+                    ),
+                ),
+                (
+                    "ext_computer_press_key",
+                    "Press a supported single key in the approved foreground App.",
+                    {"key": _text(), "observation_hash": _text(), "idempotency_key": _text()},
+                    Capability.COMPUTER_INPUT,
+                    True,
+                    computer_action("press_key", {"key", "observation_hash", "idempotency_key"}),
+                ),
+                (
+                    "ext_computer_capture_window",
+                    "Capture the approved foreground App window.",
+                    {"observation_hash": _text(), "idempotency_key": _text()},
+                    Capability.COMPUTER_SCREENSHOT,
+                    True,
+                    computer_action("capture_window", {"observation_hash", "idempotency_key"}),
+                ),
+                (
+                    "ext_computer_read_clipboard",
+                    "Read bounded non-secret plain text from the local clipboard.",
+                    {"observation_hash": _text(), "idempotency_key": _text()},
+                    Capability.COMPUTER_CLIPBOARD_READ,
+                    True,
+                    computer_action("read_clipboard", {"observation_hash", "idempotency_key"}),
+                ),
+                (
+                    "ext_computer_write_clipboard",
+                    "Write bounded non-secret plain text to the local clipboard.",
+                    {"value": _text(), "observation_hash": _text(), "idempotency_key": _text()},
+                    Capability.COMPUTER_CLIPBOARD_WRITE,
+                    True,
+                    computer_action(
+                        "write_clipboard", {"value", "observation_hash", "idempotency_key"}
+                    ),
                 ),
             )
             for (

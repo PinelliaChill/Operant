@@ -15,7 +15,11 @@ from operant.api_phase56_target import (
     install_phase56_target_routes,
 )
 from operant.application.phase45_gateway import Phase45ActionGateway
-from operant.application.remote_execution import RemoteAuthorization, RemoteExecutionController
+from operant.application.remote_execution import (
+    RemoteAuthorization,
+    RemoteExecutionController,
+    observation_hash_for_job,
+)
 from operant.application.security import PolicyEngine
 from operant.domain.remote_execution import (
     CapabilityActionRequest,
@@ -34,6 +38,7 @@ from operant.domain.security import (
     PolicyDecision,
     PolicyLayer,
     PolicyRule,
+    SecurityAuditEvent,
 )
 from operant.persistence.phase45 import SQLitePhase45Repository
 from operant.persistence.remote_execution import SQLiteRemoteExecutionRepository
@@ -306,6 +311,7 @@ def test_browser_observation_binding_and_unknown_submit_are_fail_closed(
         idempotency_key="observe-1",
         now=_now(),
     )
+    assert "observation_generation" not in observe_job.arguments
     connector = InMemoryRemoteTargetConnector(
         target_id=target.target_id,
         lease_id=lease.lease_id,
@@ -380,6 +386,231 @@ def test_browser_observation_binding_and_unknown_submit_are_fail_closed(
         now=_now(),
     )
     assert stored_receipt.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+
+
+def test_local_same_content_reobserve_has_fresh_generation_and_old_expiry(
+    tmp_path: Path,
+) -> None:
+    controller, _store = _controller(tmp_path)
+    target = controller.register_target(
+        _target().model_copy(update={"policy_ref": "local-control:test-digest"})
+    )
+    controller.heartbeat_target(
+        target.target_id, identity_public_key=target.identity_public_key, now=_now()
+    )
+    lease = controller.acquire_lease(
+        target.target_id,
+        owner="local-control:test",
+        workspace_ref="local-control",
+        ttl_seconds=120,
+        now=_now(),
+        idempotency_key="local-generation-lease",
+    )
+    body = {"url": "https://example.test/same", "elements": []}
+
+    def observe(key: str, when: datetime) -> tuple[str, CapabilityObservation]:
+        job = controller.observe(
+            kind="browser",
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            lease_token=lease.token,
+            lease_fencing=lease.fencing,
+            target_ref=target.target_id,
+            idempotency_key=key,
+            now=when,
+        )
+        assert job.arguments["observation_generation"] == "job.v1"
+        [polled] = controller.poll_jobs(
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            limit=1,
+            now=when,
+            idempotency_key=f"poll:{key}",
+        )
+        assert polled.job_id == job.job_id
+        controller.complete_job(
+            RemoteExecutionResult(
+                job_id=job.job_id,
+                result_idempotency_key=f"result:{key}",
+                status=RemoteJobStatus.SUCCEEDED,
+                postcondition={"target_ref": target.target_id, "observation": body},
+            ),
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            now=when,
+        )
+        observed_hash = observation_hash_for_job(job, target_ref=target.target_id, body=body)
+        return observed_hash, controller.repository.get_observation(target.target_id, observed_hash)
+
+    old_hash, old = observe("local-observe-1", _now())
+    later = _now() + timedelta(seconds=61)
+    fresh_hash, fresh = observe("local-observe-2", later)
+    assert old_hash != fresh_hash
+    assert old.observation_id != fresh.observation_id
+    assert old.expires_at <= later < fresh.expires_at
+    assert controller.repository.get_observation(target.target_id, old_hash) == old
+
+    request = CapabilityActionRequest(
+        target_id=target.target_id,
+        capability=RemoteCapability.BROWSER_NAVIGATE,
+        operation="navigate",
+        target_ref=target.target_id,
+        observation_hash=old_hash,
+        arguments={"url": "https://example.test/next"},
+        idempotency_key="navigate-with-expired-generation",
+        idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+    )
+    with pytest.raises(ConflictError, match="expired"):
+        controller.act(
+            request,
+            kind="browser",
+            lease_id=lease.lease_id,
+            lease_token=lease.token,
+            lease_fencing=lease.fencing,
+            now=later,
+        )
+    new_job, _ = controller.act(
+        request.model_copy(
+            update={
+                "observation_hash": fresh_hash,
+                "idempotency_key": "navigate-with-fresh-generation",
+            }
+        ),
+        kind="browser",
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        now=later,
+    )
+    assert new_job.arguments["observation_hash"] == fresh_hash
+    assert new_job.arguments["observation_content_hash"] == canonical_action_hash(
+        {"target_id": target.target_id, "target_ref": target.target_id, "body": body}
+    )
+    direct_job = controller.create_job(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        capability=RemoteCapability.BROWSER_NAVIGATE,
+        operation="navigate",
+        arguments={
+            "target_ref": target.target_id,
+            "observation_hash": fresh_hash,
+            "observation_content_hash": "0" * 64,
+            "arguments": {"url": "https://example.test/another"},
+        },
+        idempotency_key="direct-local-action-cannot-forge-content-hash",
+        idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+        now=later,
+    )
+    assert (
+        direct_job.arguments["observation_content_hash"]
+        == new_job.arguments["observation_content_hash"]
+    )
+
+
+def test_dispatch_stops_after_unknown_without_claiming_later_job(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    controller, store = _controller(tmp_path)
+    target, lease = _online_lease(controller)
+    first = controller.create_job(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        capability=RemoteCapability.TARGET_EXEC,
+        operation="run",
+        arguments={"step": 1},
+        idempotency_key="unknown-first",
+        idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+        now=_now(),
+    )
+    second = controller.create_job(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        capability=RemoteCapability.TARGET_EXEC,
+        operation="run",
+        arguments={"step": 2},
+        idempotency_key="unknown-second",
+        idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+        now=_now() + timedelta(milliseconds=1),
+    )
+    connector = InMemoryRemoteTargetConnector(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        outcomes={"run": RemoteOutcomeUnknown("synthetic lost acknowledgement")},
+    )
+    [unknown] = controller.dispatch_available(connector, now=_now(), limit=8)
+    assert unknown.job_id == first.job_id
+    assert unknown.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+    assert connector.calls == [first.job_id]
+    assert controller.repository.get_job(second.job_id).status is RemoteJobStatus.QUEUED
+
+    SQLiteSecurityRepository(store).append_security_audit(
+        SecurityAuditEvent(
+            action_hash=first.action_hash,
+            principal="test:operator",
+            event_type="local_control.unknown_checked",
+            detail={"job_id": first.job_id, "observed_outcome": "not_applied"},
+        )
+    )
+    restarted = RemoteExecutionController(
+        SQLiteRemoteExecutionRepository(store), controller.authorization
+    )
+    with pytest.raises(ConflictError, match="new fenced lease"):
+        restarted.poll_jobs(
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            limit=8,
+            now=_now(),
+            idempotency_key="poll-after-human-check",
+        )
+    with pytest.raises(ConflictError, match="new fenced lease"):
+        restarted.dispatch_available(connector, now=_now(), limit=8)
+    assert connector.calls == [first.job_id]
+    assert restarted.repository.get_job(second.job_id).status is RemoteJobStatus.QUEUED
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return _now()
+
+    monkeypatch.setattr("operant.api_phase56_target.datetime", FixedDatetime)
+    http_app = FastAPI()
+    install_phase56_target_routes(
+        http_app,
+        store,
+        action_gateway=Phase45ActionGateway(
+            SQLiteSecurityRepository(store),
+            SQLitePhase45Repository(store),
+            _allow_engine(),
+            principal="test:http-unknown-restart",
+        ),
+    )
+    with TestClient(http_app) as client:
+        blocked = client.post(
+            f"/v1/remote-targets/{target.target_id}/jobs/poll",
+            json={
+                "lease_id": lease.lease_id,
+                "token": lease.token,
+                "fencing": lease.fencing,
+                "limit": 1,
+                "idempotency_key": "poll-http-after-human-check",
+            },
+        )
+    assert blocked.status_code == 409
+    assert "new fenced lease" in blocked.json()["detail"]
 
 
 def test_browser_postcondition_and_manifest_payload_limit_fail_closed(tmp_path: Path) -> None:

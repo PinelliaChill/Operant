@@ -28,6 +28,8 @@ import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
 import type * as B2 from '../../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../../context/ClientContext';
+import { approvalId, outcomeNeedsReconciliation, requestCode, requestError, requiredText } from '../extensions/localProjection';
+import { parseExtensionArguments } from './extensionCommandArguments';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
 import type { LiveApproval, LiveEvent, LiveSessionOption } from '../../live/liveState';
 import { approvalsForSession, canDecideApproval, formatCursor } from '../../live/liveState';
@@ -58,6 +60,7 @@ function statusLabel(status: string): string {
 const REVIEW_TOOLS = ['read_file', 'search_files', 'git_diff'];
 type ReferenceKind = 'file' | 'thread' | 'artifact';
 type ArtifactChoice = { id: string; source: string; summary: string; media_type: string; content_hash: string; size_bytes: number };
+type ExtensionCommand = { kind: 'extension' | 'skill'; command: string; pluginId: string; version: string; description: string; parameters?: Record<string, unknown> };
 
 function isReadOnlyReviewer(role: B2.RolePreset): boolean {
   const policy = role.tool_policy;
@@ -261,7 +264,7 @@ export const CanonicalHistoryItem: React.FC<{ item: B2.Item; index: number }> = 
 export const LiveChatView: React.FC = () => {
   const { conversationId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
-  const { clientMode, connectionStatus } = useOperant();
+  const { clientMode, connectionStatus, phase56Client, phase45Client } = useOperant();
   const { showSidebarOpenBtn, openSidebar, isMobile } = useOutletContext<RailOutletContext>();
   const {
     phase,
@@ -335,6 +338,10 @@ export const LiveChatView: React.FC = () => {
   const [workbenchError, setWorkbenchError] = useState('');
   const [workbenchNotice, setWorkbenchNotice] = useState('');
   const [registry, setRegistry] = useState<WorkbenchCommandRegistry | null>(null);
+  const [extensionCommands, setExtensionCommands] = useState<ExtensionCommand[]>([]);
+  const [extensionArguments, setExtensionArguments] = useState('{}');
+  const [extensionApproval, setExtensionApproval] = useState<{ approvalId: string; run: () => Promise<void> }>();
+  const [extensionOutcomeUnknown, setExtensionOutcomeUnknown] = useState(false);
   const [commandBusy, setCommandBusy] = useState(false);
   const [reviewerRoleId, setReviewerRoleId] = useState('');
   const workbenchKeys = useRef(new Map<string, string>());
@@ -363,6 +370,8 @@ export const LiveChatView: React.FC = () => {
     || stream.status !== 'connected';
   const canSend = Boolean(selectedThread?.sessionId && selectedThread.workspaceRef && draft.trim())
     && !busy
+    && !extensionApproval
+    && !extensionOutcomeUnknown
     && phase === 'ready';
   const workbenchConnected = phase === 'ready' && connectionStatus === 'connected' && !projectionStale;
   const pickerVisible = referencePickerOpen || draft.includes('@');
@@ -370,6 +379,10 @@ export const LiveChatView: React.FC = () => {
     ? registry.commands.filter((item) => [item.canonical_name, ...(item.aliases ?? [])]
       .some((alias) => alias.toLowerCase().startsWith(draft.trim().split(/\s/, 1)[0].toLowerCase())))
     : [], [draft, registry]);
+  const extensionSuggestions = useMemo(() => draft.startsWith('/')
+    ? extensionCommands.filter((item) => item.command.toLowerCase().startsWith(draft.trim().split(/\s/, 1)[0].toLowerCase()))
+    : [], [draft, extensionCommands]);
+  const selectedExtensionCommand = extensionCommands.find((item) => item.command.toLowerCase() === draft.trim().toLowerCase());
   const reviewCommand = /^\/(review|审查)(\s|$)/i.test(draft.trim());
   const reviewerRoles = useMemo(() => roles.filter(isReadOnlyReviewer), [roles]);
   const effectiveReviewerRoleId = reviewerRoles.some((role) => role.id === reviewerRoleId)
@@ -380,6 +393,7 @@ export const LiveChatView: React.FC = () => {
     setReferencePickerOpen(false);
     setWorkbenchError('');
     setWorkbenchNotice('');
+    setExtensionApproval(undefined);
     setShowTerminal(false);
     ++artifactRequest.current;
     setArtifactChoices([]);
@@ -441,12 +455,44 @@ export const LiveChatView: React.FC = () => {
   }, [pickerVisible, workbenchConnected]);
 
   useEffect(() => {
-    if (!workbenchConnected || !selectedThreadId) { setRegistry(null); return; }
+    if (!workbenchConnected || !selectedThreadId) { setRegistry(null); setExtensionCommands([]); return; }
     let active = true;
+    setExtensionCommands([]);
     void workbenchClient.listCommands().then((value) => { if (active) setRegistry(value); })
       .catch((error: unknown) => { if (active) setWorkbenchError(error instanceof Error ? error.message : '命令列表读取失败'); });
+    void phase56Client.listExtensionCommands().then((value) => {
+      if (!active) return;
+      const page = value as Record<string, unknown>;
+      if (!Array.isArray(page.commands)) throw new Error('扩展命令列表格式无效。');
+      const commands = page.commands.map((raw) => {
+        const item = raw as Record<string, unknown>;
+        return {
+          kind: 'extension' as const,
+          command: `/${requiredText(item.name, 'name')}`,
+          pluginId: requiredText(item.plugin_id, 'plugin_id'),
+          version: requiredText(item.plugin_version, 'plugin_version'),
+          description: typeof item.description === 'string' ? item.description : '',
+          parameters: item.parameters && typeof item.parameters === 'object' && !Array.isArray(item.parameters) ? item.parameters as Record<string, unknown> : undefined,
+        };
+      });
+      setExtensionCommands((current) => [...current.filter((item) => item.kind !== 'extension'), ...commands]);
+    }).catch((error: unknown) => { if (active) setWorkbenchError(`扩展命令读取失败：${requestError(error)}`); });
+    void phase56Client.listSkillCommands(selectedThreadId).then((value) => {
+      if (!active) return;
+      setExtensionCommands((current) => [
+        ...current.filter((item) => item.kind !== 'skill'),
+        ...value.commands.map((item) => ({
+          kind: 'skill' as const,
+          command: `/${requiredText(item.command, 'command')}`,
+          pluginId: requiredText(item.skill_id, 'skill_id'),
+          version: '',
+          description: item.description,
+          parameters: item.parameters,
+        })),
+      ]);
+    }).catch((error: unknown) => { if (active) setWorkbenchError(`Skill 命令读取失败：${requestError(error)}`); });
     return () => { active = false; };
-  }, [selectedThreadId, workbenchConnected]);
+  }, [selectedThreadId, workbenchConnected, phase56Client]);
 
   // A deep link is resolved against the server projection.  Unknown IDs stay
   // visible as an empty live state; they are never replaced with Demo data.
@@ -467,6 +513,42 @@ export const LiveChatView: React.FC = () => {
     if (!canSend || !selectedThread) return;
     const message = draft.trim();
     if (message.startsWith('/')) {
+      const [extensionName] = message.split(/\s+/);
+      const extension = extensionCommands.find((item) => item.command.toLowerCase() === extensionName.toLowerCase());
+      if (extension) {
+        if (message !== extensionName) { setWorkbenchError('命令参数请填写在下方 JSON 输入框，草稿已保留。'); return; }
+        let args: Record<string, unknown>;
+        try { args = parseExtensionArguments(extensionArguments, extension.parameters); }
+        catch (error: unknown) { setWorkbenchError(requestError(error)); return; }
+        const identity = `${extension.kind}:${selectedThread.id}:${extension.command}:${extensionArguments}`;
+        const key = keyForWorkbenchAction(identity);
+        const run = async () => {
+          const result = extension.kind === 'skill'
+            ? await phase56Client.executeSkillCommand(selectedThread.id, { command: extension.command.slice(1), arguments: { prompt: requiredText(args.prompt, 'prompt') }, idempotency_key: key }, { idempotencyKey: key })
+            : await phase56Client.executeExtensionCommand(selectedThread.id, { command: extension.command.slice(1), arguments: args, idempotency_key: key }, { idempotencyKey: key });
+          workbenchKeys.current.delete(identity);
+          await refreshHistory();
+          const skillFeedback = extension.kind === 'skill' && typeof result.result === 'string'
+            ? `：${result.result.slice(0, 500)}（资源 ${'resource_id' in result ? result.resource_id : '未知'}）`
+            : '；请查看 Core 历史及结果';
+          if (result.status === 'failed') { setWorkbenchError(`${extension.command} 已失败${skillFeedback}`); return; }
+          setWorkbenchNotice(extension.kind === 'skill'
+            ? `${extension.command} 已完成${skillFeedback}`
+            : `${extension.command} 已完成，结果已写入 Core 历史。`);
+          setDraft(''); setExtensionArguments('{}');
+        };
+        setCommandBusy(true); setWorkbenchError(''); setWorkbenchNotice('');
+        try { await run(); }
+        catch (error: unknown) {
+          const approval = approvalId(error);
+          if (requestCode(error) === 'approval_required' && approval) { setExtensionApproval({ approvalId: approval, run }); setWorkbenchError('命令需要人工审批。'); }
+          else {
+            if (outcomeNeedsReconciliation(error)) setExtensionOutcomeUnknown(true);
+            setWorkbenchError(`命令失败：${requestError(error)} 若结果未知，请人工核对后处理。`);
+          }
+        } finally { setCommandBusy(false); }
+        return;
+      }
       if (!registry) { setWorkbenchError('命令列表尚未加载，无法校验命令。'); return; }
       const [name, ...argumentParts] = message.split(/\s+/);
       const definition = registry.commands.find((item) => [item.canonical_name, ...(item.aliases ?? [])]
@@ -800,6 +882,10 @@ export const LiveChatView: React.FC = () => {
                     <label>摘要 Token 上限<input className="input" type="number" min={128} max={4096} value={referenceMaxTokens} onChange={(event) => setReferenceMaxTokens(Number(event.target.value))} disabled={referenceBusy} /></label>
                     <button type="button" className="btn btn-secondary btn-sm" onClick={() => void addReference()} disabled={!workbenchConnected || !referenceTarget.trim() || referenceBusy || referenceMaxTokens < 128 || referenceMaxTokens > 4096}>附加摘要</button></div>}
                   {commandSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用命令">{commandSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.canonical_name} key={item.canonical_name} onClick={() => setDraft(item.canonical_name)}><span>{item.canonical_name}{item.aliases?.length ? ` · ${item.aliases.join('、')}` : ''}</span><small>{item.command_kind} · {item.execution_mode || 'json'} · Core</small></button>)}</div>}
+                  {extensionSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用扩展与 Skill 命令">{extensionSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.command} key={item.command} onClick={() => setDraft(item.command)}><span>{item.command} · {item.description}</span><small>{item.kind === 'skill' ? `${item.pluginId} · 已授权 Skill` : `${item.pluginId} v${item.version} · 已授权扩展`}</small></button>)}</div>}
+                  {selectedExtensionCommand && <label className="live-extension-arguments">{selectedExtensionCommand.kind === 'skill' ? 'Skill 命令参数' : '扩展命令参数'}（JSON 对象）<textarea className="input" value={extensionArguments} onChange={(event) => setExtensionArguments(event.target.value)} rows={3} aria-describedby="extension-argument-hint" /><small id="extension-argument-hint">{selectedExtensionCommand.parameters ? `参数 Schema：${JSON.stringify(selectedExtensionCommand.parameters)}` : '无参数 Schema。'} 输入值仅发送给 Core。</small></label>}
+                  {extensionApproval && <div className="live-alert" role="group" aria-label="动态命令审批"><span>命令等待人工审批：<code>{extensionApproval.approvalId}</code></span><button type="button" className="btn btn-primary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: true }).then(() => { setExtensionApproval(undefined); return pending.run(); }).catch((error: unknown) => { if (outcomeNeedsReconciliation(error)) setExtensionOutcomeUnknown(true); setWorkbenchError(`审批或原命令失败：${requestError(error)}`); }).finally(() => setCommandBusy(false)); }}>允许并提交</button><button type="button" className="btn btn-secondary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: false }).then(() => { setExtensionApproval(undefined); setWorkbenchNotice('已拒绝命令。'); }).catch((error: unknown) => setWorkbenchError(`拒绝失败：${requestError(error)}`)).finally(() => setCommandBusy(false)); }}>拒绝</button></div>}
+                  {extensionOutcomeUnknown && <div className="live-alert live-alert-error" role="alert">命令仍在进行或结果未知，请先在 Core 历史和审计中核对。<button type="button" className="btn btn-secondary btn-sm" onClick={() => setExtensionOutcomeUnknown(false)}>已人工核对</button></div>}
                   {reviewCommand && <label className="live-reviewer-role">审查角色<select className="select" value={effectiveReviewerRoleId} onChange={(event) => setReviewerRoleId(event.target.value)} disabled={commandBusy || reviewerRoles.length === 0}><option value="" disabled>选择严格只读角色</option>{reviewerRoles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.id}</option>)}</select>{reviewerRoles.length === 0 && <span>需要仅允许 read_file、search_files、git_diff 的角色。</span>}</label>}
                 </div>
                 <textarea

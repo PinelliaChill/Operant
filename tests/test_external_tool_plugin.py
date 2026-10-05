@@ -122,6 +122,44 @@ def test_external_tool_rejects_builtin_name_and_symlinked_script(tmp_path: Path)
     assert registry.list() == ()
 
 
+def test_external_tool_source_directory_is_pinned_and_not_a_symlink(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "print('{}')\n")
+    alias = tmp_path / "source-alias"
+    alias.symlink_to(source, target_is_directory=True)
+    registry = ExternalToolRegistry(tmp_path / "external-tools")
+    with pytest.raises(ValueError, match="real directory"):
+        registry.inspect(alias)
+    with pytest.raises(ValueError, match="real directory"):
+        registry.install(alias)
+    with pytest.raises(ValueError, match="traverse directories"):
+        registry.inspect(source / ".." / source.name)
+    (source / "plugin.py").unlink()
+    os.mkfifo(source / "plugin.py")
+    with pytest.raises(ValueError, match="invalid file"):
+        registry.inspect(source)
+    (source / "plugin.py").unlink()
+    (source / "plugin.py").write_text("print('{}')\n")
+    source.chmod(0o777)
+    with pytest.raises(PermissionError, match="not trusted"):
+        registry.inspect(source)
+    source.chmod(0o700)
+    assert registry.list() == ()
+    manifest, digest = registry.inspect(source)
+    assert manifest.plugin_id == "sample_tool"
+    assert registry.install(source, expected_digest=digest).package_digest == digest
+
+
+def test_external_tool_current_directory_remains_valid_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "print('{}')\n")
+    registry = ExternalToolRegistry(tmp_path / "external-tools")
+    monkeypatch.chdir(source)
+    manifest, digest = registry.inspect(Path("."))
+    assert manifest.plugin_id == "sample_tool"
+    assert registry.install(Path("."), expected_digest=digest).package_digest == digest
+
+
 def test_external_tool_rejects_unbound_package_files(tmp_path: Path) -> None:
     source = _package(tmp_path / "source", "print('{}')\n")
     registry = ExternalToolRegistry(tmp_path / "external-tools")

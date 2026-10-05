@@ -143,20 +143,39 @@ class BrowserCapabilityOperator(_CapabilityOperator):
         url: str | None = None,
         selector: str | None = None,
         value: str | None = None,
+        key: str | None = None,
     ) -> dict[str, Any]:
         if not observation_hash or not idempotency_key:
             raise ValueError("browser action requires observation hash and idempotency key")
         arguments: dict[str, Any]
-        if operation == "navigate" and url is not None and selector is None and value is None:
+        if (
+            operation == "navigate"
+            and url is not None
+            and selector is None
+            and value is None
+            and key is None
+        ):
             self.policy.check_url(url)
             if urlsplit(url).query or urlsplit(url).fragment or redact_public_text(url) != url:
                 raise ValueError("browser navigation URL cannot include query or credential data")
             arguments = {"url": url}
             capability = "browser.navigate"
-        elif operation == "click" and selector is not None and url is None and value is None:
+        elif (
+            operation == "click"
+            and selector is not None
+            and url is None
+            and value is None
+            and key is None
+        ):
             arguments = {"selector": selector}
             capability = "browser.submit"
-        elif operation == "fill" and selector is not None and value is not None and url is None:
+        elif (
+            operation == "fill"
+            and selector is not None
+            and value is not None
+            and url is None
+            and key is None
+        ):
             if len(value) > 2_000 or redact_public_text(value) != value:
                 raise ValueError("browser input is too long or credential-shaped")
             arguments = {
@@ -173,6 +192,40 @@ class BrowserCapabilityOperator(_CapabilityOperator):
                 ),
             }
             capability = "browser.submit"
+        elif (
+            operation == "press_key"
+            and key
+            in {
+                "Tab",
+                "Return",
+                "Enter",
+                "Escape",
+                "ArrowUp",
+                "ArrowDown",
+                "ArrowLeft",
+                "ArrowRight",
+                "Backspace",
+                "Delete",
+                "Home",
+                "End",
+                "PageUp",
+                "PageDown",
+            }
+            and url is None
+            and selector is None
+            and value is None
+        ):
+            arguments = {"key": key}
+            capability = "browser.submit"
+        elif (
+            operation == "capture_viewport"
+            and url is None
+            and selector is None
+            and value is None
+            and key is None
+        ):
+            arguments = {}
+            capability = "browser.screenshot"
         else:
             raise ValueError("browser action arguments do not match a supported operation")
         response = self.client.act_browser(
@@ -250,12 +303,133 @@ class ComputerCapabilityOperator(_CapabilityOperator):
         observation_hash: str,
         idempotency_key: str,
     ) -> dict[str, Any]:
-        if not button_name or len(button_name) > 200:
-            raise ValueError("computer button name is invalid")
+        return self.act(
+            "click_button",
+            button_name=button_name,
+            observation_hash=observation_hash,
+            idempotency_key=idempotency_key,
+        )
+
+    def act(
+        self,
+        operation: str,
+        *,
+        observation_hash: str,
+        idempotency_key: str,
+        button_name: str | None = None,
+        element_name: str | None = None,
+        value: str | None = None,
+        key: str | None = None,
+    ) -> dict[str, Any]:
         if not observation_hash or not idempotency_key:
             raise ValueError("computer action requires observation hash and idempotency key")
-        if redact_public_text(button_name) != button_name:
-            raise ValueError("computer button label is credential-shaped")
+        arguments: dict[str, Any]
+        if (
+            operation == "click_button"
+            and button_name is not None
+            and element_name is None
+            and value is None
+            and key is None
+        ):
+            if not 1 <= len(button_name) <= 200 or redact_public_text(button_name) != button_name:
+                raise ValueError("computer button label is invalid or credential-shaped")
+            arguments = {"button_name": button_name}
+            capability = "computer.input"
+        elif (
+            operation == "type_text"
+            and element_name is not None
+            and value is not None
+            and button_name is None
+            and key is None
+        ):
+            if (
+                not 1 <= len(element_name) <= 200
+                or redact_public_text(element_name) != element_name
+            ):
+                raise ValueError("computer text field label is invalid or credential-shaped")
+            if len(value) > 2_000 or redact_public_text(value) != value:
+                raise ValueError("computer input is too long or credential-shaped")
+            arguments = {
+                "element_name": element_name,
+                "value_sealed": seal_browser_input(
+                    value,
+                    token=self.binding.token,
+                    target_id=self.binding.target_id,
+                    lease_id=self.binding.lease_id,
+                    fencing=self.binding.fencing,
+                    observation_hash=observation_hash,
+                    selector=f"computer:type_text:{element_name}",
+                    idempotency_key=idempotency_key,
+                ),
+            }
+            capability = "computer.input"
+        elif (
+            operation == "press_key"
+            and key
+            in {
+                "Tab",
+                "Return",
+                "Enter",
+                "Escape",
+                "ArrowUp",
+                "ArrowDown",
+                "ArrowLeft",
+                "ArrowRight",
+                "Backspace",
+                "Delete",
+                "Home",
+                "End",
+                "PageUp",
+                "PageDown",
+            }
+            and button_name is None
+            and element_name is None
+            and value is None
+        ):
+            arguments = {"key": key}
+            capability = "computer.input"
+        elif (
+            operation == "capture_window"
+            and button_name is None
+            and element_name is None
+            and value is None
+            and key is None
+        ):
+            arguments = {}
+            capability = "computer.screenshot"
+        elif (
+            operation == "read_clipboard"
+            and button_name is None
+            and element_name is None
+            and value is None
+            and key is None
+        ):
+            arguments = {}
+            capability = "computer.clipboard.read"
+        elif (
+            operation == "write_clipboard"
+            and value is not None
+            and button_name is None
+            and element_name is None
+            and key is None
+        ):
+            if len(value) > 2_000 or redact_public_text(value) != value:
+                raise ValueError("clipboard input is too long or credential-shaped")
+            arguments = {
+                "value_sealed": seal_browser_input(
+                    value,
+                    token=self.binding.token,
+                    target_id=self.binding.target_id,
+                    lease_id=self.binding.lease_id,
+                    fencing=self.binding.fencing,
+                    observation_hash=observation_hash,
+                    selector="computer:write_clipboard",
+                    idempotency_key=idempotency_key,
+                )
+            }
+            capability = "computer.clipboard.write"
+        else:
+            raise ValueError("computer action arguments do not match a supported operation")
         response = self.client.act_computer(
             cast(
                 ActCapabilityBody,
@@ -263,11 +437,11 @@ class ComputerCapabilityOperator(_CapabilityOperator):
                     **self.binding.request_fields(),
                     "action": {
                         "target_id": self.binding.target_id,
-                        "capability": "computer.input",
-                        "operation": "click_button",
+                        "capability": capability,
+                        "operation": operation,
                         "target_ref": self.binding.target_id,
                         "observation_hash": observation_hash,
-                        "arguments": {"button_name": button_name},
+                        "arguments": arguments,
                         "idempotency_key": idempotency_key,
                         "idempotency": "non_idempotent",
                     },
