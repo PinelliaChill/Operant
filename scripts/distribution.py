@@ -19,8 +19,16 @@ MANIFEST = "snapshot-manifest.json"
 DATABASE = "operant.sqlite3"
 TRANSIENT = {DATABASE + "-wal", DATABASE + "-shm", DATABASE + "-journal"}
 REPOSITORY = Path(__file__).parents[1]
-BUILD_PREFIXES = ("src/", "plugins/", "sdk/", "clients/gui/", "clients/desktop/", "clients/tui/")
-BUILD_FILES = {"pyproject.toml", "uv.lock", "README.md", "LICENSE"}
+BUILD_PREFIXES = (
+    "src/",
+    "plugins/",
+    "sdk/",
+    "clients/gui/",
+    "clients/desktop/",
+    "clients/tui/",
+    "licenses/",
+)
+BUILD_FILES = {"pyproject.toml", "uv.lock", "README.md", "LICENSE", "COMMERCIAL.md"}
 
 
 def _absolute(path: Path) -> Path:
