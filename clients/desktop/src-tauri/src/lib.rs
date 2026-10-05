@@ -219,8 +219,15 @@ pub fn run() {
             stop_managed_core,
             persist_secret_reference
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Operant desktop shell");
+        .build(tauri::generate_context!())
+        .expect("error while building Operant desktop shell")
+        .run(|app, event| {
+            // Tauri exits the process without dropping managed state. Reap
+            // only the Core this shell launched; an existing Core is unowned.
+            if matches!(event, tauri::RunEvent::Exit) {
+                let _ = stop_managed_core(app.state::<CoreProcess>());
+            }
+        });
 }
 
 #[cfg(test)]

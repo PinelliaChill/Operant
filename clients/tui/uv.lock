@@ -374,8 +374,12 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14,<3" },
     { name = "pydantic", specifier = ">=2.10,<3" },
+    { name = "pypdf", marker = "extra == 'artifacts'", specifier = ">=5,<7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<10" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25,<2" },
+    { name = "python-docx", marker = "extra == 'artifacts'", specifier = ">=1.2,<2" },
+    { name = "python-pptx", marker = "extra == 'artifacts'", specifier = ">=1.0,<2" },
+    { name = "reportlab", marker = "extra == 'artifacts'", specifier = ">=4.2,<5" },
     { name = "rich", specifier = ">=13.9,<16" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9,<1" },
     { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.2" },
@@ -383,7 +387,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.34,<1" },
     { name = "websockets", specifier = ">=15,<17" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["artifacts", "dev"]
 
 [[package]]
 name = "operant-tui"
