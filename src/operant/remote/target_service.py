@@ -297,12 +297,18 @@ class TargetService:
             set(job.arguments) != {"argv"}
             or not isinstance(argv, list)
             or not all(isinstance(item, str) for item in argv)
-            or tuple(argv) not in self.config.allowed_argv
         ):
+            return self._result(job, RemoteJobStatus.FAILED, "remote.argv_denied")
+        requested_argv = tuple(argv)
+        configured_argv = next(
+            (candidate for candidate in self.config.allowed_argv if candidate == requested_argv),
+            None,
+        )
+        if configured_argv is None:
             return self._result(job, RemoteJobStatus.FAILED, "remote.argv_denied")
         try:
             process = subprocess.Popen(
-                cast(list[str], argv),
+                configured_argv,
                 cwd=self.workspace,
                 env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
                 stdout=subprocess.PIPE,

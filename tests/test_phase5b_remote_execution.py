@@ -326,7 +326,9 @@ def test_target_live_authority_rejects_released_lease_and_changed_job(tmp_path: 
     assert controller.repository.get_job(job.job_id).job_id == job.job_id
 
 
-def test_target_protected_read_and_output_limit(tmp_path: Path) -> None:
+def test_target_protected_read_and_output_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / ".env").write_text("SECRET=private", encoding="utf-8")
@@ -378,6 +380,20 @@ def test_target_protected_read_and_output_limit(tmp_path: Path) -> None:
         }
     )
     assert worker._perform(noisy).status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+
+    def configured_only(command: tuple[str, ...], **_kwargs: Any) -> Any:
+        assert command is worker.config.allowed_argv[0]
+
+        class FinishedProcess:
+            returncode = 0
+
+        return FinishedProcess()
+
+    monkeypatch.setattr("operant.remote.target_service.subprocess.Popen", configured_only)
+    monkeypatch.setattr(worker, "_collect_bounded", lambda _process: (b"ok", b""))
+    denied = noisy.model_copy(update={"arguments": {"argv": [*argv, "extra"]}})
+    assert worker._perform(denied).error_code == "remote.argv_denied"
+    assert worker._perform(noisy).postcondition["stdout"] == "ok"
 
 
 @pytest.mark.parametrize("connection_lost", [False, True])
