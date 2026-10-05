@@ -11,6 +11,7 @@ from operant.domain.remote_execution import (
     CapabilityManifest,
     CapabilityObservation,
     RemoteActionIdempotency,
+    RemoteCapability,
     RemoteExecutionJob,
     RemoteExecutionResult,
     RemoteJobStatus,
@@ -478,6 +479,68 @@ class SQLiteRemoteExecutionRepository:
             raise KeyError(job_id)
         return self._job(row)
 
+    def verify_job_execution(
+        self,
+        *,
+        job: RemoteExecutionJob,
+        token: str,
+        workspace_ref: str,
+        purpose: str = "execute",
+        now: datetime,
+    ) -> dict[str, Any]:
+        """Authorize one already claimed Job against the current Core Lease."""
+        with self.store._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            lease = self._require_live_lease(
+                connection,
+                target_id=job.target_id,
+                lease_id=job.lease_id,
+                token=token,
+                fencing=job.lease_fencing,
+                now=now,
+            )
+            if lease["workspace_ref"] != workspace_ref:
+                raise ConflictError("remote target workspace binding changed")
+            row = connection.execute(
+                "SELECT * FROM remote_execution_jobs WHERE job_id=?", (job.job_id,)
+            ).fetchone()
+            if row is None:
+                raise ConflictError("remote target Job is not authorized")
+            current = self._job(row)
+            expected = job.model_dump(mode="json")
+            actual = current.model_dump(mode="json")
+            if purpose == "cancel":
+                for mutable in ("status", "cancellation_requested", "finished_at"):
+                    expected.pop(mutable, None)
+                    actual.pop(mutable, None)
+            if (
+                expected != actual
+                or current.status is not RemoteJobStatus.RUNNING
+                or (purpose == "execute" and current.cancellation_requested)
+                or (purpose == "cancel" and not current.cancellation_requested)
+                or purpose not in {"execute", "cancel"}
+            ):
+                raise ConflictError("remote target Job is stale or changed")
+            target = connection.execute(
+                "SELECT capability_manifest_json,artifact_namespace FROM remote_execution_targets "
+                "WHERE target_id=?",
+                (job.target_id,),
+            ).fetchone()
+            if target is None:
+                raise ConflictError("remote target registration is missing")
+            manifest = CapabilityManifest.model_validate_json(target["capability_manifest_json"])
+            if (
+                job.capability not in manifest.capabilities
+                or job.operation not in manifest.supported_operations
+            ):
+                raise ConflictError("remote target Job capability is no longer advertised")
+            return {
+                "valid": True,
+                "job_id": job.job_id,
+                "lease_expires_at": lease["expires_at"],
+                "artifact_namespace": target["artifact_namespace"],
+            }
+
     def get_result(self, job_id: str) -> RemoteExecutionResult | None:
         """Read the durable terminal result for a job without guessing from its status."""
         with self.store._connect() as connection:
@@ -624,8 +687,39 @@ class SQLiteRemoteExecutionRepository:
                 status = (
                     RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
                     if job.status is RemoteJobStatus.RUNNING
-                    and job.idempotency is RemoteActionIdempotency.NON_IDEMPOTENT
+                    and (
+                        job.idempotency is RemoteActionIdempotency.NON_IDEMPOTENT
+                        or job.capability is RemoteCapability.TARGET_EXEC
+                    )
                     else RemoteJobStatus.FAILED
+                )
+                result = RemoteExecutionResult(
+                    job_id=job.job_id,
+                    result_idempotency_key=f"core-lease-invalidated:{job.job_id}",
+                    status=status,
+                    error_code=(
+                        "remote.lease_invalidated_outcome_unknown"
+                        if status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+                        else "remote.lease_invalidated"
+                    ),
+                    completed_at=_utc(now),
+                )
+                connection.execute(
+                    """INSERT INTO remote_execution_results(
+                        result_id,job_id,result_idempotency_key,status,artifact_ref,
+                        artifact_sha256,postcondition_json,error_code,completed_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (
+                        result.result_id,
+                        result.job_id,
+                        result.result_idempotency_key,
+                        result.status.value,
+                        None,
+                        None,
+                        _json(result.postcondition),
+                        result.error_code,
+                        result.completed_at.isoformat(),
+                    ),
                 )
                 connection.execute(
                     "UPDATE remote_execution_jobs SET status=?,finished_at=? WHERE job_id=?",

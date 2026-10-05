@@ -556,7 +556,12 @@ class SQLiteRemoteControlRepository:
         if after_cursor < 0 or not 1 <= limit <= 500:
             raise ValueError("invalid remote event page")
         with self.store._connect() as connection:
-            clauses = ["host_id=?", "rowid>?"]
+            maximum = connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) FROM remote_command_events"
+            ).fetchone()[0]
+            if after_cursor > maximum:
+                raise ConflictError("remote event cursor is ahead of durable history")
+            clauses = ["host_id=?", "sequence>?"]
             parameters: list[Any] = [host_id, after_cursor]
             if session_id is not None:
                 clauses.append("remote_session_id=?")
@@ -567,10 +572,10 @@ class SQLiteRemoteControlRepository:
             parameters.append(limit)
             rows = connection.execute(
                 f"""
-                SELECT rowid AS cursor, command_id, device_id, remote_session_id,
-                       status, host_acknowledged_at, error_code, updated_at
-                FROM remote_command_receipts
-                WHERE {" AND ".join(clauses)} ORDER BY rowid LIMIT ?
+                SELECT sequence AS cursor, command_id, device_id, remote_session_id,
+                       status, host_acknowledged_at, result_ref, error_code, updated_at
+                FROM remote_command_events
+                WHERE {" AND ".join(clauses)} ORDER BY sequence LIMIT ?
                 """,
                 parameters,
             ).fetchall()

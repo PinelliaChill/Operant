@@ -156,7 +156,7 @@ macOS `sandbox-exec`，启动前验证隔离条件；条件不足会拒绝，不
 卸载的 keep/delete 针对插件专属数据，并检查数据集所有权、资源登记与运行屏障。
 delete 不等于磁盘安全擦除，也不承诺撤回已导出的副本或已发送上下文。
 
-当前源码使用 SQLite v22。旧库升级应先停止旧 Core 并完整备份；降级只允许满足严格条件的隔离测试库，
+本任务 5 工作分支使用 SQLite v23。旧库升级应先停止旧 Core 并完整备份；降级只允许满足严格条件的隔离测试库，
 没有通用生产回滚承诺。源码升级、测试库迁移和真实用户库迁移是不同动作。
 详细实现与证据范围见 [当前实现说明](docs/PROJECT_ARCHITECTURE.md)。
 
@@ -312,6 +312,10 @@ HTTPS Origin、Bearer 和子协议，frame/pending queue 有界，并在建立�
 Host/Device/Session/Cursor 绑定；连接 owner、lease、关闭和错误事实持久化到 SQLite v14。它仍不是
 经过公网部署审计的完整套件，因此 `/web`、普通 `/v1/*` 与 Gateway 均不得直接暴露到公网。
 
+任务 5 的正式设备 CLI 在独立设备生成并保存私有身份，按 Host 一次性票据配对；仅对已配对设备开放已批准 Scope。Session 创建和运行通过签名加密 WSS 命令、Host 持久收据与本地 Action Gateway；运行结果由同一设备通过签名加密 Query 回读，其他设备的 Session 归属检查失败关闭。设备端保留未确认的原签名帧，重连先按追加事件游标追平，再在原 TTL 内重送同帧；审批仍由本机对精确 Action 决定。SQLite v23 为命令状态变化追加事件，`accepted` 后断线仍可按 Cursor 看到 `completed`。已过期或结果未知的副作用不得生成新命令自动重放。
+
+跨设备私有部署用 `operant remote-gateway serve` 在本机 loopback 提供受限 TLS edge，只转发配对、加密 Session Query、WSS Gateway 和 Target 单 Job Lease 验证。SSH 反向隧道只能指向此 edge，不能把完整 Core 管理端口映射给远端设备；否则远端请求在 Core 看来来自本机 loopback，可绕过普通 REST 的身份边界。edge 核对精确上游、受信 CA、Origin、请求体与 frame 上限，拒绝 `/web` 及其他管理 REST。此入口仍不声明公网服务能力。
+
 实现强制满足：
 
 - Remote Control 默认关闭，由本地用户通过短时码/二维码显式配对每个设备；
@@ -354,6 +358,8 @@ Lease token 只在首次 `no-store` 响应返回，SQLite 只保存 SHA-256；�
 route/recipient/TTL/nonce/fencing，使用调用方绝对 deadline，并对响应 body/stream frame 设置上限；
 Host Connector 在解密后执行同等重验。真实浏览器/桌面驱动矩阵、凭据下发运维与公网部署仍需单独
 验收。
+
+任务 5 的私有 Target 服务只监听远端 loopback、强制 TLS，并只接受白名单 `run_allowlisted` argv 和工作区内非保护文件的 `read_text`。本机 dispatch 经 HTTPS Connector 校验证书、Target 响应签名、目标身份与 Lease fencing。Target 在每次执行和取消前还向 Core 的受限验证入口核对当前 Lease、完整已领取 Job、工作区及 Manifest 能力；Lease 释放、到期或 Job 被改写时拒绝新动作。执行中 Lease 失效或结果丢失按未知结果保守收口，非幂等动作不自动重放。密钥、Bearer 与一次性 Lease Token 只在私有文件或目标进程环境中交接，不写日志或文档。
 
 ## 本机操控与隔离扩展
 

@@ -4,7 +4,7 @@ import base64
 import binascii
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Response
@@ -21,6 +21,7 @@ from operant.domain.remote_execution import (
     CapabilityManifest,
     RemoteActionIdempotency,
     RemoteCapability,
+    RemoteExecutionJob,
     RemoteExecutionResult,
     RemoteJobStatus,
     RemoteTargetRegistration,
@@ -73,6 +74,12 @@ class ReleaseRemoteTargetLeaseBody(LeaseBindingBody):
 
 class RenewRemoteTargetLeaseBody(LeaseBindingBody):
     ttl_seconds: int = Field(default=60, ge=1, le=300)
+
+
+class VerifyRemoteTargetJobBody(LeaseBindingBody):
+    workspace_ref: str = Field(min_length=1, max_length=500)
+    job: RemoteExecutionJob
+    purpose: Literal["execute", "cancel"] = "execute"
 
 
 class PollRemoteTargetJobsBody(LeaseBindingBody):
@@ -433,6 +440,31 @@ def install_phase56_target_routes(
             )
         )
         return released.model_dump(mode="json", exclude={"token"})
+
+    @app.post(
+        "/v1/remote-targets/{target_id}/leases/verify",
+        operation_id="verifyRemoteTargetJob",
+    )
+    async def verify_remote_target_job(
+        target_id: str, body: VerifyRemoteTargetJobBody, response: Response
+    ) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        job = body.job
+        if (
+            job.target_id != target_id
+            or job.lease_id != body.lease_id
+            or job.lease_fencing != body.fencing
+        ):
+            raise HTTPException(status_code=403, detail="Target Job binding changed")
+        return call(
+            lambda: repository.verify_job_execution(
+                job=job,
+                token=body.token,
+                workspace_ref=body.workspace_ref,
+                purpose=body.purpose,
+                now=now(),
+            )
+        )
 
     @app.post(
         "/v1/remote-targets/{target_id}/jobs",

@@ -1,5 +1,13 @@
 # 更新记录
 
+## 未发布 · 私有跨设备远程闭环（2026-10-05）
+
+- 新增正式设备 CLI、GUI/TUI 配对与 Scope、签名加密的远端 Session 创建/运行/结果 Query；Host Ack 由 Core 持久收据提供，断线后按追加 Cursor 追平，待确认命令仅重送原签名帧。
+- 新增只开放配对、加密 Query、WSS 和 Target Lease 验证的本机 TLS edge；私有 SSH 隧道不暴露完整 Core 管理 API。
+- 新增 HTTPS 远端 Target 的只读文件与精确 argv 白名单执行、逐次 Core Lease/Job 验证、签名结果回读；未知非幂等结果保留人工核对。
+
+本任务工作分支的 SQLite Schema 升至 v23。实现说明见[项目架构](docs/PROJECT_ARCHITECTURE.md)，真实 macOS↔Ubuntu 验收结果以[任务 5 记录](docs/design/beta-remote/acceptance.md)为准；不创建新发行版或更新已安装 App，也不代表公网部署验收。
+
 ## 未发布 · 本机操控与扩展（2026-10-04）
 
 - 本地扩展包补齐工具、命令、事件、Provider、Runtime 和能力驱动，GUI 提供清单检查、分类授权与安装管理；不同安装保留独立身份和数据。
