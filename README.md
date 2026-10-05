@@ -6,12 +6,11 @@
 
 | 版本入口 | 包含什么 |
 | --- | --- |
-| 当前 `main` | 已合并 B2-1～B2-7、UI 更新和会话式多 Agent 工作台 |
+| 当前 `main` | B2-1～B2-7、会话工作台及六次 Beta 完善对应源码；完成状态见本轮验收 |
 | [`v0.1.0-beta.1`](docs/releases/v0.1.0-beta.1.md) | 2026-09-14 发布的源码快照，范围截至 B2-3，不包含后来合入的功能 |
 | 桌面候选 | 已有本机构建与安装验证；尚未提供正式签名、公证和自动更新的桌面发行版 |
 
-更新概览见 [CHANGELOG](CHANGELOG.md)。本文按 2026-09-26 核实的主线编写；
-[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 已合并，但这些新增源码能力不会自动出现在旧标签或已安装 App 中。
+更新概览见 [CHANGELOG](CHANGELOG.md)。本文同步至 2026-10-05 的任务 6 源码；合并和整轮结论见[Beta 最终验收](docs/design/beta-daily/acceptance.md)。源码更新不会自动出现在旧标签或已安装 App 中。
 
 ## 项目定位
 
@@ -121,7 +120,7 @@ uv run operant init
 这套命令安装的是当前 `main`。如果需要复现首个源码 Release，在 `cd Operant` 后先执行
 `git checkout v0.1.0-beta.1`，再按该版本的发布说明安装。
 
-默认运行数据写入当前目录的 `.operant/`；本任务 5 工作分支的数据库为 SQLite Schema v23。当前 `main` 和旧发布版仍须按各自源码核对版本。
+默认运行数据写入当前目录的 `.operant/`；本轮源码的数据库为 SQLite Schema v23；旧发布版按各自源码核对版本。
 第一次体验请使用新目录。已有用户升级前应停止旧 Core 并备份数据库及运行目录，
 不要让旧版 Core 接管升级后的库；安装新源码不代表已替你迁移旧数据。
 
@@ -256,11 +255,13 @@ uv run operant workflow cancel WORKFLOW_ID
 | [桌面客户端](clients/desktop/README.md) | Tauri 桌面壳；需匹配版本的 Core，并用 `--desktop` 启动；无正式签名、公证或自动更新 |
 | 开发接口 | FastAPI 接口与事件流；生成的客户端位于 `sdk/` |
 
-本任务 5 工作分支新增私有双设备入口：本机 GUI「设置→远程」或 TUI `Alt+6` 管理配对、Scope、Session、Host Ack、Target Lease 与结果；另一台设备使用 `operant remote-device`，远端受控任务使用 `operant remote-target`。部署和操作步骤见[跨设备使用说明](docs/design/beta-remote/usage.md)。正式双设备验收状态以[任务 5 验收记录](docs/design/beta-remote/acceptance.md)为准；这些工作分支能力不代表当前 `main`、旧标签或已安装 App 已更新。
+私有双设备入口：本机 GUI「设置→远程」或 TUI `Alt+6` 管理配对、Scope、Session、Host Ack、Target Lease 与结果；另一台设备使用 `operant remote-device`，远端受控任务使用 `operant remote-target`。部署和操作步骤见[跨设备使用说明](docs/design/beta-remote/usage.md)。正式双设备验收状态以[任务 5 验收记录](docs/design/beta-remote/acceptance.md)为准；旧标签和已安装 App 按各自版本核对能力。
+
+六项默认能力包随 Core 分发，需在项目中显式安装与启用。DOCX/PPTX/PDF 所需依赖用 `uv sync --extra artifacts` 安装。干净安装、升级、备份回退和跨机器安装见[候选安装说明](docs/guide/candidate-installation.md)。
 
 ## 当前限制与数据边界
 
-- 当前为 Beta 版。B2-7 完成的是约定范围内的候选验收；Host 性能限制和真实 Docker 仍需单独处理。任务 5 的私有 macOS↔Ubuntu 远程链路正在正式验收，不代表公网部署或跨平台桌面控制已验收。
+- 当前为 Beta 版。B2-7 完成的是约定范围内的候选验收；Host 性能限制和真实 Docker 仍需单独处理。私有 macOS↔Ubuntu 的已验收范围见任务 5 记录，不代表公网部署或跨平台桌面控制已验收。
 - `memory add/confirm/deactivate` 等旧写入口已下线，使用当前 GUI 管理页或 `operant memory manage` 的正式命令；未经审阅的候选不会直接成为已验证经验。
 - 默认只监听本机。私网监听需要 TLS 和 OAuth 配置；目前没有完成公网部署验收，不要直接把服务开放到公网。
 - 任务记录保存在本地，但你发送给在线模型的提示词、代码和工具结果会传给对应模型服务。

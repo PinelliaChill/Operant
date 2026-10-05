@@ -147,6 +147,24 @@ def test_fts_group_is_quoted_without_allowing_query_syntax() -> None:
     assert compile_fts_query(("MAPLE-42", 'a"b', "中文")) == '"MAPLE-42" OR "a""b" OR "中文"'
 
 
+def test_long_task_query_retains_tail_lookup_terms() -> None:
+    english = build_query_plan(
+        "Use read_file to read probe.txt. Using confirmed project memory and preserve "
+        "the task's Chinese language and lookup terms, determine the equation result "
+        "and daily report code. Return the code and result."
+    )
+    assert "probe.txt" in english.queries
+    assert "code" in english.queries
+    chinese = build_query_plan(
+        "请委派且只委派一名子 Agent，选择只读角色 role_daily_worker，让它用 read_file 读取 "
+        "probe.txt，结合已确认项目记忆，求出算式结果及日报代号。等待它完成，然后写一句中文日报，"
+        "必须包含它回报的代号和结果。"
+    )
+    assert "代号" in chinese.queries
+    assert any("日报" in term for term in chinese.queries)
+    assert all(len(group) <= 12 for group in (*english.groups, *chinese.groups))
+
+
 def test_conditions_fail_closed_for_missing_facts_and_expiry() -> None:
     conditions = _conditions(
         commit_ref="abc123",

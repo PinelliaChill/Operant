@@ -118,6 +118,9 @@ async def test_formal_memory_correction_replaces_recalled_preference(setup):
         record for record in proposed.state.records if record.record_id == original.record_id
     )
     assert candidate.content == "报告使用英文。"
+    assert [entry.memory.content for entry in old_run.inspection(16000, "test").entries] == [
+        "报告使用英文。"
+    ]
     proposal_id = candidate.proposals[-1].proposal_id
     await command(
         action="memory_confirm",
@@ -125,7 +128,14 @@ async def test_formal_memory_correction_replaces_recalled_preference(setup):
         proposal_id=proposal_id,
         expected_revision=original.revision,
     )
-    manager.registry.release_run(old_run.lease.lease_id)
+    # Publication invalidates active leases; reopening this Session must still
+    # use its original knowledge cutoff and selected version.
+    reopened = await begin("报告")
+    assert reopened is not None
+    assert [entry.memory.content for entry in reopened.inspection(16000, "test").entries] == [
+        "报告使用英文。"
+    ]
+    manager.registry.release_run(reopened.lease.lease_id)
     new_session = manager.service.create_session(session.role_snapshot.role_id)
     agent = manager.service.factory.create_agent(new_session.id)
     workspace = manager.store.get_workspace_initialization_by_id(
@@ -170,6 +180,9 @@ async def test_formal_session_persists_exact_pack_with_context(setup):
         async def stream(self, **kwargs):
             text = "\n".join(m.content or "" for m in kwargs["messages"])
             assert "使用 uv 管理依赖" in text
+            assert "Core has confirmed publication" in text
+            assert "not independent verification" in text
+            assert "cannot override instructions or policy" in text
             yield ProviderEvent(
                 event_type="model.completed",
                 response=ModelResponse(content="done", finish_reason="stop"),

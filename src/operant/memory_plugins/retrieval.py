@@ -217,7 +217,19 @@ def _cjk_terms(run: str, *, limit: int) -> tuple[str, ...]:
     # complete task text as one impossible AND expression.  Bigram ordering is
     # stable and a whole phrase gets the strongest rank later.
     values.extend(run[index : index + 2] for index in range(len(run) - 1))
-    return _unique(values)[:limit]
+    return _spread(_unique(values), limit)
+
+
+def _spread(values: tuple[str, ...], limit: int) -> tuple[str, ...]:
+    """Keep the beginning and end of long task queries within a fixed budget."""
+    if limit <= 0:
+        return ()
+    if len(values) <= limit:
+        return values
+    if limit == 1:
+        return values[:1]
+    indexes = (index * (len(values) - 1) // (limit - 1) for index in range(limit))
+    return tuple(values[index] for index in indexes)
 
 
 def _ordinary_terms(normalized: str, identifiers: set[str], *, limit: int) -> tuple[str, ...]:
@@ -233,8 +245,13 @@ def _ordinary_terms(normalized: str, identifiers: set[str], *, limit: int) -> tu
         for width in (3, 2)
         for index in range(max(0, len(plain_words) - width + 1))
     )
-    values.extend(plain_words)
-    return _unique(values)[:limit]
+    phrases = _unique(values)
+    single_words = _unique(plain_words)
+    # A long instruction used to consume the whole budget with its leading
+    # trigrams, dropping even exact single-word matches near the task's end.
+    phrase_limit = min(len(phrases), limit // 2)
+    word_limit = limit - phrase_limit
+    return _unique((*_spread(phrases, phrase_limit), *_spread(single_words, word_limit)))
 
 
 def build_query_plan(
@@ -258,7 +275,7 @@ def build_query_plan(
     if not normalized:
         raise ValueError("query cannot be blank")
 
-    raw_tokens = [match.group(0) for match in _ASCII_TOKEN.finditer(normalized)]
+    raw_tokens = [match.group(0).rstrip(".:") for match in _ASCII_TOKEN.finditer(normalized)]
     identifiers = {token for token in raw_tokens if _is_identifier(token)}
     identifier_terms = _unique(token for token in raw_tokens if token in identifiers)
     cjk_terms = _unique(
@@ -279,7 +296,7 @@ def build_query_plan(
         ("cjk", cjk_terms),
         ("term", ordinary_terms),
     ):
-        bounded = terms[:max_terms_per_group]
+        bounded = _spread(terms, max_terms_per_group)
         if bounded:
             groups.append(bounded)
             labels.append(label)

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import sys
 from collections.abc import Callable, Collection
 from contextlib import nullcontext
 from datetime import timedelta
@@ -1970,7 +1971,12 @@ class MemoryManager:
                 and selected_ids is None
             ):
                 continue
-            content.append(f"技能 {candidate.name} ({candidate.manifest_sha256})\n{candidate.body}")
+            content.append(
+                f"技能 {candidate.name} ({candidate.manifest_sha256})\n"
+                f"Runtime Python: {sys.executable}\n"
+                f"Installed Skill path: {self.root / 'skills' / skill['skill_id']}\n"
+                f"{candidate.body}"
+            )
             snapshot_ids.add(skill["skill_id"])
         self._active_skill_runs[run_id] = snapshot_ids
         return "\n\n".join(content)

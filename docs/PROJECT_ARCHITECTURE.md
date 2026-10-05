@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-10-05（Beta 任务 5 增量；记录身份：独立验收 Agent，保留原历史署名）
+> 最后更新：2026-10-05（Beta 任务 6 增量；记录身份：Codex 主线程，保留原历史署名）
 >
-> 对应源码：`codex/beta-remote-task5`，基线 `main@85f280063178d6ebf7748d246902b6403cba7f57`；本分支新增任务 5，SQLite 为 v23。本次没有更新已安装 App 或真实用户库。任务 5 的实际双设备结果见独立验收记录，不能凭源码视为已通过。
+> 对应源码：`codex/beta-daily-task6`，基线 `main@329a3bf4142913f0ccc039d7fd097b8d873904e8`；本轮补齐默认能力分发、日常组合及隔离安装路径，SQLite 保持 v23。最终 H-01～H-18 与四项完成标准见[任务 6 验收记录](design/beta-daily/acceptance.md)。本次没有更新已安装 App 或真实用户库。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -15,7 +15,7 @@
 
 ## 当前版本速览
 
-- **当前源码**：会话工作台、编排、配置和任务控制及本机扩展已有各自交付记录。本分支增加 H-17 私有双设备配对、远端 Session 控制和只读/白名单 Target 执行；合并状态和验收以 Git 与[任务 5 验收记录](design/beta-remote/acceptance.md)核对。
+- **当前源码**：任务 1～5 已合入会话工作台、编排、配置与任务控制、本机扩展和私有跨设备能力。本轮补齐随 Core 分发的六项默认 Skill、文档依赖、记忆召回修复与桌面退出回收；整体结论以 Git 与[任务 6 验收记录](design/beta-daily/acceptance.md)核对。
 - **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
 - **会话工作台**：[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 提供会话内子 Agent、定向消息、历史树，以及 GUI/TUI 引用、命令和上下文入口，详见 §2.1。
 - **交付边界**：本机候选安装不等于正式签名、公证或自动更新发布；主线合并也不会自动更新已安装 App。历史批次的失败与验收范围仍保留。
@@ -29,6 +29,7 @@
 | 经验与授权 | `memory_plugins/experience_skills.py`、`experience_runtime.py`、`sharing.py` | 经验 Skill、上下文使用、共享、晋级与撤销 |
 | 远程记忆边界 | `memory_plugins/remote_memory.py`、`remote_query.py` | 最小传递包与授权投影；不代表生产远程部署已验收 |
 | 任务 5 远程闭环 | `remote_control/device_cli.py`、`edge.py`、`session_executor.py`、`session_query.py`，`remote/target_service.py`、`target_cli.py` | 设备配对、受限边缘入口、正式 Session 命令/结果、私有远端 Target 执行；真实双设备状态见验收记录 |
+| 默认能力与分发 | `default_skill_tools.py`、`application/default_skill_pack.py`、`package_resources.py`；仓库 `scripts/distribution.py` | 默认 Skill 资源、受控产物工具、可选依赖、完整数据快照与隔离候选启动 |
 
 源码入口相对 `src/operant/`。安装与能力概览见 [README](../README.md)，版本变化见 [更新记录](../CHANGELOG.md)。
 
@@ -242,6 +243,14 @@ Remote Control 的设备端由 `remote_control/device_cli.py` 提供：独立身
 `operant remote-gateway serve` 是私有部署用的 TLS 受限 edge。它只代理配对、加密结果 Query、WSS Gateway 与 Target 逐次 Lease 验证，限制 Origin、body/frame 大小、精确上游和受信 CA。完整 Core 管理 API 仅留在本机 loopback；远端 SSH 反向隧道接 edge 而非 Core。GUI「设置→远程」与 TUI `Alt+6` 提供 Host/Scope/票据、设备、Session、Gateway/Cursor/Host Ack、撤销及 Target 状态/Lease/Job/结果入口；一次性票据和 Lease Token 只作短时交接，不写持久客户端状态。
 
 Remote Execution Target 的远端进程由 `remote/target_service.py` 和 `operant remote-target serve` 提供，仅监听 loopback 且强制 HTTPS。当前受控动作只有工作区内 `read_text` 和配置中精确 argv 的 `run_allowlisted`；路径保护、输出和运行时间有界。Core 的 `dispatch` 经 HTTPS Connector 校验 Target 签名；Target 每次执行/取消前向 Core 核对当前 Lease、fencing、工作区、完整已领取 Job 与 Manifest，取消还要求 Core 已经持久提出取消。释放或过期 Lease 后不接受新的旧令牌动作；执行中失联、租约失效或结果未知的非幂等 Job 进入人工核对，不自动重复副作用。正式使用范围、运行步骤与真实 macOS↔Ubuntu 结果分别见[使用说明](design/beta-remote/usage.md)和[任务 5 验收记录](design/beta-remote/acceptance.md)；私有双设备链路不意味着公网、任意远程桌面或分布式 Core 已获支持。
+
+## 2.7 Beta 任务 6：日常组合与分发
+
+`plugins/default-skills/` 随 wheel/sdist 发布六项能力：`grill-me`、`documents`、`presentations`、`pdf`、`skill-creator`、`find-skills`。安装入口优先选择绑定 `operant-default` 来源的内置候选，仍需显式安装和项目启用，不增加工具授权。文件能力通过当前 Core 的 Python 执行器调用 `default_skill_tools.py`，写入限定在当前可信工作区；`operant-agent[artifacts]` 提供 DOCX/PPTX/PDF 库。产物需经过格式与内容回读，能力包不代表所有排版任务的质量保证。
+
+记忆检索仍受固定候选预算约束，长任务查询从完整词序中保留首尾并为单词留预算，避免前几个短语耗尽名额。Provider 上下文和持久检查共用 `MEMORY_EVIDENCE_PREFIX`，明确所选版本已由 Core 确认发布，同时保留内容不可信、不可覆盖指令和权限的边界。确认发布撤销活动插件租约；同一 Session 重新获取租约仍遵守原知识截止，新 Session 才采用新版本。
+
+桌面在 Tauri `RunEvent::Exit` 回收自己启动的 Core Child；接入已有 Core 时没有该 Child，不停止外部进程。`scripts/distribution.py` 提供私有目录下完整 SQLite/插件/工件文件快照、逐文件 SHA 校验、恢复到新目录及隔离桌面启动。回退使用升级前快照和旧版 Core，不直接降级新版库。支持与操作见[候选安装说明](guide/candidate-installation.md)，真实日常任务、macOS arm64 桌面、Ubuntu Core/TUI 和升级回退证据见[本轮验收](design/beta-daily/acceptance.md)。
 
 ## 3. 总体架构
 
@@ -1998,10 +2007,10 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 4. **Graph与协作**：正式执行器和 Live 画布支持 14 类节点，执行图仍需至少一个 Agent 与匹配的 Team。Subworkflow 使用固定版本和保守预算预留；Graph writer 仅支持管理员配置的 Git worktree。工作流建议对话持久化但不自行发布；文件/Git watcher 在本地工作区运行。会话委派/消息与 Graph Team 是不同运行时，不能混作一个状态权威。
 5. **记忆效果与清理**：召回、治理、共享和小样本质量评测已实现，但不证明普遍收益。原固定复用问题失败与补充条件化成功分开；尚无一般化自动冲突合并或完整容量淘汰。插件专属数据delete与全局历史/缓存治理不同。
 6. **数据与迁移**：本任务分支 SQLite v23，在 v22 基础上增加 Remote Command 追加状态游标；已有分版本原子迁移及隔离演练，只有显式允许且新增表为空的受限回退，没有通用生产 downgrade。旧记录显式映射/迁移，legacy_unverified 不自动升级为可信。各类 Lease 不代表分布式 Core/高可用，普通 REST Command 没有通用跨常驻进程 owner/liveness 恢复机制。
-7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布。Task 1 的文件正文、Diff、PTY、显式引用和 TUI 配置/Goal/Plan 已完成隔离入口联调；GUI 正式模型的文件/普通 Artifact 按需读取及有历史清理后的新轮、TUI 显式文件读取已验收。隔离原生 WebView 文件、Diff、历史、审批与终端交互均已核实；任意对象`@`和动态`/`注册仍有缺口。Phase1E冻结协议本身的查询缺口需与后续入口区分。
+7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布。Task 1 的文件正文、Diff、PTY、显式引用和 TUI 配置/Goal/Plan 已完成隔离入口联调；GUI 正式模型的文件/普通 Artifact 按需读取及有历史清理后的新轮、TUI 显式文件读取已验收。隔离原生 WebView 文件、Diff、历史、审批与终端交互均已核实；引用范围按已支持类型提供；任务 4 已接通动态扩展/Skill 命令及 GUI/TUI 显式调用。Phase1E冻结协议本身的查询缺口需与后续入口区分。
 8. **权限与公网**：OAuth面向单用户私网，不是多租户或通用公网CSRF方案；loopback仍可无OAuth。Remote配对/E2E不替代所有API鉴权，Gateway/Relay不属于已审计公网托管产品。面向非可信HTTP客户端的Artifact capability签发仍未完成；跨项目操作必须走已实现的显式共享授权，不能由路径推定权限。
-9. **外部能力与隔离**：本机 Chrome 已有真实隔离 Profile 与 Core Job 链路，Agent 工具入口已完成真实模型在临时网页上的观察、导航、非密码输入和点击；macOS Computer 适配器已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；日常 App 操作范围仍需验收。隔离第三方 Tool 已以临时包验证包外文件、网络和环境密钥拒绝，但不代表其他插件类别已有沙箱。GUI 仅有持久 Job 读回和人工核对提示，直接操控和生产 Remote 尚未验收。MCP Streamable HTTP、真实第三方 Server 长时验证、多 Host 发现/通知与移动推送仍有缺口。历史 Docker 隔离测试与真实 Host 模型任务是不同证据；候选中的 Docker skip 及生产 HTTPS Target 限制继续保留。
-10. **扩展与审批**：新增受信 Tool 扩展边界、隔离第三方 Tool 包和两种随 Core 发布的能力适配器，仍缺通用 Command/Event/Provider/Runtime 扩展和第三方能力驱动契约。六项默认 Skill 能从配置的可信根安装，但运行依赖相应 Skill 包与工具环境，不能把安装读回当成文档/幻灯片/PDF 内容质量验收。审批模型默认不开启，启用后失联或重启中的审核保持人工待审；模型不能修改 Policy。
+9. **外部能力与隔离**：本机 Chrome 已有真实隔离 Profile 与 Core Job 链路，Agent 工具入口已完成真实模型在临时网页上的观察、导航、非密码输入和点击；macOS Computer 适配器已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；任务 4 已在约定 macOS App 验证观察、输入、截图/剪贴板和人工接管，GUI 提供相应入口。六类本地扩展均通过独立宿主与分类授权，支持范围见任务 4 验收；其他平台桌面和公网生产 Remote 未据此验收。MCP Streamable HTTP、真实第三方 Server 长时验证、多 Host 发现/通知与移动推送仍有缺口。历史 Docker 隔离测试与真实 Host 模型任务是不同证据；候选中的 Docker skip 及生产 HTTPS Target 限制继续保留。
+10. **扩展与审批**：新增受信 Tool 扩展边界、隔离第三方 Tool 包和两种随 Core 发布的能力适配器，任务 4 已补齐六类扩展契约。任务 6 的六项默认 Skill 随 Core 包发布；文档能力需可选 artifacts 依赖和正式运行授权，实际结果以本轮逐项产物验收为准。审批模型默认不开启，启用后失联或重启中的审核保持人工待审；模型不能修改 Policy。
 11. **保留策略与缓存**：Artifact 可 Pin/归档/计划删除/Trash/Restore/显式孤儿修复，物理删除另行启用；新增浏览器临时 Profile 正常关闭即清理、崩溃后一小时回收，任务 2 新增会话资源盘点与临时引用快照 TTL 执行器，其他权威记录保留，不按临时 TTL 物理删除。Provider 缓存目前只做观测，不复制或裁决 Provider 内部缓存；不得按临时 TTL 删除长期知识/审计/恢复证据。
 12. **评测与发布**：价格/首次模型等待等部分遥测未知；缺自动价格发现、一般化统计显著性、Evaluation Run逐Result续跑等，历史Exp19—24学习验收未完成。候选已测本机macOS arm64，不代表Windows/Linux/浏览器矩阵或正式签名WebView。仓库仍缺完整安装向导、Developer ID/公证、DMG和自动更新；本机launcher适配不等于跨设备安装产品。历史安全扫描事项未全部清零。
 
