@@ -7,6 +7,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 from cryptography.exceptions import InvalidSignature
@@ -24,6 +25,7 @@ class HttpRemoteTargetConfig:
     timeout_seconds: float = 30.0
     max_response_bytes: int = 16 * 1024 * 1024 + 64 * 1024
     allow_loopback_http: bool = False
+    ca_file: str | None = None
 
     def __post_init__(self) -> None:
         url = httpx.URL(self.endpoint)
@@ -51,6 +53,8 @@ class HttpRemoteTargetConfig:
         if not 1024 <= self.max_response_bytes <= 64 * 1024 * 1024:
             raise ValueError("remote target response limit is out of bounds")
         _decode_public_key(self.identity_public_key)
+        if self.ca_file is not None and not Path(self.ca_file).is_file():
+            raise ValueError("remote target CA file is unavailable")
 
 
 class HttpRemoteTargetConnector:
@@ -180,6 +184,8 @@ class HttpRemoteTargetConnector:
                     base_url=self.config.endpoint,
                     timeout=self.config.timeout_seconds,
                     follow_redirects=False,
+                    trust_env=False,
+                    verify=self.config.ca_file or True,
                     transport=self.transport,
                     headers={
                         "authorization": f"Bearer {self.config.bearer_token}",

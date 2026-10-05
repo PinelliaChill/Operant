@@ -31,7 +31,10 @@ from operant.domain.workflow import WorkflowRunStatus
 from operant.persistence.sqlite import NotFoundError, SQLiteStore
 from operant.providers.openai_compatible import OpenAICompatibleProvider
 from operant.remote.cli_operator import browser_app, computer_app
+from operant.remote.target_cli import target_app
 from operant.remote.tool_extensions import local_capability_tool_extensions
+from operant.remote_control.device_cli import device_app
+from operant.remote_control.edge_cli import gateway_app
 from operant.settings import database_path, load_local_env
 from operant.tools.extensions import EXTENSION_TOOL_NAME
 
@@ -64,6 +67,9 @@ app.add_typer(capability_plugin_app, name="capability-plugin")
 app.add_typer(extension_app, name="extension")
 app.add_typer(browser_app, name="capability-browser")
 app.add_typer(computer_app, name="capability-computer")
+app.add_typer(device_app, name="remote-device")
+app.add_typer(target_app, name="remote-target")
+app.add_typer(gateway_app, name="remote-gateway")
 console = Console()
 
 

@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-10-04（Beta 任务 4；记录身份：Codex 主线程，保留原历史署名）
+> 最后更新：2026-10-05（Beta 任务 5 增量；记录身份：独立验收 Agent，保留原历史署名）
 >
-> 对应源码：`codex/beta-local-extensions-task4`，基线 `main@8384a4e3`，包含已合并任务 1～3 和本次任务 4；SQLite 为 v22。本次没有更新已安装 App 或真实用户库。
+> 对应源码：`codex/beta-remote-task5`，基线 `main@85f280063178d6ebf7748d246902b6403cba7f57`；本分支新增任务 5，SQLite 为 v23。本次没有更新已安装 App 或真实用户库。任务 5 的实际双设备结果见独立验收记录，不能凭源码视为已通过。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -15,7 +15,7 @@
 
 ## 当前版本速览
 
-- **当前源码**：会话工作台、H-03～H-06 编排、H-08/H-09/H-12 配置与任务控制、受信能力驱动和隔离第三方 Tool 已合并主线。本分支补齐六类隔离扩展、动态命令和本机控制 GUI、日常输入、截图/剪贴板与接管；合并状态和验收以 Git 与扩展验收记录核对。
+- **当前源码**：会话工作台、编排、配置和任务控制及本机扩展已有各自交付记录。本分支增加 H-17 私有双设备配对、远端 Session 控制和只读/白名单 Target 执行；合并状态和验收以 Git 与[任务 5 验收记录](design/beta-remote/acceptance.md)核对。
 - **公开标签**：`v0.1.0-beta.1` 仍是 2026-09-14 的 B2-3 源码快照；本文件当前能力不能倒推为该标签已有能力。
 - **会话工作台**：[PR #28](https://github.com/PinelliaChill/Operant/pull/28) 提供会话内子 Agent、定向消息、历史树，以及 GUI/TUI 引用、命令和上下文入口，详见 §2.1。
 - **交付边界**：本机候选安装不等于正式签名、公证或自动更新发布；主线合并也不会自动更新已安装 App。历史批次的失败与验收范围仍保留。
@@ -28,6 +28,7 @@
 | 整理与治理 | `memory_plugins/governance.py`、`maintenance.py` | 来源、冲突、时效、候选审阅与受控后台整理 |
 | 经验与授权 | `memory_plugins/experience_skills.py`、`experience_runtime.py`、`sharing.py` | 经验 Skill、上下文使用、共享、晋级与撤销 |
 | 远程记忆边界 | `memory_plugins/remote_memory.py`、`remote_query.py` | 最小传递包与授权投影；不代表生产远程部署已验收 |
+| 任务 5 远程闭环 | `remote_control/device_cli.py`、`edge.py`、`session_executor.py`、`session_query.py`，`remote/target_service.py`、`target_cli.py` | 设备配对、受限边缘入口、正式 Session 命令/结果、私有远端 Target 执行；真实双设备状态见验收记录 |
 
 源码入口相对 `src/operant/`。安装与能力概览见 [README](../README.md)，版本变化见 [更新记录](../CHANGELOG.md)。
 
@@ -99,8 +100,8 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 | Graph/Team | 正式执行 14 类节点；Live 画布编辑/连线/版本差异/运行投影；Team消息、Mailbox及任务/工件板、隔离Writer | 每个执行图至少含一个 Agent 且锁定匹配 Team；Writer 需受信 Git worktree，未知写入不重放；会话式委派使用独立工作台运行时 |
 | 安全/扩展/调度 | Action Gateway、Policy/审批/租约、Skill/MCP管理；全局可选独立审批 ModelProfile；Cron/Timer/应用信号及文件/Git Hook；六类本地隔离扩展、动态 Slash 与客户端安装管理 | 审批模型默认仍为人工模式；硬 DENY 始终优先。Watcher 仅本地显式工作区；扩展代码不进入 Core 进程 |
 | 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Task 1 已接入文件正文、Diff、本机 PTY、普通 Artifact/会话引用及 TUI 配置、Goal/Plan；隔离 GUI/TUI 正式模型读取和原生 WebView 文件、Diff、历史、审批、终端输入/输出/回收均已验收 |
-| Remote/Writer | 单Host远控协议、Gateway/Connector、Target权限与证据、受限Container和Git隔离合并 | 公网、容器联合流程与完整跨设备产品不外推 |
-| 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；Core 管理会话、观察、输入、截图/剪贴板及人工接管；六类隔离扩展可接入正式服务与能力提案 | Beta 任务 4 的真实验收范围以扩展验收记录为准；生产远程仍属任务 5，不从本机回环推定跨设备完成 |
+| Remote/Writer | 单 Host 远控协议、设备 CLI、受限 TLS edge、签名加密 Session 命令/Query、追加 Cursor；远端 Target TLS Worker、实时 Lease/Job 验证与受限文件/命令执行；受限 Container 和 Git 隔离合并 | macOS↔Ubuntu 私有双设备链路以任务 5 验收记录裁决；公网、任意远程桌面/跨平台 App 与分布式 Core 不外推 |
+| 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；Core 管理会话、观察、输入、截图/剪贴板及人工接管；六类隔离扩展可接入正式服务与能力提案 | Beta 任务 4 的真实验收范围以扩展验收记录为准；不从本机回环推定任务 5 跨设备通过 |
 | 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证 | 非正式签名/公证发布，无完整安装向导、DMG或自动更新；本机启动适配另有安装记录 |
 
 可复用的最近证据：B2-7范围与负结果见[任务包](design/b2-7/task-package.md)；
@@ -233,6 +234,14 @@ Python/TypeScript Client；WebSocket 帧及一次性 token 不写入通用 REST 
 - **持续保留**：旧 `context-reference`、普通成果工件、模型输入/压缩、聊天、记忆、审批审计和未知结果证据保留。Browser Profile 只读盘点并沿用既有专用回收，归属不明不参与会话 TTL；PTY、工具快照和运行记录按各自生命周期管理。Provider 内部 Cache 只观测，不作为本地可删除资源。v21 仅允许治理表及新临时快照为空时受限回退，不迁移真实用户库。
 
 详细范围、失败历史、真实模型/客户端证据及日常负载见[任务 2 验收记录](design/beta-reliability/acceptance.md)。本轮在任务 2 停止，后续编排、扩展、远程及安装工作仍按原计划保留。
+
+## 2.6 Beta 任务 5：私有跨设备远程闭环
+
+Remote Control 的设备端由 `remote_control/device_cli.py` 提供：独立身份配对后，设备通过 TLS/WSS 发送签名加密的 Session `create/run/status/cancel` 命令。Core 解密后检查设备 Scope、命令 TTL/签名/幂等、Session 归属和 Action Gateway；`run` 使用已注册 Project 的绝对工作区、冻结 Role/ModelProfile 与正式 Agent Loop。`host_ack` 对应本机持久命令收据，不代表模型已经完成。设备通过独立的签名加密 `session-query` 读取自己创建的 Session 事件和脱敏结果，不能借普通管理 REST 查询其他设备。若 Policy 要求审批，Core 返回 Approval ID；批准后设备只在原 TTL 内重送同一签名帧。SQLite v23 的 `remote_command_events` 为命令状态变化追加 Cursor，断线后可从前一游标继续读取终态；旧的未知副作用不能自动重放。
+
+`operant remote-gateway serve` 是私有部署用的 TLS 受限 edge。它只代理配对、加密结果 Query、WSS Gateway 与 Target 逐次 Lease 验证，限制 Origin、body/frame 大小、精确上游和受信 CA。完整 Core 管理 API 仅留在本机 loopback；远端 SSH 反向隧道接 edge 而非 Core。GUI「设置→远程」与 TUI `Alt+6` 提供 Host/Scope/票据、设备、Session、Gateway/Cursor/Host Ack、撤销及 Target 状态/Lease/Job/结果入口；一次性票据和 Lease Token 只作短时交接，不写持久客户端状态。
+
+Remote Execution Target 的远端进程由 `remote/target_service.py` 和 `operant remote-target serve` 提供，仅监听 loopback 且强制 HTTPS。当前受控动作只有工作区内 `read_text` 和配置中精确 argv 的 `run_allowlisted`；路径保护、输出和运行时间有界。Core 的 `dispatch` 经 HTTPS Connector 校验 Target 签名；Target 每次执行/取消前向 Core 核对当前 Lease、fencing、工作区、完整已领取 Job 与 Manifest，取消还要求 Core 已经持久提出取消。释放或过期 Lease 后不接受新的旧令牌动作；执行中失联、租约失效或结果未知的非幂等 Job 进入人工核对，不自动重复副作用。正式使用范围、运行步骤与真实 macOS↔Ubuntu 结果分别见[使用说明](design/beta-remote/usage.md)和[任务 5 验收记录](design/beta-remote/acceptance.md)；私有双设备链路不意味着公网、任意远程桌面或分布式 Core 已获支持。
 
 ## 3. 总体架构
 
@@ -1426,6 +1435,9 @@ SQLiteStore 当前创建以下表：
 16. v16～v18：B2-4 召回、B2-5 治理及 B2-6 经验共享；各版冻结 manifest/checksum。
 17. v19：会话子 Agent、定向消息及唤醒计数，继续使用冻结角色快照。
 18. v20：配置层、Goal、Plan 与执行清单。覆盖更新和任务状态使用 revision CAS；已有 v1～v19 manifest/checksum 不变。回退仅在新增表为空的隔离库允许。
+19. v21：任务 2 的会话临时资源治理与保留锁。
+20. v22：任务 3 的图审批、智能建议对话和本地触发器基线；任务 4 沿用此版本。
+21. v23：任务 5 的 `remote_command_events` 追加式命令状态游标；升级时为已有命令收据回填当前状态，后续状态转移追加新事件。保留 v1～v22 的迁移和校验契约。
 
 v6 的来源证明以 Store 为正式写入口，并在领域校验、SQLite trigger 和回读三个层次复核。Prompt Block
 的 source refs 必须是非空、严格结构的 JSON 数组；Thread、Item、Artifact、Memory、Session、Agent、
@@ -1476,6 +1488,8 @@ v14 为每个 RemoteSession 最多保留一个活动 WSS connection，连接建�
 绑定并登记 owner/lease；关闭、过期和失败都留下只追加事件。Container Writer 在 Docker 调用前先持久
 进入过渡态并绑定 Writer Lease fencing 与 Action Hash；调用后无法确定结果时进入 `outcome_unknown`，
 只能经本机鉴权、Action Gateway 和实际 Docker inspect 人工核对，不能自动重放。
+
+v23 为 Remote Command 的每次收据状态变化生成独立递增事件，WSS `cursor_sync` 和本机事件查询使用同一持久 Cursor。旧版按收据行号读取会漏掉断线期间对同一行的终态更新；本版在迁移后可从已见 `accepted` 游标继续读到后续 `completed`。该迁移不把历史命令重新执行，也不改变 Host Ack 与模型运行终态的含义。
 
 每个版本都冻结 schema manifest SHA-256 和由版本、名称、manifest 共同计算的 Migration checksum；
 启动时先重算两者，原版本 DDL 或契约发生漂移会要求新增 Migration 版本，不能静默改写历史。自检覆盖
@@ -1983,7 +1997,7 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 3. **未知副作用**：Coder/Writer/外部动作结果未知须人工核对。Git已提交而SQLite回执未落盘的窗口可能进入outcome_unknown；既有租约、锁与工作树证据保留，不猜测或自动重放。
 4. **Graph与协作**：正式执行器和 Live 画布支持 14 类节点，执行图仍需至少一个 Agent 与匹配的 Team。Subworkflow 使用固定版本和保守预算预留；Graph writer 仅支持管理员配置的 Git worktree。工作流建议对话持久化但不自行发布；文件/Git watcher 在本地工作区运行。会话委派/消息与 Graph Team 是不同运行时，不能混作一个状态权威。
 5. **记忆效果与清理**：召回、治理、共享和小样本质量评测已实现，但不证明普遍收益。原固定复用问题失败与补充条件化成功分开；尚无一般化自动冲突合并或完整容量淘汰。插件专属数据delete与全局历史/缓存治理不同。
-6. **数据与迁移**：当前SQLite v22，保留会话临时资源策略，新增图审批、建议对话和 watcher 基线，已有分版本原子迁移及隔离演练；只有显式允许且新增表为空的受限回退，没有通用生产downgrade。旧记录显式映射/迁移，legacy_unverified不自动升级为可信。各类lease不代表分布式Core/高可用，REST Command没有通用跨常驻进程owner/liveness恢复机制。
+6. **数据与迁移**：本任务分支 SQLite v23，在 v22 基础上增加 Remote Command 追加状态游标；已有分版本原子迁移及隔离演练，只有显式允许且新增表为空的受限回退，没有通用生产 downgrade。旧记录显式映射/迁移，legacy_unverified 不自动升级为可信。各类 Lease 不代表分布式 Core/高可用，普通 REST Command 没有通用跨常驻进程 owner/liveness 恢复机制。
 7. **客户端入口**：Live GUI 已有配置来源、审批 Reviewer、Goal/Plan/BTW，以及会话父子树、规范历史与编排画布。Task 1 的文件正文、Diff、PTY、显式引用和 TUI 配置/Goal/Plan 已完成隔离入口联调；GUI 正式模型的文件/普通 Artifact 按需读取及有历史清理后的新轮、TUI 显式文件读取已验收。隔离原生 WebView 文件、Diff、历史、审批与终端交互均已核实；任意对象`@`和动态`/`注册仍有缺口。Phase1E冻结协议本身的查询缺口需与后续入口区分。
 8. **权限与公网**：OAuth面向单用户私网，不是多租户或通用公网CSRF方案；loopback仍可无OAuth。Remote配对/E2E不替代所有API鉴权，Gateway/Relay不属于已审计公网托管产品。面向非可信HTTP客户端的Artifact capability签发仍未完成；跨项目操作必须走已实现的显式共享授权，不能由路径推定权限。
 9. **外部能力与隔离**：本机 Chrome 已有真实隔离 Profile 与 Core Job 链路，Agent 工具入口已完成真实模型在临时网页上的观察、导航、非密码输入和点击；macOS Computer 适配器已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；日常 App 操作范围仍需验收。隔离第三方 Tool 已以临时包验证包外文件、网络和环境密钥拒绝，但不代表其他插件类别已有沙箱。GUI 仅有持久 Job 读回和人工核对提示，直接操控和生产 Remote 尚未验收。MCP Streamable HTTP、真实第三方 Server 长时验证、多 Host 发现/通知与移动推送仍有缺口。历史 Docker 隔离测试与真实 Host 模型任务是不同证据；候选中的 Docker skip 及生产 HTTPS Target 限制继续保留。

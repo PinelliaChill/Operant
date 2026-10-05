@@ -46,6 +46,8 @@ from operant.persistence.security import SQLiteSecurityRepository
 from operant.persistence.sqlite import ConflictError, SQLiteStore
 from operant.protocol import canonical_action_hash
 from operant.remote import ConnectorOutcome, InMemoryRemoteTargetConnector, RemoteOutcomeUnknown
+from operant.remote.target_cli import dispatch as dispatch_remote_target
+from operant.remote.target_service import TargetService, TargetServiceConfig
 
 
 def _now() -> datetime:
@@ -197,6 +199,304 @@ def _online_lease(
         idempotency_key="lease-1",
     )
     return target, lease
+
+
+def test_target_live_authority_rejects_released_lease_and_changed_job(tmp_path: Path) -> None:
+    controller, store = _controller(tmp_path)
+    at = datetime.now(timezone.utc)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "safe.txt").write_text("safe content", encoding="utf-8")
+    target = _target().model_copy(
+        update={
+            "capability_manifest": CapabilityManifest(
+                version="1",
+                capabilities=(RemoteCapability.TARGET_READ,),
+                supported_operations=("read_text",),
+                platform="test",
+            )
+        }
+    )
+    controller.register_target(target)
+    controller.heartbeat_target(
+        target.target_id, identity_public_key=target.identity_public_key, now=at
+    )
+    lease = controller.acquire_lease(
+        target.target_id,
+        owner="test-worker",
+        workspace_ref=str(workspace),
+        ttl_seconds=120,
+        now=at,
+        idempotency_key="lease-live-check",
+    )
+    job = controller.create_job(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        capability=RemoteCapability.TARGET_READ,
+        operation="read_text",
+        arguments={"path": "safe.txt"},
+        idempotency_key="read-live-check",
+        idempotency=RemoteActionIdempotency.IDEMPOTENT,
+        now=at,
+    )
+    claimed = controller.poll_jobs(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        limit=1,
+        now=at,
+        idempotency_key="poll-live-check",
+    )[0]
+    core_app = FastAPI()
+    gateway = Phase45ActionGateway(
+        SQLiteSecurityRepository(store),
+        SQLitePhase45Repository(store),
+        _allow_engine(),
+        principal="test:core",
+    )
+    install_phase56_target_routes(core_app, store, action_gateway=gateway)
+    verify_body = {
+        "lease_id": lease.lease_id,
+        "token": lease.token,
+        "fencing": lease.fencing,
+        "workspace_ref": str(workspace),
+        "job": claimed.model_dump(mode="json"),
+    }
+    with TestClient(core_app) as core_client:
+        checked = core_client.post(
+            f"/v1/remote-targets/{target.target_id}/leases/verify", json=verify_body
+        )
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["valid"] is True
+    assert checked.headers["cache-control"] == "no-store"
+    ca = tmp_path / "ca.pem"
+    ca.write_text("test", encoding="utf-8")
+    worker = TargetService(
+        TargetServiceConfig(
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            lease_token=lease.token,
+            lease_fencing=lease.fencing,
+            lease_expires_at=lease.expires_at,
+            bearer_token="b" * 32,
+            signing_private_key=b"k" * 32,
+            workspace=workspace,
+            ledger_path=tmp_path / "worker.sqlite3",
+            allowed_argv=(),
+            core_origin="https://127.0.0.1:18805",
+            core_ca_file=ca,
+        )
+    )
+    worker.verify_core_job = lambda incoming, purpose="execute": (
+        controller.repository.verify_job_execution(  # type: ignore[method-assign]
+            job=incoming,
+            token=lease.token,
+            workspace_ref=str(workspace),
+            purpose=purpose,
+            now=at,
+        )
+    )
+    with pytest.raises(ConflictError, match="changed"):
+        worker.execute(claimed.model_copy(update={"arguments": {"path": ".env"}}))
+    assert worker.execute(claimed).postcondition["content"] == "safe content"
+    with pytest.raises(ConflictError, match="stale or changed"):
+        worker.cancel(job.job_id)
+    controller.cancel_job(job.job_id, now=at, idempotency_key="cancel-live-check")
+    assert worker.cancel(job.job_id)["status"] == "cancel_requested"
+    controller.release_lease(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        now=at,
+        idempotency_key="release-live-check",
+    )
+    with pytest.raises(ConflictError, match="stale"):
+        worker.execute(claimed)
+    with pytest.raises(ConflictError, match="stale"):
+        worker.cancel(job.job_id)
+    with TestClient(core_app) as core_client:
+        denied = core_client.post(
+            f"/v1/remote-targets/{target.target_id}/leases/verify", json=verify_body
+        )
+    assert denied.status_code == 409
+    assert controller.repository.get_job(job.job_id).job_id == job.job_id
+
+
+def test_target_protected_read_and_output_limit(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".env").write_text("SECRET=private", encoding="utf-8")
+    (workspace / "safe.txt").write_text("Bearer abcdefghijklmnopqrstuvwxyz", encoding="utf-8")
+    ca = tmp_path / "ca.pem"
+    ca.write_text("test", encoding="utf-8")
+    python = Path(__import__("sys").executable)
+    argv = (str(python), "-c", "print('x' * 1000000)")
+    worker = TargetService(
+        TargetServiceConfig(
+            target_id="target-test",
+            lease_id="lease-test",
+            lease_token="l" * 32,
+            lease_fencing=1,
+            lease_expires_at=_now(),
+            bearer_token="b" * 32,
+            signing_private_key=b"k" * 32,
+            workspace=workspace,
+            ledger_path=tmp_path / "worker.sqlite3",
+            allowed_argv=(argv,),
+            core_origin="https://127.0.0.1:18805",
+            core_ca_file=ca,
+        )
+    )
+    base = dict(
+        target_id="target-test",
+        lease_id="lease-test",
+        lease_fencing=1,
+        action_hash="a" * 64,
+        idempotency_key="protected-test",
+        idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+    )
+    from operant.domain.remote_execution import RemoteExecutionJob
+
+    protected = RemoteExecutionJob(
+        **base,
+        capability=RemoteCapability.TARGET_READ,
+        operation="read_text",
+        arguments={"path": ".env"},
+    )
+    assert worker._perform(protected).error_code == "remote.invalid_path"
+    safe = protected.model_copy(update={"arguments": {"path": "safe.txt"}})
+    assert "abcdefghijklmnopqrstuvwxyz" not in worker._perform(safe).postcondition["content"]
+    noisy = protected.model_copy(
+        update={
+            "capability": RemoteCapability.TARGET_EXEC,
+            "operation": "run_allowlisted",
+            "arguments": {"argv": list(argv)},
+        }
+    )
+    assert worker._perform(noisy).status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+
+
+@pytest.mark.parametrize("connection_lost", [False, True])
+def test_dispatch_release_during_execution_never_records_success(
+    tmp_path: Path, connection_lost: bool
+) -> None:
+    controller, store = _controller(tmp_path)
+    target, lease = _online_lease(controller)
+    job = controller.create_job(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        capability=RemoteCapability.TARGET_EXEC,
+        operation="run",
+        arguments={"argv": ["/bin/true"]},
+        idempotency_key="lease-race-job",
+        idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+        now=_now(),
+    )
+
+    class ReleasingConnector:
+        target_id = target.target_id
+        lease_id = lease.lease_id
+        lease_token = lease.token
+        lease_fencing = lease.fencing
+
+        def execute(self, incoming: Any) -> ConnectorOutcome:
+            controller.repository.release_lease(
+                target_id=target.target_id,
+                lease_id=lease.lease_id,
+                token=lease.token,
+                fencing=lease.fencing,
+                now=_now(),
+            )
+            if connection_lost:
+                raise RemoteOutcomeUnknown("SSH return path closed after execution")
+            return ConnectorOutcome(
+                RemoteExecutionResult(
+                    job_id=incoming.job_id,
+                    result_idempotency_key="release-race-result",
+                    status=RemoteJobStatus.SUCCEEDED,
+                )
+            )
+
+        def cancel(self, job_id: str) -> None:
+            raise AssertionError(job_id)
+
+    [result] = controller.dispatch_available(ReleasingConnector(), now=_now())
+    assert result.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+    assert (
+        controller.repository.get_job(job.job_id).status
+        is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+    )
+    persisted = controller.repository.get_result(job.job_id)
+    assert persisted == result
+    assert persisted is not None
+    assert persisted.result_idempotency_key == f"core-lease-invalidated:{job.job_id}"
+    assert persisted.error_code == "remote.lease_invalidated_outcome_unknown"
+    assert persisted.postcondition == {}
+    assert persisted.artifact_ref is None
+    gateway = Phase45ActionGateway(
+        SQLiteSecurityRepository(store),
+        SQLitePhase45Repository(store),
+        _allow_engine(),
+        principal="test:core",
+    )
+    app = FastAPI()
+    install_phase56_target_routes(app, store, action_gateway=gateway)
+    with TestClient(app) as client:
+        projected = client.get(f"/v1/remote-targets/jobs/{job.job_id}/result")
+    assert projected.status_code == 200
+    assert projected.json()["status"] == result.status.value
+    assert projected.json()["result"] == result.model_dump(mode="json")
+    with pytest.raises(ConflictError, match="stale"):
+        controller.complete_job(
+            RemoteExecutionResult(
+                job_id=job.job_id,
+                result_idempotency_key="late-target-success",
+                status=RemoteJobStatus.SUCCEEDED,
+            ),
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            now=_now(),
+        )
+    with pytest.raises(ConflictError, match="stale"):
+        controller.repository.poll_jobs(
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            now=_now(),
+            limit=1,
+        )
+    assert controller.repository.get_result(job.job_id) == persisted
+
+
+def test_dispatch_cli_never_runs_core_startup_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SQLiteStore(tmp_path / "live.sqlite3")
+    store.initialize()
+    ca = tmp_path / "ca.pem"
+    ca.write_text("test", encoding="utf-8")
+
+    def forbidden_initialize(_store: SQLiteStore) -> None:
+        raise AssertionError("dispatch must not run Core startup recovery")
+
+    monkeypatch.setattr(SQLiteStore, "initialize", forbidden_initialize)
+    with pytest.raises(KeyError):
+        dispatch_remote_target(
+            target_id="missing-target",
+            lease_id="missing-lease",
+            fencing=1,
+            db_path=store.path,
+            ca_file=ca,
+        )
 
 
 def test_remote_target_lease_fencing_pull_result_and_checksum(tmp_path: Path) -> None:
@@ -747,6 +1047,25 @@ def test_expired_non_idempotent_running_job_requires_manual_reconcile(tmp_path: 
     [changed] = controller.repository.reconcile_expired(now=_now() + timedelta(seconds=121))
     assert changed.job_id == job.job_id
     assert changed.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+    result = controller.repository.get_result(job.job_id)
+    assert result is not None
+    assert result.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+    assert result.error_code == "remote.lease_invalidated_outcome_unknown"
+    assert controller.repository.reconcile_expired(now=_now() + timedelta(seconds=122)) == ()
+    assert controller.repository.get_result(job.job_id) == result
+    with pytest.raises(ConflictError, match="stale"):
+        controller.complete_job(
+            RemoteExecutionResult(
+                job_id=job.job_id,
+                result_idempotency_key="late-expired-success",
+                status=RemoteJobStatus.SUCCEEDED,
+            ),
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            now=_now() + timedelta(seconds=122),
+        )
 
 
 def test_remote_target_api_installer_exposes_bounded_operations(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Sequence
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
@@ -565,14 +566,16 @@ class RemoteExecutionController:
         if not 1 <= limit <= 32:
             raise ValueError("invalid remote job dispatch limit")
         results: list[RemoteExecutionResult] = []
+        dispatch_started = time.monotonic()
         for _ in range(limit):
+            polled_at = now + timedelta(seconds=time.monotonic() - dispatch_started)
             self._require_no_unknown_on_lease(connector.target_id, connector.lease_id)
             jobs = self.repository.poll_jobs(
                 target_id=connector.target_id,
                 lease_id=connector.lease_id,
                 token=connector.lease_token,
                 fencing=connector.lease_fencing,
-                now=now,
+                now=polled_at,
                 limit=1,
             )
             if not jobs:
@@ -580,35 +583,44 @@ class RemoteExecutionController:
             job = jobs[0]
             try:
                 outcome = connector.execute(job)
-                result = self.complete_job(
-                    outcome.result,
-                    target_id=connector.target_id,
-                    lease_id=connector.lease_id,
-                    token=connector.lease_token,
-                    fencing=connector.lease_fencing,
-                    now=now,
-                    artifact_bytes=outcome.artifact_bytes,
-                )
+                pending_result = outcome.result
+                artifact_bytes = outcome.artifact_bytes
             except RemoteOutcomeUnknown:
                 status = (
                     RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
                     if job.idempotency is RemoteActionIdempotency.NON_IDEMPOTENT
                     else RemoteJobStatus.FAILED
                 )
+                pending_result = RemoteExecutionResult(
+                    job_id=job.job_id,
+                    result_idempotency_key=f"connector-unknown:{job.job_id}",
+                    status=status,
+                    error_code="remote.outcome_unknown",
+                )
+                artifact_bytes = None
+            completed_at = now + timedelta(seconds=time.monotonic() - dispatch_started)
+            try:
                 result = self.complete_job(
-                    RemoteExecutionResult(
-                        job_id=job.job_id,
-                        result_idempotency_key=f"connector-unknown:{job.job_id}",
-                        status=status,
-                        error_code="remote.outcome_unknown",
-                        completed_at=now,
-                    ),
+                    pending_result.model_copy(update={"completed_at": completed_at}),
                     target_id=connector.target_id,
                     lease_id=connector.lease_id,
                     token=connector.lease_token,
                     fencing=connector.lease_fencing,
-                    now=now,
+                    now=completed_at,
+                    artifact_bytes=artifact_bytes,
                 )
+            except ConflictError as exc:
+                reconciled = self.repository.reconcile_expired(now=completed_at)
+                persisted = self.repository.get_result(job.job_id)
+                if (
+                    persisted is not None
+                    and persisted.result_idempotency_key == f"core-lease-invalidated:{job.job_id}"
+                ):
+                    result = persisted
+                elif any(item.job_id == job.job_id for item in reconciled):
+                    raise ConflictError("reconciled Job has no durable result") from exc
+                else:
+                    raise
             results.append(result)
             if result.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED:
                 break

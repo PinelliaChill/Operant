@@ -46,6 +46,7 @@ class OperantTui(App[None]):
         Binding("?", "help", "帮助"),
         Binding("alt+4", "experience", "经验与授权"),
         Binding("alt+5", "conversation", "会话工作台"),
+        Binding("alt+6", "remote", "远程设备"),
         Binding("/", "command", "命令"),
         Binding("ctrl+q", "close_terminal_or_quit", "关闭终端 / 退出", priority=True),
         Binding("escape", "dismiss_layer", "关闭"),
@@ -420,6 +421,11 @@ class OperantTui(App[None]):
         from .conversation_screen import ConversationScreen
 
         self.push_screen(ConversationScreen(self.controller))
+
+    def action_remote(self) -> None:
+        from .remote_screen import RemoteScreen
+
+        self.push_screen(RemoteScreen(self.controller))
 
     def action_help(self) -> None:
         self.query_one("#error", Static).update(

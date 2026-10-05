@@ -3686,7 +3686,25 @@ def create_app(
         executor=phase56_remote_executor,
         operation_capabilities=phase56_remote_operation_capabilities,
     )
+    if phase56_remote_executor is None:
+        from operant.remote_control.session_executor import (
+            REMOTE_SESSION_CAPABILITIES,
+            session_remote_executor,
+        )
+
+        previous_remote_executor = remote_control_service.executor
+
+        def run_remote_session(payload: Any, action: Any) -> str | None:
+            if payload.tool == "session":
+                return session_remote_executor(service, payload, action)
+            return previous_remote_executor(payload, action)
+
+        remote_control_service.executor = run_remote_session
+        remote_control_service.operation_capabilities.update(REMOTE_SESSION_CAPABILITIES)
     app.state.b26_connect_remote(remote_control_service)
+    from operant.remote_control.session_query import install_remote_session_query
+
+    install_remote_session_query(app, service, remote_control_service)
     gateway_connection_repository = SQLiteRemoteGatewayConnectionRepository(store)
     install_beta_gateway_routes(
         app,

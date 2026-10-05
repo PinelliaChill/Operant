@@ -7,7 +7,9 @@ from typing import Any, TypeVar
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from operant import __version__
 from operant.application.phase45_gateway import Phase45ActionGateway
+from operant.application.protocol_metadata import PHASE56_PROTOCOL_VERSION
 from operant.application.security import PolicyEngine
 from operant.domain.remote_control import (
     EncryptedRemoteCommand,
@@ -40,8 +42,8 @@ class EnableRemoteHostBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     host_id: str | None = Field(default=None, max_length=200)
     display_name: str = Field(min_length=1, max_length=200)
-    core_version: str = Field(min_length=1, max_length=100)
-    protocol_version: str = Field(min_length=1, max_length=100)
+    core_version: str = Field(default=__version__, min_length=1, max_length=100)
+    protocol_version: str = Field(default=PHASE56_PROTOCOL_VERSION, min_length=1, max_length=100)
     capabilities: tuple[str, ...] = Field(default=(), max_length=64)
     enabled: bool = True
 
