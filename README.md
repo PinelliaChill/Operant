@@ -19,7 +19,7 @@
 
 **[下载 Apple Silicon（M1/M2/M3/M4 等）DMG](https://github.com/PinelliaChill/Operant/releases/download/v0.1.0-beta.2/Operant-v0.1.0-beta.2-macos-arm64.dmg)** · [全部发行附件](https://github.com/PinelliaChill/Operant/releases/tag/v0.1.0-beta.2)
 
-打开 DMG，将 `Operant.app` 拖到“应用程序”，再从“应用程序”启动。DMG 内的 App 已包含 Python、Core 和基础依赖，无需先安装 uv、Python 或单独启动服务。模型调用仍需配置你自己的服务地址和 API Key，详见包内中文安装说明。
+打开 DMG，将 `Operant.app` 拖到“应用程序”，再从“应用程序”启动。DMG 内的 App 已包含 Python、Core 和基础依赖，无需先安装 uv、Python 或单独启动服务。模型调用仍需配置你自己的服务地址和 API Key，中文安装说明位于 App 内部：右键“显示包内容” → `Contents/Resources/安装说明.txt`。
 
 当前包未经 Apple Developer ID 签名或公证。如被系统拦截，在确认下载来源后，按 [Apple 官方说明](https://support.apple.com/en-us/102445)从“系统设置 → 隐私与安全”允许打开。
 新包使用独立的 `~/Library/Application Support/Operant Beta 2/` 保存数据，不自动迁移旧库。启动前先退出旧版 Operant；若 8000 端口已有服务，新包会提示冲突。

@@ -275,12 +275,16 @@ def main() -> None:
     with info.open("wb") as destination:
         plistlib.dump(plist, destination)
 
+    installed_licenses = resources / "Licenses"
+    installed_licenses.mkdir()
     for name in ("LICENSE", "COMMERCIAL.md", "THIRD_PARTY_NOTICES.md"):
-        shutil.copy2(release / name, volume / name)
-    shutil.copytree(release / "licenses", volume / "licenses")
-    shutil.copy2(python / "lib/python3.13/LICENSE.txt", volume / "licenses/CPython-3.13.txt")
-    shutil.copytree(runtime_licenses, volume / "licenses/python-runtime")
-    with (volume / "THIRD_PARTY_NOTICES.md").open("a", encoding="utf-8") as notices:
+        shutil.copy2(release / name, installed_licenses / name)
+    shutil.copytree(release / "licenses", installed_licenses / "licenses")
+    shutil.copy2(
+        python / "lib/python3.13/LICENSE.txt", installed_licenses / "licenses/CPython-3.13.txt"
+    )
+    shutil.copytree(runtime_licenses, installed_licenses / "licenses/python-runtime")
+    with (installed_licenses / "THIRD_PARTY_NOTICES.md").open("a", encoding="utf-8") as notices:
         notices.write(
             "\n## 本 DMG 的内置 Python 运行时\n\n"
             "上文末尾关于 Python 依赖不随包提供的说明仅适用于原 Beta 2 ZIP。"
@@ -290,15 +294,10 @@ def main() -> None:
             " `Operant.app/Contents/Resources/python/lib/python3.13/site-packages/` 的"
             " `*.dist-info/licenses/` 等元数据内。\n"
         )
-    installed_licenses = resources / "Licenses"
-    installed_licenses.mkdir()
-    for name in ("LICENSE", "COMMERCIAL.md", "THIRD_PARTY_NOTICES.md"):
-        shutil.copy2(volume / name, installed_licenses / name)
-    shutil.copytree(volume / "licenses", installed_licenses / "licenses")
     (volume / "Applications").symlink_to("/Applications", target_is_directory=True)
-    (volume / "安装说明.txt").write_text(
+    (resources / "安装说明.txt").write_text(
         "Operant Beta 2（macOS arm64）\n\n"
-        "将 Operant.app 拖到 Applications，或复制到任意可写位置后双击。"
+        "将 Operant.app 复制到 Finder 的“应用程序”，或任意可写位置后双击。"
         "首次打开此 ad-hoc 签名且未公证的 App 时，macOS 可能要求在系统设置中允许打开。\n\n"
         "App 自带 Core 和 Python；无需另装 Python 或 uv。首次启动会在"
         " ~/Library/Application Support/Operant Beta 2/ 创建独立数据库。"
@@ -310,7 +309,7 @@ def main() -> None:
         "如 8000 端口已由旧版 Operant 或其他服务占用，先退出该服务再打开本版。"
         "报错日志位于上述目录的 core.log。\n\n"
         "本包仅为 macOS arm64，未获 Apple Developer ID 签名或公证。"
-        "项目许可见 LICENSE、COMMERCIAL.md、THIRD_PARTY_NOTICES.md 与 licenses/。\n",
+        "项目许可见本目录下的 Licenses/，包含主许可、商业授权说明及第三方许可。\n",
         encoding="utf-8",
     )
     manifest = {
@@ -337,11 +336,14 @@ def main() -> None:
         },
         "signing": "ad-hoc only; not Developer ID signed or notarized",
     }
+    (resources / "来源摘要.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     check_symlinks(app)
     sign_app(app)
     manifest["launcher_sha256"] = digest(launcher)
     manifest["bundle_files_sha256"] = bundle_checksums(app)
-    (volume / "来源摘要.json").write_text(
+    (output / "来源摘要.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     dmg = output / f"{NAME}.dmg"
