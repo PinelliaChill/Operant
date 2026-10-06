@@ -259,7 +259,7 @@ export const LiveAgentsView: React.FC = () => {
     <div className="section-view b2-agents-page" data-client-mode="live">
       <header className="section-header b2-agents-header">
         <div className="b2-agents-header-copy">
-          <span className="b2-agents-kicker">Agent 配置</span>
+          <span className="b2-agents-kicker">模型与角色</span>
           <h1 className="section-title">模型与角色</h1>
           <p className="section-sub">先配置可用模型，再编辑角色预设；运行实例保留为只读快照。</p>
         </div>
@@ -295,7 +295,7 @@ export const LiveAgentsView: React.FC = () => {
                 </div>
                 {models.length === 0 ? (
                   <div className="b2-agents-empty-shell">
-                    <EmptyState icon={Database} title="暂无模型配置" description="先添加一个模型，或在表单中使用 Provider Discovery 选择 Core 返回的精确模型 ID。" />
+                    <EmptyState icon={Database} title="暂无模型配置" description="添加模型，或从发现列表选择模型 ID。" />
                   </div>
                 ) : (
                   <div className="b2-agents-grid">
@@ -318,12 +318,12 @@ export const LiveAgentsView: React.FC = () => {
                         <details className="b2-agents-details">
                           <summary>查看连接与能力详情</summary>
                           <dl className="b2-agents-detail-grid">
-                            <div><dt>ModelProfile ID</dt><dd><code>{model.id || 'Core 尚未返回 ID'}</code></dd></div>
+                            <div><dt>模型配置 ID</dt><dd><code>{model.id || '暂无 ID'}</code></dd></div>
                             <div><dt>Provider</dt><dd>{model.provider || 'openai-compatible'}</dd></div>
                             <div><dt>Base URL</dt><dd><code>{model.base_url}</code></dd></div>
                             <div><dt>凭据引用</dt><dd><code>{model.secret_ref}</code></dd></div>
-                            <div><dt>可用推理强度</dt><dd>{model.supported_efforts?.join('、') || 'Core 未返回'}</dd></div>
-                            <div><dt>默认推理强度</dt><dd>{model.default_effort || 'Core 未返回'}</dd></div>
+                            <div><dt>可用推理强度</dt><dd>{model.supported_efforts?.join('、') || '暂无'}</dd></div>
+                            <div><dt>默认推理强度</dt><dd>{model.default_effort || '暂无'}</dd></div>
                             <div><dt>输入价格</dt><dd>{model.input_usd_per_million_tokens === undefined || model.input_usd_per_million_tokens === null ? '未设置' : `$${model.input_usd_per_million_tokens}/百万 tokens`}</dd></div>
                             <div><dt>输出价格</dt><dd>{model.output_usd_per_million_tokens === undefined || model.output_usd_per_million_tokens === null ? '未设置' : `$${model.output_usd_per_million_tokens}/百万 tokens`}</dd></div>
                             <div><dt>Provider 参数</dt><dd><code>{model.effort_parameter || '未设置'}</code></dd></div>
@@ -346,11 +346,11 @@ export const LiveAgentsView: React.FC = () => {
                       <p>编辑可复用的角色；每次运行保留创建时的角色快照。</p>
                     </div>
                   </div>
-                  <div className="b2-agents-section-meta"><span className="b2-agents-count">{roles.length} 个</span><span>版本由 Core 维护</span></div>
+                  <div className="b2-agents-section-meta"><span className="b2-agents-count">{roles.length} 个</span><span></span></div>
                 </div>
                 {roles.length === 0 ? (
                   <div className="b2-agents-empty-shell">
-                    <EmptyState icon={Bot} title="暂无角色预设" description="请先配置模型，再创建可用于 Session 的角色预设。" />
+                    <EmptyState icon={Bot} title="暂无角色预设" description="请先配置模型，再创建角色。" />
                   </div>
                 ) : (
                   <div className="b2-agents-grid">
@@ -373,9 +373,9 @@ export const LiveAgentsView: React.FC = () => {
                         <details className="b2-agents-details">
                           <summary>查看角色与权限详情</summary>
                           <dl className="b2-agents-detail-grid">
-                            <div><dt>RolePreset ID</dt><dd><code>{role.id || 'Core 尚未返回 Role ID'}</code></dd></div>
+                            <div><dt>角色 ID</dt><dd><code>{role.id || '暂无角色 ID'}</code></dd></div>
                             <div><dt>版本</dt><dd>v{role.version || 1}</dd></div>
-                            <div><dt>ModelProfile ID</dt><dd><code>{role.model_profile_id}</code></dd></div>
+                            <div><dt>模型配置 ID</dt><dd><code>{role.model_profile_id}</code></dd></div>
                             <div><dt>记忆范围</dt><dd><code>{role.memory_scope || '未设置'}</code></dd></div>
                             <div><dt>允许工具</dt><dd>{role.tool_policy?.allowed_tools?.join('、') || '无'}</dd></div>
                             <div><dt>需审批能力</dt><dd>{role.tool_policy?.approval_required?.join('、') || '无'}</dd></div>
@@ -407,7 +407,7 @@ export const LiveAgentsView: React.FC = () => {
                 {instances.length === 0 ? (
                   <div className="b2-agents-empty-inline" role="status">
                     <Bot size={18} aria-hidden="true" />
-                    <div><strong>暂无运行实例</strong><span>创建并运行任务后，Core 会在此展示只读实例。</span></div>
+                    <div><strong>暂无运行实例</strong><span>运行任务后会在此显示成员。</span></div>
                   </div>
                 ) : (
                   <div className="b2-agents-grid">
@@ -432,8 +432,8 @@ export const LiveAgentsView: React.FC = () => {
                           <details className="b2-agents-details">
                             <summary>查看不可变 RoleSnapshot</summary>
                             <dl className="b2-agents-detail-grid b2-agents-snapshot-grid">
-                              <div><dt>Agent ID</dt><dd><code>{agent.id || 'Core 尚未返回 Agent ID'}</code></dd></div>
-                              <div><dt>Session ID</dt><dd><code>{agent.session_id}</code></dd></div>
+                              <div><dt>成员 ID</dt><dd><code>{agent.id || '暂无成员 ID'}</code></dd></div>
+                              <div><dt>会话 ID</dt><dd><code>{agent.session_id}</code></dd></div>
                               <div><dt>Role ID</dt><dd><code>{snapshot.role_id}</code></dd></div>
                               <div><dt>Role 版本</dt><dd>v{snapshot.role_version}</dd></div>
                               <div><dt>ModelProfile</dt><dd>{snapshot.model_profile_name} · <code>{snapshot.model_profile_id}</code></dd></div>
@@ -524,13 +524,13 @@ export const LiveAgentsView: React.FC = () => {
             <div className="b2-agents-discovery-head">
               <div>
                 <h3 id="b2-model-discovery-title">发现可用模型</h3>
-                <p>从当前连接读取 Core 返回的模型 ID，点击后填入表单。</p>
+                <p>选择发现的模型 ID，填入表单。</p>
               </div>
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => void discover()} disabled={discovering || !modelForm.baseUrl.trim() || !modelForm.secretRef.trim()}><Search size={13} aria-hidden="true" />{discovering ? '发现中…' : 'Provider Discovery'}</button>
             </div>
-            {discovery && <div className="b2-agents-discovery-result"><strong>Core 返回的模型 ID</strong>{discovery.length === 0 ? <span>没有返回模型 ID</span> : discovery.map((id) => <button type="button" className="b2-agents-discovery-id" key={id} onClick={() => setModelForm((current) => ({ ...current, modelId: id }))}>{id}</button>)}</div>}
+            {discovery && <div className="b2-agents-discovery-result"><strong>发现的模型 ID</strong>{discovery.length === 0 ? <span>没有返回模型 ID</span> : discovery.map((id) => <button type="button" className="b2-agents-discovery-id" key={id} onClick={() => setModelForm((current) => ({ ...current, modelId: id }))}>{id}</button>)}</div>}
           </section>
-          <p className="b2-agents-form-note">Core 只保存 <code>secret_ref</code> 引用名；GUI 不读取、显示或保存凭据值。</p>
+          <p className="b2-agents-form-note">这里只保存凭据的环境变量名，不读取或显示凭据值。</p>
         </div>
       </Modal>
 
@@ -549,7 +549,7 @@ export const LiveAgentsView: React.FC = () => {
               <div className="b2-agents-field">
                 <label htmlFor="b2-role-model">绑定模型配置</label>
                 <select id="b2-role-model" className="select" value={roleForm.modelProfileId} onChange={(event) => setRoleForm((current) => ({ ...current, modelProfileId: event.target.value, effort: models.find((model) => model.id === event.target.value)?.default_effort || current.effort }))}><option value="">选择模型配置</option>{models.filter((model) => model.id && model.enabled !== false).map((model) => <option key={model.id} value={model.id}>{model.name} · {model.model_id}</option>)}</select>
-                <p>只显示 Core 返回且仍启用的 ModelProfile。</p>
+                <p>只能选择已启用的模型配置。</p>
               </div>
             </div>
           </fieldset>
@@ -572,7 +572,7 @@ export const LiveAgentsView: React.FC = () => {
               <div className="b2-agents-field">
                 <label htmlFor="b2-role-turns">最大轮次</label>
                 <input id="b2-role-turns" className="input" type="number" min={1} value={roleForm.maxTurns} onChange={(event) => setRoleForm((current) => ({ ...current, maxTurns: event.target.value }))} />
-                <p>达到上限后由 Core 停止该角色的继续执行。</p>
+                <p>达到上限后，该角色会停止执行。</p>
               </div>
             </div>
           </fieldset>
@@ -592,7 +592,7 @@ export const LiveAgentsView: React.FC = () => {
               </label>)}</div>
             </div>)}
           </fieldset>
-          <p className="b2-agents-form-note">权限变更只进入新建 Session 的不可变快照；已有运行不会改变。编辑时其他工具、Workspace 写入、命令执行、审批和执行器设置保持原值。</p>
+          <p className="b2-agents-form-note">权限修改只对新会话生效，不影响已有运行。其他工具、工作区写入、命令执行和审批设置保持原值。</p>
         </div>
       </Modal>
     </div>

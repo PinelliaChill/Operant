@@ -904,17 +904,17 @@ export const LiveSkillsView: React.FC = () => {
     return needle ? skills.filter((item) => `${item.name} ${item.description} ${item.relativeDirectory}`.toLowerCase().includes(needle)) : skills;
   }, [query, skills]);
 
-  if (phase === 'loading' && skills.length === 0) return <div className="live-route-state" role="status"><RefreshCw size={22} aria-hidden="true" /><h1>正在读取 Skill Projection…</h1><p>Live 模式不会使用演示技能填充页面。</p></div>;
+  if (phase === 'loading' && skills.length === 0) return <div className="live-route-state" role="status"><RefreshCw size={22} aria-hidden="true" /><h1>正在读取技能…</h1><p>连接后会显示可用技能。</p></div>;
 
   return <div className="section-view" data-client-mode="live">
     <header className="section-header" style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-      <div><h1 className="section-title">技能中心</h1><p className="section-sub">Core 发现的候选技能；发现不代表信任、安装或授权。</p></div>
+      <div><h1 className="section-title">技能中心</h1><p className="section-sub">发现的候选技能；使用前仍需确认信任、安装和授权。</p></div>
       <div style={{ display: 'flex', gap: 8 }}><button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={Boolean(actionLabel)}><RefreshCw size={13} aria-hidden="true" />刷新</button><button type="button" className="btn btn-primary btn-sm" onClick={() => void discoverSkills()} disabled={Boolean(actionLabel) || connectionStatus !== 'connected'}><Search size={13} aria-hidden="true" />{actionLabel === '扫描技能' ? '扫描中…' : '扫描受信根目录'}</button></div>
     </header>
     <div className="section-scroll"><div className="section-inner">
-      <div aria-live="polite">{connectionStatus !== 'connected' && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />Core 连接已断开；现有 Skill Projection 可能过期，写操作已禁用。</div>}{error && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{error.code}：{error.message}</div>}{skillIssues.length > 0 && <div className="live-alert" role="status"><ShieldAlert size={16} aria-hidden="true" />扫描跳过 {skillIssues.length} 个不安全或无效候选。</div>}</div>
+      <div aria-live="polite">{connectionStatus !== 'connected' && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />连接已断开；技能列表可能过期，修改操作已禁用。</div>}{error && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{error.code}：{error.message}</div>}{skillIssues.length > 0 && <div className="live-alert" role="status"><ShieldAlert size={16} aria-hidden="true" />扫描跳过 {skillIssues.length} 个不安全或无效候选。</div>}</div>
       <label style={{ display: 'block', maxWidth: 360, marginBottom: 16 }}>搜索候选技能<input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="名称、描述或相对目录" /></label>
-      {visible.length === 0 ? <div className="section-empty-wrap"><EmptyState icon={Sparkles} title="没有 Skill candidate" description="可扫描 Core 已配置的受信根目录；客户端不能提交任意本机路径。" /></div> : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: 14 }}>
+      {visible.length === 0 ? <div className="section-empty-wrap"><EmptyState icon={Sparkles} title="没有候选技能" description="可扫描已配置的可信目录。" /></div> : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: 14 }}>
         {visible.map((skill) => <button key={skill.id} type="button" className="card" style={{ textAlign: 'left', padding: 16, color: 'inherit' }} onClick={() => setSelected(skill)} aria-label={`查看候选技能 ${skill.name}`}>
           <strong>{skill.name}</strong><span className="badge" style={{ marginLeft: 8 }}>未信任候选</span>
           <p>{skill.description}</p><code>{skill.relativeDirectory}</code><p className="section-footnote">{skill.resources.length} 个已哈希资源</p>

@@ -201,6 +201,7 @@ fn persist_secret_reference(app: AppHandle, secret_ref: String) -> Result<(), St
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(CoreProcess::default())
         .setup(|app| {
             start_local_core(app.state::<CoreProcess>())?;

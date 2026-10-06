@@ -6,6 +6,7 @@
  * 文件/任务两栏摘要卡；项目 id 不存在时显示空态。
  */
 
+import { PathInput } from '../../components/PathInput';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -101,21 +102,17 @@ const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClose }) =>
 
         <div>
           <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
-            工作区绑定目录路径
+            项目文件夹
           </label>
-          <input
-            type="text"
-            className="input"
-            placeholder="/Users/operant/workspace/..."
+          <PathInput
+            aria-label="项目文件夹"
+            placeholder="选择文件夹或填写完整路径"
             value={path}
-            onChange={(e) => {
-              setPath(e.target.value);
+            onChange={(value) => {
+              setPath(value);
               setPathCustomized(true);
             }}
           />
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
-            与本地文件系统 workspace 目录绑定，会话与工作流生成的文件将归属于该路径。
-          </span>
         </div>
 
         <div>

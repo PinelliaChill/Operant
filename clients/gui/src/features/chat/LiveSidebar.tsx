@@ -107,11 +107,11 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   };
 
   const phaseLabel = phase === 'ready'
-    ? 'Core 已连接'
+    ? '已连接'
     : phase === 'connecting'
-      ? '正在连接 Core'
+      ? '连接中'
       : phase === 'error'
-        ? 'Core 连接失败'
+        ? '连接失败'
         : '等待连接';
 
   return (
@@ -132,7 +132,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
           type="button"
           className="btn btn-ghost btn-icon"
           onClick={() => setNewSessionOpen(true)}
-          aria-label="创建 Core Session"
+          aria-label="新建会话"
           title="为当前会话创建运行"
           disabled={!canCreateSession || creatingSession}
         >
@@ -190,7 +190,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                     if (selectProject(project.id)) toggleProject(project.id);
                   }}
                   aria-expanded={!isCollapsed}
-                  aria-label={`Project ${project.name}，${projectThreadList.length} 个 Thread`}
+                  aria-label={`项目 ${project.name}，${projectThreadList.length} 个会话`}
                 >
                   <FolderKanban size={13} aria-hidden="true" />
                   <span className="rail-sidebar-project-info">
@@ -250,7 +250,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
         )}
         {command.status === 'awaiting_projection' && (
           <div className="live-sidebar-empty" role="status">
-            Session/Run 已接受，等待 Core Projection 更新…
+            请求已接受，正在同步进度…
           </div>
         )}
       </div>
@@ -258,8 +258,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
       <div className="rail-sidebar-footer">
         <div className="rail-sidebar-mode-card live-mode-card">
           <div className="rail-sidebar-mode-text">
-            <span className="rail-sidebar-mode-title">实时 Core</span>
-            <span className="rail-sidebar-mode-desc">只显示服务端 Projection</span>
+            <span className="rail-sidebar-mode-title">实时连接</span>
           </div>
           <button
             type="button"
@@ -275,31 +274,24 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
       <Modal
         isOpen={newSessionOpen}
         onClose={() => setNewSessionOpen(false)}
-        title="创建 Core Session"
+        title="新建会话"
         footer={(
           <>
             <button type="button" className="btn btn-secondary" onClick={() => setNewSessionOpen(false)}>
               取消
             </button>
-            <button type="button" className="btn btn-primary" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !newRoleName.trim() || !newRolePrompt.trim() || !newRoleModelId.trim() || creatingSession} title={createSessionUnavailableReason || '请填写完整 newRole'}>
-              {creatingSession ? '提交中…' : '创建并等待 Projection'}
+            <button type="button" className="btn btn-primary" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !newRoleName.trim() || !newRolePrompt.trim() || !newRoleModelId.trim() || creatingSession} title={createSessionUnavailableReason || '请填写完整角色信息'}>
+              {creatingSession ? '提交中…' : '创建会话'}
             </button>
           </>
         )}
       >
-        <p className="live-modal-copy">
-          请求会交给当前 Core 的 Session Client，并绑定当前选中的 Thread。GUI 不会本地生成 Session、Thread 或运行状态；未选择 Thread 时不能创建。
-        </p>
         <div className="live-modal-form">
-          <label className="live-select-label"><span>新 Role 名称</span><input className="input" value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} placeholder="例如：编码助手" /></label>
-          <label className="live-select-label"><span>Model Profile ID</span><input className="input" value={newRoleModelId} onChange={(event) => setNewRoleModelId(event.target.value)} placeholder="Core 中已配置的 profile ID" /></label>
-          <label className="live-select-label"><span>System Prompt</span><textarea className="textarea" value={newRolePrompt} onChange={(event) => setNewRolePrompt(event.target.value)} rows={3} placeholder="输入 Role 的系统提示" /></label>
+          <label className="live-select-label"><span>角色名称</span><input className="input" value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} placeholder="例如：编码助手" /></label>
+          <label className="live-select-label"><span>模型配置编号</span><input className="input" value={newRoleModelId} onChange={(event) => setNewRoleModelId(event.target.value)} placeholder="已配置的模型编号" /></label>
+          <label className="live-select-label"><span>系统提示词</span><textarea className="textarea" value={newRolePrompt} onChange={(event) => setNewRolePrompt(event.target.value)} rows={3} placeholder="描述这个角色的职责" /></label>
         </div>
         {createSessionUnavailableReason && <p className="live-modal-copy">{createSessionUnavailableReason}</p>}
-        <div className="live-modal-boundary">
-          <span>当前阶段接入</span>
-          <strong>Workspace / Project · Thread · Session / Run</strong>
-        </div>
       </Modal>
     </div>
   );

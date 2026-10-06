@@ -7,7 +7,7 @@ type Preview = { path: string; content: string; content_hash: string; size_bytes
 type Diff = { path: string; diff: string; truncated: boolean };
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : 'Core 文件读取失败';
+  return error instanceof Error ? error.message : '文件读取失败';
 }
 
 function languageLabel(path: string): string {
@@ -58,7 +58,7 @@ export const LiveFilePreview: React.FC<{
 
   const parentPath = currentPath.split('/').filter(Boolean).slice(0, -1).join('/');
   return <section className="live-panel live-files-panel" aria-labelledby="live-files-title">
-    <div className="live-panel-heading"><div><h2 id="live-files-title">工作区文件</h2><p>正文与差异由 Core 按路径和权限读取，单次最多 64 KiB</p></div>
+    <div className="live-panel-heading"><div><h2 id="live-files-title">工作区文件</h2><p>按权限读取文件，单次最多 64 KiB</p></div>
       {currentPath && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onLoad(parentPath)} disabled={loading}>返回上级</button>}
     </div>
     <div className="live-file-path" aria-label="当前目录路径"><span>{currentPath ? `/${currentPath}` : '/'}</span><span className="live-file-project-id">Workspace ID: {workspaceId}</span></div>
@@ -76,6 +76,6 @@ export const LiveFilePreview: React.FC<{
       <p>{preview.language || languageLabel(preview.path)} · {preview.size_bytes.toLocaleString()} B · 预览片段哈希 {preview.content_hash.slice(0, 16)}…{preview.truncated ? ' · 预览已截断' : ''}</p>
       <pre aria-label="文件正文"><code>{preview.content}</code></pre>
     </div>}
-    {diff && <div className="live-file-preview"><strong>工作区 Diff · {diff.path}</strong><p>{diff.truncated ? '差异已截断；请缩小范围核对。' : 'Core 返回的当前差异'}</p><pre aria-label="文件 Diff"><code>{diff.diff || '没有可显示的差异。'}</code></pre></div>}
+    {diff && <div className="live-file-preview"><strong>文件差异 · {diff.path}</strong><p>{diff.truncated ? '差异已截断；请缩小范围核对。' : '当前差异'}</p><pre aria-label="文件差异"><code>{diff.diff || '没有可显示的差异。'}</code></pre></div>}
   </section>;
 };

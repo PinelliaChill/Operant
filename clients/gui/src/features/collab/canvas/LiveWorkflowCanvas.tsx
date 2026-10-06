@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { PathInput } from '../../../components/PathInput';
+import { useOperant } from '../../../context/ClientContext';
 import { Bot, GitBranch, GitFork, Merge, Plus, Timer, Trash2, Wrench, FileCode, Hand, ShieldCheck, Hourglass, Workflow, Package } from 'lucide-react';
 import type { Phase23 } from '@operant/sdk';
 import { hasOutputPort, newNode, nodePosition } from './live-graph-model';
@@ -49,6 +51,7 @@ const JsonField: React.FC<{ label: string; value: unknown; onChange: (value: Rec
 };
 
 const NodeFields: React.FC<{ node: Node; nodes: Node[]; roles: { id: string; label: string }[]; disabled: boolean; update: (patch: Partial<Node>) => void }> = ({ node, nodes, roles, disabled, update }) => {
+  const { activeWorkspace } = useOperant();
   const metadata = node.metadata || {};
   const setMetadata = (patch: Record<string, unknown>) => update({ metadata: { ...metadata, ...patch } });
   const policy = node.loop_policy;
@@ -58,7 +61,7 @@ const NodeFields: React.FC<{ node: Node; nodes: Node[]; roles: { id: string; lab
     {(['agent', 'tool', 'script'].includes(node.node_kind)) && <label>绑定 RolePreset<select value={typeof metadata.role_id === 'string' ? metadata.role_id : ''} onChange={(event) => setMetadata({ role_id: event.target.value, role_version: undefined })} disabled={disabled}><option value="">选择角色</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.label}</option>)}</select></label>}
     {node.node_kind === 'agent' && <label>节点任务<input value={typeof metadata.task === 'string' ? metadata.task : ''} onChange={(event) => setMetadata({ task: event.target.value })} disabled={disabled} /></label>}
     {node.node_kind === 'tool' && <><label>工具<select value={typeof metadata.tool_name === 'string' ? metadata.tool_name : ''} onChange={(event) => setMetadata({ tool_name: event.target.value })} disabled={disabled}><option value="">选择工具</option>{['read_file', 'search_files', 'git_diff', 'apply_patch', 'run_command'].map((name) => <option key={name} value={name}>{name}</option>)}</select></label><JsonField key={`${node.node_id}:arguments`} label={'参数绑定 JSON（可用 {"$input":"端口名"}）'} value={metadata.arguments || {}} onChange={(value) => setMetadata({ arguments: value })} disabled={disabled} /></>}
-    {node.node_kind === 'script' && <><JsonField key={`${node.node_id}:argv`} label="命令 argv（字符串数组）" value={metadata.argv || []} onChange={(value) => setMetadata({ argv: value })} disabled={disabled} array /><label>工作目录<input value={typeof metadata.cwd === 'string' ? metadata.cwd : ''} onChange={(event) => setMetadata({ cwd: event.target.value })} disabled={disabled} /></label><label>超时秒数<input type="number" min="1" value={typeof metadata.timeout_seconds === 'number' ? metadata.timeout_seconds : 300} onChange={(event) => setMetadata({ timeout_seconds: Number(event.target.value) })} disabled={disabled} /></label></>}
+    {node.node_kind === 'script' && <><JsonField key={`${node.node_id}:argv`} label="命令与参数（JSON 数组）" value={metadata.argv || []} onChange={(value) => setMetadata({ argv: value })} disabled={disabled} array /><PathInput key={`${node.node_id}:cwd`} label="运行文件夹" value={typeof metadata.cwd === 'string' ? metadata.cwd : ''} onChange={(value) => setMetadata({ cwd: value })} relativeTo={activeWorkspace} disabled={disabled || !activeWorkspace.trim()} /><label>超时秒数<input type="number" min="1" value={typeof metadata.timeout_seconds === 'number' ? metadata.timeout_seconds : 300} onChange={(event) => setMetadata({ timeout_seconds: Number(event.target.value) })} disabled={disabled} /></label></>}
     {node.node_kind === 'condition' && <label>条件表达式<input value={typeof metadata.expression === 'string' ? metadata.expression : ''} onChange={(event) => setMetadata({ expression: event.target.value })} disabled={disabled} /></label>}
     {node.node_kind === 'timer' && <label>延迟秒数<input type="number" min="0" max="86400" value={typeof metadata.delay_seconds === 'number' ? metadata.delay_seconds : 0} onChange={(event) => setMetadata({ delay_seconds: Number(event.target.value) })} disabled={disabled} /></label>}
     {node.node_kind === 'wait' && <label>等待秒数<input type="number" min="0" max="86400" value={typeof metadata.delay_seconds === 'number' ? metadata.delay_seconds : 0} onChange={(event) => setMetadata({ delay_seconds: Number(event.target.value) })} disabled={disabled} /></label>}

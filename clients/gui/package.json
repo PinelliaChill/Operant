@@ -11,6 +11,7 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
+    "@tauri-apps/plugin-dialog": "2.4.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",

@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Minimal capability set for the Operant desktop window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
+import { PathInput } from '../../components/PathInput';
 import type * as B2 from '../../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../../context/ClientContext';
 import { approvalId, outcomeNeedsReconciliation, requestCode, requestError, requiredText } from '../extensions/localProjection';
@@ -81,9 +82,9 @@ function eventSummary(event: LiveEvent): string {
     return typeof delta === 'string' ? delta : '模型增量已提交';
   }
   if (event.event_type.startsWith('approval') || event.event_type.includes('approval')) {
-    return 'Approval Projection 已更新';
+    return '审批状态已更新';
   }
-  if (event.event_type.startsWith('tool.')) return 'Action Gateway Projection 已更新';
+  if (event.event_type.startsWith('tool.')) return '操作状态已更新';
   if (event.event_type === 'agent.failed') {
     const message = event.payload.message;
     return typeof message === 'string' && message.trim() ? `Agent 失败：${message}` : 'Agent 运行失败';
@@ -100,7 +101,7 @@ function eventSummary(event: LiveEvent): string {
   if (event.event_type === 'agent.no_progress') return 'Agent 因连续无进展而停止';
   if (event.event_type === 'agent.max_turns') return 'Agent 已达到最大轮次';
   if (event.event_type === 'session.run_failed') return 'Session 运行失败';
-  if (event.event_type.startsWith('agent.')) return 'Agent Projection 已更新';
+  if (event.event_type.startsWith('agent.')) return '成员状态已更新';
   return '收到已提交事件';
 }
 
@@ -144,7 +145,7 @@ export const LiveApprovalCard: React.FC<{
       <span className="live-approval-icon" aria-hidden="true"><ShieldCheck size={16} /></span>
       <div>
         <h3>{approval.category}</h3>
-        <p>{approval.detail || 'Core 未提供动作详情'}</p>
+        <p>{approval.detail || '暂无动作详情'}</p>
       </div>
       <StatusBadge status={approval.status} size="sm" />
     </div>
@@ -327,6 +328,9 @@ export const LiveChatView: React.FC = () => {
   const [referenceTarget, setReferenceTarget] = useState('');
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
   const [referenceBusy, setReferenceBusy] = useState(false);
+  const referenceRequest = useRef(0);
+  const referenceScope = useRef('');
+  referenceScope.current = `${selectedThreadId}:${selectedThread?.workspaceRef || ''}`;
   const [referenceMaxTokens, setReferenceMaxTokens] = useState(1200);
   const [artifactChoices, setArtifactChoices] = useState<ArtifactChoice[]>([]);
   const [artifactCursor, setArtifactCursor] = useState<number | null>(null);
@@ -390,7 +394,9 @@ export const LiveChatView: React.FC = () => {
 
   useEffect(() => {
     setReferences([]);
+    setReferenceTarget('');
     setReferencePickerOpen(false);
+    setReferenceBusy(false);
     setWorkbenchError('');
     setWorkbenchNotice('');
     setExtensionApproval(undefined);
@@ -401,7 +407,8 @@ export const LiveChatView: React.FC = () => {
     setArtifactLoaded(false);
     setArtifactBusy(false);
     setArtifactError('');
-  }, [selectedThreadId]);
+    return () => { ++referenceRequest.current; };
+  }, [selectedThreadId, selectedThread?.workspaceRef]);
 
   useEffect(() => {
     if (!pickerVisible || referenceKind !== 'artifact' || !selectedThreadId || !workbenchConnected || artifactLoaded) return;
@@ -530,11 +537,11 @@ export const LiveChatView: React.FC = () => {
           await refreshHistory();
           const skillFeedback = extension.kind === 'skill' && typeof result.result === 'string'
             ? `：${result.result.slice(0, 500)}（资源 ${'resource_id' in result ? result.resource_id : '未知'}）`
-            : '；请查看 Core 历史及结果';
+            : '；请查看会话记录确认结果';
           if (result.status === 'failed') { setWorkbenchError(`${extension.command} 已失败${skillFeedback}`); return; }
           setWorkbenchNotice(extension.kind === 'skill'
             ? `${extension.command} 已完成${skillFeedback}`
-            : `${extension.command} 已完成，结果已写入 Core 历史。`);
+            : `${extension.command} 已完成，结果已写入会话记录。`);
           setDraft(''); setExtensionArguments('{}');
         };
         setCommandBusy(true); setWorkbenchError(''); setWorkbenchNotice('');
@@ -553,13 +560,13 @@ export const LiveChatView: React.FC = () => {
       const [name, ...argumentParts] = message.split(/\s+/);
       const definition = registry.commands.find((item) => [item.canonical_name, ...(item.aliases ?? [])]
         .some((alias) => alias.toLowerCase() === name.toLowerCase()));
-      if (!definition) { setWorkbenchError(`Core 未注册命令 ${name}。请从命令列表选择。`); return; }
+      if (!definition) { setWorkbenchError(`没有找到命令 ${name}。请从命令列表选择。`); return; }
       if (argumentParts.length > 0 && !['review.run', 'plan.generate'].includes(definition.command_kind)) {
         setWorkbenchError(`${definition.canonical_name} 不接受参数；草稿已保留。`);
         return;
       }
       if (reviewCommand && !effectiveReviewerRoleId) {
-        setWorkbenchError('运行 /review 需要严格只读的 Reviewer 角色：仅允许 read_file、search_files、git_diff。请先在 Agent 设置中配置。');
+        setWorkbenchError('运行 /review 需要严格只读的 Reviewer 角色：仅允许 read_file、search_files、git_diff。请先在模型与角色设置中配置。');
         return;
       }
       setCommandBusy(true); setWorkbenchError(''); setWorkbenchNotice('');
@@ -583,17 +590,21 @@ export const LiveChatView: React.FC = () => {
 
   const addReference = async (target = referenceTarget, kind = referenceKind) => {
     if (!selectedThread || !workbenchConnected || !target.trim() || referenceBusy) return;
+    const request = ++referenceRequest.current;
+    const scope = referenceScope.current;
+    const isCurrent = () => request === referenceRequest.current && scope === referenceScope.current;
     setReferenceBusy(true); setWorkbenchError('');
     try {
       const identity = `reference:${selectedThread.id}:${kind}:${target.trim()}:${referenceMaxTokens}`;
       const value = await workbenchClient.createReference(selectedThread.id, { kind, target: target.trim(), max_tokens: referenceMaxTokens }, keyForWorkbenchAction(identity));
       workbenchKeys.current.delete(identity);
+      if (!isCurrent()) return;
       setReferences((current) => [...current, value]);
       if (target === referenceTarget) setReferenceTarget('');
       setReferencePickerOpen(false);
       setWorkbenchNotice(`已附加 ${value.source} 的摘要快照，正文按需读取。`);
-    } catch (error) { setWorkbenchError(error instanceof Error ? error.message : '引用创建失败'); }
-    finally { setReferenceBusy(false); }
+    } catch (error) { if (isCurrent()) setWorkbenchError(error instanceof Error ? error.message : '引用创建失败'); }
+    finally { if (isCurrent()) setReferenceBusy(false); }
   };
 
   const handleCreateSession = async () => {
@@ -627,10 +638,10 @@ export const LiveChatView: React.FC = () => {
   const connectionMessage = phase === 'ready'
     ? manualReconcileRequired
       ? '需要人工核对，已阻止自动重试'
-      : stream.status === 'replaying' ? 'Core 正在重建连接，Projection 待校正' : 'Core 已连接'
-    : phase === 'connecting' ? '正在连接 Core 并协商 phase1e.v1…'
-      : phase === 'error' ? 'Core 连接失败，实时数据未加载'
-        : '等待 Core 连接';
+      : stream.status === 'replaying' ? '正在重新连接并同步状态' : '已连接'
+    : phase === 'connecting' ? '正在连接…'
+      : phase === 'error' ? '连接失败，实时信息未加载'
+        : '等待连接';
 
   if (phase !== 'ready' && !selectedThread && !topError) {
     return (
@@ -638,7 +649,7 @@ export const LiveChatView: React.FC = () => {
         <div className="live-connection-state" role="status" aria-live="polite">
           <Loader2 size={22} className="animate-spin" aria-hidden="true" />
           <h1>{connectionMessage}</h1>
-          <p>Live 模式只等待 Core Projection，不会显示演示会话。</p>
+          <p>连接后会显示项目会话。</p>
         </div>
       </div>
     );
@@ -649,7 +660,7 @@ export const LiveChatView: React.FC = () => {
       <header className="live-chat-header">
         <div className="live-header-leading">
           {showSidebarOpenBtn && (
-            <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开 Core 侧栏" title="打开 Core 侧栏">
+            <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开侧栏" title="打开侧栏">
               {isMobile ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftOpen size={16} aria-hidden="true" />}
             </button>
           )}
@@ -665,7 +676,7 @@ export const LiveChatView: React.FC = () => {
             size="sm"
             pulse={phase === 'connecting' || stream.status === 'replaying'}
           />
-          <button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新 Core Projection" title="刷新 Core Projection" disabled={phase === 'connecting'}>
+          <button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新会话状态" title="刷新会话状态" disabled={phase === 'connecting'}>
             <RefreshCw size={15} aria-hidden="true" />
           </button>
         </div>
@@ -682,14 +693,14 @@ export const LiveChatView: React.FC = () => {
       )}
       {workbenchError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>{workbenchError}</span></div>}
       {workbenchNotice && <div className="live-workbench-notice" role="status">{workbenchNotice}</div>}
-      {terminalCleanupId && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>终端 {terminalCleanupId} 的清理结果未确认；请人工核查。打开终端面板可回读 Core 状态。本提示不改变 Core 审计。</span></div>}
+      {terminalCleanupId && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>终端 {terminalCleanupId} 的清理结果未确认；请人工核查。打开终端面板可刷新状态。本提示不改变审计记录。</span></div>}
 
       {manualReconcileRequired && (
         <div className="live-alert live-alert-warn" role="alert">
           <AlertTriangle size={17} aria-hidden="true" />
           <div className="live-alert-content">
             <strong>需要人工核对</strong>
-            <span>{manualReconcileReason || 'Core 返回了 manual_reconcile_required / outcome_unknown。GUI 不会自动重放或猜测运行终态。'}</span>
+            <span>{manualReconcileReason || '结果未知，请刷新并核对运行状态。系统不会自动重试，也不会猜测运行结果。'}</span>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={phase !== 'ready'}>
             刷新并核对状态
@@ -705,7 +716,7 @@ export const LiveChatView: React.FC = () => {
             ref={projectSelectRef}
             value={selectedProjectId ?? ''}
             onChange={(event) => selectProject(event.target.value || null)}
-            aria-label="选择 Core Project Workspace"
+            aria-label="选择项目工作区"
           >
             <option value="">选择项目</option>
             {projects.filter((project) => project.readable).map((project) => (
@@ -730,7 +741,7 @@ export const LiveChatView: React.FC = () => {
               const id = event.target.value || null;
               if (selectThread(id) && id) navigate(`/chat/${id}`);
             }}
-            aria-label="选择 Core Thread"
+            aria-label="选择会话"
           >
             <option value="">选择已有会话</option>
             {threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title || thread.id}</option>)}
@@ -742,7 +753,7 @@ export const LiveChatView: React.FC = () => {
             className="select"
             value={selectedSessionId ?? ''}
             onChange={(event) => selectSession(event.target.value || null)}
-            aria-label="选择 Core Session"
+            aria-label="选择运行"
           >
             <option value="" disabled={Boolean(selectedThread?.sessionId)}>尚未绑定运行</option>
             {sessionOptions.map((option) => (
@@ -758,7 +769,7 @@ export const LiveChatView: React.FC = () => {
             className="select"
             value={selectedRoleId}
             onChange={(event) => setSelectedRoleId(event.target.value)}
-            aria-label="选择 Core RolePreset"
+            aria-label="选择角色"
             disabled={roles.length === 0}
           >
             <option value="">选择角色</option>
@@ -767,7 +778,7 @@ export const LiveChatView: React.FC = () => {
             ))}
           </select>
         </label>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedRoleId || creatingSession} title={createSessionUnavailableReason || '需要一个明确的 RolePreset'}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedRoleId || creatingSession} title={createSessionUnavailableReason || '请先选择角色'}>
           <PlusIcon />
           {creatingSession ? '正在准备…' : '使用此角色'}
         </button>
@@ -777,7 +788,7 @@ export const LiveChatView: React.FC = () => {
 
       {projectionStale && (
         <div className="live-projection-note" role="status">
-          <RefreshCw size={13} aria-hidden="true" /> 当前显示可能落后于 Core，等待 Query Projection 校正。
+          <RefreshCw size={13} aria-hidden="true" /> 当前状态可能尚未同步，请刷新确认。
         </div>
       )}
 
@@ -843,11 +854,11 @@ export const LiveChatView: React.FC = () => {
                   <p>任务内容与执行结果保存在当前会话中。</p>
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refreshHistory()} disabled={historyLoading || phase !== 'ready' || !selectedThread.sessionId} aria-label="刷新 Session history">
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refreshHistory()} disabled={historyLoading || phase !== 'ready' || !selectedThread.sessionId} aria-label="刷新会话记录">
                     <RefreshCw size={13} aria-hidden="true" />刷新历史
                   </button>
                 {selectedThread.sessionId && (
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelSession()} disabled={!cancelCommandAvailable || manualReconcileRequired || phase !== 'ready' || connectionStatus !== 'connected'} title="取消由 Core B2 Command 接收，按钮状态等待服务端 Projection 校正">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void cancelSession()} disabled={!cancelCommandAvailable || manualReconcileRequired || phase !== 'ready' || connectionStatus !== 'connected'} title="取消后请刷新确认运行状态">
                     <Square size={12} aria-hidden="true" />取消运行
                   </button>
                 )}
@@ -875,17 +886,17 @@ export const LiveChatView: React.FC = () => {
                   {references.length > 0 && <ul className="live-reference-chips" aria-label="待发送引用">{references.map((item, index) => <li key={`${item.content_hash}:${index}`}><details><summary>{item.source} · {item.size_bytes.toLocaleString()} B · {item.content_hash.slice(0, 8)}{item.truncated ? ' · 摘要已截断' : ''}</summary><p>{item.summary}</p><small>SHA-256 {item.content_hash}</small></details><button type="button" aria-label={`移除引用 ${item.source}`} onClick={() => setReferences((current) => current.filter((_, position) => position !== index))}>×</button></li>)}</ul>}
                   {pickerVisible && <div className="live-reference-picker"><label>引用类型<select className="select" value={referenceKind} onChange={(event) => { setReferenceKind(event.target.value as ReferenceKind); setReferenceTarget(''); }} disabled={!workbenchConnected || referenceBusy}><option value="file">文件</option><option value="thread">会话摘要</option><option value="artifact">可引用工件</option></select></label>
                     {referenceKind === 'thread' ? <label>目标会话<select className="select" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} disabled={!workbenchConnected || referenceBusy}><option value="">选择会话</option>{threads.filter((item) => item.id !== selectedThread.id && item.workspaceRef === selectedThread.workspaceRef).map((item) => <option key={item.id} value={item.id}>{item.title || item.id}</option>)}</select></label>
-                      : referenceKind === 'artifact' ? <><label>当前会话可引用工件<select className="select" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} disabled={!workbenchConnected || referenceBusy || artifactBusy}><option value="">选择 Core 已授权的工件</option>{artifactChoices.map((item) => <option key={item.id} value={item.id}>{item.source} · {item.id.slice(0, 12)}</option>)}</select></label>
+                      : referenceKind === 'artifact' ? <><label>当前会话可引用工件<select className="select" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} disabled={!workbenchConnected || referenceBusy || artifactBusy}><option value="">选择可引用工件</option>{artifactChoices.map((item) => <option key={item.id} value={item.id}>{item.source} · {item.id.slice(0, 12)}</option>)}</select></label>
                         {artifactBusy && <span role="status">正在读取可引用工件…</span>}{artifactError && <><span role="alert">{artifactError}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => { setArtifactLoaded(false); setArtifactChoices([]); setArtifactCursor(null); setArtifactReload((current) => current + 1); }} disabled={artifactBusy}>重试读取</button></>}{artifactCursor !== null && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void loadMoreArtifacts()} disabled={artifactBusy}>加载更多工件</button>}
                         {artifactChoices.filter((item) => item.id === referenceTarget).map((item) => <p className="live-artifact-choice" key={item.id}>{item.summary} · {item.media_type} · {item.size_bytes.toLocaleString()} B · SHA-256 {item.content_hash.slice(0, 16)}…</p>)}</>
-                        : <label>工作区相对路径<input className="input" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} list="live-reference-files" placeholder="输入或选择文件路径" disabled={!workbenchConnected || referenceBusy} /><datalist id="live-reference-files">{files.filter((item) => item.kind === 'file').map((item) => <option key={item.path} value={item.path} />)}</datalist></label>}
+                        : <><PathInput key={`${selectedThreadId}:${selectedThread?.workspaceRef}`} label="项目内文件" kind="file" relativeTo={selectedThread?.workspaceRef || ''} value={referenceTarget} onChange={setReferenceTarget} list="live-reference-files" placeholder="输入或选择文件路径" disabled={!workbenchConnected || referenceBusy || !selectedThread?.workspaceRef} /><datalist id="live-reference-files">{files.filter((item) => item.kind === 'file').map((item) => <option key={item.path} value={item.path} />)}</datalist></>}
                     <label>摘要 Token 上限<input className="input" type="number" min={128} max={4096} value={referenceMaxTokens} onChange={(event) => setReferenceMaxTokens(Number(event.target.value))} disabled={referenceBusy} /></label>
                     <button type="button" className="btn btn-secondary btn-sm" onClick={() => void addReference()} disabled={!workbenchConnected || !referenceTarget.trim() || referenceBusy || referenceMaxTokens < 128 || referenceMaxTokens > 4096}>附加摘要</button></div>}
-                  {commandSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用命令">{commandSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.canonical_name} key={item.canonical_name} onClick={() => setDraft(item.canonical_name)}><span>{item.canonical_name}{item.aliases?.length ? ` · ${item.aliases.join('、')}` : ''}</span><small>{item.command_kind} · {item.execution_mode || 'json'} · Core</small></button>)}</div>}
+                  {commandSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用命令">{commandSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.canonical_name} key={item.canonical_name} onClick={() => setDraft(item.canonical_name)}><span>{item.canonical_name}{item.aliases?.length ? ` · ${item.aliases.join('、')}` : ''}</span><small>{item.command_kind} · {item.execution_mode || 'json'} </small></button>)}</div>}
                   {extensionSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用扩展与 Skill 命令">{extensionSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.command} key={item.command} onClick={() => setDraft(item.command)}><span>{item.command} · {item.description}</span><small>{item.kind === 'skill' ? `${item.pluginId} · 已授权 Skill` : `${item.pluginId} v${item.version} · 已授权扩展`}</small></button>)}</div>}
-                  {selectedExtensionCommand && <label className="live-extension-arguments">{selectedExtensionCommand.kind === 'skill' ? 'Skill 命令参数' : '扩展命令参数'}（JSON 对象）<textarea className="input" value={extensionArguments} onChange={(event) => setExtensionArguments(event.target.value)} rows={3} aria-describedby="extension-argument-hint" /><small id="extension-argument-hint">{selectedExtensionCommand.parameters ? `参数 Schema：${JSON.stringify(selectedExtensionCommand.parameters)}` : '无参数 Schema。'} 输入值仅发送给 Core。</small></label>}
+                  {selectedExtensionCommand && <label className="live-extension-arguments">{selectedExtensionCommand.kind === 'skill' ? 'Skill 命令参数' : '扩展命令参数'}（JSON 对象）<textarea className="input" value={extensionArguments} onChange={(event) => setExtensionArguments(event.target.value)} rows={3} aria-describedby="extension-argument-hint" /><small id="extension-argument-hint">{selectedExtensionCommand.parameters ? `参数 Schema：${JSON.stringify(selectedExtensionCommand.parameters)}` : '无参数 Schema。'} 输入值仅用于执行当前命令。</small></label>}
                   {extensionApproval && <div className="live-alert" role="group" aria-label="动态命令审批"><span>命令等待人工审批：<code>{extensionApproval.approvalId}</code></span><button type="button" className="btn btn-primary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: true }).then(() => { setExtensionApproval(undefined); return pending.run(); }).catch((error: unknown) => { if (outcomeNeedsReconciliation(error)) setExtensionOutcomeUnknown(true); setWorkbenchError(`审批或原命令失败：${requestError(error)}`); }).finally(() => setCommandBusy(false)); }}>允许并提交</button><button type="button" className="btn btn-secondary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: false }).then(() => { setExtensionApproval(undefined); setWorkbenchNotice('已拒绝命令。'); }).catch((error: unknown) => setWorkbenchError(`拒绝失败：${requestError(error)}`)).finally(() => setCommandBusy(false)); }}>拒绝</button></div>}
-                  {extensionOutcomeUnknown && <div className="live-alert live-alert-error" role="alert">命令仍在进行或结果未知，请先在 Core 历史和审计中核对。<button type="button" className="btn btn-secondary btn-sm" onClick={() => setExtensionOutcomeUnknown(false)}>已人工核对</button></div>}
+                  {extensionOutcomeUnknown && <div className="live-alert live-alert-error" role="alert">命令仍在进行或结果未知，请先查看会话记录和审计；不要重复提交。<button type="button" className="btn btn-secondary btn-sm" onClick={() => setExtensionOutcomeUnknown(false)}>已人工核对</button></div>}
                   {reviewCommand && <label className="live-reviewer-role">审查角色<select className="select" value={effectiveReviewerRoleId} onChange={(event) => setReviewerRoleId(event.target.value)} disabled={commandBusy || reviewerRoles.length === 0}><option value="" disabled>选择严格只读角色</option>{reviewerRoles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.id}</option>)}</select>{reviewerRoles.length === 0 && <span>需要仅允许 read_file、search_files、git_diff 的角色。</span>}</label>}
                 </div>
                 <textarea
@@ -897,8 +908,8 @@ export const LiveChatView: React.FC = () => {
                       void handleSubmit();
                     }
                   }}
-                  placeholder={manualReconcileRequired ? '需要人工核对，完成 Projection 校正后才能发送' : selectedThread?.sessionId ? '描述你想完成的工作，Enter 发送，Shift+Enter 换行' : '请先选择角色并绑定运行'}
-                  aria-label="向 Core Session 发送消息"
+                  placeholder={manualReconcileRequired ? '需要人工核对，确认状态后才能发送' : selectedThread?.sessionId ? '描述你想完成的工作，Enter 发送，Shift+Enter 换行' : '请先选择角色并绑定运行'}
+                  aria-label="向会话发送消息"
                   disabled={!selectedThread?.sessionId || !selectedThread.workspaceRef || busy || commandBusy || phase !== 'ready'}
                   rows={2}
                 />
@@ -906,18 +917,18 @@ export const LiveChatView: React.FC = () => {
                   {command.status === 'sending' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <SendHorizontal size={16} aria-hidden="true" />}
                 </button>
               </div>
-              <p className="live-composer-note">输入 / 可发现 Core 命令，输入 @ 可附加有版本摘要。文件引用保留创建时的快照；源文件变更后可重附加，用哈希区分版本。权限或快照失效时 Core 会拒绝，草稿与引用保留供核对。</p>
+              <p className="live-composer-note">输入 / 查看命令，输入 @ 添加引用。文件变更后请重新添加引用；引用失效时消息会被拒绝，草稿仍会保留。</p>
             {history && history.next_cursor !== null && <button type="button" className="btn btn-secondary" disabled={historyLoading} onClick={() => void loadMoreHistory()}>加载更多历史</button>}
               </section>
 
             {selectedThread.sessionId && <LiveWorkbenchPanel threadId={selectedThread.id} connected={workbenchConnected} onChanged={refresh} />}
-            <details className="live-inspector-column ui-chat-inspector" onToggle={(event) => { if (!event.currentTarget.open) setShowTerminal(false); }}><summary>运行详情与文件</summary><div className="ui-chat-inspector-body" aria-label="Core 实时检查器">
-          <details className="live-thread-summary ui-thread-details"><summary>会话信息 <StatusBadge status={selectedThread.status} label={statusLabel(selectedThread.status)} size="sm" /></summary><div className="ui-thread-detail-body" aria-label="Core Thread Projection">
+            <details className="live-inspector-column ui-chat-inspector" onToggle={(event) => { if (!event.currentTarget.open) setShowTerminal(false); }}><summary>运行详情与文件</summary><div className="ui-chat-inspector-body" aria-label="运行详情">
+          <details className="live-thread-summary ui-thread-details"><summary>会话信息 <StatusBadge status={selectedThread.status} label={statusLabel(selectedThread.status)} size="sm" /></summary><div className="ui-thread-detail-body" aria-label="会话信息">
             <div className="live-thread-summary-main">
               <span className="live-thread-icon" aria-hidden="true"><MessageSquare size={16} /></span>
               <div>
                 <strong>{liveThreadTitle(selectedThread)}</strong>
-                <span>{selectedThread.workspaceRef || '未绑定 Workspace'} · {selectedThread.id}</span>
+                <span>{selectedThread.workspaceRef || '未选择工作区'} · {selectedThread.id}</span>
               </div>
             </div>
             </div>
@@ -953,8 +964,8 @@ export const LiveChatView: React.FC = () => {
               {showTerminal && selectedThread.sessionId && <LiveTerminalPanel key={selectedThread.id} threadId={selectedThread.id} connected={workbenchConnected} />}
               <section className="live-panel live-scope-panel">
                 <div className="live-panel-heading"><h2>连接与协议</h2><ChevronRight size={15} aria-hidden="true" /></div>
-                <p>当前使用本地 Core 的真实状态。会话、运行、审批和事件记录均由服务端提供，协议为 phase1e.v1 / B2。</p>
-                <p className="live-not-connected">OAuth PKCE 由 Core 部署配置启用；PWA、TUI 与 Tauri 均复用生成 Client，远程连接仍以服务端验收状态为准。</p>
+                <p>会话、运行和审批记录已从本地服务读取。</p>
+
               </section>
             </div></details>
           </div>
