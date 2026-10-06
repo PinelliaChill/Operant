@@ -2,8 +2,7 @@
 
 **让合适的模型分工协作，让验证过的经验留给下一次任务。**
 
-当前处于 **Beta 阶段**，采用**非商业使用许可，商用须另行协商授权**。适合希望自己选择模型、控制权限并组织复杂任务的开发者。
-
+当前处于 **Beta 阶段**，采用**非商业使用许可，商用须另行协商授权**。
 | 版本入口 | 包含什么 |
 | --- | --- |
 | [`v0.1.0-beta.2`](docs/releases/v0.1.0-beta.2.md) | 本次 Beta：源码、Core/TUI 安装包与未公证 macOS arm64 App；会话协作、可视化编排、可调自动审批、经验复用、本机扩展与私有跨设备能力 |
@@ -12,8 +11,6 @@
 | [旧桌面候选](https://github.com/PinelliaChill/Operant/releases/tag/desktop-candidate-2026-09-28-08e65ea) | 9 月 28 日的 macOS arm64 包，不包含本次全部更新；桌面仍无 Developer ID 签名、公证或自动更新 |
 
 [本次发行说明](docs/releases/v0.1.0-beta.2.md) · [更新记录](CHANGELOG.md) · [安装、升级与回退](docs/guide/candidate-installation.md)
-
-本文同步至 2026-10-06 的桌面打包补充。源码与发行标签不会自动更新已安装的 App。
 
 ## 下载 macOS 安装包
 

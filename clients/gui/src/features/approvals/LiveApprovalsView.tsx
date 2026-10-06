@@ -39,15 +39,15 @@ export const LiveApprovalsView: React.FC = () => {
   const decide = (approval: (typeof approvals)[number], decision: LiveApprovalDecision) => {
     void decideApproval(approval, decision);
   };
-  const phaseLabel = phase === 'ready' ? 'Core 已连接' : phase === 'error' ? 'Core 连接失败' : '正在连接 Core';
+  const phaseLabel = phase === 'ready' ? '已连接' : phase === 'error' ? '连接失败' : '连接中';
 
   if (phase !== 'ready' && approvals.length === 0) {
     return (
       <div className="live-route-state" role={lastError ? 'alert' : 'status'}>
         <div className="live-route-state-icon"><ShieldCheck size={22} aria-hidden="true" /></div>
-        <h1>{lastError ? 'Core Approval Projection 不可用' : '正在读取 Approval Projection…'}</h1>
-        <p>{lastError?.message ?? 'Live 模式不会用演示审批卡填充此页面。'}</p>
-        <div className="live-empty-actions"><button type="button" className="btn btn-primary" onClick={() => void reconnect()}><RefreshCw size={14} aria-hidden="true" />重连 Core</button><button type="button" className="btn btn-secondary" onClick={() => void refresh()}>重新查询</button></div>
+        <h1>{lastError ? '审批信息暂不可用' : '正在读取审批…'}</h1>
+        <p>{lastError?.message ?? '连接后会显示待处理的审批。'}</p>
+        <div className="live-empty-actions"><button type="button" className="btn btn-primary" onClick={() => void reconnect()}><RefreshCw size={14} aria-hidden="true" />重新连接</button><button type="button" className="btn btn-secondary" onClick={() => void refresh()}>刷新</button></div>
       </div>
     );
   }
@@ -56,17 +56,17 @@ export const LiveApprovalsView: React.FC = () => {
     <div className="live-route-view">
       <header className="live-route-header">
         <div className="live-route-heading">
-          {showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开 Core 侧栏" title="打开 Core 侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}
-          <div><span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时 Core · Approval phase1e.v1 · Policy phase45.v1</span><h1>Approval Center</h1></div>
+          {showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开侧栏" title="打开侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}
+          <div><h1>审批中心</h1></div>
         </div>
-        <div className="live-route-header-actions"><StatusBadge status={phase === 'ready' ? 'connected' : phase === 'error' ? 'disconnected' : 'pending'} label={phaseLabel} size="sm" /><button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新 Approval Projection" title="刷新 Approval Projection"><RefreshCw size={15} aria-hidden="true" /></button></div>
+        <div className="live-route-header-actions"><StatusBadge status={phase === 'ready' ? 'connected' : phase === 'error' ? 'disconnected' : 'pending'} label={phaseLabel} size="sm" /><button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新审批" title="刷新审批"><RefreshCw size={15} aria-hidden="true" /></button></div>
       </header>
       {lastError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>{lastError.code}：{lastError.message}</span></div>}
       <LiveReviewerSettings />
       <LiveAskAudit />
-      <div className="live-approval-route-summary"><span><ShieldCheck size={16} aria-hidden="true" />待处理 Approval</span><strong>{pending.length}</strong><small>服务端 Projection 权威 · Policy {policyPhase === 'ready' ? '已连接' : '未就绪'} · <Link to="/settings?cat=security">检查 Policy</Link></small></div>
+      <div className="live-approval-route-summary"><span><ShieldCheck size={16} aria-hidden="true" />待处理审批</span><strong>{pending.length}</strong><small>安全设置{policyPhase === 'ready' ? '已就绪' : '暂不可用'} · <Link to="/settings?cat=security">查看安全设置</Link></small></div>
       {pending.length === 0 ? (
-        <div className="live-route-empty"><ShieldCheck size={24} aria-hidden="true" /><h2>没有待处理 Approval</h2><p>当前 Core 没有返回待决定的审批事实。</p><button type="button" className="btn btn-secondary" onClick={() => navigate('/chat')}>返回 Live Thread</button></div>
+        <div className="live-route-empty"><ShieldCheck size={24} aria-hidden="true" /><h2>没有待处理审批</h2><button type="button" className="btn btn-secondary" onClick={() => navigate('/chat')}>返回会话</button></div>
       ) : (
         <div className="live-approval-route-list">
           {pending.map((approval) => (
@@ -85,7 +85,7 @@ export const LiveApprovalsView: React.FC = () => {
           ))}
         </div>
       )}
-      {selectedSessionId && <p className="live-route-footnote">当前 Session：{selectedSessionId} · 决定提交后仍等待 Core Approval Projection 校正。</p>}
+      {selectedSessionId && <p className="live-route-footnote">当前会话：{selectedSessionId} · 提交决定后，审批状态可能需要稍后刷新。</p>}
     </div>
   );
 };

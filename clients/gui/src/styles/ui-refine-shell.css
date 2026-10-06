@@ -1,7 +1,6 @@
 .ui-refined-shell { --rail-w: 80px; }
 .ui-refined-shell .rail-icon-rail { gap: 4px; padding-top: 12px; }
 .ui-refined-shell .rail-nav-item { width: 64px; height: auto; min-height: 48px; flex-direction: column; gap: 5px; padding: 7px 3px; border-radius: var(--radius-sm); }
-.ui-refined-shell .rail-nav-caption { display: block; font-size: 11px; line-height: 1.2; font-weight: 500; white-space: nowrap; }
 .ui-refined-shell .rail-sidebar-header { gap: 4px; }
 .ui-refined-shell .rail-sidebar-header .btn-icon { min-width: 30px; padding: 5px; }
 .ui-refined-shell .rail-sidebar-search { min-width: 0; }

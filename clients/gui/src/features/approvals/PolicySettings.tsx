@@ -8,6 +8,7 @@
  * 全部待处理卡，workspace-write 仅自动批准 file_write 卡，切回"询问模式"不影响已处理卡）。
  */
 
+import { PathInput } from '../../components/PathInput';
 import React, { useRef, useState } from 'react';
 import {
   CheckCheck,
@@ -119,20 +120,20 @@ const LivePolicySettings: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div>
-        <h2 style={subsectionTitleStyle}>Policy 检查与解释</h2>
-        <p style={subsectionSubStyle}>通过 Phase 4 Action Gateway 对一个明确动作做 dry-run。此处不修改 Policy，也不能覆盖 DENY。</p>
+        <h2 style={subsectionTitleStyle}>权限检查</h2>
+        <p style={subsectionSubStyle}>检查操作是否允许，不会实际执行或修改权限。</p>
       </div>
       <form className="card approval-rules" onSubmit={submit} aria-describedby="live-policy-help">
-        <p id="live-policy-help" className="section-footnote">每次检查使用新的幂等键，并由 Core 返回权威 Policy 结果。</p>
+        <p id="live-policy-help" className="section-footnote">被安全规则禁止的操作无法在此放行。</p>
         <label>主体<input className="input" value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
         <label>工具<input className="input" value={tool} onChange={(event) => setTool(event.target.value)} required /></label>
         <label>操作<input className="input" value={operation} onChange={(event) => setOperation(event.target.value)} required /></label>
         <label>能力<select className="select" value={capability} onChange={(event) => setCapability(event.target.value as Phase45.Capability)}>{CAPABILITIES.map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label>Workspace（可选）<input className="input" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="绝对路径" /></label>
+        <PathInput label="项目文件夹（可选）" value={workspace} onChange={setWorkspace} placeholder="选择文件夹或填写完整路径" disabled={Boolean(actionLabel)} />
         <button type="submit" className="btn btn-primary" disabled={Boolean(actionLabel) || connectionStatus !== 'connected'}><RefreshCw size={14} aria-hidden="true" />{actionLabel === 'Policy 检查' ? '检查中…' : '检查并解释'}</button>
       </form>
       <div aria-live="polite" aria-atomic="true">
-        {connectionStatus !== 'connected' && <div className="live-alert live-alert-error" role="alert"><ShieldAlert size={16} aria-hidden="true" />Core 连接已断开；Policy 检查已禁用。</div>}
+        {connectionStatus !== 'connected' && <div className="live-alert live-alert-error" role="alert"><ShieldAlert size={16} aria-hidden="true" />连接已断开，暂时无法检查权限。</div>}
         {error && <div className="live-alert live-alert-error" role="alert"><ShieldAlert size={16} aria-hidden="true" />{error.code}：{error.message}</div>}
         {result && <div className="card" style={{ padding: 16 }}>
           <StatusBadge status={policyDecisionStatus(result.decision)} label={result.decision.toUpperCase()} />
@@ -143,7 +144,7 @@ const LivePolicySettings: React.FC = () => {
       </div>
       {result && <section aria-labelledby="security-audit-title" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div><h2 id="security-audit-title" style={subsectionTitleStyle}>安全审计事实</h2><p style={subsectionSubStyle}>仅展示最新加载的 100 条安全字段；原始参数、detail 与 Secret 不进入客户端状态。</p></div>
+          <div><h2 id="security-audit-title" style={subsectionTitleStyle}>安全记录</h2></div>
           <button type="button" className="btn btn-secondary btn-sm" disabled={auditLoading || connectionStatus !== 'connected'} onClick={() => void loadSecurityAudit(result.actionHash)}><RefreshCw size={13} aria-hidden="true" />{auditLoading ? '刷新中…' : '刷新审计'}</button>
         </div>
         <div aria-live="polite" aria-busy={auditLoading}>

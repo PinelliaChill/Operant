@@ -87,8 +87,8 @@ export const LiveRunDetailView: React.FC = () => {
       const accepted = result.accepted;
       await load();
       setError(accepted
-        ? { code: 'session_cancel_projection_pending', message: 'Core 已接受取消请求；是否完成仍以刷新后的 Projection 为准。', recovery: 'refresh' }
-        : { code: 'session_cancel_rejected', message: 'Core 未接受取消请求；当前状态仍以 Projection 为准。', recovery: 'refresh' });
+        ? { code: 'session_cancel_projection_pending', message: '取消请求已提交；请刷新确认结果。', recovery: 'refresh' }
+        : { code: 'session_cancel_rejected', message: '取消请求未成功；请刷新运行状态。', recovery: 'refresh' });
     } catch (caught: unknown) {
       setError(normalizeB2Error(caught).detail);
     } finally {
@@ -104,21 +104,21 @@ export const LiveRunDetailView: React.FC = () => {
         <div><h1 className="section-title">运行详情</h1><p className="section-sub section-mono">{id}</p></div>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => void load()} disabled={loading || connectionStatus !== 'connected'}><RefreshCw size={14} aria-hidden="true" />刷新</button>
       </header>
-      {error && <div className="live-alert live-alert-error" role="alert"><ListTodo size={16} aria-hidden="true" /><div className="live-alert-content"><strong>{error.code}</strong><span>{error.message}</span><span className="live-alert-recovery">恢复：{error.recovery}</span></div><button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()} disabled={loading}>重试</button></div>}
+      {error && <div className="live-alert live-alert-error" role="alert"><ListTodo size={16} aria-hidden="true" /><div className="live-alert-content"><span>{error.message}</span></div><button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()} disabled={loading}>重试</button></div>}
       <div className="section-scroll"><div className="section-inner">
-        {loading ? <div className="live-panel-loading" role="status"><RefreshCw size={16} className="animate-spin" />正在读取 Core 运行详情…</div> : !task ? <EmptyState icon={ListTodo} title="没有可显示的运行详情" description="Live 只显示 Core 返回的 B2 Task Projection。" /> : (
+        {loading ? <div className="live-panel-loading" role="status"><RefreshCw size={16} className="animate-spin" />正在读取运行详情…</div> : !task ? <EmptyState icon={ListTodo} title="没有可显示的运行详情" description="请返回任务列表查看可用的运行。" /> : (
           <>
-            <section className="card b2-run-summary" aria-label="Core Task Projection">
-              <div><span className="b2-run-source">{task.source.source_type}</span><h2>{task.title}</h2><p className="section-mono">source_id={task.source.source_id}</p></div>
+            <section className="card b2-run-summary" aria-label="运行详情">
+              <div><span className="b2-run-source">{task.source.source_type === 'session' ? '会话' : task.source.source_type === 'workflow_run' ? '流程运行' : '团队任务'}</span><h2>{task.title}</h2><p className="section-mono">运行 ID：{task.source.source_id}</p></div>
               <StatusBadge status={task.source_status} label={statusLabel(task.source_status)} />
-              {canCancel && <button type="button" className="btn btn-danger btn-sm" onClick={() => void cancel()} disabled={working}><Square size={13} aria-hidden="true" />{working ? '取消中…' : '取消 Session'}</button>}
+              {canCancel && <button type="button" className="btn btn-danger btn-sm" onClick={() => void cancel()} disabled={working}><Square size={13} aria-hidden="true" />{working ? '取消中…' : '取消会话'}</button>}
             </section>
-            <dl className="b2-run-meta card"><div><dt>Project</dt><dd>{task.project_id || '—'}</dd></div><div><dt>Workspace</dt><dd>{task.workspace_id || '—'}</dd></div><div><dt>Thread</dt><dd>{task.thread_id || '—'}</dd></div><div><dt>Revision</dt><dd>{task.revision}</dd></div></dl>
-            {task.source.source_type === 'session' && history && <section className="card b2-run-agents"><div className="live-section-heading"><h2>AgentInstance</h2><span>{history.agents.length} 个 · 使用不可变 RoleSnapshot</span></div>{history.agents.length === 0 ? <p className="live-panel-empty">Core 尚未返回 AgentInstance。</p> : <ul className="chat-row-list">{history.agents.map((agent, index) => <li className="chat-row chat-row-wrap" key={agent.id || `${agent.session_id}:${index}`}><span className="chat-row-main"><span className="chat-row-title">{agent.role_snapshot.role_name}</span><span className="chat-row-meta">{agent.id || 'AgentInstance'} · role v{agent.role_snapshot.role_version} · {agent.role_snapshot.model_id}</span></span><StatusBadge status={agent.status || 'created'} size="sm" /></li>)}</ul>}</section>}
-            {task.source.source_type === 'session' && history && <section className="card b2-run-history"><div className="live-section-heading"><h2>Canonical Session History</h2><span>{history.items.length} items · Cursor {history.next_cursor ?? '—'}</span></div>{history.items.length === 0 ? <p className="live-panel-empty">Core 尚未返回 canonical items。</p> : history.items.map((item, index) => <CanonicalHistoryItem item={item} index={index} key={item.id || `${item.thread_id}:${item.turn_id}:${item.position ?? index}`} />)}</section>}
-            {task.source.source_type === 'session' && task.thread_id && <Link className="btn btn-secondary" to={`/chat/${encodeURIComponent(task.thread_id)}`}>打开 Session 会话 <ArrowRight size={13} aria-hidden="true" /></Link>}
-            {task.source.source_type === 'workflow_run' && <section className="card b2-run-graph"><div className="live-section-heading"><h2>Graph WorkflowRun</h2>{graphRun && <StatusBadge status={graphRun.status} label={statusLabel(graphRun.status)} size="sm" />}</div>{graphRun ? <><p className="section-mono">Graph Run {graphRun.id} · revision {graphRun.revision}</p><p>当前节点：{graphRun.current_node_ids.join(', ') || '无'}</p><Link className="btn btn-secondary btn-sm" to={`/collab?view=runs&legacyWorkflowRunId=${encodeURIComponent(id)}`}>进入 Graph 运行监控 <ArrowRight size={13} aria-hidden="true" /></Link></> : <p className="live-panel-empty">等待 Phase23 Graph Projection。</p>}</section>}
-            {task.source.source_type === 'team_task' && <p className="live-panel-empty">Core 返回了 TeamTask 来源；本批不合成 TeamTask 详情。</p>}
+            <dl className="b2-run-meta card"><div><dt>项目</dt><dd>{task.project_id || '—'}</dd></div><div><dt>工作区</dt><dd>{task.workspace_id || '—'}</dd></div><div><dt>会话</dt><dd>{task.thread_id || '—'}</dd></div><div><dt>版本</dt><dd>{task.revision}</dd></div></dl>
+            {task.source.source_type === 'session' && history && <section className="card b2-run-agents"><div className="live-section-heading"><h2>参与成员</h2><span>{history.agents.length} 个 · 角色配置已固定</span></div>{history.agents.length === 0 ? <p className="live-panel-empty">暂无参与成员。</p> : <ul className="chat-row-list">{history.agents.map((agent, index) => <li className="chat-row chat-row-wrap" key={agent.id || `${agent.session_id}:${index}`}><span className="chat-row-main"><span className="chat-row-title">{agent.role_snapshot.role_name}</span><span className="chat-row-meta">{agent.id || 'AgentInstance'} · role v{agent.role_snapshot.role_version} · {agent.role_snapshot.model_id}</span></span><StatusBadge status={agent.status || 'created'} size="sm" /></li>)}</ul>}</section>}
+            {task.source.source_type === 'session' && history && <section className="card b2-run-history"><div className="live-section-heading"><h2>会话记录</h2><span>{history.items.length} 条记录 · 进度位置 {history.next_cursor ?? '—'}</span></div>{history.items.length === 0 ? <p className="live-panel-empty">暂无会话记录。</p> : history.items.map((item, index) => <CanonicalHistoryItem item={item} index={index} key={item.id || `${item.thread_id}:${item.turn_id}:${item.position ?? index}`} />)}</section>}
+            {task.source.source_type === 'session' && task.thread_id && <Link className="btn btn-secondary" to={`/chat/${encodeURIComponent(task.thread_id)}`}>打开会话 <ArrowRight size={13} aria-hidden="true" /></Link>}
+            {task.source.source_type === 'workflow_run' && <section className="card b2-run-graph"><div className="live-section-heading"><h2>流程运行</h2>{graphRun && <StatusBadge status={graphRun.status} label={statusLabel(graphRun.status)} size="sm" />}</div>{graphRun ? <><p className="section-mono">运行 {graphRun.id} · 版本 {graphRun.revision}</p><p>当前节点：{graphRun.current_node_ids.join(', ') || '无'}</p><Link className="btn btn-secondary btn-sm" to={`/collab?view=runs&legacyWorkflowRunId=${encodeURIComponent(id)}`}>查看运行进度 <ArrowRight size={13} aria-hidden="true" /></Link></> : <p className="live-panel-empty">正在读取流程运行状态。</p>}</section>}
+            {task.source.source_type === 'team_task' && <p className="live-panel-empty">此类团队任务暂不支持查看详情。</p>}
           </>
         )}
       </div></div>

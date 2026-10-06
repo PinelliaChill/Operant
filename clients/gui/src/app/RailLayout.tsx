@@ -233,19 +233,19 @@ const LiveRailStatusBar: React.FC = () => {
   const { phase, stream, selectedThread, projectionStale } = useLive();
   const status = phase === 'error' ? 'disconnected' : phase === 'ready' && stream.status !== 'replaying' ? 'connected' : 'pending';
   const label = phase === 'error'
-    ? 'Core 连接失败'
+    ? '连接失败'
     : stream.status === 'replaying'
-      ? 'SSE 回放中'
+      ? '正在同步进度'
       : phase === 'ready'
-        ? 'Core 已连接'
-        : 'Core 连接中';
+        ? '已连接'
+        : '连接中';
   return (
     <footer className="rail-statusbar" data-client-mode="live">
       <div className="rail-statusbar-side">
-        <span className="rail-statusbar-text">Workspace：{selectedThread?.workspace || activeWorkspace || '未选择 Workspace'}</span>
+        <span className="rail-statusbar-text">工作区：{selectedThread?.workspace || activeWorkspace || '未选择工作区'}</span>
       </div>
       <div className="rail-statusbar-side">
-        {projectionStale && <span className="rail-statusbar-text">Projection 待校正 · </span>}
+        {projectionStale && <span className="rail-statusbar-text">状态待同步 · </span>}
         <StatusBadge status={status} label={label} size="sm" pulse={status === 'pending'} />
       </div>
     </footer>
@@ -503,7 +503,6 @@ export const RailLayout: React.FC = () => {
                 title={item.label}
               >
                 <Icon size={20} />
-                <span className="rail-nav-caption">{item.label}</span>
               </NavLink>
             );
           })}
@@ -517,7 +516,6 @@ export const RailLayout: React.FC = () => {
             title={theme === 'light' ? '切换到深色主题' : '切换到浅色主题'}
           >
             {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
-            <span className="rail-nav-caption">外观</span>
           </button>
           <NavLink
             to="/settings"
@@ -526,7 +524,6 @@ export const RailLayout: React.FC = () => {
             title="设置"
           >
             <Settings size={20} />
-            <span className="rail-nav-caption">设置</span>
           </NavLink>
         </nav>
 

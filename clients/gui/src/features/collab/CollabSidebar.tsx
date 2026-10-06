@@ -8,6 +8,7 @@
  * 5. 运行进度 (Runs)（全局 Run 列表）
  */
 
+import { PathInput } from '../../components/PathInput';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronRight, PanelLeftClose, Plus, Search, Check } from 'lucide-react';
@@ -585,28 +586,17 @@ export const CollabSidebar: React.FC<CollabSidebarProps> = ({ onNavigate, onColl
                 marginBottom: 4,
               }}
             >
-              工作区绑定目录路径
+              项目文件夹
             </label>
-            <input
-              type="text"
-              className="input"
-              placeholder="/Users/operant/workspace/..."
+            <PathInput
+              aria-label="项目文件夹"
+              placeholder="选择文件夹或填写完整路径"
               value={newProjPath}
-              onChange={(e) => {
-                setNewProjPath(e.target.value);
+              onChange={(value) => {
+                setNewProjPath(value);
                 setPathCustomized(true);
               }}
             />
-            <span
-              style={{
-                fontSize: '11px',
-                color: 'var(--text-muted)',
-                marginTop: 4,
-                display: 'block',
-              }}
-            >
-              绑定本地文件系统 workspace 路径，工作流与实例将归属该工作区。
-            </span>
           </div>
 
           <div>
