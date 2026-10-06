@@ -12,7 +12,16 @@
 
 [本次发行说明](docs/releases/v0.1.0-beta.2.md) · [更新记录](CHANGELOG.md) · [安装、升级与回退](docs/guide/candidate-installation.md)
 
+## 下载 macOS 安装包
 
+**[下载 Apple Silicon（M1/M2/M3/M4 等）DMG](https://github.com/PinelliaChill/Operant/releases/download/v0.1.0-beta.2/Operant-v0.1.0-beta.2-macos-arm64.dmg)** · [全部发行附件](https://github.com/PinelliaChill/Operant/releases/tag/v0.1.0-beta.2)
+
+打开 DMG，将 `Operant.app` 拖到“应用程序”，再从“应用程序”启动。DMG 内的 App 已包含 Python、Core 和基础依赖，无需先安装 uv、Python 或单独启动服务。模型调用仍需配置你自己的服务地址和 API Key，中文安装说明位于 App 内部：右键“显示包内容” → `Contents/Resources/安装说明.txt`。
+
+当前包未经 Apple Developer ID 签名或公证。如被系统拦截，在确认下载来源后，按 [Apple 官方说明](https://support.apple.com/en-us/102445)从“系统设置 → 隐私与安全”允许打开。
+新包使用独立的 `~/Library/Application Support/Operant Beta 2/` 保存数据，不自动迁移旧库。启动前先退出旧版 Operant；若 8000 端口已有服务，新包会提示冲突。
+
+Intel Mac、Windows 和 Linux 桌面暂不提供此安装包。需要源码、Core/TUI 或旧 ZIP 的开发者，可从全部发行附件下载。
 
 ## 项目定位
 
@@ -256,7 +265,7 @@ uv run operant workflow cancel WORKFLOW_ID
 | 基础网页工作台 | 跟随本机服务启动，地址为 `/web` |
 | React GUI / PWA | 位于 `clients/gui`，区分演示模式和实时连接 |
 | [终端界面](clients/tui/README.md) | 可选的 Textual 客户端 |
-| [桌面客户端](clients/desktop/README.md) | Tauri 桌面壳；需匹配版本的 Core，并用 `--desktop` 启动；无正式签名、公证或自动更新 |
+| [桌面客户端](clients/desktop/README.md) | Tauri 桌面壳；DMG 内置 Core，源码/旧 ZIP 仍需另行配置；无 Developer ID 签名、公证或自动更新 |
 | 开发接口 | FastAPI 接口与事件流；生成的客户端位于 `sdk/` |
 
 私有双设备入口：本机 GUI「设置→远程」或 TUI `Alt+6` 管理配对、Scope、Session、Host Ack、Target Lease 与结果；另一台设备使用 `operant remote-device`，远端受控任务使用 `operant remote-target`。部署和操作步骤见[跨设备使用说明](docs/design/beta-remote/usage.md)。正式双设备验收状态以[任务 5 验收记录](docs/design/beta-remote/acceptance.md)为准；旧标签和已安装 App 按各自版本核对能力。
