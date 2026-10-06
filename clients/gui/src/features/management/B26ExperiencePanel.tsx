@@ -27,7 +27,7 @@ export const B26ExperiencePanel: React.FC<{
       await Promise.all([client.negotiateProtocol(), gc.negotiateProtocol()]);
       const [next, knowledge] = await Promise.all([client.getExperience(projectId), gc.getGovernance(projectId)]);
       if (token !== epoch.current || activeProject.current !== projectId) return;
-      if (next.project_id !== projectId || knowledge.project_id !== projectId) throw new Error('Core 返回了其他项目的投影。');
+      if (next.project_id !== projectId || knowledge.project_id !== projectId) throw new Error('返回的数据属于其他项目，请刷新。');
       setState(next); setGovernance(knowledge); setGeneration(v => v + 1); setError(null);
       if (next.unresolved_command_ids?.length) setNotice(`待人工核对命令：${next.unresolved_command_ids.join('、')}。请检查当前对象，不要自动重发。`);
     } catch (e) {
@@ -53,7 +53,7 @@ export const B26ExperiencePanel: React.FC<{
     try {
       const result = await client.execute(command, { idempotencyKey: crypto.randomUUID() });
       if (activeProject.current !== projectId) return;
-      if (result.state.project_id !== projectId) throw new Error('Core 返回了其他项目的结果。');
+      if (result.state.project_id !== projectId) throw new Error('操作结果属于其他项目，请刷新核对。');
       setState(result.state); setGeneration(v => v + 1); setNotice(result.message); onMutation?.();
     } catch (e) {
       if (activeProject.current === projectId) setError(`${e instanceof Error ? e.message : '结果未确认'}。请刷新核对；不会自动重发。`);
@@ -62,7 +62,7 @@ export const B26ExperiencePanel: React.FC<{
   if (!projectId) return <p className="b2-memory-warning">请选择项目后查看经验与授权。</p>;
   return <section aria-label="经验与授权"><B26Presentation sections={view?.sections ?? []} loading={loading} busy={busy}
     readOnly={connectionStatus !== 'connected' || !!error || !view}
-    error={error ?? (connectionStatus !== 'connected' ? 'Core 已断开；保留内容只读，重连后请刷新。' : null)}
+    error={error ?? (connectionStatus !== 'connected' ? '连接已断开；当前内容只读，重连后请刷新。' : null)}
     notice={notice} onRefresh={() => void refresh()} onAction={(id, values) => void submit(id, values)} />
     <p className="section-footnote"><Link to="/remote">查看远程任务的派发与完成结果</Link>；Target 上传的候选仍需在管理中心“知识”页审阅。</p>
   </section>;

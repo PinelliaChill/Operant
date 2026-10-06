@@ -413,7 +413,7 @@ export const LiveRemoteView: React.FC = () => {
       setShowLeaseToken(false);
       addNotification('success', 'Target 租约已释放。');
     } catch (reason: unknown) {
-      addNotification('error', reason instanceof Error ? reason.message : '租约释放失败；请核对 Core 状态。');
+      addNotification('error', reason instanceof Error ? reason.message : '租约释放失败；请刷新状态确认。');
     } finally { setBusy(false); }
   };
 
@@ -493,7 +493,7 @@ export const LiveRemoteView: React.FC = () => {
             <span>远程控制、执行目标与自托管中继</span>
           </h2>
           <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4 }}>
-            实时数据来自本地 Core；Remote Control 与 Remote Execution Target 分开显示。
+            查看远程控制与远程执行设备。
           </p>
         </div>
         <button className="btn btn-secondary" onClick={() => void loadData()} disabled={loading}>
@@ -501,7 +501,7 @@ export const LiveRemoteView: React.FC = () => {
         </button>
       </div>
 
-      {error && <div className="live-error" role="alert">{error} 页面保留最近一次投影，不会回退演示数据。</div>}
+      {error && <div className="live-error" role="alert">{error} 页面显示上次读取的状态，请刷新确认。</div>}
       {loading && hosts.length === 0 ? <LoadingSkeleton lines={3} height={72} /> : (
         <>
           <section>
@@ -570,7 +570,7 @@ export const LiveRemoteView: React.FC = () => {
 
           <section>
             <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Host 命令回执</h3>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>按 Command ID 读取 Core 状态；未确认或结果不明时先核对，不能自动重发。</p>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>命令结果不明时请先核对状态，不要重复发送。</p>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><input className="input" aria-label="Command ID" placeholder="Command ID" value={commandId} onChange={(event) => setCommandId(event.target.value)} /><button className="btn btn-secondary" onClick={() => void readCommand(commandId)} disabled={actionsDisabled || !commandId.trim()}>读取回执</button></div>
             {commandDetail && <div className="card" role="status">状态：{String(commandDetail.status ?? '未知')} · Host 确认：{typeof commandDetail.host_acknowledged_at === 'string' ? formatDate(commandDetail.host_acknowledged_at) : '未确认'} · 结果引用：{String(commandDetail.result_ref ?? '无')}{typeof commandDetail.error_code === 'string' ? ` · 错误：${commandDetail.error_code}` : ''}</div>}
             {events.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>{events.slice(-10).reverse().map((event) => <div className="card" key={`${event.cursor}-${event.commandId}`}><button className="btn btn-ghost btn-sm" style={{ maxWidth: '100%', whiteSpace: 'normal', overflowWrap: 'anywhere', textAlign: 'left' }} onClick={() => { setCommandId(event.commandId); void readCommand(event.commandId); }} disabled={actionsDisabled}>{event.commandId}</button> · Cursor {event.cursor} · {event.status} · Host {event.hostAcknowledgedAt ? '已确认' : '未确认'}{event.errorCode ? ` · ${event.errorCode}` : ''}</div>)}</div>}
@@ -625,7 +625,7 @@ export const LiveRemoteView: React.FC = () => {
 
           <section>
             <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Remote Execution Target Job（{jobs.length}）</h3>
-            {jobs.length === 0 ? <EmptyState title="暂无远程执行任务" description="远程执行任务与控制命令分开显示，结果按 Job ID 从 Core 回读。" /> :
+            {jobs.length === 0 ? <EmptyState title="暂无远程执行任务" description="远程执行任务会显示在这里。" /> :
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{jobs.slice(0, 50).map((job) => <div className="card" key={job.jobId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{job.capability} · {job.operation}<small style={{ display: 'block', color: 'var(--text-muted)' }}>{job.targetId} · {job.jobId}</small></span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><StatusBadge status={job.status} size="sm" /><button className="btn btn-secondary btn-sm" onClick={() => void loadJobDetail(job)} disabled={actionsDisabled} aria-label={`查看任务 ${job.jobId} 的结果`}>查看结果</button>{['queued', 'leased', 'running'].includes(job.status) && <button className="btn btn-danger btn-sm" onClick={() => setConfirmCancelJob(job)} disabled={actionsDisabled}>取消…</button>}</span>

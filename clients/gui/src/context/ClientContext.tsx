@@ -120,7 +120,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setSelectedWorkflowRunId('run_operant_001');
       setActiveWorkspace(DEFAULT_WORKSPACE);
     }
-    addNotification('info', mode === 'mock' ? '已切换到演示模式（内置演示数据）' : '已切换到实时连接（Core 后端 /v1/*）');
+    addNotification('info', mode === 'mock' ? '已切换到演示模式（内置演示数据）' : '已切换到实时连接');
   };
 
   const setTheme = (t: 'light' | 'dark') => {

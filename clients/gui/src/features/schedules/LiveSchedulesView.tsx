@@ -1,3 +1,4 @@
+import { PathInput } from '../../components/PathInput';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -45,7 +46,7 @@ const REQUEST_LABELS: Record<RunRequestStatus, string> = {
   retry_wait: '等待重试',
   succeeded: '已完成',
   cancelled: '已取消',
-  dead_letter: 'Dead Letter',
+  dead_letter: '已失败',
   manual_reconcile_required: '需人工核对',
 };
 
@@ -85,13 +86,13 @@ const RequestCard: React.FC<{
         <div><dt>尝试</dt><dd>{request.attemptCount}/{request.maxAttempts}</dd></div>
         <div><dt>可执行时间</dt><dd>{formatDateTime(request.availableAt)}</dd></div>
         {request.lastErrorCode && <div><dt>最后错误</dt><dd>{request.lastErrorCode}</dd></div>}
-        {request.replayOfRequestId && <div><dt>Replay 来源</dt><dd>{request.replayOfRequestId}</dd></div>}
+        {request.replayOfRequestId && <div><dt>原失败请求</dt><dd>{request.replayOfRequestId}</dd></div>}
       </dl>
     </div>
     {replay && (
       <button type="button" className="btn btn-danger btn-sm" onClick={replay} disabled={busy}>
         <RotateCcw size={13} aria-hidden="true" />
-        {busy ? '提交中…' : '显式 Replay'}
+        {busy ? '提交中…' : '重新提交'}
       </button>
     )}
     {cancel && <button type="button" className="btn btn-secondary btn-sm" onClick={cancel} disabled={busy}>取消请求</button>}
@@ -203,7 +204,7 @@ export const LiveSchedulesView: React.FC = () => {
     try {
       const request = mapRunRequest(await client.triggerSchedule(scheduleId, key));
       keys.current.release(action);
-      addNotification('success', `「${scheduleName}」已进入队列；重复点击已由幂等键保护`);
+      addNotification('success', `「${scheduleName}」已进入队列`);
       setSnapshot((current) => ({ ...current, queue: [request, ...current.queue.filter((item) => item.id !== request.id)] }));
       await refresh(true);
     } catch (caught) {
@@ -226,7 +227,7 @@ export const LiveSchedulesView: React.FC = () => {
       const request = mapRunRequest(await client.signalHook(scheduleId, eventId, key));
       keys.current.release(action);
       setSnapshot((current) => ({ ...current, queue: [request, ...current.queue.filter((item) => item.id !== request.id)] }));
-      addNotification('success', `「${scheduleName}」事件 ${eventId} 已由 Core 接收；重复事件会复用同一请求。`);
+      addNotification('success', `「${scheduleName}」事件 ${eventId} 已接收。`);
       await refresh(true);
     } catch (caught) {
       const nextError = schedulerError(caught);
@@ -246,7 +247,7 @@ export const LiveSchedulesView: React.FC = () => {
       const request = mapRunRequest(await client.cancelRunRequest(requestId, key));
       keys.current.release(action);
       setSnapshot((current) => ({ ...current, queue: [request, ...current.queue.filter((item) => item.id !== request.id)] }));
-      addNotification('success', `运行请求 ${requestId} 已提交取消；等待 Core 确认终态。`);
+      addNotification('success', `运行请求 ${requestId} 正在取消。`);
       await refresh(true);
     } catch (caught) {
       const nextError = schedulerError(caught);
@@ -311,7 +312,7 @@ export const LiveSchedulesView: React.FC = () => {
         ...current,
         queue: [queued, ...current.queue.filter((item) => item.id !== queued.id)],
       }));
-      addNotification('success', `Dead Letter ${requestId} 已显式 Replay；重复提交已由幂等键保护`);
+      addNotification('success', `失败请求 ${requestId} 已重新提交。`);
       await refresh(true);
     } catch (caught) {
       const nextError = schedulerError(caught);
@@ -328,8 +329,8 @@ export const LiveSchedulesView: React.FC = () => {
     return (
       <div className="live-route-state" role="status">
         <div className="live-route-state-icon"><Loader2 size={22} className="animate-spin" aria-hidden="true" /></div>
-        <h1>正在读取 Scheduler Projection…</h1>
-        <p>Live 模式只展示本地 Core 的 phase45.v1 数据，不会混入演示调度。</p>
+        <h1>正在读取调度…</h1>
+
       </div>
     );
   }
@@ -338,18 +339,18 @@ export const LiveSchedulesView: React.FC = () => {
     <div className="section-view live-scheduler-view">
       <header className="section-header scheduler-header">
         <div>
-          <span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时 Core · phase45.v1</span>
+
           <h1 className="section-title">调度中心</h1>
-          <p className="section-sub">单 Core 本地 Scheduler · {snapshot.schedules.length} 个调度</p>
+          <p className="section-sub">{snapshot.schedules.length} 个调度</p>
         </div>
         <div className="scheduler-header-actions">
           <StatusBadge
             status={snapshot.phase === 'ready' && connectionStatus === 'connected' ? 'connected' : 'disconnected'}
-            label={snapshot.phase === 'ready' && connectionStatus === 'connected' ? 'Core 已连接' : '连接不可用'}
+            label={snapshot.phase === 'ready' && connectionStatus === 'connected' ? '已连接' : '连接不可用'}
             size="sm"
           />
           <span className="scheduler-connection-announcement" role="status" aria-live="polite">
-            {connectionStatus === 'connected' ? 'Core 已连接' : 'Core 连接已断开，调度修改暂不可用'}
+            {connectionStatus === 'connected' ? '已连接' : '连接已断开，暂时无法修改调度'}
           </span>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={snapshot.phase === 'loading'}>
             <RefreshCw size={13} className={snapshot.phase === 'loading' ? 'animate-spin' : undefined} aria-hidden="true" />
@@ -373,10 +374,10 @@ export const LiveSchedulesView: React.FC = () => {
 
           <section aria-labelledby="live-schedules-heading">
             <div className="scheduler-section-heading">
-              <div><h2 id="live-schedules-heading">Schedules</h2><p>暂停/恢复使用版本检查；手动触发使用一次一键一幂等键。</p></div>
+              <div><h2 id="live-schedules-heading">调度列表</h2></div>
             </div>
             {snapshot.schedules.length === 0 ? (
-              <EmptyState icon={CalendarClock} title="暂无服务端调度" description="Core 尚未返回 ScheduleDefinition。可创建一个绑定已发布 Workflow 的调度。" />
+              <EmptyState icon={CalendarClock} title="暂无调度" />
             ) : (
               <div className="scheduler-card-list">
                 {snapshot.schedules.map((schedule) => {
@@ -393,10 +394,10 @@ export const LiveSchedulesView: React.FC = () => {
                           <StatusBadge status={schedule.status === 'enabled' ? 'active' : schedule.status} size="sm" />
                         </div>
                         <p className="scheduler-rule">
-                          {schedule.triggerKind === 'cron' ? schedule.cronExpression : schedule.triggerKind === 'timer' ? `单次 ${formatDateTime(schedule.timerAt ?? '')}` : schedule.hookEventType === 'file.changed' ? `文件变化 · ${schedule.watchPath}` : schedule.hookEventType === 'git.head.changed' ? `Git HEAD 变化 · ${schedule.watchPath}` : '本地应用信号 · application.signal'}
+                          {schedule.triggerKind === 'cron' ? schedule.cronExpression : schedule.triggerKind === 'timer' ? `单次 ${formatDateTime(schedule.timerAt ?? '')}` : schedule.hookEventType === 'file.changed' ? `文件变化 · ${schedule.watchPath}` : schedule.hookEventType === 'git.head.changed' ? `Git 版本变化 · ${schedule.watchPath}` : '本地应用信号 · application.signal'}
                           <span> · {schedule.timezoneName}</span>
                         </p>
-                        <p className="scheduler-target">{schedule.workflowId} · Workflow v{schedule.workflowVersion} · 调度 v{schedule.version}</p>
+                        <p className="scheduler-target">{schedule.workflowId} · 流程 v{schedule.workflowVersion} · 调度 v{schedule.version}</p>
                         {watchStatuses[schedule.id] && <p className="scheduler-target" role="status">Watcher：{watchStatuses[schedule.id].errorCode ? `错误 ${watchStatuses[schedule.id].errorCode}` : watchStatuses[schedule.id].initialized ? `已初始化 · generation ${watchStatuses[schedule.id].generation}` : '等待初始化'}{watchStatuses[schedule.id].observedAt ? ` · 观察于 ${formatDateTime(watchStatuses[schedule.id].observedAt ?? '')}` : ''}</p>}
                       </div>
                       <div className="scheduler-card-actions">
@@ -433,15 +434,15 @@ export const LiveSchedulesView: React.FC = () => {
 
           <div className="scheduler-columns">
             <section aria-labelledby="scheduler-queue-heading">
-              <div className="scheduler-section-heading"><div><h2 id="scheduler-queue-heading">运行请求队列</h2><p>显示已提交请求的权威状态，不推断后台仍在运行。</p></div><strong>{snapshot.queue.length}</strong></div>
+              <div className="scheduler-section-heading"><div><h2 id="scheduler-queue-heading">运行队列</h2></div><strong>{snapshot.queue.length}</strong></div>
               <div className="scheduler-request-list">
                 {snapshot.queue.length === 0 ? <p className="scheduler-inline-empty">队列中暂无运行请求。</p> : snapshot.queue.map((request) => <RequestCard key={request.id} request={request} busy={mutationsDisabled} cancel={['queued', 'leased', 'retry_wait'].includes(request.status) ? () => void cancelRequest(request.id) : undefined} />)}
               </div>
             </section>
             <section aria-labelledby="scheduler-dead-heading">
-              <div className="scheduler-section-heading"><div><h2 id="scheduler-dead-heading">Dead Letter</h2><p>只有人工确认后才创建新的 replay 请求；原记录不会被覆盖。</p></div><strong>{snapshot.deadLetter.length}</strong></div>
+              <div className="scheduler-section-heading"><div><h2 id="scheduler-dead-heading">失败记录</h2></div><strong>{snapshot.deadLetter.length}</strong></div>
               <div className="scheduler-request-list">
-                {snapshot.deadLetter.length === 0 ? <p className="scheduler-inline-empty">暂无 Dead Letter。</p> : snapshot.deadLetter.map((request) => (
+                {snapshot.deadLetter.length === 0 ? <p className="scheduler-inline-empty">暂无失败记录。</p> : snapshot.deadLetter.map((request) => (
                   <RequestCard
                     key={request.id}
                     request={request}
@@ -452,7 +453,7 @@ export const LiveSchedulesView: React.FC = () => {
               </div>
             </section>
           </div>
-          <p className="section-footnote">本页面只显示本地单 Core、单 Scheduler Leader 与单 Runtime Writer；Remote 与多 Writer 状态请到对应 live 页面查看。OAuth PKCE 由 Core 部署配置统一保护。</p>
+
         </div>
       </div>
 
@@ -473,28 +474,27 @@ export const LiveSchedulesView: React.FC = () => {
             <button type="button" className={`btn btn-sm ${triggerKind === 'timer' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'timer'} onClick={() => setTriggerKind('timer')}>单次 Timer</button>
             <button type="button" className={`btn btn-sm ${triggerKind === 'hook' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'hook'} onClick={() => setTriggerKind('hook')}>事件 Hook</button>
           </div></fieldset>
-          {triggerKind === 'cron' ? <label>Cron 表达式<input className="input" value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label> : triggerKind === 'timer' ? <label>触发时间<input type="datetime-local" className="input" value={timerAt} onChange={(event) => setTimerAt(event.target.value)} /></label> : <><label>事件来源<select className="input" value={hookEventType} onChange={(event) => setHookEventType(event.target.value as typeof hookEventType)}><option value="application.signal">应用信号</option><option value="file.changed">文件变化</option><option value="git.head.changed">Git HEAD 变化</option></select></label>{hookEventType === 'application.signal' ? <p className="scheduler-form-note">创建后输入稳定事件 ID，可重复发送而不重复创建 RunRequest。</p> : <label>监控路径<input className="input" value={watchPath} onChange={(event) => setWatchPath(event.target.value)} placeholder={hookEventType === 'file.changed' ? '工作区内文件的绝对路径' : '工作区内 Git 仓库目录的绝对路径'} /><small className="scheduler-form-note">路径须在当前工作区内；Core 会检查实际路径与符号链接。</small></label>}</>}
-          <label>已发布 Workflow ID<input className="input" value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} placeholder="例如 builtin.coding-review" /></label>
-          <label>Workflow 版本<input type="number" min="1" step="1" className="input" value={workflowVersion} onChange={(event) => setWorkflowVersion(event.target.value)} /></label>
-          <p className="scheduler-form-note">运行工作区：{activeWorkspace || '请先在会话页选择一个 Core 项目'}</p>
-          <p className="scheduler-form-note">live 契约只接受已发布 Workflow；Prompt 和系统巡检仍仅保留在演示模式。</p>
+          {triggerKind === 'cron' ? <label>Cron 表达式<input className="input" value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label> : triggerKind === 'timer' ? <label>触发时间<input type="datetime-local" className="input" value={timerAt} onChange={(event) => setTimerAt(event.target.value)} /></label> : <><label>事件来源<select className="input" value={hookEventType} onChange={(event) => setHookEventType(event.target.value as typeof hookEventType)}><option value="application.signal">应用信号</option><option value="file.changed">文件变化</option><option value="git.head.changed">Git 版本变化</option></select></label>{hookEventType === 'application.signal' ? <p className="scheduler-form-note">相同事件不会重复触发任务。</p> : <div><PathInput key={hookEventType} label="监控文件或文件夹" kind={hookEventType === 'file.changed' ? 'file' : 'directory'} value={watchPath} onChange={setWatchPath} within={activeWorkspace} placeholder={hookEventType === 'file.changed' ? '选择项目内的文件' : '选择项目内的 Git 仓库文件夹'} disabled={Boolean(busyAction)} /><small className="scheduler-form-note">请选择当前项目内的文件或文件夹。</small></div>}</>}
+          <label>已发布流程编号<input className="input" value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} placeholder="例如 builtin.coding-review" /></label>
+          <label>流程版本<input type="number" min="1" step="1" className="input" value={workflowVersion} onChange={(event) => setWorkflowVersion(event.target.value)} /></label>
+          <p className="scheduler-form-note">项目文件夹：{activeWorkspace || '请先在会话页选择项目'}</p>
         </div>
       </Modal>
 
       <Modal
         isOpen={replayRequest !== null}
         onClose={() => { if (!busyAction?.startsWith('replay:')) { setReplayRequest(null); setReplayConfirmed(false); } }}
-        title="确认显式 Replay"
+        title="确认重新提交"
         footer={<>
           <button type="button" className="btn btn-ghost" onClick={() => { setReplayRequest(null); setReplayConfirmed(false); }} disabled={busyAction?.startsWith('replay:')}>取消</button>
-          <button type="button" className="btn btn-danger" onClick={() => void replay()} disabled={!replayConfirmed || mutationsDisabled}>{busyAction?.startsWith('replay:') ? '提交中…' : '确认创建 Replay 请求'}</button>
+          <button type="button" className="btn btn-danger" onClick={() => void replay()} disabled={!replayConfirmed || mutationsDisabled}>{busyAction?.startsWith('replay:') ? '提交中…' : '确认重新提交'}</button>
         </>}
       >
         <div className="scheduler-replay-confirm">
           {error && <div className="scheduler-form-error" role="alert">{error.code}：{error.message}</div>}
-          <div className="scheduler-danger-copy" role="alert"><AlertTriangle size={18} aria-hidden="true" /><p>Replay 会创建一个新的运行请求，可能再次执行 Workflow 副作用。原 Dead Letter 会保留，不会被覆盖。</p></div>
-          <dl className="scheduler-meta"><div><dt>请求</dt><dd>{replayRequest?.id}</dd></div><div><dt>Workflow</dt><dd>{replayRequest?.workflowId} · v{replayRequest?.workflowVersion}</dd></div><div><dt>最后错误</dt><dd>{replayRequest?.lastErrorCode ?? '未提供'}</dd></div></dl>
-          <label className="scheduler-confirm-check"><input type="checkbox" checked={replayConfirmed} onChange={(event) => setReplayConfirmed(event.target.checked)} />我已核对该请求，并确认创建一次显式 Replay。</label>
+          <div className="scheduler-danger-copy" role="alert"><AlertTriangle size={18} aria-hidden="true" /><p>重新提交会创建新的运行请求，可能再次修改文件或执行外部操作。原失败记录会保留。</p></div>
+          <dl className="scheduler-meta"><div><dt>请求</dt><dd>{replayRequest?.id}</dd></div><div><dt>流程</dt><dd>{replayRequest?.workflowId} · v{replayRequest?.workflowVersion}</dd></div><div><dt>最后错误</dt><dd>{replayRequest?.lastErrorCode ?? '未提供'}</dd></div></dl>
+          <label className="scheduler-confirm-check"><input type="checkbox" checked={replayConfirmed} onChange={(event) => setReplayConfirmed(event.target.checked)} />我已核对该请求，并确认重新提交。</label>
         </div>
       </Modal>
     </div>

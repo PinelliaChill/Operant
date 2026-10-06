@@ -2051,7 +2051,7 @@ const DemoSettingsView: React.FC = () => {
               <section aria-labelledby="sec-network">
                 <SectionHeader
                   title="网络与代理"
-                  subtitle="配置 Core 连接外部模型提供商的代理服务器与请求超时"
+                  subtitle="设置模型服务的代理服务器与请求超时"
                   icon={Globe}
                 />
                 <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -2631,7 +2631,7 @@ const LiveSecuritySettingsView: React.FC = () => (
   <div className="section-view" data-client-mode="live">
     <header className="section-header">
       <h1 className="section-title">安全与治理</h1>
-      <p className="section-sub">Phase 4 Policy 检查与解释。Live 模式不会显示或修改演示设置。</p>
+      <p className="section-sub">检查操作权限，不会实际执行或修改权限。</p>
     </header>
     <div className="section-scroll">
       <div className="section-inner"><PolicySettings /></div>
@@ -2664,7 +2664,7 @@ const LiveSettingsView: React.FC = () => {
       <div className="section-view" data-client-mode="live">
         <header className="section-header">
           <h1 className="section-title">系统与设备</h1>
-          <p className="section-sub">连接本地 Core 的 Remote Control、Remote Execution Target 与设备状态。</p>
+          <p className="section-sub">查看远程控制、远程执行与设备状态。</p>
         </header>
         <div className="section-scroll">
           <div className="section-inner"><RemoteView /></div>

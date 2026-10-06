@@ -1,5 +1,5 @@
 import React from 'react';
-import { LockKeyhole, Radio } from 'lucide-react';
+import { LockKeyhole } from 'lucide-react';
 import { useOperant } from '../context/ClientContext';
 import type { LiveUnavailableSection } from './liveRouteSupport';
 
@@ -10,12 +10,12 @@ const SECTION_LABELS: Record<string, string> = {
   collab_canvas: '工作流画布预览',
   tasks: '任务',
   schedules: '调度',
-  agents: 'Agent',
+  agents: '模型与角色',
   extensions: '插件与 MCP',
   skills: '技能',
   settings: '设置',
   runs: '运行详情',
-  workflow: '工作流深链',
+  workflow: '工作流',
   session: '会话',
 };
 
@@ -26,9 +26,8 @@ export const LiveUnavailableView: React.FC<{ section: string }> = ({ section }) 
   return (
     <div className="live-route-state live-unavailable-state" role="note">
       <div className="live-route-state-icon"><LockKeyhole size={22} aria-hidden="true" /></div>
-      <h1>{label}：Live 本阶段未接入</h1>
-      <p>此功能当前仅有演示界面。Live 模式不会静默显示或混入演示数据。</p>
-      <div className="live-unavailable-boundary"><Radio size={14} aria-hidden="true" /><span>已接入：Core、Workspace/Project、Thread、Session/Run、SSE、Approval、类型化错误</span></div>
+      <h1>{label}：暂不可用</h1>
+      <p>此功能尚未接入当前连接。</p>
       <button type="button" className="btn btn-secondary" onClick={() => setClientMode('mock')}>切换到演示模式查看</button>
     </div>
   );

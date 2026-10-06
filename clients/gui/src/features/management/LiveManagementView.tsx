@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import { EmptyState } from '../../components/EmptyState';
+import { PathInput } from '../../components/PathInput';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { currentBrowserOrigin } from '../../lib/liveBaseUrl';
@@ -59,15 +60,6 @@ const TAB_LABELS: Record<ManagementTab, string> = {
   settings: '记忆设置',
   skills: '技能',
   retention: '保留与审计',
-};
-
-const TAB_DESCRIPTIONS: Record<ManagementTab, string> = {
-  projects: '登记工作区并管理项目生命周期。',
-  knowledge: '保存、检索和审阅项目知识。',
-  plugins: '安装插件并管理运行模式、项目绑定与数据集。',
-  settings: '控制记忆范围并核对配置来源。',
-  skills: '发现受信 Skill，按项目启用和管理安装副本。',
-  retention: '管理 Artifact 保留状态并查看审计结果。',
 };
 
 const TABS: ManagementTab[] = ['projects', 'knowledge', 'plugins', 'settings', 'skills', 'retention'];
@@ -205,6 +197,7 @@ function statusLabel(value: string): string {
     enabled: '已启用',
     disabled: '已停用',
     installed: '已安装',
+    completed: '已完成',
     closing: '关闭中',
     uninstalling: '卸载中',
     failed: '失败',
@@ -311,7 +304,7 @@ const ProjectsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
       return;
     }
     if (!absolutePath(trimmedPath)) {
-      setFormError('workspace 路径必须是绝对路径，例如 /Users/you/workspace/project。');
+      setFormError('请选择项目文件夹，或填写完整路径。');
       return;
     }
     setFormError('');
@@ -360,7 +353,6 @@ const ProjectsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
         <div className="b2-memory-card-header">
           <div>
             <h2>新建项目</h2>
-            <p>项目绑定一个绝对 workspace 目录，后续记忆与插件选择都使用这个项目范围。</p>
           </div>
           <FolderKanban size={18} aria-hidden="true" />
         </div>
@@ -368,8 +360,8 @@ const ProjectsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
           {formError && <FormError message={formError} id="project-form-error" />}
           <label htmlFor="b2-project-name">项目名称</label>
           <input id="b2-project-name" className="input" value={name} onChange={(event) => setName(event.target.value)} aria-describedby={formError ? 'project-form-error' : undefined} required />
-          <label htmlFor="b2-project-workspace">Workspace 绝对路径</label>
-          <input id="b2-project-workspace" className="input" value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder="/Users/you/workspace/project" aria-describedby={formError ? 'project-form-error' : undefined} required />
+          <label htmlFor="b2-project-workspace">项目文件夹</label>
+          <PathInput id="b2-project-workspace" value={workspacePath} onChange={setWorkspacePath} placeholder="选择文件夹或填写完整路径" aria-label="项目文件夹" aria-describedby={formError ? 'project-form-error' : undefined} disabled={busy} required />
           <div className="b2-memory-actions">
             <ActionButton label="创建项目" tone="primary" icon={<Plus size={14} aria-hidden="true" />} onClick={() => undefined} disabled={busy || !name.trim() || !workspacePath.trim()} type="submit" />
           </div>
@@ -378,11 +370,11 @@ const ProjectsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
 
       <section aria-labelledby="b2-project-list-title">
         <div className="b2-memory-card-header">
-          <div><h2 id="b2-project-list-title">项目列表</h2><p>{state.projects.length} 个项目，ID 和绑定状态来自服务端。</p></div>
+          <div><h2 id="b2-project-list-title">项目列表</h2></div>
           <StatusBadge status="active" label={`${state.projects.filter((project) => !project.archived).length} 个活跃`} size="sm" />
         </div>
         {state.projects.length === 0 ? (
-          <EmptyState icon={FolderKanban} title="暂无项目" description="Live 模式不会用演示项目填充此页面。" />
+          <EmptyState icon={FolderKanban} title="暂无项目" />
         ) : (
           <div className="b2-memory-grid">
             {state.projects.map((project) => (
@@ -397,8 +389,8 @@ const ProjectsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
                   <StatusBadge status={statusKind(project.archived ? 'archived' : 'active')} label={statusLabel(project.archived ? 'archived' : 'active')} size="sm" />
                 </div>
                 <div className="b2-memory-meta">
-                  <span>Project ID <code>{project.project_id}</code></span>
-                  <span>Workspace <code>{project.workspace_id}</code></span>
+                  <details><summary>详细信息</summary><span>项目编号 <code>{project.project_id}</code></span>
+                  <span>工作区编号 <code>{project.workspace_id}</code></span></details>
                   <span>记忆：{project.memory_enabled ? '已开启' : '已关闭'}</span>
                   {project.installation_id && <span>插件安装：<code>{project.installation_id}</code></span>}
                 </div>
@@ -690,9 +682,9 @@ const PluginPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) =
           <select id="plugin-mode" className="select" value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}><option value="isolated">isolated（隔离）</option><option value="trusted_in_process">trusted_in_process（受信进程内）</option></select>
           <label htmlFor="plugin-retained-dataset">接回保留数据集（可选）</label>
           <select id="plugin-retained-dataset" className="select" value={retainedDataset} onChange={(event) => setRetainedDataset(event.target.value)}><option value="">不接回</option>{state.datasets.filter((dataset) => !dataset.installation_id).map((dataset) => <option key={dataset.dataset_id} value={dataset.dataset_id}>{dataset.plugin_id} · {dataset.dataset_id}</option>)}</select>
-          <small>安装/重装按钮提交后，页面只显示服务端返回的生命周期状态。</small>
+
         </div>
-        {state.catalog.length === 0 ? <EmptyState icon={PackageOpen} title="插件目录为空" description="Live 模式不会显示演示插件。" /> : <div className="b2-memory-grid">{state.catalog.map((plugin) => <article key={plugin.plugin_id} className="b2-memory-card"><div className="b2-memory-card-header"><div><h3>{plugin.name}</h3><p><code>{plugin.plugin_id}</code></p></div><ActionButton label="安装" tone="primary" onClick={() => void install(plugin.plugin_id)} disabled={busy} icon={<Plus size={13} aria-hidden="true" />} /></div><p>{plugin.description}</p><details><summary>配置 Schema</summary><pre className="b2-memory-record-content">{safeJson(plugin.config_schema)}</pre></details></article>)}</div>}
+        {state.catalog.length === 0 ? <EmptyState icon={PackageOpen} title="插件目录为空"  /> : <div className="b2-memory-grid">{state.catalog.map((plugin) => <article key={plugin.plugin_id} className="b2-memory-card"><div className="b2-memory-card-header"><div><h3>{plugin.name}</h3><p><code>{plugin.plugin_id}</code></p></div><ActionButton label="安装" tone="primary" onClick={() => void install(plugin.plugin_id)} disabled={busy} icon={<Plus size={13} aria-hidden="true" />} /></div><p>{plugin.description}</p><details><summary>配置 Schema</summary><pre className="b2-memory-record-content">{safeJson(plugin.config_schema)}</pre></details></article>)}</div>}
       </section>
 
       <section aria-labelledby="plugin-installations-title">
@@ -730,7 +722,7 @@ const SettingsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
   };
   return (
     <div className="b2-memory" data-panel="settings">
-      <section className="b2-memory-card"><div className="b2-memory-card-header"><div><h2>记忆开关</h2><p>全局开关优先于项目开关；实际生效范围、来源与时间由服务端返回。</p></div><Power size={18} aria-hidden="true" /></div><div className="b2-memory-actions"><span className="b2-memory-status" data-status={state.global_enabled ? 'enabled' : 'disabled'}>全局：{state.global_enabled ? '已开启' : '已关闭'}</span><ActionButton label={state.global_enabled ? '关闭全局记忆' : '开启全局记忆'} tone={state.global_enabled ? 'ghost' : 'primary'} onClick={() => void switchMemory(!state.global_enabled)} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /></div><div className="b2-memory-form"><label htmlFor="settings-project">项目范围</label><ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="settings-project" /><div className="b2-memory-actions">{projectId && <><span className="b2-memory-status" data-status={state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? 'enabled' : 'disabled'}>项目：{state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? '已开启' : '已关闭'}</span><ActionButton label="切换项目记忆" onClick={() => { const project = state.projects.find((entry) => entry.project_id === projectId); if (project) void switchMemory(!project.memory_enabled, project.project_id); }} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="迁移项目记忆" onClick={() => void execute({ action: 'memory_migrate', project_id: projectId, confirmed: true }, '迁移项目记忆')} disabled={busy} icon={<RefreshCw size={13} aria-hidden="true" />} /></>}</div><div className="b2-memory-actions"><ActionButton label="打开高级知识治理" onClick={() => onTab('knowledge')} disabled={busy} icon={<ExternalLink size={13} aria-hidden="true" />} /></div></div></section>
+      <section className="b2-memory-card"><div className="b2-memory-card-header"><div><h2>记忆开关</h2><p>关闭全局记忆后，所有项目都将停用记忆。</p></div><Power size={18} aria-hidden="true" /></div><div className="b2-memory-actions"><span className="b2-memory-status" data-status={state.global_enabled ? 'enabled' : 'disabled'}>全局：{state.global_enabled ? '已开启' : '已关闭'}</span><ActionButton label={state.global_enabled ? '关闭全局记忆' : '开启全局记忆'} tone={state.global_enabled ? 'ghost' : 'primary'} onClick={() => void switchMemory(!state.global_enabled)} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /></div><div className="b2-memory-form"><label htmlFor="settings-project">项目范围</label><ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="settings-project" /><div className="b2-memory-actions">{projectId && <><span className="b2-memory-status" data-status={state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? 'enabled' : 'disabled'}>项目：{state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? '已开启' : '已关闭'}</span><ActionButton label="切换项目记忆" onClick={() => { const project = state.projects.find((entry) => entry.project_id === projectId); if (project) void switchMemory(!project.memory_enabled, project.project_id); }} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="迁移项目记忆" onClick={() => void execute({ action: 'memory_migrate', project_id: projectId, confirmed: true }, '迁移项目记忆')} disabled={busy} icon={<RefreshCw size={13} aria-hidden="true" />} /></>}</div><div className="b2-memory-actions"><ActionButton label="打开高级知识治理" onClick={() => onTab('knowledge')} disabled={busy} icon={<ExternalLink size={13} aria-hidden="true" />} /></div></div></section>
       <section aria-labelledby="settings-source-title"><div className="b2-memory-card-header"><div><h2 id="settings-source-title">配置来源与作用域</h2><p>用于核对 global/project 生效来源，客户端不自行推断覆盖关系。</p></div><div className="b2-memory-actions"><Link className="btn btn-secondary btn-sm" to="/settings?cat=config">打开运行配置继承 <ExternalLink size={13} aria-hidden="true" /></Link><ActionButton label="查看项目知识" onClick={() => onTab('knowledge')} icon={<ExternalLink size={13} aria-hidden="true" />} disabled={busy} /></div></div>{state.settings.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Settings2} title="暂无配置" description="服务端尚未返回设置来源。" /></div> : <div className="b2-memory-grid">{state.settings.map((setting) => <article key={`${setting.scope}-${setting.key}`} className="b2-memory-card"><div className="b2-memory-card-header"><h3>{setting.key}</h3><span className="b2-memory-status">{setting.scope}</span></div><div className="b2-memory-meta"><span>来源：{setting.source}</span><span>生效：{setting.effective_at}</span></div><pre className="b2-memory-record-content">{safeJson(setting.value)}</pre></article>)}</div>}</section>
     </div>
   );
@@ -745,23 +737,23 @@ const RetentionPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, 
   return (
     <div className="b2-memory" data-panel="retention">
       <section className="b2-memory-card">
-        <div className="b2-memory-card-header"><div><h2>保留与审计</h2><p>查看 Artifact 的保留状态、内容哈希和审计入口；物理清理仍由服务端保留锁与宽限期管理。</p></div><Archive size={18} aria-hidden="true" /></div>
-        {artifacts.length === 0 ? <EmptyState icon={Archive} title="暂无 Artifact" description="服务端尚未返回可管理的 Artifact 条目。" /> : <div className="b2-memory-grid">{artifacts.map((artifact) => <article key={artifact.artifact_id} className="b2-memory-card" data-state={artifact.lifecycle} data-blocked={artifact.blocked ? 'true' : 'false'}>
-          <div className="b2-memory-card-header"><div><h3>Artifact</h3><p><code>{artifact.artifact_id}</code></p></div><span className="b2-memory-status" data-status={artifact.blocked ? 'blocked' : artifact.lifecycle}>{artifact.blocked ? '已阻断' : statusLabel(artifact.lifecycle)}</span></div>
-          <div className="b2-memory-meta"><span>大小：{artifact.size_bytes} B</span><span>生命周期：{artifact.lifecycle}</span><span>哈希：<code>{artifact.content_hash}</code></span><span>固定：{artifact.pinned ? '是' : '否'}</span></div>
-          {artifact.blocked && <div className="b2-memory-warning" data-severity="error" role="alert">该 Artifact 当前被阻断，服务端不会执行未获允许的生命周期操作；可先打开审计。</div>}
+        <div className="b2-memory-card-header"><div><h2>保留与审计</h2></div><Archive size={18} aria-hidden="true" /></div>
+        {artifacts.length === 0 ? <EmptyState icon={Archive} title="暂无产物" description="" /> : <div className="b2-memory-grid">{artifacts.map((artifact) => <article key={artifact.artifact_id} className="b2-memory-card" data-state={artifact.lifecycle} data-blocked={artifact.blocked ? 'true' : 'false'}>
+          <div className="b2-memory-card-header"><div><h3>产物</h3><p><code>{artifact.artifact_id}</code></p></div><span className="b2-memory-status" data-status={artifact.blocked ? 'blocked' : artifact.lifecycle}>{artifact.blocked ? '已阻断' : statusLabel(artifact.lifecycle)}</span></div>
+          <div className="b2-memory-meta"><span>大小：{artifact.size_bytes} B</span><span>状态：{statusLabel(artifact.lifecycle)}</span><details><summary>详细信息</summary><span>内容校验值：<code>{artifact.content_hash}</code></span></details><span>固定保留：{artifact.pinned ? '是' : '否'}</span></div>
+          {artifact.blocked && <div className="b2-memory-warning" data-severity="error" role="alert">该产物暂时无法修改，请先查看审计结果。</div>}
           <div className="b2-memory-actions">
-            <ActionButton label={artifact.pinned ? '取消固定' : '固定保留'} onClick={() => runArtifactAction(artifact, 'artifact_pin', artifact.pinned ? '取消固定 Artifact' : '固定 Artifact')} disabled={busy || artifact.blocked} icon={<Check size={13} aria-hidden="true" />} />
-            <ActionButton label="审计" onClick={() => runArtifactAction(artifact, 'artifact_audit', '审计 Artifact')} disabled={busy} icon={<Search size={13} aria-hidden="true" />} />
-            <ActionButton label="归档" onClick={() => runArtifactAction(artifact, 'artifact_archive', '归档 Artifact')} disabled={busy || artifact.blocked} icon={<Archive size={13} aria-hidden="true" />} />
-            <ActionButton label="安排清理" onClick={() => runArtifactAction(artifact, 'artifact_schedule', '安排 Artifact 清理')} disabled={busy || artifact.blocked} icon={<RefreshCw size={13} aria-hidden="true" />} />
-            <ActionButton label="移入回收站" tone="ghost" onClick={() => runArtifactAction(artifact, 'artifact_trash', '移入 Artifact 回收站')} disabled={busy || artifact.blocked} icon={<Trash2 size={13} aria-hidden="true" />} />
-            <ActionButton label="恢复" onClick={() => runArtifactAction(artifact, 'artifact_restore', '恢复 Artifact')} disabled={busy || artifact.blocked} icon={<RefreshCw size={13} aria-hidden="true" />} />
+            <ActionButton label={artifact.pinned ? '取消固定' : '固定保留'} onClick={() => runArtifactAction(artifact, 'artifact_pin', artifact.pinned ? '取消固定产物' : '固定产物')} disabled={busy || artifact.blocked} icon={<Check size={13} aria-hidden="true" />} />
+            <ActionButton label="审计" onClick={() => runArtifactAction(artifact, 'artifact_audit', '审计产物')} disabled={busy} icon={<Search size={13} aria-hidden="true" />} />
+            <ActionButton label="归档" onClick={() => runArtifactAction(artifact, 'artifact_archive', '归档产物')} disabled={busy || artifact.blocked} icon={<Archive size={13} aria-hidden="true" />} />
+            <ActionButton label="安排清理" onClick={() => runArtifactAction(artifact, 'artifact_schedule', '安排产物清理')} disabled={busy || artifact.blocked} icon={<RefreshCw size={13} aria-hidden="true" />} />
+            <ActionButton label="移入回收站" tone="ghost" onClick={() => runArtifactAction(artifact, 'artifact_trash', '移入产物回收站')} disabled={busy || artifact.blocked} icon={<Trash2 size={13} aria-hidden="true" />} />
+            <ActionButton label="恢复" onClick={() => runArtifactAction(artifact, 'artifact_restore', '恢复产物')} disabled={busy || artifact.blocked} icon={<RefreshCw size={13} aria-hidden="true" />} />
           </div>
         </article>)}</div>}
       </section>
       {auditReport && <section className="b2-memory-card" data-audit-result>
-        <div className="b2-memory-card-header"><div><h2>最近一次审计结果</h2><p>结果来自服务端 Artifact 审计；没有审计返回时不显示此区域。</p></div><Search size={18} aria-hidden="true" /></div>
+        <div className="b2-memory-card-header"><div><h2>最近一次审计结果</h2></div><Search size={18} aria-hidden="true" /></div>
         <div className="b2-memory-meta" data-audit-summary>
           <span>扫描引用：{auditReport.scanned_database_references}</span>
           <span>扫描内容：{auditReport.scanned_blobs}</span>
@@ -770,7 +762,7 @@ const RetentionPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, 
         {auditReport.findings.length === 0 ? <p className="b2-memory-status" role="status">未发现异常。</p> : <ul className="b2-memory-record-content" data-audit-findings>
           {auditReport.findings.map((finding, index) => <li key={`${finding.finding_hash}-${index}`}>
             <strong>{finding.finding_type}</strong>
-            {finding.artifact_id && <code>Artifact {finding.artifact_id}</code>}
+            {finding.artifact_id && <code>产物 {finding.artifact_id}</code>}
             {finding.content_hash && <code>内容 {finding.content_hash}</code>}
             {(finding.expected_size_bytes !== null || finding.observed_size_bytes !== null) && <span>大小：期望 {finding.expected_size_bytes ?? '未知'} B，实际 {finding.observed_size_bytes ?? '未知'} B</span>}
             {finding.repairable && <span>可修复</span>}
@@ -817,14 +809,14 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
             <span className="ui-refine-skill-icon" aria-hidden="true"><Sparkles size={16} /></span>
             <div>
               <h2 id="skills-catalog-title">Skill 目录</h2>
-              <p>服务端受信目录中的可用 Skill。安装、项目启停和卸载均需明确操作，权限仍由 Action Gateway 管理。</p>
+              <p>选择技能安装，再按项目启用。</p>
             </div>
           </div>
           <ActionButton label="发现技能" onClick={() => void execute({ action: 'skill_discover' }, '发现已有技能')} disabled={busy} icon={<Search size={13} aria-hidden="true" />} />
         </div>
         {state.skill_catalog.length === 0 ? (
           <div className="ui-refine-skill-empty">
-            <EmptyState icon={Sparkles} title="没有可安装 Skill" description="Live 模式不会显示演示数据；请点击“发现技能”重新查询服务端目录。" />
+            <EmptyState icon={Sparkles} title="暂无可安装技能" description="点击“发现技能”刷新列表。" />
           </div>
         ) : (
           <div className="ui-refine-skill-list" role="list" aria-label="可安装 Skill">
@@ -857,7 +849,7 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
         </div>
         {skills.length === 0 ? (
           <div className="ui-refine-skill-empty">
-            <EmptyState icon={Sparkles} title="暂无已安装 Skill" description="从上方目录选择安装，安装副本会出现在这里。" />
+            <EmptyState icon={Sparkles} title="暂无已安装技能" description="从上方目录选择安装，安装副本会出现在这里。" />
           </div>
         ) : (
           <div className="ui-refine-skill-list" role="list" aria-label="已安装 Skill">
@@ -975,9 +967,9 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
         : result.state;
       setState(nextState);
       setPhase('ready');
-      setLastResult({ status: result.status, message: result.message });
+      setLastResult({ status: result.status, message: result.message.replace('，状态来自 Core', '') });
       setAuditReport(command.action === 'artifact_audit' ? parseArtifactAuditExport(result.export_data) : undefined);
-      addNotification(result.status === 'blocked' || result.status === 'failed' ? 'warn' : 'info', `${label}：${result.status} · ${result.message}`);
+      addNotification(result.status === 'blocked' || result.status === 'failed' ? 'warn' : 'info', `${label}：${statusLabel(result.status)} · ${result.message.replace('，状态来自 Core', '')}`);
       return result;
     } catch (value: unknown) {
       const detail = normalizeB23Error(value).detail;
@@ -999,8 +991,8 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
   if (!state && phase !== 'ready') {
     return (
       <div className="section-view ui-refine-management" data-client-mode="live">
-        <header className="section-header b2-memory-header ui-refine-management-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开服务侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时服务</span><h1>{TAB_LABELS[tab]}</h1><p className="section-sub ui-refine-management-subtitle">{TAB_DESCRIPTIONS[tab]}</p></div></div><ActionButton label="刷新" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={14} aria-hidden="true" />} /></header>
-        <div className="section-scroll"><div className="section-inner"><div className="b2-memory-card b2-memory-empty" role={error ? 'alert' : 'status'}>{phase === 'loading' && <Loader2 size={22} className="animate-spin" aria-hidden="true" />}{error ? <><AlertTriangle size={22} aria-hidden="true" /><h2>{error.code}</h2><p>{error.message}</p>{error.code === 'b2_3_client_unavailable' && <p>请在生成 `b2_3.generated.ts` 出现后把它注入 ClientContext；页面不会回退到 Demo。</p>}{error.outcomeUnknown && <p>当前写操作结果未知，请刷新后核对状态。</p>}</> : <><h2>{phase === 'loading' ? '正在读取管理 Projection…' : '管理页面未就绪'}</h2><p>Live 模式只显示服务端返回的项目、知识、插件、设置和 Skill。</p></>}{error && <ActionButton label="重新查询" tone="primary" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={13} aria-hidden="true" />} />}</div></div></div>
+        <header className="section-header b2-memory-header ui-refine-management-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><h1>{TAB_LABELS[tab]}</h1></div></div><ActionButton label="刷新" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={14} aria-hidden="true" />} /></header>
+        <div className="section-scroll"><div className="section-inner"><div className="b2-memory-card b2-memory-empty" role={error ? 'alert' : 'status'}>{phase === 'loading' && <Loader2 size={22} className="animate-spin" aria-hidden="true" />}{error ? <><AlertTriangle size={22} aria-hidden="true" /><h2>{error.code}</h2><p>{error.message}</p>{error.code === 'b2_3_client_unavailable' && <p>客户端无法连接，请检查服务是否正常运行。</p>}{error.outcomeUnknown && <p>当前写操作结果未知，请刷新后核对状态。</p>}</> : <><h2>{phase === 'loading' ? '正在读取管理信息…' : '管理页面未就绪'}</h2></>}{error && <ActionButton label="重新查询" tone="primary" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={13} aria-hidden="true" />} />}</div></div></div>
       </div>
     );
   }
@@ -1021,20 +1013,20 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
 
   return (
     <div className="section-view ui-refine-management" data-client-mode="live">
-      <header className="section-header b2-memory-header ui-refine-management-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开 Core 侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><span className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />实时服务</span><h1>{TAB_LABELS[tab]}</h1><p className="section-sub ui-refine-management-subtitle">{TAB_DESCRIPTIONS[tab]}</p></div></div><div className="b2-memory-actions"><StatusBadge status={phase === 'ready' && connectionStatus === 'connected' ? 'connected' : 'pending'} label={phase === 'ready' && connectionStatus === 'connected' ? '已连接' : '未就绪'} size="sm" /><ActionButton label="刷新" onClick={() => void refresh()} disabled={Boolean(actionLabel)} icon={<RefreshCw size={14} aria-hidden="true" />} /></div></header>
+      <header className="section-header b2-memory-header ui-refine-management-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><h1>{TAB_LABELS[tab]}</h1></div></div><div className="b2-memory-actions"><StatusBadge status={phase === 'ready' && connectionStatus === 'connected' ? 'connected' : 'pending'} label={phase === 'ready' && connectionStatus === 'connected' ? '已连接' : '未就绪'} size="sm" /><ActionButton label="刷新" onClick={() => void refresh()} disabled={Boolean(actionLabel)} icon={<RefreshCw size={14} aria-hidden="true" />} /></div></header>
       <div className="section-scroll"><div className="section-inner">
         <nav className="b2-memory-tabs ui-refine-management-nav" aria-label="管理分区" role="tablist">{TABS.map((entry) => <button key={entry} type="button" role="tab" aria-selected={entry === tab} className={`b2-memory-tab ui-refine-management-tab${entry === tab ? ' active' : ''}`} onClick={() => setTab(entry)}>{TAB_LABELS[entry]}</button>)}</nav>
-        {connectionStatus !== 'connected' && <FormError message="Core 连接已断开；管理写操作已禁用。" id="b2-connection-error" />}
+        {connectionStatus !== 'connected' && <FormError message="连接已断开，暂时无法保存更改。" id="b2-connection-error" />}
         {error && <FormError message={`${error.code}：${error.message}${error.outcomeUnknown ? ' 写操作结果未知，请刷新后人工核对，客户端不会自动重放。' : ''}`} id="b2-management-error" />}
-        {actionLabel && <div className="b2-memory-status" role="status" aria-live="polite"><Loader2 size={14} className="animate-spin" aria-hidden="true" />{actionLabel}处理中，请等待 Core 返回确认。</div>}
-        {lastResult && <div className="b2-memory-status" data-status={lastResult.status} role={['blocked', 'failed'].includes(lastResult.status) ? 'alert' : 'status'} aria-live="polite">服务端返回：{statusLabel(lastResult.status)} · {lastResult.message}</div>}
+        {actionLabel && <div className="b2-memory-status" role="status" aria-live="polite"><Loader2 size={14} className="animate-spin" aria-hidden="true" />{actionLabel}处理中…</div>}
+        {lastResult && <div className="b2-memory-status" data-status={lastResult.status} role={['blocked', 'failed'].includes(lastResult.status) ? 'alert' : 'status'} aria-live="polite">{statusLabel(lastResult.status)} · {lastResult.message}</div>}
         {tab === 'projects' && <ProjectsPanel {...panelProps} />}
         {tab === 'knowledge' && <KnowledgePanel {...panelProps} />}
         {tab === 'plugins' && <PluginPanel {...panelProps} />}
         {tab === 'settings' && <SettingsPanel {...panelProps} />}
         {tab === 'skills' && <SkillsPanel {...panelProps} />}
         {tab === 'retention' && <RetentionPanel {...panelProps} />}
-        <p className="section-footnote">管理操作由服务端确认；未知写结果只允许刷新/人工核对。<Link to="/chat">返回 B2 聊天</Link></p>
+        <p className="section-footnote"><Link to="/chat">返回会话</Link></p>
       </div></div>
     </div>
   );
