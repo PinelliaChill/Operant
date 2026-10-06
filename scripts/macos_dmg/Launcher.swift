@@ -3,25 +3,6 @@ import Darwin
 import Foundation
 
 private let corePort: UInt16 = 8000
-private let bootstrap = "from operant.cli import app; app()"
-private var interrupted = false
-private let signalLock = NSLock()
-private var signalSources: [DispatchSourceSignal] = []
-
-private func wasInterrupted() -> Bool {
-    signalLock.lock()
-    defer { signalLock.unlock() }
-    return interrupted
-}
-
-private func showError(_ detail: String) {
-    let alert = NSAlert()
-    alert.alertStyle = .critical
-    alert.messageText = "Operant 无法启动"
-    alert.informativeText = detail
-    alert.addButton(withTitle: "确定")
-    alert.runModal()
-}
 
 private func portAvailable() -> Bool {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
@@ -39,58 +20,23 @@ private func portAvailable() -> Bool {
     }
 }
 
-private func healthy() -> Bool {
-    guard let url = URL(string: "http://127.0.0.1:\(corePort)/healthz") else { return false }
-    var request = URLRequest(url: url)
-    request.timeoutInterval = 0.5
-    let semaphore = DispatchSemaphore(value: 0)
-    var result = false
-    let session = URLSession(configuration: .ephemeral)
-    session.dataTask(with: request) { data, response, _ in
-        if let response = response as? HTTPURLResponse, response.statusCode == 200,
-           let data = data, let body = String(data: data, encoding: .utf8) {
-            result = body.contains("\"status\":\"ok\"")
-        }
-        semaphore.signal()
-    }.resume()
-    _ = semaphore.wait(timeout: .now() + 0.8)
-    session.invalidateAndCancel()
-    return result
+private func failure(_ code: Int, _ message: String) -> NSError {
+    NSError(domain: "Operant", code: code, userInfo: [NSLocalizedDescriptionKey: message])
 }
 
-private func stop(_ process: Process?) {
-    guard let process = process, process.isRunning else { return }
-    kill(process.processIdentifier, SIGTERM)
-    for _ in 0..<30 {
-        if !process.isRunning { break }
-        Thread.sleep(forTimeInterval: 0.1)
-    }
-    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-    process.waitUntilExit()
-}
-
-private func cleanEnvironment(_ dataDirectory: URL) -> [String: String] {
-    var environment = ProcessInfo.processInfo.environment
-    for key in environment.keys where key.hasPrefix("PYTHON") || key.hasPrefix("UV_") || key.hasPrefix("OPERANT_") {
-        environment.removeValue(forKey: key)
-    }
-    environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
-    environment["OPERANT_DB_PATH"] = dataDirectory.appendingPathComponent("core.sqlite3").path
-    // The Core uses -B; a plugin launched through sys.executable may not.
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    return environment
-}
-
-private func run() throws {
+private func start() throws {
     let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
     let contents = executable.deletingLastPathComponent().deletingLastPathComponent()
-    let resources = contents.appendingPathComponent("Resources")
-    let pythonRoot = resources.appendingPathComponent("python")
-    let python = pythonRoot.appendingPathComponent("bin/python3.13")
-    let packages = pythonRoot.appendingPathComponent("lib/python3.13/site-packages")
+    let pythonRoot = contents.appendingPathComponent("Resources/python")
     let desktop = contents.appendingPathComponent("MacOS/operant-desktop")
-    for path in [python, packages, desktop] where !FileManager.default.fileExists(atPath: path.path) {
-        throw NSError(domain: "Operant", code: 1, userInfo: [NSLocalizedDescriptionKey: "应用文件不完整：\(path.lastPathComponent)。请重新安装 DMG。"])
+    let wrapperDirectory = contents.appendingPathComponent("Resources/bin")
+    for path in [
+        pythonRoot.appendingPathComponent("bin/python3.13"),
+        pythonRoot.appendingPathComponent("lib/python3.13/site-packages/operant"),
+        desktop,
+        wrapperDirectory.appendingPathComponent("operant"),
+    ] where !FileManager.default.fileExists(atPath: path.path) {
+        throw failure(1, "应用文件不完整：\(path.lastPathComponent)。请重新安装 DMG。")
     }
 
     let dataDirectory = FileManager.default.homeDirectoryForCurrentUser
@@ -99,82 +45,63 @@ private func run() throws {
         at: dataDirectory, withIntermediateDirectories: true,
         attributes: [.posixPermissions: 0o700]
     )
-    let lockURL = dataDirectory.appendingPathComponent("launcher.lock")
-    let lockFD = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
-    guard lockFD >= 0 else { throw NSError(domain: "Operant", code: 2, userInfo: [NSLocalizedDescriptionKey: "无法创建启动锁。"] ) }
-    defer { close(lockFD) }
+    let logFD = open(dataDirectory.appendingPathComponent("core.log").path, O_CREAT | O_APPEND | O_WRONLY, 0o600)
+    guard logFD >= 0 else { throw failure(2, "无法创建 Core 日志。") }
+    close(logFD)
+    let lockFD = open(dataDirectory.appendingPathComponent("launcher.lock").path, O_CREAT | O_RDWR, 0o600)
+    guard lockFD >= 0 else { throw failure(2, "无法创建启动锁。") }
     guard flock(lockFD, LOCK_EX | LOCK_NB) == 0 else {
-        throw NSError(domain: "Operant", code: 3, userInfo: [NSLocalizedDescriptionKey: "Operant Beta 2 已在运行。"])
+        close(lockFD)
+        throw failure(3, "Operant Beta 2 已在运行。")
     }
+    // Keep this descriptor open across exec so a second launch cannot race
+    // the Tauri process before its Core has opened port 8000.
     guard portAvailable() else {
-        throw NSError(domain: "Operant", code: 4, userInfo: [NSLocalizedDescriptionKey: "本机 8000 端口已被其他服务占用。请先退出该服务或旧版 Operant，再启动 Beta 2；本次未连接该服务，也未访问旧数据库。"])
+        throw failure(4, "本机 8000 端口已被其他服务占用。请先退出该服务或旧版 Operant，再启动 Beta 2；本次未连接该服务，也未访问旧数据库。")
     }
 
-    let logURL = dataDirectory.appendingPathComponent("core.log")
-    if !FileManager.default.fileExists(atPath: logURL.path) {
-        FileManager.default.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+    for key in ProcessInfo.processInfo.environment.keys
+    where key.hasPrefix("PYTHON") || key.hasPrefix("UV_") || key.hasPrefix("OPERANT_") {
+        unsetenv(key)
     }
-    let log = try FileHandle(forWritingTo: logURL)
-    try log.seekToEnd()
-    defer { try? log.close() }
+    setenv("PATH", "\(wrapperDirectory.path):/usr/bin:/bin:/usr/sbin:/sbin", 1)
+    setenv("OPERANT_DB_PATH", dataDirectory.appendingPathComponent("core.sqlite3").path, 1)
+    setenv("PYTHONDONTWRITEBYTECODE", "1", 1)
+    guard chdir(dataDirectory.path) == 0 else { throw failure(5, "无法进入 Beta 2 私有数据目录。") }
 
-    let core = Process()
-    core.executableURL = python
-    core.arguments = ["-I", "-B", "-c", bootstrap, "serve", "--host", "127.0.0.1", "--port", String(corePort), "--desktop"]
-    core.currentDirectoryURL = dataDirectory
-    core.environment = cleanEnvironment(dataDirectory)
-    core.standardInput = FileHandle.nullDevice
-    core.standardOutput = log
-    core.standardError = log
-    try core.run()
-    defer { stop(core) }
-
-    let deadline = Date().addingTimeInterval(20)
-    while Date() < deadline && !wasInterrupted() {
-        if !core.isRunning {
-            throw NSError(domain: "Operant", code: 5, userInfo: [NSLocalizedDescriptionKey: "内置 Core 启动失败。请查看 \(logURL.path)。"])
-        }
-        if healthy() { break }
-        Thread.sleep(forTimeInterval: 0.2)
+    // Replace the LaunchServices process with the accepted Tauri binary.
+    // Its window keeps the original App identity and Tauri manages Core.
+    let args: [UnsafeMutablePointer<CChar>?] = [strdup(desktop.path), nil]
+    defer { free(args[0]) }
+    args.withUnsafeBufferPointer { buffer in
+        _ = Darwin.execv(desktop.path, UnsafeMutablePointer(mutating: buffer.baseAddress!))
     }
-    guard healthy() else {
-        throw NSError(domain: "Operant", code: 6, userInfo: [NSLocalizedDescriptionKey: "内置 Core 未在 20 秒内就绪。请查看 \(logURL.path)。"])
-    }
-
-    let ui = Process()
-    ui.executableURL = desktop
-    ui.currentDirectoryURL = dataDirectory
-    ui.environment = cleanEnvironment(dataDirectory)
-    ui.standardInput = FileHandle.nullDevice
-    try ui.run()
-    defer { stop(ui) }
-    NSRunningApplication(processIdentifier: ui.processIdentifier)?.activate(options: [.activateIgnoringOtherApps])
-    while !wasInterrupted() && ui.isRunning && core.isRunning {
-        Thread.sleep(forTimeInterval: 0.15)
-    }
-    if !wasInterrupted() && ui.isRunning && !core.isRunning {
-        throw NSError(domain: "Operant", code: 7, userInfo: [NSLocalizedDescriptionKey: "内置 Core 意外退出。请查看 \(logURL.path)。"])
-    }
-    if !wasInterrupted() && !ui.isRunning && ui.terminationStatus != 0 {
-        throw NSError(domain: "Operant", code: 8, userInfo: [NSLocalizedDescriptionKey: "桌面窗口意外退出（状态 \(ui.terminationStatus)）。"])
-    }
+    throw failure(6, "无法运行桌面窗口：\(String(cString: strerror(errno)))")
 }
 
-for number in [SIGTERM, SIGINT] {
-    signal(number, SIG_IGN)
-    let source = DispatchSource.makeSignalSource(signal: number, queue: .global(qos: .userInitiated))
-    source.setEventHandler {
-        signalLock.lock()
-        interrupted = true
-        signalLock.unlock()
+private final class ErrorDelegate: NSObject, NSApplicationDelegate {
+    let detail: String
+    init(detail: String) { self.detail = detail }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Operant 无法启动"
+        alert.informativeText = detail
+        alert.addButton(withTitle: "确定")
+        alert.runModal()
+        NSApp.terminate(nil)
     }
-    source.resume()
-    signalSources.append(source)
 }
 
 do {
-    try run()
+    try start()
 } catch {
-    showError(error.localizedDescription)
+    let application = NSApplication.shared
+    let delegate = ErrorDelegate(detail: error.localizedDescription)
+    application.delegate = delegate
+    application.setActivationPolicy(.regular)
+    application.run()
     exit(1)
 }

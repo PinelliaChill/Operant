@@ -34,7 +34,10 @@ async def test_sync_close_cannot_block_lifecycle_deadline(tmp_path: Path):
         assert registry.installation_root(installation.installation_id).exists()
     finally:
         plugin.release.set()
-        await asyncio.to_thread(plugin.finished.wait, 1)
+        assert await asyncio.to_thread(plugin.finished.wait, 1)
+        # The thread signals before its asyncio close task finishes unwinding.
+        # Wait for that retained task instead of assuming scheduler ordering.
+        await asyncio.wait_for(asyncio.shield(host._close_tasks[installation.installation_id]), 1)
         await host.close()
 
 

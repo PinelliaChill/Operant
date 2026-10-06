@@ -262,6 +262,10 @@ def main() -> None:
         env=swift_env,
     )
     require_arm64(launcher)
+    wrapper = app / "Contents/Resources/bin/operant"
+    wrapper.parent.mkdir()
+    shutil.copy2(ROOT / "scripts/macos_dmg/operant-wrapper", wrapper)
+    wrapper.chmod(0o755)
     info = app / "Contents/Info.plist"
     with info.open("rb") as source:
         plist = plistlib.load(source)
@@ -286,6 +290,11 @@ def main() -> None:
             " `Operant.app/Contents/Resources/python/lib/python3.13/site-packages/` 的"
             " `*.dist-info/licenses/` 等元数据内。\n"
         )
+    installed_licenses = resources / "Licenses"
+    installed_licenses.mkdir()
+    for name in ("LICENSE", "COMMERCIAL.md", "THIRD_PARTY_NOTICES.md"):
+        shutil.copy2(volume / name, installed_licenses / name)
+    shutil.copytree(volume / "licenses", installed_licenses / "licenses")
     (volume / "Applications").symlink_to("/Applications", target_is_directory=True)
     (volume / "安装说明.txt").write_text(
         "Operant Beta 2（macOS arm64）\n\n"
@@ -324,6 +333,7 @@ def main() -> None:
         "packaging_scripts_sha256": {
             "scripts/macos_dmg/build.py": digest(ROOT / "scripts/macos_dmg/build.py"),
             "scripts/macos_dmg/Launcher.swift": digest(ROOT / "scripts/macos_dmg/Launcher.swift"),
+            "scripts/macos_dmg/operant-wrapper": digest(ROOT / "scripts/macos_dmg/operant-wrapper"),
         },
         "signing": "ad-hoc only; not Developer ID signed or notarized",
     }
