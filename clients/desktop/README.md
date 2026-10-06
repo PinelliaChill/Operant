@@ -3,8 +3,12 @@
 这是基于 Tauri 2 的桌面壳，使用 `clients/gui` 的 React 界面。窗口管理和本机 Core 的连接由桌面壳负责，
 模型、工具、审批、数据库和任务恢复仍由 Python Core 处理。
 
-桌面壳需要匹配版本的 Core，不能只复制 `.app` 就假定已经完成安装。
-当前构建目标是 macOS `.app`；尚无正式 Developer ID 签名、公证、DMG 或自动更新。
+[Beta 2 自包含 DMG](https://github.com/PinelliaChill/Operant/releases/download/v0.1.0-beta.2/Operant-v0.1.0-beta.2-macos-arm64.dmg) 面向 macOS arm64，已包含 Python、匹配版本的 Core 与基础依赖。打开 DMG，将 App 拖入“应用程序”后启动即可；模型服务仍需自行配置。
+
+DMG 启动器使用独立的 `~/Library/Application Support/Operant Beta 2/`，检查 8000 端口冲突，启动 Core 后再打开界面，并在退出时回收自己启动的进程。不会自动迁移旧数据。
+
+源码构建与早期 ZIP 中的 `.app` 仍需要单独配置 Core。桌面尚无 Developer ID 签名、公证或自动更新。
+自包含打包入口见 [DMG 构建说明](../../scripts/macos_dmg/README.md)。
 
 ## 从源码启动（macOS）
 

@@ -33,6 +33,12 @@
 
 源码入口相对 `src/operant/`。安装与能力概览见 [README](../README.md)，版本变化见 [更新记录](../CHANGELOG.md)。
 
+### macOS 自包含安装包
+
+beta.2 的产品二进制与 Core wheel 保持同源，DMG 另加原生启动器及可迁移的 Python 运行环境。启动器从 App 内部定位运行时，不依赖 Finder 的 PATH 或开发机虚拟环境；使用独立用户数据目录，先检查固定回环端口，再启动 Core 并等待健康检查，最后启动既有 Tauri 界面。退出时只回收本次启动的进程。旧库不自动迁移；模型 Key 仍由用户在本地配置，包内不带凭据。
+
+构建方式与验收边界见 [DMG 打包入口](../scripts/macos_dmg/README.md)。新增 DMG 附件不移动 beta.2 源码标签，也不覆盖已发布 ZIP。
+
 ## 仓库检查与源码发布
 
 本版许可为 PolyForm Noncommercial 1.0.0，超出允许用途的商用需单独书面授权。Core/TUI 包包含许可与商业说明，SPDX 清单同步声明；历史 Apache-2.0 和第三方授权不变，见 [商业授权说明](../COMMERCIAL.md)。
@@ -105,7 +111,7 @@ Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 | 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Task 1 已接入文件正文、Diff、本机 PTY、普通 Artifact/会话引用及 TUI 配置、Goal/Plan；隔离 GUI/TUI 正式模型读取和原生 WebView 文件、Diff、历史、审批、终端输入/输出/回收均已验收 |
 | Remote/Writer | 单 Host 远控协议、设备 CLI、受限 TLS edge、签名加密 Session 命令/Query、追加 Cursor；远端 Target TLS Worker、实时 Lease/Job 验证与受限文件/命令执行；受限 Container 和 Git 隔离合并 | macOS↔Ubuntu 私有双设备链路以任务 5 验收记录裁决；公网、任意远程桌面/跨平台 App 与分布式 Core 不外推 |
 | 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；Core 管理会话、观察、输入、截图/剪贴板及人工接管；六类隔离扩展可接入正式服务与能力提案 | Beta 任务 4 的真实验收范围以扩展验收记录为准；不从本机回环推定任务 5 跨设备通过 |
-| 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证 | 非正式签名/公证发布，无完整安装向导、DMG或自动更新；本机启动适配另有安装记录 |
+| 桌面与分发 | macOS arm64 自包含 DMG、Core/TUI 分发、来源与校验清单；打包入口 `scripts/macos_dmg/` | DMG 内置 Python/Core，独立数据目录、冲突提示与退出回收；无 Developer ID 签名、公证或自动更新，源码/旧 ZIP 仍需配置 Core |
 
 可复用的最近证据：B2-7范围与负结果见[任务包](design/b2-7/task-package.md)；
 UI关键页面与集中验收见[任务包](design/ui-refine-2-3/task-package.md)。
