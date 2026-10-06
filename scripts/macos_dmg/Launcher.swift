@@ -8,6 +8,11 @@ private func portAvailable() -> Bool {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
     guard fd >= 0 else { return false }
     defer { close(fd) }
+    var reuse: Int32 = 1
+    let optionSet = withUnsafePointer(to: &reuse) {
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, $0, socklen_t(MemoryLayout<Int32>.size))
+    }
+    guard optionSet == 0 else { return false }
     var address = sockaddr_in()
     address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
     address.sin_family = sa_family_t(AF_INET)
@@ -15,7 +20,7 @@ private func portAvailable() -> Bool {
     address.sin_addr = in_addr(s_addr: in_addr_t(INADDR_LOOPBACK).bigEndian)
     return withUnsafePointer(to: &address) { pointer in
         pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 && listen(fd, 1) == 0
         }
     }
 }
