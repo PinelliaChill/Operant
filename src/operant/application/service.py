@@ -765,6 +765,9 @@ class ApplicationService:
         workspace_ref: str | None = None,
         config_overrides: dict[str, Any] | None = None,
         _configuration_workspace_ref: str | None = None,
+        _new_thread: ConversationThread | None = None,
+        _onboarding_command: tuple[str, str] | None = None,
+        _onboarding_title: str | None = None,
     ) -> Session:
         if (role_id is None) == (new_role is None):
             raise ValueError("provide exactly one of role_id or new_role")
@@ -814,6 +817,9 @@ class ApplicationService:
             effort=effort,
             budget_overrides=budget_overrides,
             thread_id=thread_id,
+            _new_thread=_new_thread,
+            _onboarding_command=_onboarding_command,
+            _onboarding_title=_onboarding_title,
             effective_config={
                 **config.values,
                 "config_sources": {

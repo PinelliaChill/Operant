@@ -1,0 +1,13 @@
+.skill-sources { max-width: 900px; margin: 0 auto; padding: 28px 32px 48px; }
+.skill-sources header h1 { margin: 0 0 6px; font-size: var(--font-size-title); }
+.skill-sources header p, .skill-sources-card p { color: var(--text-secondary); }
+.skill-sources-card { margin: 22px 0; padding: 20px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-card); }
+.skill-sources-card h2 { margin: 0 0 14px; font-size: var(--font-size-section); }
+.skill-sources-card ul { list-style: none; padding: 0; margin: 0; }
+.skill-sources-card li { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border-subtle); }
+.skill-sources-card li:first-child { border-top: 0; }
+.skill-sources-card li strong, .skill-sources-card li span, .skill-sources-card li small { display: block; }
+.skill-sources-card li span { margin: 3px 0; color: var(--accent-on-subtle); }
+.skill-sources-card li small { color: var(--text-secondary); overflow-wrap: anywhere; }
+.skill-sources-card form, .skill-sources-card .path-input { margin-bottom: 14px; }
+@media (max-width: 680px) { .skill-sources { padding: 20px 16px 100px; } }

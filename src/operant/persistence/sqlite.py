@@ -133,6 +133,15 @@ from operant.persistence.graph_boundary_schema import (
 from operant.persistence.graph_boundary_schema import (
     upgrade as upgrade_graph_boundaries,
 )
+from operant.persistence.onboarding_schema import (
+    downgrade as downgrade_onboarding,
+)
+from operant.persistence.onboarding_schema import (
+    schema_contracts as onboarding_schema_contracts,
+)
+from operant.persistence.onboarding_schema import (
+    upgrade as upgrade_onboarding,
+)
 from operant.persistence.remote_command_event_schema import (
     downgrade as downgrade_remote_command_events,
 )
@@ -287,6 +296,7 @@ class WorkflowExecutionLease:
 
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
+        24: "140dd547a8788ad49a71d205d79a1c2eedac0902f775695aee730f9e1b54fb26",
         23: "cf7675e2379064df54df1f7205e3595aab42ee4d2cec93f82182b916ef72bf02",
         22: "a5f500b2f8e40669c5470ac1f529dae7157f846620c50cf921bf180fb84d3dfb",
         21: "1aa28a25987bd6da49bbf7cdc49293038f3a8e30f488388ae0f10140b7a3400c",
@@ -312,6 +322,7 @@ class SQLiteStore:
         14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
+        24: "1ce29207256d06907415c136e1056488f6c3130ef0e7593698995ceafc9aa738",
         23: "cb2e87a2f13e8e0daed579ad0dc520cbb8684e2c99b5d57beb5592751768dff5",
         22: "19d538d88ff2780bd4ef94ca843198a434ac6364951794e4ad3e7c6de7976430",
         21: "164a2941edbcdf482027b7de89a70035181ed1e2818c81d33f4357f33871d565",
@@ -691,6 +702,7 @@ class SQLiteStore:
                 upgrade_remote_command_events,
                 downgrade_remote_command_events,
             ),
+            build(24, "onboarding_model_connections", upgrade_onboarding, downgrade_onboarding),
         )
 
     @staticmethod
@@ -2231,6 +2243,8 @@ class SQLiteStore:
             tables.update(automation_schema_contracts()[0])
         if version >= 23:
             tables.update(remote_command_event_schema_contracts()[0])
+        if version >= 24:
+            tables.update(onboarding_schema_contracts()[0])
         return tables
 
     @staticmethod
@@ -2513,6 +2527,8 @@ class SQLiteStore:
             contract.update(automation_schema_contracts()[1])
         if version >= 23:
             contract.update(remote_command_event_schema_contracts()[1])
+        if version >= 24:
+            contract.update(onboarding_schema_contracts()[1])
         return contract
 
     @classmethod
@@ -2792,6 +2808,8 @@ class SQLiteStore:
                 upgrade_automation(connection)
             if version >= 23:
                 upgrade_remote_command_events(connection)
+            if version >= 24:
+                upgrade_onboarding(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -3007,6 +3025,8 @@ class SQLiteStore:
             contract.update(automation_schema_contracts()[2])
         if version >= 23:
             contract.update(remote_command_event_schema_contracts()[2])
+        if version >= 24:
+            contract.update(onboarding_schema_contracts()[2])
         return contract
 
     @staticmethod
@@ -3231,6 +3251,8 @@ class SQLiteStore:
             contract.update(automation_schema_contracts()[3])
         if version >= 23:
             contract.update(remote_command_event_schema_contracts()[3])
+        if version >= 24:
+            contract.update(onboarding_schema_contracts()[3])
         return contract
 
     @staticmethod
@@ -3669,6 +3691,8 @@ class SQLiteStore:
             contract.update(automation_schema_contracts()[5])
         if version >= 23:
             contract.update(remote_command_event_schema_contracts()[5])
+        if version >= 24:
+            contract.update(onboarding_schema_contracts()[5])
         return contract
 
     @staticmethod
@@ -3936,6 +3960,8 @@ class SQLiteStore:
             indexes.update(automation_schema_contracts()[4])
         if version >= 23:
             indexes.update(remote_command_event_schema_contracts()[4])
+        if version >= 24:
+            indexes.update(onboarding_schema_contracts()[4])
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:
@@ -9963,6 +9989,9 @@ class SQLiteStore:
         budget_overrides: dict[str, Any] | None = None,
         thread_id: str | None = None,
         effective_config: dict[str, Any] | None = None,
+        _new_thread: ConversationThread | None = None,
+        _onboarding_command: tuple[str, str] | None = None,
+        _onboarding_title: str | None = None,
     ) -> Session:
         role = self.get_role(role_id)
         if role.status is RoleStatus.INACTIVE:
@@ -10052,13 +10081,73 @@ class SQLiteStore:
                 budget_fields=overridden_budget_fields,
             ),
         )
+        if _onboarding_title is not None:
+            from operant.contracts.onboarding import validate_title
+
+            _onboarding_title = validate_title(_onboarding_title)
+            if len(_onboarding_title) > 100:
+                raise ValueError("conversation name is too long")
         session = Session(role_snapshot=snapshot)
+        if _new_thread is not None:
+            if (
+                thread_id is not None
+                or _new_thread.cursor is not None
+                or _new_thread.parent_thread_id is not None
+                or _new_thread.legacy_refs
+                or _new_thread.status is not ThreadStatus.ACTIVE
+                or _new_thread.workspace_ref != snapshot.config_workspace_ref
+            ):
+                raise ValueError("invalid setup conversation identity")
+            thread_id = _new_thread.id
         with self._connect() as connection:
             # The session row and its canonical Thread legacy reference are a
             # single identity boundary.  Validate and write both on the same
             # transaction so a bad/competing Thread can never leave an
             # unbound Session behind.
             connection.execute("BEGIN IMMEDIATE")
+            if _onboarding_command is not None:
+                command_key, fingerprint = _onboarding_command
+                previous = connection.execute(
+                    "SELECT fingerprint,body_json FROM ux_commands WHERE key=?", (command_key,)
+                ).fetchone()
+                if previous is not None:
+                    if previous["fingerprint"] != fingerprint:
+                        raise ConflictError("request identity already belongs to another operation")
+                    previous_result = json.loads(previous["body_json"])
+                    old_session = connection.execute(
+                        "SELECT body FROM sessions WHERE id=?", (previous_result["session_id"],)
+                    ).fetchone()
+                    if old_session is None:
+                        raise ConflictError("recorded conversation needs reconciliation")
+                    return Session.model_validate_json(old_session["body"])
+            if _new_thread is not None:
+                body = _new_thread.model_dump_json()
+                connection.execute(
+                    "INSERT INTO threads(id,parent_thread_id,workspace_ref,status,body,body_hash,"
+                    "created_at,updated_at,archived_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        _new_thread.id,
+                        None,
+                        _new_thread.workspace_ref,
+                        _new_thread.status.value,
+                        body,
+                        hashlib.sha256(body.encode()).hexdigest(),
+                        _new_thread.created_at.isoformat(),
+                        _new_thread.updated_at.isoformat(),
+                        None,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO ux_conversation_metadata("
+                    "thread_id,title,title_source,revision,updated_at) "
+                    "VALUES (?,?,?,1,?)",
+                    (
+                        _new_thread.id,
+                        _onboarding_title or "新对话",
+                        "manual" if _onboarding_title else "default",
+                        _new_thread.created_at.isoformat(),
+                    ),
+                )
             if thread_id is not None:
                 self._assert_active_thread(connection, thread_id)
                 existing_session_ref = connection.execute(
@@ -10083,6 +10172,35 @@ class SQLiteStore:
                         ) VALUES (?, 'session', ?, ?)
                         """,
                         (thread_id, session.id, session.created_at.isoformat()),
+                    )
+                if _onboarding_command is not None:
+                    if thread_id is None or not snapshot.config_workspace_ref:
+                        raise ValueError("setup requires a bound conversation workspace")
+                    workspace = connection.execute(
+                        "SELECT id FROM workspace_initializations WHERE workspace_ref=?",
+                        (snapshot.config_workspace_ref,),
+                    ).fetchone()
+                    if workspace is None:
+                        raise ValueError("setup workspace is not registered")
+                    result_body = json.dumps(
+                        {
+                            "thread_id": thread_id,
+                            "session_id": session.id,
+                            "workspace_id": workspace["id"],
+                            "title": _onboarding_title or "新对话",
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    connection.execute(
+                        "INSERT INTO ux_commands(key,fingerprint,body_json,updated_at) "
+                        "VALUES (?,?,?,?)",
+                        (
+                            _onboarding_command[0],
+                            _onboarding_command[1],
+                            result_body,
+                            session.created_at.isoformat(),
+                        ),
                     )
             except sqlite3.IntegrityError as exc:
                 raise ConflictError("session or Thread legacy mapping already exists") from exc

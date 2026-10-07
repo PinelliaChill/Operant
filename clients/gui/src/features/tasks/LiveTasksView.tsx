@@ -8,6 +8,7 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { B2LiveAdapter, normalizeB2Error } from '../../live/b2Adapter';
 import { createIdempotencyKey } from '../../live/liveState';
+import { formatDateTime } from '../../lib/format';
 import { LiveGoalPlanPanel } from './LiveGoalPlanPanel';
 import '../settings/live-config.css';
 
@@ -29,7 +30,10 @@ const SOURCE_LABELS: Record<B2.TaskSource['source_type'], string> = {
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
-    active: '活跃',
+    active: '可处理',
+    queued: '等待开始',
+    pending: '等待处理',
+    blocked: '需要处理',
     running: '运行中',
     waiting_approval: '等待审批',
     completed: '已完成',
@@ -38,7 +42,7 @@ function statusLabel(status: string): string {
     cancelled: '已取消',
     archived: '已归档',
   };
-  return labels[status] || status;
+  return labels[status] || '状态待确认';
 }
 
 export const LiveTasksView: React.FC = () => {
@@ -145,7 +149,7 @@ export const LiveTasksView: React.FC = () => {
       {error && (
         <div className="live-alert live-alert-error b2-task-error" role="alert">
           <ShieldAlert size={16} aria-hidden="true" />
-          <div className="live-alert-content"><strong>{error.code}</strong><span>{error.message}</span><span className="live-alert-recovery">恢复：{error.recovery}</span></div>
+          <div className="live-alert-content"><strong>任务操作未完成</strong><span>{error.message}</span><span className="live-alert-recovery">请刷新列表核对任务状态，再决定是否重试。</span><details><summary>错误详情</summary><code>{error.code}</code> · {error.recovery}</details></div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()} disabled={loading}><RefreshCw size={13} aria-hidden="true" />重试</button>
         </div>
       )}
@@ -160,17 +164,18 @@ export const LiveTasksView: React.FC = () => {
             <ul className="chat-row-list b2-task-list">
               {filteredTasks.map((task) => (
                 <li className="chat-row chat-row-wrap b2-task-row" data-source-type={task.source.source_type} data-status={task.source_status} key={`${task.source.source_type}:${task.source.source_id}`}>
-                  <span className="b2-task-identity"><strong className="b2-task-source-type">{SOURCE_LABELS[task.source.source_type]}</strong><span className="b2-task-source-id section-mono">{task.source.source_id}</span></span>
-                  <span className="chat-row-main"><span className="chat-row-title">{task.title}</span><span className="b2-task-scope">{task.project_id || '无 Project'} · {task.workspace_id || '无 Workspace'}</span></span>
+                  <span className="b2-task-identity"><strong className="b2-task-source-type">{SOURCE_LABELS[task.source.source_type]}</strong></span>
+                  <span className="chat-row-main"><span className="chat-row-title">{task.title}</span><details><summary>任务详情</summary><span className="b2-task-scope">编号：{task.source.source_id} · 项目：{task.project_id || '无'} · 工作区：{task.workspace_id || '无'}</span></details></span>
                   <span className="b2-task-status"><StatusBadge status={task.source_status} label={statusLabel(task.source_status)} size="sm" /></span>
                   <span className="b2-task-actions">
                     {task.actions.map((action) => (
-                      <button type="button" className="btn btn-secondary btn-sm b2-task-action" data-action={action.action} data-availability={action.availability} key={action.action} disabled={action.availability !== 'available' || working === task.source.source_id} title={action.availability === 'available' ? undefined : action.reason_code || `暂不可${ACTION_LABELS[action.action]}`} onClick={() => void executeAction(task, action)}>
+                      <button type="button" className="btn btn-secondary btn-sm b2-task-action" data-action={action.action} data-availability={action.availability} key={action.action} disabled={action.availability !== 'available' || working === task.source.source_id} title={action.availability === 'available' ? undefined : `暂不可${ACTION_LABELS[action.action]}，可在操作详情中查看原因`} onClick={() => void executeAction(task, action)}>
                         {working === task.source.source_id && action.action === 'cancel' ? <RefreshCw size={12} className="animate-spin" /> : null}{ACTION_LABELS[action.action]}{action.action === 'inspect' && <ArrowRight size={12} aria-hidden="true" />}
                       </button>
                     ))}
                   </span>
-                  <time className="chat-row-meta" dateTime={task.created_at}>{task.created_at}</time>
+                  {task.actions.some((action) => action.reason_code) && <details><summary>操作详情</summary><ul>{task.actions.filter((action) => action.reason_code).map((action) => <li key={action.action}>{ACTION_LABELS[action.action]}：<code>{action.reason_code}</code></li>)}</ul></details>}
+                  <time className="chat-row-meta" dateTime={task.created_at}>{formatDateTime(task.created_at)}</time>
                 </li>
               ))}
             </ul>

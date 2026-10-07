@@ -31,10 +31,10 @@ export function buildExperienceView(state: B26State, governance: GovernanceState
   const projectId = state.project_id;
   const commands = new Map<string, (values: Record<string, string>) => B26Command>();
   const sections: B26Section[] = [
-    { id: 'skills', title: '经验技能', description: '将有来源的经验整理为步骤，经审阅和验证后发布。技能资料不会增加工具权限。', emptyMessage: '还没有经验技能。先创建步骤候选，在知识治理中确认后再生成技能草稿。', cards: [], actions: [] },
-    { id: 'writers', title: 'Writer 知识晋级', description: '分支经验保持隔离；Core 核对合并结果和目标 tree 的验证证据后，才能晋级到项目。', emptyMessage: '暂无待晋级的 Writer 经验。', cards: [], actions: [] },
+    { id: 'skills', title: '经验技能', description: '从已确认的知识创建、验证和发布技能。', emptyMessage: '还没有经验技能。可先整理一条可复用的步骤。', cards: [], actions: [] },
+    { id: 'writers', title: '分支知识', description: '核对合并结果和验证证据后，可将分支经验加入项目。', emptyMessage: '暂无待加入项目的分支经验。', cards: [], actions: [] },
     { id: 'sharing', title: '授权共享', description: '共享必须明确对象、范围和期限。撤销阻止后续使用，已发送内容无法收回。', emptyMessage: '没有显式共享授权。路径或仓库地址相同不会自动共享。', cards: [], actions: [] },
-    { id: 'remote', title: 'Remote 最小记忆包', description: '只向已授权 Target 提供当前任务所需内容；用途、期限与本地来源复核持续生效。', emptyMessage: '暂无远程记忆包。', cards: [], actions: [] },
+    { id: 'remote', title: '远程任务资料', description: '按授权范围和期限，提供当前任务需要的内容。', emptyMessage: '暂无远程任务资料。', cards: [], actions: [] },
   ];
   function add(section: B26Section, identity: string, action: Omit<B26Action, 'id'>, build: (v: Record<string, string>) => B26Command) {
     const id = `${projectId}:${generation}:${identity}`;

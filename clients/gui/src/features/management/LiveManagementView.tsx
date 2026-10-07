@@ -22,9 +22,10 @@ import {
   Unplug,
   X,
 } from 'lucide-react';
-import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { EmptyState } from '../../components/EmptyState';
 import { PathInput } from '../../components/PathInput';
+import { SearchSelect } from '../../components/SearchSelect';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { currentBrowserOrigin } from '../../lib/liveBaseUrl';
@@ -223,6 +224,7 @@ function statusLabel(value: string): string {
     rejected: '已拒绝',
     confirmed: '已确认',
     deactivated: '已停用',
+    user_installed: '已安装',
   };
   return labels[value] ?? value;
 }
@@ -423,14 +425,7 @@ const ProjectSelect: React.FC<{
   id: string;
   includeArchived?: boolean;
 }> = ({ projects, value, onChange, id, includeArchived = false }) => (
-  <select id={id} className="select" value={value} onChange={(event) => onChange(event.target.value)}>
-    <option value="">{projects.length ? '请选择项目' : '服务端尚未返回项目'}</option>
-    {projects.filter((project) => includeArchived || !project.archived).map((project) => (
-      <option key={project.project_id} value={project.project_id} disabled={project.archived}>
-        {project.name}{project.archived ? '（已归档）' : ''}
-      </option>
-    ))}
-  </select>
+  <div id={id}><SearchSelect label="项目" value={value} onChange={onChange} placeholder={projects.length ? '请选择项目' : '尚无项目'} options={projects.filter((project) => includeArchived || !project.archived).map((project) => ({ value: project.project_id, label: `${project.name}${project.archived ? '（已归档）' : ''}`, disabled: project.archived }))} /></div>
 );
 
 const KnowledgeRecord: React.FC<{
@@ -723,7 +718,7 @@ const SettingsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
   return (
     <div className="b2-memory" data-panel="settings">
       <section className="b2-memory-card"><div className="b2-memory-card-header"><div><h2>记忆开关</h2><p>关闭全局记忆后，所有项目都将停用记忆。</p></div><Power size={18} aria-hidden="true" /></div><div className="b2-memory-actions"><span className="b2-memory-status" data-status={state.global_enabled ? 'enabled' : 'disabled'}>全局：{state.global_enabled ? '已开启' : '已关闭'}</span><ActionButton label={state.global_enabled ? '关闭全局记忆' : '开启全局记忆'} tone={state.global_enabled ? 'ghost' : 'primary'} onClick={() => void switchMemory(!state.global_enabled)} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /></div><div className="b2-memory-form"><label htmlFor="settings-project">项目范围</label><ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="settings-project" /><div className="b2-memory-actions">{projectId && <><span className="b2-memory-status" data-status={state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? 'enabled' : 'disabled'}>项目：{state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? '已开启' : '已关闭'}</span><ActionButton label="切换项目记忆" onClick={() => { const project = state.projects.find((entry) => entry.project_id === projectId); if (project) void switchMemory(!project.memory_enabled, project.project_id); }} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="迁移项目记忆" onClick={() => void execute({ action: 'memory_migrate', project_id: projectId, confirmed: true }, '迁移项目记忆')} disabled={busy} icon={<RefreshCw size={13} aria-hidden="true" />} /></>}</div><div className="b2-memory-actions"><ActionButton label="打开高级知识治理" onClick={() => onTab('knowledge')} disabled={busy} icon={<ExternalLink size={13} aria-hidden="true" />} /></div></div></section>
-      <section aria-labelledby="settings-source-title"><div className="b2-memory-card-header"><div><h2 id="settings-source-title">配置来源与作用域</h2><p>用于核对 global/project 生效来源，客户端不自行推断覆盖关系。</p></div><div className="b2-memory-actions"><Link className="btn btn-secondary btn-sm" to="/settings?cat=config">打开运行配置继承 <ExternalLink size={13} aria-hidden="true" /></Link><ActionButton label="查看项目知识" onClick={() => onTab('knowledge')} icon={<ExternalLink size={13} aria-hidden="true" />} disabled={busy} /></div></div>{state.settings.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Settings2} title="暂无配置" description="服务端尚未返回设置来源。" /></div> : <div className="b2-memory-grid">{state.settings.map((setting) => <article key={`${setting.scope}-${setting.key}`} className="b2-memory-card"><div className="b2-memory-card-header"><h3>{setting.key}</h3><span className="b2-memory-status">{setting.scope}</span></div><div className="b2-memory-meta"><span>来源：{setting.source}</span><span>生效：{setting.effective_at}</span></div><pre className="b2-memory-record-content">{safeJson(setting.value)}</pre></article>)}</div>}</section>
+      <section aria-labelledby="settings-source-title"><div className="b2-memory-card-header"><div><h2 id="settings-source-title">配置来源与作用域</h2><p>用于核对不同范围的设置来源。</p></div><div className="b2-memory-actions"><Link className="btn btn-secondary btn-sm" to="/settings?section=advanced">打开运行配置 <ExternalLink size={13} aria-hidden="true" /></Link><ActionButton label="查看项目知识" onClick={() => onTab('knowledge')} icon={<ExternalLink size={13} aria-hidden="true" />} disabled={busy} /></div></div>{state.settings.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Settings2} title="暂无配置" description="服务端尚未返回设置来源。" /></div> : <div className="b2-memory-grid">{state.settings.map((setting) => <article key={`${setting.scope}-${setting.key}`} className="b2-memory-card"><div className="b2-memory-card-header"><h3>{setting.key}</h3><span className="b2-memory-status">{setting.scope}</span></div><div className="b2-memory-meta"><span>来源：{setting.source}</span><span>生效：{setting.effective_at}</span></div><pre className="b2-memory-record-content">{safeJson(setting.value)}</pre></article>)}</div>}</section>
     </div>
   );
 };
@@ -777,6 +772,7 @@ const RetentionPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, 
 const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, connectionStatus, refresh }) => {
   const [projectId, setProjectId] = useState('');
   const [uninstallId, setUninstallId] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const activeProjects = state.projects.filter((project) => !project.archived);
   const skills = state.skills as ManagedSkillView[];
 
@@ -808,7 +804,7 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
           <div className="ui-refine-skill-heading-line">
             <span className="ui-refine-skill-icon" aria-hidden="true"><Sparkles size={16} /></span>
             <div>
-              <h2 id="skills-catalog-title">Skill 目录</h2>
+              <h2 id="skills-catalog-title">技能目录</h2>
               <p>选择技能安装，再按项目启用。</p>
             </div>
           </div>
@@ -819,12 +815,12 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
             <EmptyState icon={Sparkles} title="暂无可安装技能" description="点击“发现技能”刷新列表。" />
           </div>
         ) : (
-          <div className="ui-refine-skill-list" role="list" aria-label="可安装 Skill">
+          <div className="ui-refine-skill-list" role="list" aria-label="可安装技能">
             {state.skill_catalog.map((entry) => (
               <article className="ui-refine-skill-row" key={entry.package_ref} role="listitem">
                 <div className="ui-refine-skill-row-main">
-                  <div className="ui-refine-skill-row-title"><h3>{entry.name}</h3><span className="ui-refine-skill-source">服务端目录</span></div>
-                  <code>{entry.package_ref}</code>
+                  <div className="ui-refine-skill-row-title"><h3>{entry.name}</h3><span className="ui-refine-skill-source">本机技能</span></div>
+                  <details><summary>来源详情</summary><code>{entry.package_ref}</code></details>
                 </div>
                 <ActionButton label="安装" tone="primary" onClick={() => void execute({ action: 'skill_install', package_ref: entry.package_ref, confirmed: true }, '安装 Skill')} disabled={busy} icon={<Plus size={13} aria-hidden="true" />} />
               </article>
@@ -835,7 +831,7 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
       <section className="ui-refine-skill-section" aria-labelledby="skills-installed-title">
         <div className="ui-refine-skill-section-heading">
           <div>
-            <h2 id="skills-installed-title">已安装 Skill</h2>
+            <h2 id="skills-installed-title">已安装技能</h2>
             <p>{skills.length} 个安装副本；可按项目启用、停用或卸载。</p>
           </div>
           <span className="ui-refine-skill-count">{skills.length} 个</span>
@@ -843,7 +839,7 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
         <div className="ui-refine-skill-scope">
           <div className="ui-refine-skill-scope-copy">
             <label htmlFor="skills-project">启用范围</label>
-            <small>项目级启停只提交所选 project_id；卸载安装副本不会删除独立来源。</small>
+            <small>技能只在选中的项目中启用。卸载技能不会删除原始来源。</small>
           </div>
           <ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="skills-project" />
         </div>
@@ -852,7 +848,7 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
             <EmptyState icon={Sparkles} title="暂无已安装技能" description="从上方目录选择安装，安装副本会出现在这里。" />
           </div>
         ) : (
-          <div className="ui-refine-skill-list" role="list" aria-label="已安装 Skill">
+          <div className="ui-refine-skill-list" role="list" aria-label="已安装技能">
             {skills.map((skill) => {
               const projectIds = skill.project_ids ?? [];
               const enabled = Boolean(projectId && projectIds.includes(projectId));
@@ -862,13 +858,13 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
                 <article className="ui-refine-skill-row ui-refine-skill-installed" key={skill.skill_id} data-state={skill.state} role="listitem">
                   <div className="ui-refine-skill-row-main">
                     <div className="ui-refine-skill-row-title"><h3>{skill.name}</h3><StatusBadge status={statusKind(skill.state)} label={statusLabel(skill.state)} size="sm" /></div>
-                    <code>{skill.package_ref}</code>
-                    <div className="ui-refine-skill-meta"><span>信任：{skill.trust_status ?? '未提供'}</span><span>已启用项目：{projectIds.length ? projectIds.join('、') : '无'}</span></div>
-                    {isExperienceSkill && <p className="ui-refine-skill-permission" role="note">经验 Skill 的启停与卸载由下方“经验与授权”区域管理。</p>}
+                    <div className="ui-refine-skill-meta"><span>已启用项目：{projectIds.length ? projectIds.map((id) => state.projects.find((project) => project.project_id === id)?.name || '未知项目').join('、') : '无'}</span></div>
+                    {isExperienceSkill && <p className="ui-refine-skill-permission" role="note">此技能的发布和停用请在下方高级管理中操作。</p>}
+                    <details><summary>来源与信任详情</summary><p>来源：<code>{skill.package_ref}</code></p><p>信任状态：{statusLabel(skill.trust_status ?? 'pending')}</p><p>技能编号：<code>{skill.skill_id}</code></p><p>项目编号：<code>{projectIds.join('、') || '无'}</code></p></details>
                   </div>
                   <div className="ui-refine-skill-actions">
                     <ActionButton label={enabled ? '停用当前项目' : '启用当前项目'} onClick={() => void toggleProjectSkill(skill)} disabled={controlsDisabled} icon={<Power size={13} aria-hidden="true" />} />
-                    <ActionButton label={uninstallId === skill.skill_id ? '再次点击确认卸载' : '卸载 Skill'} tone={uninstallId === skill.skill_id ? 'primary' : 'ghost'} onClick={() => void uninstall(skill)} disabled={busy || isExperienceSkill} icon={<Trash2 size={13} aria-hidden="true" />} />
+                    <ActionButton label={uninstallId === skill.skill_id ? '再次点击确认卸载' : '卸载技能'} tone={uninstallId === skill.skill_id ? 'primary' : 'ghost'} onClick={() => void uninstall(skill)} disabled={busy || isExperienceSkill} icon={<Trash2 size={13} aria-hidden="true" />} />
                   </div>
                   {uninstallId === skill.skill_id && <p className="b2-memory-warning ui-refine-skill-warning" role="status">卸载只删除当前安装副本并保留来源；再次点击按钮才提交。</p>}
                 </article>
@@ -877,16 +873,17 @@ const SkillsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, con
           </div>
         )}
       </section>
-      <section className="ui-refine-skills-advanced" aria-label="经验与授权">
-        <B26ExperiencePanel management={state} projectId={projectId} connectionStatus={connectionStatus} onMutation={refresh} />
-      </section>
+      <details className="ui-refine-skills-advanced" onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}><summary>高级：经验技能与共享授权</summary>
+        {advancedOpen && <B26ExperiencePanel management={state} projectId={projectId} connectionStatus={connectionStatus} onMutation={refresh} />}
+      </details>
     </div>
   );
 };
 
-export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ initialTab = 'settings' }) => {
+export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?: boolean }> = ({ initialTab = 'settings', focused = false }) => {
   const { clientMode, b23Client, b2Client, connectionStatus, addNotification } = useOperant();
   const { showSidebarOpenBtn, openSidebar } = useOutletContext<RailOutletContext>();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = queryTab(searchParams.get('tab'), initialTab);
   const adapter = useMemo(() => b23Client ? new B23ManagementAdapter(b23Client) : null, [b23Client]);
@@ -901,10 +898,19 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
   const requestEpoch = useRef(0);
 
   const setTab = useCallback((next: ManagementTab) => {
+    if (focused) {
+      const destinations: Record<ManagementTab, string> = {
+        projects: '/projects?tab=projects', knowledge: '/projects?tab=knowledge',
+        plugins: '/settings?section=tools&page=plugins', skills: '/settings?section=tools&page=skills',
+        settings: '/settings?section=memory&page=settings', retention: '/settings?section=memory&page=retention',
+      };
+      navigate(destinations[next]);
+      return;
+    }
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set('tab', next);
     setSearchParams(nextParams, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [focused, navigate, searchParams, setSearchParams]);
 
   const refresh = useCallback(async () => {
     const epoch = ++requestEpoch.current;
@@ -1015,7 +1021,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
     <div className="section-view ui-refine-management" data-client-mode="live">
       <header className="section-header b2-memory-header ui-refine-management-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><h1>{TAB_LABELS[tab]}</h1></div></div><div className="b2-memory-actions"><StatusBadge status={phase === 'ready' && connectionStatus === 'connected' ? 'connected' : 'pending'} label={phase === 'ready' && connectionStatus === 'connected' ? '已连接' : '未就绪'} size="sm" /><ActionButton label="刷新" onClick={() => void refresh()} disabled={Boolean(actionLabel)} icon={<RefreshCw size={14} aria-hidden="true" />} /></div></header>
       <div className="section-scroll"><div className="section-inner">
-        <nav className="b2-memory-tabs ui-refine-management-nav" aria-label="管理分区" role="tablist">{TABS.map((entry) => <button key={entry} type="button" role="tab" aria-selected={entry === tab} className={`b2-memory-tab ui-refine-management-tab${entry === tab ? ' active' : ''}`} onClick={() => setTab(entry)}>{TAB_LABELS[entry]}</button>)}</nav>
+        {!focused && <nav className="b2-memory-tabs ui-refine-management-nav" aria-label="管理分区" role="tablist">{TABS.map((entry) => <button key={entry} type="button" role="tab" aria-selected={entry === tab} className={`b2-memory-tab ui-refine-management-tab${entry === tab ? ' active' : ''}`} onClick={() => setTab(entry)}>{TAB_LABELS[entry]}</button>)}</nav>}
         {connectionStatus !== 'connected' && <FormError message="连接已断开，暂时无法保存更改。" id="b2-connection-error" />}
         {error && <FormError message={`${error.code}：${error.message}${error.outcomeUnknown ? ' 写操作结果未知，请刷新后人工核对，客户端不会自动重放。' : ''}`} id="b2-management-error" />}
         {actionLabel && <div className="b2-memory-status" role="status" aria-live="polite"><Loader2 size={14} className="animate-spin" aria-hidden="true" />{actionLabel}处理中…</div>}
@@ -1026,7 +1032,6 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab }> = ({ i
         {tab === 'settings' && <SettingsPanel {...panelProps} />}
         {tab === 'skills' && <SkillsPanel {...panelProps} />}
         {tab === 'retention' && <RetentionPanel {...panelProps} />}
-        <p className="section-footnote"><Link to="/chat">返回会话</Link></p>
       </div></div>
     </div>
   );

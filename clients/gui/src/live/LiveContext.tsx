@@ -111,7 +111,7 @@ export interface LiveContextValue {
   selectThread: (threadId: string | null) => boolean;
   selectSession: (sessionId: string | null) => boolean;
   resolveDeepLink: (threadId: string | null) => boolean;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<boolean>;
   reconnect: () => Promise<void>;
   createSession: (input: LiveCreateSessionInput) => Promise<LiveSession | undefined>;
   /** Create a Core Thread for the selected readable Project/Workspace. */
@@ -692,8 +692,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [adapter, b2Adapter, setActiveWorkspace]);
 
   const refresh = useCallback(async () => {
-    if (clientMode !== 'live') return;
-    if (connectionStatusRef.current !== 'connected' && phaseRef.current !== 'connecting') return;
+    if (clientMode !== 'live') return false;
+    if (connectionStatusRef.current !== 'connected' && phaseRef.current !== 'connecting') return false;
     const generation = projectionGeneration(lifecycleRef.current, true);
     lifecycleRef.current = generation;
     try {
@@ -702,12 +702,15 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         phaseRef.current = 'ready';
         setPhase('ready');
         await refreshHistory();
+        return true;
       }
+      return false;
     } catch (error: unknown) {
-      if (generation !== lifecycleRef.current) return;
+      if (generation !== lifecycleRef.current) return false;
       phaseRef.current = 'error';
       setPhase((current) => (current === 'ready' ? current : 'error'));
       applyError(error);
+      return false;
     }
   }, [applyError, clientMode, loadProjection, refreshHistory]);
 

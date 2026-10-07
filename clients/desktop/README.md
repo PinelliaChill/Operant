@@ -13,7 +13,7 @@
 
 ```bash
 uv sync --frozen --extra dev
-uv run operant serve --host 127.0.0.1 --port 8000 --desktop
+OPERANT_SETUP_ALLOWED_ORIGINS_JSON='["http://127.0.0.1:3000"]' uv run operant serve --host 127.0.0.1 --port 8000 --desktop
 ```
 
 在第二个终端、同一仓库根目录启动桌面开发窗口：
@@ -26,6 +26,9 @@ npm run tauri --prefix clients/desktop -- dev
 
 Tauri 配置会启动前端开发服务。`--desktop` 让 Core 接受固定的 Tauri 来源；已有 8000 端口服务若未带该参数，
 即使网页可访问，桌面窗口也可能连接失败。请先核对服务归属，再决定是否停止旧服务，不要直接覆盖或强杀。
+
+开发窗口通过 Vite 同源代理访问 Core，模型连接页只接受显式登记的本机来源；更换开发端口时同步修改
+`OPERANT_SETUP_ALLOWED_ORIGINS_JSON`。发布壳仍使用固定 Tauri 来源，不需要登记开发端口。
 
 ## 构建候选
 
@@ -42,7 +45,8 @@ npm run tauri --prefix clients/desktop -- build
 
 ## 使用边界
 
-- 首次使用先确认是实时连接还是演示模式，演示数据不是实际任务。
+- 首次使用在“连接模型”中选择服务商和模型；系统准备通用助手及个人工作区。演示切换位于开发设置。
 - 使用稳定的运行目录并备份旧数据库；升级 App 不代表已迁移用户数据。
 - 桌面壳只接受固定的本机 Core 地址，不从网页输入执行路径、命令或工作目录。
+- 模型登录通过受限的 `open_model_oauth` 命令打开官方 OpenAI/Google 页面，回调须匹配当前 Core；不提供任意链接打开权限。真实账号授权结果见 [本轮验收](../../docs/design/onboarding-ux/acceptance.md)。
 - 本机构建、安装验证和正式分发是不同阶段。版本范围见 [根 README](../../README.md)，安全边界见 [SECURITY](../../SECURITY.md)。

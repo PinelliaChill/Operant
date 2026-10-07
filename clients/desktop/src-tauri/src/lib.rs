@@ -171,6 +171,48 @@ fn valid_secret_ref(value: &str) -> bool {
         && chars.all(|character| matches!(character, 'A'..='Z' | '0'..='9' | '_'))
 }
 
+fn validate_model_oauth_url(value: &str, core_port: u16) -> Result<tauri::Url, String> {
+    if value.len() > 16_384 || value.chars().any(char::is_control) {
+        return Err("Invalid model sign-in URL".into());
+    }
+    let url = tauri::Url::parse(value).map_err(|_| "Invalid model sign-in URL")?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.fragment().is_some()
+        || !matches!(
+            (url.host_str(), url.path()),
+            (Some("auth.openai.com"), "/api/accounts/authorize")
+                | (Some("accounts.google.com"), "/o/oauth2/v2/auth")
+        )
+    {
+        return Err("Only official model sign-in pages can be opened".into());
+    }
+    let provider = if url.host_str() == Some("auth.openai.com") {
+        "chatgpt"
+    } else {
+        "gemini"
+    };
+    let callbacks: Vec<_> = url
+        .query_pairs()
+        .filter(|(key, _)| key == "redirect_uri")
+        .collect();
+    let expected_callback =
+        format!("http://127.0.0.1:{core_port}/internal/model-auth/{provider}/callback");
+    if callbacks.len() != 1 || callbacks[0].1 != expected_callback {
+        return Err("Model sign-in must return to this local Core".into());
+    }
+    Ok(url)
+}
+
+#[tauri::command]
+fn open_model_oauth(url: String) -> Result<(), String> {
+    let url = validate_model_oauth_url(&url, configured_endpoint()?.addr.port())?;
+    tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
+        .map_err(|_| "Could not open the model sign-in page".into())
+}
+
 #[tauri::command]
 fn persist_secret_reference(app: AppHandle, secret_ref: String) -> Result<(), String> {
     if !valid_secret_ref(&secret_ref) {
@@ -218,7 +260,8 @@ pub fn run() {
             core_status,
             start_local_core,
             stop_managed_core,
-            persist_secret_reference
+            persist_secret_reference,
+            open_model_oauth
         ])
         .build(tauri::generate_context!())
         .expect("error while building Operant desktop shell")
@@ -233,7 +276,34 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_dev_core_url, valid_secret_ref};
+    use super::{parse_dev_core_url, valid_secret_ref, validate_model_oauth_url};
+
+    #[test]
+    fn model_sign_in_opener_rejects_other_origins_paths_and_url_credentials() {
+        for valid in [
+            "https://auth.openai.com/api/accounts/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A8000%2Finternal%2Fmodel-auth%2Fchatgpt%2Fcallback",
+            "https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=http%3A%2F%2F127.0.0.1%3A8000%2Finternal%2Fmodel-auth%2Fgemini%2Fcallback",
+        ] {
+            assert!(validate_model_oauth_url(valid, 8000).is_ok());
+        }
+        for invalid in [
+            "http://auth.openai.com/api/accounts/authorize",
+            "https://auth.openai.com.evil.example/api/accounts/authorize",
+            "https://auth.openai.com@evil.example/api/accounts/authorize",
+            "https://name:secret@auth.openai.com/api/accounts/authorize",
+            "https://auth.openai.com:8443/api/accounts/authorize",
+            "https://auth.openai.com/api/accounts/authorize/other",
+            "https://accounts.google.com/other",
+            "https://auth.openai.com/api/accounts/authorize#other",
+            "file:///private/tmp/example",
+            "javascript:alert(1)",
+            "https://auth.openai.com/api/accounts/authorize?redirect_uri=https%3A%2F%2Fevil.example",
+            "https://auth.openai.com/api/accounts/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A8001%2Finternal%2Fmodel-auth%2Fchatgpt%2Fcallback",
+        ] {
+            assert!(validate_model_oauth_url(invalid, 8000).is_err(), "{invalid}");
+        }
+        assert!(validate_model_oauth_url(&"x".repeat(16_385), 8000).is_err());
+    }
 
     #[test]
     fn dev_core_url_accepts_only_explicit_loopback_http_port() {

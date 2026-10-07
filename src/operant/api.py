@@ -105,6 +105,7 @@ from operant.domain.threads import (
 )
 from operant.multiwriter import TrustedGitMultiWriterAdapter
 from operant.multiwriter.container import ContainerWriterLifecycle
+from operant.package_resources import protocol_schema_path
 from operant.persistence.beta import SQLiteRemoteGatewayConnectionRepository
 from operant.persistence.sqlite import (
     ActionOutcomeUnknownError,
@@ -1339,10 +1340,17 @@ def create_app(
     oauth_config: OAuthConfig | None = None,
     oauth_http_client: httpx.AsyncClient | None = None,
     plugin_host: PluginHost | None = None,
+    setup_allowed_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     load_local_env()
+    skill_source_defaults_enabled = phase45_skill_roots is None
     if phase45_skill_roots is None:
-        phase45_skill_roots = configured_path_roots("OPERANT_SKILL_ROOTS_JSON")
+        from operant.skills.sources import default_skill_roots
+
+        phase45_skill_roots = {
+            **default_skill_roots(None),
+            **configured_path_roots("OPERANT_SKILL_ROOTS_JSON"),
+        }
     if phase45_mcp_workspace_roots is None:
         phase45_mcp_workspace_roots = configured_path_roots("OPERANT_MCP_WORKSPACE_ROOTS_JSON")
     if phase56_multiwriter_roots is None:
@@ -1382,10 +1390,14 @@ def create_app(
     )
     app.router.add_event_handler("shutdown", service.close)
     app.state.operant_service = service
+    # Explicit local development origins may use the first-party Vite proxy.
+    # Model credential routes still validate each origin as HTTP loopback.
+    app.state.setup_allowed_origins = frozenset(setup_allowed_origins)
     # Explicit trusted bootstrap owns Host configuration; ordinary startup never
     # installs a plugin, reads its package, or creates an engine implicitly.
     app.state.plugin_host = plugin_host
-    app.state.b23_skill_roots = phase45_skill_roots
+    app.state.b23_skill_roots = dict(phase45_skill_roots or {})
+    app.state.skill_source_defaults_enabled = skill_source_defaults_enabled
     if plugin_host is not None:
         app.router.add_event_handler("shutdown", plugin_host.close)
 
@@ -3637,22 +3649,67 @@ def create_app(
     install_workbench_file_routes(app, service)
     install_workbench_resource_routes(app, service)
     install_phase23_routes(app, store)
+    model_reviewer = ApprovalModelReviewer(
+        provider=service.provider,
+        get_profile=service.get_model_profile,
+    )
     install_phase45_routes(
         app,
         store,
-        skill_roots=phase45_skill_roots,
+        skill_roots=app.state.b23_skill_roots,
         mcp_workspace_roots=phase45_mcp_workspace_roots,
         policy_engine=phase45_policy_engine,
         approval_reviewer=phase45_approval_reviewer,
-        approval_model_reviewer=ApprovalModelReviewer(
-            provider=service.provider,
-            get_profile=service.get_model_profile,
-        ),
+        approval_model_reviewer=model_reviewer,
         approval_reviewer_config=lambda: (
             config_service.get_scope("global", "default").patch.approval_reviewer
             or ReviewerConfig()
         ),
     )
+    from operant.api_model_connections import install_model_connection_routes
+    from operant.api_onboarding import install_onboarding_routes
+    from operant.api_setup_apps import install_setup_app_routes
+    from operant.api_skill_sources import install_skill_source_routes
+    from operant.persistence.onboarding import UXRepository
+
+    setup_repository = UXRepository(store)
+    app.state.setup_repository = setup_repository
+    service.provider.delegate = install_model_connection_routes(
+        app,
+        service,
+        setup_repository,
+        action_gateway=app.state.phase45_action_gateway,
+        local_authorizer=phase56_local_authorizer,
+    )
+    model_reviewer.provider = service.provider
+    install_skill_source_routes(
+        app, service, setup_repository, local_authorizer=phase56_local_authorizer
+    )
+    install_onboarding_routes(
+        app, service, setup_repository, local_authorizer=phase56_local_authorizer
+    )
+    install_setup_app_routes(app, local_authorizer=phase56_local_authorizer)
+
+    @app.get("/v1/protocol/onboarding", operation_id="negotiateOnboarding")
+    def negotiate_onboarding() -> dict[str, Any]:
+        path = protocol_schema_path("operant-onboarding.openapi.sha256")
+        if not path.is_file():
+            raise HTTPException(status_code=503, detail="setup protocol is not installed")
+        return {
+            "protocol_version": "onboarding.v1",
+            "min_client_version": "onboarding.v1",
+            "schema_digest": path.read_text().split()[0],
+            "capabilities": [
+                "conversation_metadata",
+                "default_assistant",
+                "model_connections",
+                "model_oauth",
+                "skill_sources",
+                "local_applications",
+                "team_templates",
+            ],
+        }
+
     install_workbench_terminal_routes(app, service, app.state.phase45_action_gateway)
     from operant.api_b2_4 import install_b2_4_routes
 

@@ -937,11 +937,28 @@ class MemoryManager:
                     "upgrade_required", "experience Skills require exact B2-6 version commands"
                 )
         if cmd.action == "skill_discover":
-            if not self.skill_roots:
-                raise ValueError("尚未配置可信 Skill 根目录")
-            for root_ref, root in self.skill_roots.items():
-                discovered = SkillDiscovery((root,)).discover()
-                repository.replace_skill_candidates(root_ref, discovered.candidates)
+            available = [
+                (root_ref, root) for root_ref, root in self.skill_roots.items() if root.is_dir()
+            ]
+            discovered = (
+                SkillDiscovery(tuple(root for _, root in available)).discover()
+                if available
+                else None
+            )
+            for index, (root_ref, _) in enumerate(available):
+                assert discovered is not None
+                repository.replace_skill_candidates(
+                    root_ref,
+                    tuple(
+                        candidate
+                        for candidate in discovered.candidates
+                        if candidate.root_index == index
+                    ),
+                )
+            available_refs = {root_ref for root_ref, _ in available}
+            for root_ref in self.skill_roots:
+                if root_ref not in available_refs:
+                    repository.replace_skill_candidates(root_ref, ())
             return
         if cmd.action in ("skill_enable", "skill_disable", "skill_uninstall"):
             skill = next((s for s in self._state["skills"] if s["skill_id"] == cmd.skill_id), None)
@@ -975,11 +992,26 @@ class MemoryManager:
         selected_root = self.skill_roots.get(candidate["root_ref"])
         if selected_root is None:
             raise PermissionError("configured Skill root is unavailable")
+        available = [
+            (root_ref, root) for root_ref, root in self.skill_roots.items() if root.is_dir()
+        ]
+        selected_index = next(
+            (
+                index
+                for index, (root_ref, _) in enumerate(available)
+                if root_ref == candidate["root_ref"]
+            ),
+            None,
+        )
+        if selected_index is None:
+            raise PermissionError("configured Skill root is unavailable")
+        discovered = SkillDiscovery(tuple(root for _, root in available)).discover()
         current = next(
             (
                 s
-                for s in SkillDiscovery((selected_root,)).discover().candidates
-                if s.relative_directory == candidate["relative_directory"]
+                for s in discovered.candidates
+                if s.root_index == selected_index
+                and s.relative_directory == candidate["relative_directory"]
             ),
             None,
         )
@@ -991,6 +1023,15 @@ class MemoryManager:
         ):
             raise ValueError("Skill is already installed")
         source = selected_root / current.relative_directory
+        if source.is_symlink():
+            linked = source.resolve(strict=True)
+            if not any(
+                linked == root.resolve(strict=True)
+                or linked.is_relative_to(root.resolve(strict=True))
+                for _, root in available
+            ):
+                raise PermissionError("Skill link target is outside registered roots")
+            source = linked
         before = compute_package_digest(source)
         skill_id = "skill_" + uuid4().hex
         destination = self.root / "skills" / skill_id

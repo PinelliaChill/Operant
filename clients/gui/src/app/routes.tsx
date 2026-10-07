@@ -7,13 +7,8 @@ const TasksView = lazy(() => import('../features/tasks/TasksView').then((module)
 const CollabView = lazy(() => import('../features/collab/CollabView').then((module) => ({ default: module.CollabView })));
 const CollabWorkflowCanvas = lazy(() => import('../features/collab/CollabWorkflowCanvas').then((module) => ({ default: module.CollabWorkflowCanvas })));
 const RunDetailView = lazy(() => import('../features/runs/RunDetailView').then((module) => ({ default: module.RunDetailView })));
-const SchedulesView = lazy(() => import('../features/schedules/SchedulesView').then((module) => ({ default: module.SchedulesView })));
 const ProjectsView = lazy(() => import('../features/projects/ProjectsView').then((module) => ({ default: module.ProjectsView })));
-const AgentsView = lazy(() => import('../features/agents/AgentsView').then((module) => ({ default: module.AgentsView })));
-const ExtensionsView = lazy(() => import('../features/extensions/ExtensionsView').then((module) => ({ default: module.ExtensionsView })));
-const SkillsView = lazy(() => import('../features/skills/SkillsView').then((module) => ({ default: module.SkillsView })));
 const SettingsView = lazy(() => import('../features/settings/SettingsView').then((module) => ({ default: module.SettingsView })));
-const ApprovalCenterView = lazy(() => import('../features/approvals/ApprovalCenterView').then((module) => ({ default: module.ApprovalCenterView })));
 const WorkflowSessionView = lazy(() => import('../features/workflowdir/WorkflowSessionView').then((module) => ({ default: module.WorkflowSessionView })));
 const AgentFocusView = lazy(() => import('../features/workflowdir/AgentFocusView').then((module) => ({ default: module.AgentFocusView })));
 
@@ -80,7 +75,7 @@ export const router = createHashRouter([
       },
       {
         path: 'schedules',
-        element: route(<SchedulesView />),
+        element: <Navigate to="/tasks?tab=schedules" replace />,
       },
       {
         path: 'projects',
@@ -92,15 +87,15 @@ export const router = createHashRouter([
       },
       {
         path: 'agents',
-        element: route(<AgentsView />),
+        element: <Navigate to="/settings?section=roles" replace />,
       },
       {
         path: 'extensions',
-        element: route(<ExtensionsView />),
+        element: <Navigate to="/settings?section=tools&page=local" replace />,
       },
       {
         path: 'skills',
-        element: route(<SkillsView />),
+        element: <Navigate to="/settings?section=tools&page=skills" replace />,
       },
       {
         path: 'settings',
@@ -112,13 +107,12 @@ export const router = createHashRouter([
         element: <Navigate to="/chat" replace />,
       },
       {
-        // 审批与权限中心（v5 §3：rail 一级分区，策略管理 + 待处理列表）
         path: 'approvals',
-        element: route(<ApprovalCenterView />),
+        element: <Navigate to="/tasks?tab=approvals" replace />,
       },
       {
         path: 'remote',
-        element: <Navigate to="/settings?tab=remote" replace />,
+        element: <Navigate to="/settings?tab=advanced" replace />,
       },
       {
         path: '*',

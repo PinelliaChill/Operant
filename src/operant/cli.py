@@ -81,6 +81,19 @@ def _service() -> ApplicationService:
         tool_extension_factory=local_capability_tool_extensions,
     )
     service.initialize()
+    from operant.model_connections.credentials import CredentialStore
+    from operant.model_connections.oauth import OAuthConnections
+    from operant.persistence.onboarding import UXRepository
+    from operant.providers.router import ConnectionProviderRouter
+
+    repo = UXRepository(service.store)
+    credentials = CredentialStore(service.store.path.parent / ".env")
+    service.provider.delegate = ConnectionProviderRouter(
+        repo,
+        credentials,
+        OAuthConnections(repo, credentials),
+        compatible_provider=service.provider.delegate,
+    )
     return service
 
 

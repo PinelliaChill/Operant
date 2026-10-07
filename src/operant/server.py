@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +23,37 @@ _DEFAULT_WS_MAX_SIZE = 512 * 1024
 
 class ServerConfigurationError(ValueError):
     pass
+
+
+def _setup_origins_from_env(values: Mapping[str, str]) -> tuple[str, ...]:
+    raw = values.get("OPERANT_SETUP_ALLOWED_ORIGINS_JSON", "")
+    if not raw:
+        return ()
+    try:
+        origins = json.loads(raw)
+        if not isinstance(origins, list) or not 1 <= len(origins) <= 16:
+            raise ValueError("expected a bounded list")
+        for origin in origins:
+            if not isinstance(origin, str):
+                raise ValueError("invalid origin")
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme != "http"
+                or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+                or parsed.port is None
+                or not 1 <= parsed.port <= 65535
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("expected a loopback HTTP origin")
+        return tuple(origins)
+    except (ValueError, TypeError) as exc:
+        raise ServerConfigurationError(
+            "setup origins must be an array of 1-16 explicit loopback HTTP origins"
+        ) from exc
 
 
 def _gateway_config_from_env(
@@ -114,6 +146,7 @@ def build_server_config(
         db_path=values.get("OPERANT_DB_PATH"),
         phase56_gateway_config=gateway_config,
         oauth_config=oauth_config,
+        setup_allowed_origins=_setup_origins_from_env(values),
     )
     if desktop:
         application.add_middleware(
@@ -146,6 +179,9 @@ def build_server_config(
             else _DEFAULT_WS_MAX_SIZE
         ),
         proxy_headers=False,
+        # OAuth callback query parameters contain one-use authorization codes.
+        # Structured Core audits remain available without raw HTTP access logs.
+        access_log=False,
         server_header=False,
         workers=1,
     )

@@ -66,7 +66,7 @@ const ClientContext = createContext<ClientContextValue | null>(null);
 
 export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [clientMode, setClientModeState] = useState<ClientMode>(() => {
-    return (localStorage.getItem('operant_client_mode') as ClientMode) || 'mock';
+    return (localStorage.getItem('operant_client_mode') as ClientMode) || 'live';
   });
 
   const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
@@ -74,18 +74,18 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   });
 
   const [activeWorkspace, setActiveWorkspace] = useState<string>(() => {
-    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'mock';
+    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'live';
     return mode === 'live' ? '' : DEFAULT_WORKSPACE;
   });
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('mock_active');
   const [pendingApprovalCount, setPendingApprovalCount] = useState<number>(0);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() => {
-    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'mock';
+    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'live';
     return mode === 'live' ? null : 'thread_main_alpha';
   });
   const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<string | null>(() => {
-    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'mock';
+    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'live';
     return mode === 'live' ? null : 'run_operant_001';
   });
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('context');

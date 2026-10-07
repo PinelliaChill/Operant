@@ -9,6 +9,15 @@ from .beta_generated import (
 from .beta_generated import (
     ProtocolNegotiationError as BetaProtocolNegotiationError,
 )
+from .onboarding_generated import (
+    ONBOARDING_MAX_CURSOR,
+    ONBOARDING_PROTOCOL_VERSION,
+    ONBOARDING_SCHEMA_DIGEST,
+    OnboardingClient,
+)
+from .onboarding_generated import (
+    ProtocolNegotiationError as OnboardingProtocolNegotiationError,
+)
 from .phase1e_generated import (
     PHASE1E_MAX_CURSOR,
     PHASE1E_PROTOCOL_VERSION,
@@ -48,6 +57,11 @@ from .workbench_generated import WorkbenchClient
 
 __all__ = [
     "WorkbenchClient",
+    "OnboardingClient",
+    "OnboardingProtocolNegotiationError",
+    "ONBOARDING_MAX_CURSOR",
+    "ONBOARDING_PROTOCOL_VERSION",
+    "ONBOARDING_SCHEMA_DIGEST",
     "PHASE1E_MAX_CURSOR",
     "PHASE1E_PROTOCOL_VERSION",
     "PHASE1E_SCHEMA_DIGEST",

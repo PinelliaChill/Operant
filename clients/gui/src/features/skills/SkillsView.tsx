@@ -513,9 +513,6 @@ const DemoSkillsView: React.FC = () => {
             </div>
           )}
 
-          <p className="section-footnote" style={{ marginTop: 24 }}>
-            遵循 standard Agent Skill 规范（包含 SKILL.md 与 scripts/ 目录），通过项目工作区软链接 <code>.operant/skills/</code> 动态映射与加载。
-          </p>
         </div>
       </div>
 

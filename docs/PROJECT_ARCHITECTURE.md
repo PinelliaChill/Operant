@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-10-05（Beta 任务 6 增量；记录身份：Codex 主线程，保留原历史署名）
+> 最后更新：2026-10-07（开箱即用增量实施中；记录身份：Codex 主线程，保留原历史署名）
 >
-> 对应源码：`codex/beta-daily-task6`，基线 `main@329a3bf4142913f0ccc039d7fd097b8d873904e8`；本轮补齐默认能力分发、日常组合及隔离安装路径，SQLite 保持 v23。最终 H-01～H-18 与四项完成标准见[任务 6 验收记录](design/beta-daily/acceptance.md)。本次没有更新已安装 App 或真实用户库。
+> 对应源码：`codex/onboarding-ux`，基线 Beta 3 `939e3cc`，SQLite 新增 v24。当前代码与验收状态见[本轮记录](design/onboarding-ux/acceptance.md)，尚未整体交付。既有 H-01～H-18 与四项完成标准的历史结果见[任务 6 验收记录](design/beta-daily/acceptance.md)。本轮不更新已安装 App 或真实用户库。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -14,6 +14,8 @@
 当前实现以本文、源码和测试为准。
 
 ## 当前版本速览
+
+- **开箱即用与界面整理（实施中，2026-10-07）**：User 已批准 [完整方案](design/onboarding-ux/plan.md)，基于 Beta 3 `939e3cc` 改进会话标题、默认助手、模型/API/OAuth、技能发现和唯一设置入口。逐项状态见 [验收记录](design/onboarding-ux/acceptance.md)。本条记录实施范围，不表示新能力已交付；实际模块说明随代码和验收更新。
 
 - **当前源码**：任务 1～5 已合入会话工作台、编排、配置与任务控制、本机扩展和私有跨设备能力。本轮补齐随 Core 分发的六项默认 Skill、文档依赖、记忆召回修复与桌面退出回收；整体结论以 Git 与[任务 6 验收记录](design/beta-daily/acceptance.md)核对。
 - **公开版本**：本次 `v0.1.0-beta.2` 源码和候选包发行范围与检查见[发行说明](releases/v0.1.0-beta.2.md)。`v0.1.0-beta.1` 保留为 2026-09-14 的 B2-3 快照；新能力不回填旧标签。
@@ -50,7 +52,8 @@ GitHub Beta 源码预发布固定 Git 标签，不代表签名、公证、自动
 
 Operant 是一个由角色预设驱动的多模型 Coding Agent Runtime。
 
-用户可以创建 Model Profile 和 Role Preset，再用指定角色创建 Session。Session 创建时会
+首次连接模型后，系统准备通用助手和个人工作区，用户可以直接新建对话。高级用户仍可创建
+Model Profile 和 Role Preset。Session 创建时会
 保存不可变的 `RoleSnapshot`，因此后续修改角色不会改变历史任务的执行配置。
 
 项目当前的核心目标是打通以下流程：
@@ -261,6 +264,54 @@ Remote Execution Target 的远端进程由 `remote/target_service.py` 和 `opera
 GUI 的 `PathInput` 通过 Tauri 官方 Dialog 插件打开本机文件或文件夹选择窗口。新建项目、权限检查、运行设置、文件监控、合并目标、脚本目录和会话文件引用共用该组件；手动输入仍可用，取消不改变输入，关闭后恢复按钮焦点。相对路径字段保留项目内相对路径，监控字段保持完整路径；Core 继续裁决路径、符号链接与实际访问权限。桌面仅新增 `dialog:allow-open`，没有新增前端文件读写入口。网页保留输入并禁用本机浏览按钮，提示使用桌面版；远端路径、受信目录引用和插件隔离引用不转换为客户端本机路径。
 
 会话文件选择直接使用当前会话的工作区；切换会话或工作区时清空旧路径和待发送引用。选择窗口与摘要请求都校验所属上下文，旧异步结果不得写入新会话。
+
+### 2.9 首次使用与界面整理（实施中）
+
+新增 `onboarding.v1`，由 `contracts/onboarding.py` 定义 DTO，`sdk/protocol/generate_onboarding.py`
+生成独立 Schema、digest 和 TS/Python Client。旧协议与 digest 保持不变。查询与命令分别管理
+首次配置、模型连接、标题、技能源、本机应用列表和基础团队模板。当前新增契约含 21 个操作，
+摘要为 `aac48a78b39f04a1a3d84741bb18a226c558f0026c06332ca03c572188f50ecf`。
+
+`application/onboarding.py` 准备默认通用、规划、探索、编程、审查角色、个人工作区及六项内置技能。
+首次配置新增的通用与编程助手在已登记的可信工作区使用 Host，写入与命令仍走 Policy/审批；
+CLI 的 Docker 默认值和已有角色保持原值。`api_onboarding.py` 的统一初始化命令在事务中补齐 Thread、Session、
+快照与幂等结果；改名支持版本检查。SQLite v24 的标题元数据只影响展示，第一条消息生成自动名称，
+手动名称优先；旧会话可从首条消息读出默认标题，历史内容不变。单个标题可独立查询，不依赖
+历史列表分页；子对话也保存标题。未知创建结果通过原幂等键只读查询已提交的完整绑定，查询失败
+或尚无结果时继续等待核对，不重新发送创建命令。
+
+`model_connections` 负责受保护 `.env` 的原子读写及 OAuth，`api_model_connections.py` 仅向可信本机
+客户端开放。连接信息与私有 Provider 状态由 `persistence/onboarding.py` 持久化；只接受凭据引用及
+不透明签名、加密状态，不存 Token 或隐藏思维正文。连接路由作为现有 `ExtensionModelProvider` 的
+delegate，保留扩展和 Gateway。OpenAI 兼容 API、ChatGPT Responses、Gemini 原生 Provider 共用正式
+Agent Loop，并保留已有兼容 Provider 的注入。登录状态与模型可用状态分别保存，温度默认不发送、
+未知上下文窗口不指定。模型目录保存经过过滤的显示名称，调用始终使用发现的精确模型 ID。
+
+Gemini OAuth 的 Operant 桌面客户端由受保护 `.env` 或进程环境配置
+`OPERANT_GEMINI_OAUTH_CLIENT_ID`、`OPERANT_GEMINI_OAUTH_CLIENT_SECRET`，首次用户连接提供 Cloud
+项目。缺少应用配置、账号授权或真实调用条件时明确报错，不使用其他应用的客户端身份。
+两家 OAuth 的真实登录、流式工具调用、续期和撤销仍需按[验收记录](design/onboarding-ux/acceptance.md)
+完成；fixture 只证明边界与协议处理。
+
+Core 默认登记内置技能目录、三个用户目录和当前工作区目录；缺失目录为空结果，坏技能单独返回
+问题。`skills/discovery.py` 使用受限 YAML、真实路径校验和去重，`api_skill_sources.py` 提供来源管理。
+新工作区按配置作用域把内置技能写入新 Session 快照，自动发现外部技能不运行脚本或增加工具权限。
+服务重启时从已登记的默认工作区恢复扫描范围；来源增删经过 Gateway 与持久幂等命令。
+
+桌面 `open_model_oauth` 仅接受官方 OpenAI/Google 授权页面，且回调必须指向当前本机 Core 的
+对应模型回调。前端不能借此打开任意协议、文件或其他地址；登录链接不进入日志和持久缓存。
+
+GUI 一级导航为对话、项目、协作、任务，底部设置包含六类唯一管理页面。引导和对话提示复用模型
+连接页面，草稿保留到发送已接受。`SearchSelect` 共用搜索和键盘操作；本机能力显示状态和目标选择，
+原始控制台及包摘要收起。基础模板由 `application/onboarding_collaboration.py` 调用真实 Graph/Team
+Runtime；模板开始入口不要求用户先编辑团队与流程。
+
+本轮 API 首次配置与正式 `gpt-6-luna` 文件读取已跑通，标题和幂等持久检查通过；内置文档技能经
+一次正式审批生成 Word，内容回读通过。原生基础团队三成员完成任务，运行详情已通过正式 Graph
+入口回读终态；原生新建双击没有重复创建或发送草稿，改名、深浅主题、窄屏和选择器焦点已核对。
+前两轮文档超时及旧团队详情链接失败继续保留。完整后端检查 1380 项通过、12 项条件跳过；其后
+新增契约与目录处理单独补测。本机操控、首次连接的剩余原生流程及两家真实 OAuth 尚未完成验收。
+完整范围、失败和后续结果统一维护在本轮验收文件。
 
 ## 3. 总体架构
 
@@ -611,7 +662,7 @@ Role Preset 是可编辑配置，不是历史执行事实。
 ### CommandExecutionPolicy
 
 `ToolPolicy` 还携带不可变的 `CommandExecutionPolicy`。它指定 `run_command` 使用 `host` 或
-`docker` Runner，以及 Docker 镜像、CPU、内存和 PID 上限。新初始化的默认 Coder 使用 Docker；普通
+`docker` Runner，以及 Docker 镜像、CPU、内存和 PID 上限。CLI 默认角色初始化的 Coder 使用 Docker；普通
 `ToolPolicy` 的默认值仍为 `host`，因此自定义角色只有在用户明确选择 Docker 时才会启用隔离。
 
 Docker Runner 不会把原 workspace 直接暴露给容器，而是创建排除凭据、Git 元数据、运行态数据、
@@ -1252,7 +1303,7 @@ Coder
     git_diff
 ```
 
-新初始化的默认 Coder 的命令使用 Docker Runner；没有 Docker 的环境会返回明确工具错误，而不会自动退回
+CLI 默认角色初始化的 Coder 命令使用 Docker Runner；没有 Docker 时会明确报错，不会自动退回
 到宿主机。用户自定义的 `ToolPolicy` 默认仍是 Host Runner，必须只用于可信 workspace。
 
 ### 路径保护

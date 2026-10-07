@@ -1,0 +1,43 @@
+.task-hub {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.task-hub > .section-view,
+.task-hub > .live-route-view {
+  min-height: 0;
+  flex: 1;
+}
+
+.task-hub-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+}
+
+.task-hub-tab {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.task-hub-tab:hover,
+.task-hub-tab.active {
+  background: var(--accent-subtle);
+  color: var(--accent-on-subtle);
+}
+
+.task-hub-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}

@@ -4,9 +4,12 @@ import { LiveFilePreview } from './LiveFilePreview';
 import { LiveTerminalPanel, TERMINAL_CLEANUP_EVENT, readTerminalCleanupUnknown } from './LiveTerminalPanel';
 import { workbenchClient } from '../../live/workbenchClient';
 import type { WorkbenchCommandRegistry, WorkbenchReference } from '../../live/workbenchClient';
+import { bindPendingConversationSend, draftAfterAccepted, pendingSendMatchesSelection, shouldQueuePendingSend } from '../../live/pendingConversationSend';
+import { deepLinkLookupDecision } from '../../live/deepLinkLookup';
 import './b2-chat-layout.css';
 import './ui-refine-chat.css';
-import { chatEmptyPresentation, historyItemLabel } from './chatPresentation';
+import { historyItemLabel } from './chatPresentation';
+import { systemEventLabel, toolActionLabel, toolResultLabel } from './historyPresentation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
@@ -24,15 +27,16 @@ import {
   Wifi,
   X,
 } from 'lucide-react';
-import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
 import { PathInput } from '../../components/PathInput';
+import { SearchSelect } from '../../components/SearchSelect';
 import type * as B2 from '../../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../../context/ClientContext';
 import { approvalId, outcomeNeedsReconciliation, requestCode, requestError, requiredText } from '../extensions/localProjection';
 import { parseExtensionArguments } from './extensionCommandArguments';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
-import type { LiveApproval, LiveEvent, LiveSessionOption } from '../../live/liveState';
+import { useOnboarding } from '../../live/OnboardingContext';
+import type { LiveApproval, LiveEvent } from '../../live/liveState';
 import { approvalsForSession, canDecideApproval, formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
 
@@ -139,21 +143,28 @@ export const LiveApprovalCard: React.FC<{
   approval: LiveApproval;
   busy: boolean;
   onDecide: (decision: 'approve' | 'reject') => void;
-}> = ({ approval, busy, onDecide }) => (
+}> = ({ approval, busy, onDecide }) => {
+  const action = approval.detail.match(/(?:^|[\s=])(run_command|file_write|network_access|read_file|write_file)(?:\s|$)/)?.[1] || approval.category;
+  const actionName: Record<string, string> = {
+    run_command: '运行命令', file_write: '修改文件', write_file: '修改文件',
+    read_file: '读取文件', network_access: '访问网络', security_policy: '执行受保护操作',
+  };
+  const statusName: Record<string, string> = { pending: '等待你的决定', approved_once: '已允许一次', approved_for_run: '本次运行已允许', rejected: '已拒绝', expired: '已过期' };
+  return (
   <article className="live-approval-card">
     <div className="live-approval-head">
       <span className="live-approval-icon" aria-hidden="true"><ShieldCheck size={16} /></span>
       <div>
-        <h3>{approval.category}</h3>
-        <p>{approval.detail || '暂无动作详情'}</p>
+        <h3>助手请求{actionName[action] || '执行操作'}</h3>
+        <p>{statusName[approval.status] || statusLabel(approval.status)}</p>
       </div>
-      <StatusBadge status={approval.status} size="sm" />
+      <StatusBadge status={approval.status} label={statusName[approval.status] || statusLabel(approval.status)} size="sm" />
     </div>
-    <dl className="live-approval-meta">
-      <div><dt>Approval ID</dt><dd>{approval.id}</dd></div>
-      <div><dt>Tool Call</dt><dd>{approval.toolCallId}</dd></div>
-      <div><dt>过期时间</dt><dd>{approval.expiresAt}</dd></div>
-    </dl>
+    <details className="live-approval-details"><summary>查看操作与审批详情</summary><p>{approval.detail || '服务未提供更多动作说明'}</p><dl className="live-approval-meta">
+      <div><dt>审批编号</dt><dd><code>{approval.id}</code></dd></div>
+      <div><dt>操作编号</dt><dd><code>{approval.toolCallId}</code></dd></div>
+      <div><dt>到期时间</dt><dd>{approval.expiresAt}</dd></div>
+    </dl></details>
     <div className="live-approval-actions">
       <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDecide('reject')} disabled={busy || approval.status !== 'pending'}>
         拒绝
@@ -163,7 +174,8 @@ export const LiveApprovalCard: React.FC<{
       </button>
     </div>
   </article>
-);
+  );
+};
 
 const LiveEventTimeline: React.FC<{ events: LiveEvent[]; cursor: LiveEvent['sequence']; status: string }> = ({ events, cursor, status }) => (
   <section className="live-panel live-events-panel" aria-labelledby="live-events-title">
@@ -190,14 +202,6 @@ const LiveEventTimeline: React.FC<{ events: LiveEvent[]; cursor: LiveEvent['sequ
   </section>
 );
 
-function sessionLabel(option: LiveSessionOption): string {
-  if (option.details) {
-    const role = option.details.role_snapshot?.role_name || 'Session';
-    return `${role} · ${option.id.slice(0, 12)}`;
-  }
-  return `服务端 Session ${option.id.slice(0, 12)} · 详情未查询`;
-}
-
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value, (_key, nested) => (
@@ -212,52 +216,41 @@ function safeJson(value: unknown): string {
 export const CanonicalHistoryItem: React.FC<{ item: B2.Item; index: number }> = ({ item, index }) => {
   const payload = item.payload;
   const type = payload.type || 'canonical_payload';
-  let body: React.ReactNode;
+  let summary: React.ReactNode;
   if (payload.type === 'user_message' || payload.type === 'agent_message') {
-    body = <p>{payload.text}</p>;
+    summary = <p>{payload.text}</p>;
   } else if (payload.type === 'tool_call') {
-    body = (
-      <dl className="b2-history-payload">
-        <div><dt>工具</dt><dd>{payload.tool_name}</dd></div>
-        <div><dt>Tool Call</dt><dd>{payload.tool_call_id}</dd></div>
-        {payload.detail_summary && <div><dt>详情</dt><dd>{payload.detail_summary}</dd></div>}
-        {payload.action_hash && <div><dt>Action Hash</dt><dd>{payload.action_hash}</dd></div>}
-      </dl>
-    );
+    summary = <p>{toolActionLabel(payload.tool_name)}</p>;
   } else if (payload.type === 'tool_result_ref') {
-    body = (
-      <dl className="b2-history-payload">
-        <div><dt>结果</dt><dd>{payload.outcome}</dd></div>
-        <div><dt>Artifact</dt><dd>{payload.artifact_id}</dd></div>
-        <div><dt>Tool Call</dt><dd>{payload.tool_call_id}</dd></div>
-        {payload.summary && <div><dt>摘要</dt><dd>{payload.summary}</dd></div>}
-      </dl>
-    );
+    summary = <p>{toolResultLabel(payload.summary, payload.outcome)}</p>;
   } else if (payload.type === 'artifact_ref') {
-    body = <p>Artifact：{payload.artifact_id}{payload.label ? ` · ${payload.label}` : ''}</p>;
+    summary = <p>{payload.label || '已生成内容'}</p>;
   } else if (payload.type === 'approval_link') {
-    body = <p>Approval：{payload.approval_id}</p>;
+    summary = <p>等待你确认一项操作</p>;
   } else if (payload.type === 'steering') {
-    body = <p>{payload.text} · mode={payload.mode || 'steer'}</p>;
+    summary = <p>{payload.text}</p>;
   } else if (payload.type === 'system_event') {
-    body = <p>{payload.summary} · event={payload.event_type}{payload.source_ref ? ` · source=${payload.source_ref}` : ''}</p>;
+    summary = <p>{systemEventLabel(payload.event_type, payload.summary)}</p>;
   } else {
-    body = <pre>{safeJson(payload)}</pre>;
+    summary = <p>收到一条运行记录</p>;
   }
+  const details = <details className="live-history-details"><summary>查看记录详情</summary><dl>
+    <div><dt>记录类型</dt><dd>{type}</dd></div>
+    {item.cursor !== null && item.cursor !== undefined && <div><dt>进度位置</dt><dd>{String(item.cursor)}</dd></div>}
+    <div><dt>原始记录</dt><dd><pre>{safeJson(payload)}</pre></dd></div>
+  </dl></details>;
   const itemKey = item.id || `${item.thread_id}:${item.turn_id}:${item.position ?? index}`;
   if (type === 'system_event') {
-    return <details className="ui-chat-system-event" data-payload-type={type}>
-      <summary>运行记录 <span>{item.cursor == null ? 'canonical' : `Cursor ${String(item.cursor)}`}</span></summary>
-      {body}
+    return <details className="ui-chat-system-event" data-payload-type={type} key={itemKey}>
+      <summary>{payload.type === 'system_event' ? systemEventLabel(payload.event_type, payload.summary) : '运行记录'}</summary>
+      {details}
     </details>;
   }
   return (
     <article className="live-message b2-history-item" data-payload-type={type} key={itemKey}>
-      <div className="live-message-meta">
-        <strong>{historyItemLabel(type)}</strong>
-        <span>{item.cursor === null || item.cursor === undefined ? 'canonical' : `Cursor ${String(item.cursor)}`}</span>
-      </div>
-      {body}
+      <div className="live-message-meta"><strong>{historyItemLabel(type)}</strong></div>
+      {summary}
+      {type !== 'user_message' && type !== 'agent_message' && details}
     </article>
   );
 };
@@ -271,13 +264,10 @@ export const LiveChatView: React.FC = () => {
     phase,
     projects,
     threads,
-    sessionOptions,
     approvals,
     selectedProjectId,
     selectedThreadId,
-    selectedSessionId,
     selectedThread,
-    selectedSession,
     roles,
     history,
     historyLoading,
@@ -293,37 +283,39 @@ export const LiveChatView: React.FC = () => {
     manualReconcileRequired,
     manualReconcileReason,
     deepLinkNotFound,
-    canCreateThread,
-    createThreadUnavailableReason,
-    threadCreationStatus,
-    createThread,
-    canCreateSession,
-    createSessionUnavailableReason,
     cancelCommandAvailable,
     selectProject,
-    selectThread,
-    selectSession,
     resolveDeepLink,
     refresh,
     reconnect,
-    createSession,
     sendMessage,
     cancelSession,
     decideApproval,
     loadFiles,
     clearError,
   } = useLive();
-  const [draft, setDraft] = useState('');
-  const projectSelectRef = useRef<HTMLSelectElement>(null);
+  const { setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const projectSelectRef = useRef<HTMLButtonElement>(null);
   const [showFiles, setShowFiles] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [workbenchMounted, setWorkbenchMounted] = useState(false);
   const [terminalCleanupId, setTerminalCleanupId] = useState<string | null>(null);
   const [showEvents, setShowEvents] = useState(false);
   const [filePath, setFilePath] = useState('');
   const [filesLoading, setFilesLoading] = useState(false);
-  const [creatingSession, setCreatingSession] = useState(false);
-  const [selectedRoleId, setSelectedRoleId] = useState('');
-  const [references, setReferences] = useState<WorkbenchReference[]>([]);
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
+  const pendingSendInFlight = useRef(false);
+  const deepLinkAttempted = useRef<string | null>(null);
+  const deepLinkLookupEpoch = useRef(0);
+  const [deepLinkLookup, setDeepLinkLookup] = useState<'idle' | 'loading' | 'failed'>('idle');
+  const [references, setReferencesState] = useState<WorkbenchReference[]>([]);
+  const referencesRevision = useRef(0);
+  const setReferences = useCallback<React.Dispatch<React.SetStateAction<WorkbenchReference[]>>>((value) => {
+    referencesRevision.current += 1;
+    setReferencesState(value);
+  }, []);
   const [referenceKind, setReferenceKind] = useState<ReferenceKind>('file');
   const [referenceTarget, setReferenceTarget] = useState('');
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
@@ -358,11 +350,6 @@ export const LiveChatView: React.FC = () => {
   };
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
-  useEffect(() => {
-    if (!roles.some((role) => role.id === selectedRoleId && role.status !== 'inactive')) {
-      setSelectedRoleId(roles.find((role) => role.status !== 'inactive')?.id || '');
-    }
-  }, [roles, selectedRoleId]);
   const visibleApprovals = useMemo(
     () => approvalsForSession(approvals, selectedThread?.sessionId ?? null),
     [approvals, selectedThread?.sessionId],
@@ -374,6 +361,8 @@ export const LiveChatView: React.FC = () => {
     || stream.status !== 'connected';
   const canSend = Boolean(selectedThread?.sessionId && selectedThread.workspaceRef && draft.trim())
     && !busy
+    && !createBusy
+    && !createOutcomeUnknown
     && !extensionApproval
     && !extensionOutcomeUnknown
     && phase === 'ready';
@@ -484,7 +473,7 @@ export const LiveChatView: React.FC = () => {
       });
       setExtensionCommands((current) => [...current.filter((item) => item.kind !== 'extension'), ...commands]);
     }).catch((error: unknown) => { if (active) setWorkbenchError(`扩展命令读取失败：${requestError(error)}`); });
-    void phase56Client.listSkillCommands(selectedThreadId).then((value) => {
+    if (selectedThread?.sessionId) void phase56Client.listSkillCommands(selectedThreadId).then((value) => {
       if (!active) return;
       setExtensionCommands((current) => [
         ...current.filter((item) => item.kind !== 'skill'),
@@ -499,14 +488,47 @@ export const LiveChatView: React.FC = () => {
       ]);
     }).catch((error: unknown) => { if (active) setWorkbenchError(`Skill 命令读取失败：${requestError(error)}`); });
     return () => { active = false; };
-  }, [selectedThreadId, workbenchConnected, phase56Client]);
+  }, [selectedThreadId, selectedThread?.sessionId, workbenchConnected, phase56Client]);
 
-  // A deep link is resolved against the server projection.  Unknown IDs stay
-  // visible as an empty live state; they are never replaced with Demo data.
+  const refreshMissingDeepLink = useCallback(async () => {
+    const epoch = ++deepLinkLookupEpoch.current;
+    const route = window.location.href;
+    setDeepLinkLookup('loading');
+    let refreshed = false;
+    try { refreshed = await refresh(); } catch { refreshed = false; }
+    if (epoch !== deepLinkLookupEpoch.current || window.location.href !== route) return;
+    setDeepLinkLookup(refreshed ? 'idle' : 'failed');
+  }, [refresh]);
+
+  // An uncached deep link gets one formal projection read before showing a
+  // not-found state. It never creates a replacement conversation.
   React.useEffect(() => {
     if (clientMode !== 'live') return;
-    resolveDeepLink(conversationId ?? null);
-  }, [clientMode, conversationId, resolveDeepLink]);
+    const target = conversationId ?? null;
+    resolveDeepLink(target);
+    const decision = deepLinkLookupDecision(target, threads.some((thread) => thread.id === target), connectionStatus === 'connected', deepLinkAttempted.current);
+    if (decision === 'empty' || decision === 'found') {
+      deepLinkAttempted.current = null;
+      setDeepLinkLookup('idle');
+      return;
+    }
+    if (decision === 'disconnected') {
+      deepLinkAttempted.current = null;
+      setDeepLinkLookup('failed');
+      return;
+    }
+    if (decision === 'await_result' || !target) return;
+    deepLinkAttempted.current = target;
+    void refreshMissingDeepLink();
+  }, [clientMode, connectionStatus, conversationId, refreshMissingDeepLink, resolveDeepLink, threads]);
+  React.useEffect(() => () => { deepLinkLookupEpoch.current += 1; }, []);
+
+  const retryDeepLink = () => {
+    if (!conversationId) return;
+    if (connectionStatus !== 'connected') { void reconnect(); return; }
+    deepLinkAttempted.current = conversationId;
+    void refreshMissingDeepLink();
+  };
 
   const loadLiveFiles = useCallback(async (path = '') => {
     if (!selectedProject) return;
@@ -517,7 +539,29 @@ export const LiveChatView: React.FC = () => {
   }, [loadFiles, selectedProject]);
 
   const handleSubmit = async () => {
-    if (!canSend || !selectedThread) return;
+    if (!selectedThread || !draft.trim() || pendingSendInFlight.current) return;
+    if (pendingSend) setPendingSend(null);
+    if (!selectedThread.sessionId) {
+      const clickedText = draft.trim();
+      const clickedReferences = references.map((item) => ({ ...item.reference }));
+      const clickedReferencesRevision = referencesRevision.current;
+      const clickedRevision = getDraftRevision();
+      const clickedWorkspaceId = selectedProjectId || setup?.default_workspace_id || '';
+      const clickedRouteVersion = getRouteRevision();
+      const clickedLocation = window.location.href;
+      if (!setup?.ready) {
+        if (!setup?.default_model_profile_id) { navigate('/settings?section=models'); return; }
+        if (!await bootstrap(setup.default_model_profile_id)) return;
+      }
+      const result = await initializeConversation({ thread_id: selectedThread.id });
+      if (result && getRouteRevision() === clickedRouteVersion && window.location.href === clickedLocation) {
+        if (clickedWorkspaceId && result.workspace_id !== clickedWorkspaceId) { setWorkbenchError('新对话的工作区与发送时选择的不一致。请打开对话核对后手动发送。'); return; }
+        if (shouldQueuePendingSend(true, clickedText, clickedWorkspaceId)) setPendingSend(bindPendingConversationSend({ threadId: result.thread_id, workspaceId: clickedWorkspaceId, workspaceRef: selectedThread.workspaceRef || '', sourceConversationId: conversationId ?? null, text: clickedText, references: clickedReferences, referencesRevision: clickedReferencesRevision, draftRevision: clickedRevision }));
+        navigate(`/chat/${encodeURIComponent(result.thread_id)}`);
+      }
+      return;
+    }
+    if (!canSend) return;
     const message = draft.trim();
     if (message.startsWith('/')) {
       const [extensionName] = message.split(/\s+/);
@@ -584,8 +628,15 @@ export const LiveChatView: React.FC = () => {
       finally { setCommandBusy(false); }
       return;
     }
-    const completed = await sendMessage(message, references.map((item) => item.reference));
-    if (completed) { setDraft(''); setReferences([]); }
+    const clickedRevision = getDraftRevision();
+    const clickedReferences = references.map((item) => ({ ...item.reference }));
+    const clickedReferencesRevision = referencesRevision.current;
+    const completed = await sendMessage(message, clickedReferences);
+    if (completed) {
+      const currentRevision = getDraftRevision();
+      setDraft((current) => draftAfterAccepted(current, currentRevision, { text: message, draftRevision: clickedRevision }));
+      if (referencesRevision.current === clickedReferencesRevision) setReferences([]);
+    }
   };
 
   const addReference = async (target = referenceTarget, kind = referenceKind) => {
@@ -607,32 +658,53 @@ export const LiveChatView: React.FC = () => {
     finally { if (isCurrent()) setReferenceBusy(false); }
   };
 
-  const handleCreateSession = async () => {
-    const roleId = selectedRoleId || selectedSession?.role_snapshot.role_id;
-    if (!canCreateSession || !roleId || !selectedThread) return;
-    setCreatingSession(true);
-    const session = await createSession({ roleId, threadId: selectedThread.id });
-    setCreatingSession(false);
-    if (session) {
-      const projectedThread = threads.find((thread) => thread.sessionId === session.id);
-      if (projectedThread) navigate(`/chat/${projectedThread.id}`);
+  const beginConversation = async (sendClickedDraft = false) => {
+    if (pendingSendInFlight.current) return;
+    if (pendingSend) setPendingSend(null);
+    const clickedText = draft.trim();
+    const clickedReferences = references.map((item) => ({ ...item.reference }));
+    const clickedReferencesRevision = referencesRevision.current;
+    const clickedRevision = getDraftRevision();
+    const clickedWorkspaceId = selectedProjectId || setup?.default_workspace_id || '';
+    const clickedWorkspaceRef = selectedProject?.workspaceRef || '';
+    const clickedRouteVersion = getRouteRevision();
+    const clickedLocation = window.location.href;
+    if (!setup?.ready) {
+      if (!setup?.default_model_profile_id) { navigate('/settings?section=models'); return; }
+      const ready = await bootstrap(setup.default_model_profile_id);
+      if (!ready) { navigate(setup.missing_steps?.includes('skills') ? '/settings?section=tools' : '/settings?section=models'); return; }
+    }
+    const result = await initializeConversation(selectedProjectId ? { workspace_id: selectedProjectId } : {});
+    if (result && getRouteRevision() === clickedRouteVersion && window.location.href === clickedLocation) {
+      if (clickedWorkspaceId && result.workspace_id !== clickedWorkspaceId) { setWorkbenchError('新对话的工作区与选择的不一致。请刷新对话列表核对。'); return; }
+      if (shouldQueuePendingSend(sendClickedDraft, clickedText, clickedWorkspaceId)) setPendingSend(bindPendingConversationSend({ threadId: result.thread_id, workspaceId: clickedWorkspaceId, workspaceRef: clickedWorkspaceRef, sourceConversationId: conversationId ?? null, text: clickedText, references: clickedReferences, referencesRevision: clickedReferencesRevision, draftRevision: clickedRevision }));
+      navigate(`/chat/${encodeURIComponent(result.thread_id)}`);
     }
   };
+  useEffect(() => {
+    if (!pendingSend || !selectedThread?.sessionId || !pendingSendMatchesSelection(pendingSend, conversationId ?? null, selectedThread.id, selectedThread.workspaceRef)) return;
+    if (selectedProjectId && pendingSend.workspaceId !== selectedProjectId) { setPendingSend(null); setWorkbenchError('工作区已变化，自动发送已取消。草稿仍在输入框中。'); return; }
+    if (busy || phase !== 'ready' || pendingSendInFlight.current || extensionApproval || extensionOutcomeUnknown) return;
+    pendingSendInFlight.current = true;
+    const submitted = pendingSend;
+    setPendingSend(null);
+    void sendMessage(submitted.text, submitted.references).then((accepted) => {
+      if (accepted) {
+        const currentRevision = getDraftRevision();
+        setDraft((current) => draftAfterAccepted(current, currentRevision, submitted));
+        if (referencesRevision.current === submitted.referencesRevision) setReferences([]);
+      }
+    }).finally(() => { pendingSendInFlight.current = false; });
+  }, [pendingSend, conversationId, selectedThread?.id, selectedThread?.sessionId, selectedThread?.workspaceRef, selectedProjectId, busy, phase, extensionApproval, extensionOutcomeUnknown, getDraftRevision, sendMessage, setDraft, setPendingSend]);
 
-  const emptyPresentation = chatEmptyPresentation({
-    failed: phase === 'error' || connectionStatus === 'disconnected',
-    deepLinkNotFound,
-    hasProjects: projects.some((project) => project.readable),
-    hasProject: Boolean(selectedProject),
-  });
-  const handleEmptyAction = () => {
-    switch (emptyPresentation.action) {
-      case 'projects': navigate('/projects'); break;
-      case 'select-project': projectSelectRef.current?.focus(); break;
-      case 'create-thread': if (canCreateThread) void createThread(); break;
-      case 'reconnect': void reconnect(); break;
-    }
+  const saveTitle = async () => {
+    if (!selectedThread || !titleDraft.trim() || renameBusy) return;
+    setRenameBusy(true);
+    const saved = await renameConversation(selectedThread.id, titleDraft.trim());
+    setRenameBusy(false);
+    if (saved) setRenaming(false);
   };
+  const refreshConversation = async () => { await refresh(); await refreshMetadata(); };
 
   const topError = lastError || stream.error || (command.status === 'awaiting_projection' ? command.error : undefined);
   const connectionMessage = phase === 'ready'
@@ -666,17 +738,18 @@ export const LiveChatView: React.FC = () => {
           )}
           <div>
             <div className="live-kicker"><span className="live-kicker-dot" aria-hidden="true" />对话</div>
-            <h1>{selectedThread ? (selectedThread.title && selectedThread.title !== selectedThread.id ? selectedThread.title : '项目会话') : '开始新任务'}</h1>
+            <h1>{selectedThread ? metadata[selectedThread.id]?.title || (selectedThread.title && selectedThread.title !== selectedThread.id ? selectedThread.title : '新对话') : '新对话'}</h1>
           </div>
         </div>
         <div className="live-header-actions">
+          {selectedThread && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTitleDraft(metadata[selectedThread.id]?.title || selectedThread.title || ''); setRenaming(true); }}>改名</button>}
           <StatusBadge
             status={phase === 'ready' ? (stream.status === 'replaying' ? 'pending' : 'connected') : phase === 'error' ? 'disconnected' : 'pending'}
             label={connectionMessage}
             size="sm"
             pulse={phase === 'connecting' || stream.status === 'replaying'}
           />
-          <button type="button" className="btn btn-ghost btn-icon" onClick={() => void refresh()} aria-label="刷新会话状态" title="刷新会话状态" disabled={phase === 'connecting'}>
+          <button type="button" className="btn btn-ghost btn-icon" onClick={() => void refreshConversation()} aria-label="刷新对话" title="刷新对话" disabled={phase === 'connecting'}>
             <RefreshCw size={15} aria-hidden="true" />
           </button>
         </div>
@@ -692,6 +765,8 @@ export const LiveChatView: React.FC = () => {
         />
       )}
       {workbenchError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>{workbenchError}</span></div>}
+      {createError && selectedThread && <div className="live-alert live-alert-error" role="alert">{createError}{(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearCreateUncertainty()}>刷新并核对</button>}{recoveredConversationId && <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}</div>}
+      {renaming && selectedThread && <div className="live-rename"><label>对话名称<input className="input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} maxLength={100} autoFocus onKeyDown={(event) => { if (event.key === 'Enter') void saveTitle(); if (event.key === 'Escape') setRenaming(false); }} /></label><button type="button" className="btn btn-primary btn-sm" disabled={renameBusy || !titleDraft.trim()} onClick={() => void saveTitle()}>保存名称</button><button type="button" className="btn btn-ghost btn-sm" onClick={() => setRenaming(false)}>取消</button></div>}
       {workbenchNotice && <div className="live-workbench-notice" role="status">{workbenchNotice}</div>}
       {terminalCleanupId && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>终端 {terminalCleanupId} 的清理结果未确认；请人工核查。打开终端面板可刷新状态。本提示不改变审计记录。</span></div>}
 
@@ -702,89 +777,20 @@ export const LiveChatView: React.FC = () => {
             <strong>需要人工核对</strong>
             <span>{manualReconcileReason || '结果未知，请刷新并核对运行状态。系统不会自动重试，也不会猜测运行结果。'}</span>
           </div>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={phase !== 'ready'}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refreshConversation()} disabled={phase !== 'ready'}>
             刷新并核对状态
           </button>
         </div>
       )}
 
       <div className="live-chat-toolbar ui-chat-project-bar">
-        <label className="live-select-label">
-          <span>工作项目</span>
-          <select
-            className="select"
-            ref={projectSelectRef}
-            value={selectedProjectId ?? ''}
-            onChange={(event) => selectProject(event.target.value || null)}
-            aria-label="选择项目工作区"
-          >
-            <option value="">选择项目</option>
-            {projects.filter((project) => project.readable).map((project) => (
-              <option key={project.id} value={project.id}>{project.name} · {project.workspaceRef}</option>
-            ))}
-          </select>
-        </label>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void createThread()}
-          disabled={!canCreateThread} title={createThreadUnavailableReason}>
-          <PlusIcon />{threadCreationStatus === 'sending' ? '创建中…' : '新建会话'}
+        <SearchSelect label="工作项目" buttonRef={projectSelectRef} value={selectedProjectId ?? ''} onChange={(value) => selectProject(value || null)} placeholder="选择项目" options={projects.filter((project) => project.readable).map((project) => ({ value: project.id, label: project.name, detail: project.workspaceRef }))} />
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void beginConversation()}
+          disabled={createBusy || createOutcomeUnknown || phase !== 'ready'}>
+          <PlusIcon />{createBusy ? '创建中…' : '新建对话'}
         </button>
       </div>
-      <details className="ui-chat-setup" open={Boolean(selectedThread && !selectedThread.sessionId)}>
-        <summary>会话与运行设置<span>{selectedSession?.role_snapshot.role_name || history?.session.role_snapshot?.role_name || '选择会话与角色'}</span></summary>
-        <div className="ui-chat-setup-fields">
-        <label className="live-select-label">
-          <span>当前会话</span>
-          <select
-            className="select"
-            value={selectedThreadId ?? ''}
-            onChange={(event) => {
-              const id = event.target.value || null;
-              if (selectThread(id) && id) navigate(`/chat/${id}`);
-            }}
-            aria-label="选择会话"
-          >
-            <option value="">选择已有会话</option>
-            {threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title || thread.id}</option>)}
-          </select>
-        </label>
-        <label className="live-select-label live-session-select">
-          <span>绑定运行</span>
-          <select
-            className="select"
-            value={selectedSessionId ?? ''}
-            onChange={(event) => selectSession(event.target.value || null)}
-            aria-label="选择运行"
-          >
-            <option value="" disabled={Boolean(selectedThread?.sessionId)}>尚未绑定运行</option>
-            {sessionOptions.map((option) => (
-              <option key={option.id} value={option.id} disabled={option.boundThreadId === null}>
-                {history?.session.id === option.id ? `${history.session.role_snapshot?.role_name || option.id} · ${option.id.slice(0, 12)}` : sessionLabel(option)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="live-select-label">
-          <span>角色预设</span>
-          <select
-            className="select"
-            value={selectedRoleId}
-            onChange={(event) => setSelectedRoleId(event.target.value)}
-            aria-label="选择角色"
-            disabled={roles.length === 0}
-          >
-            <option value="">选择角色</option>
-            {roles.filter((role) => role.status !== 'inactive' && role.id).map((role) => (
-              <option key={role.id} value={role.id}>{role.name} · {role.id}</option>
-            ))}
-          </select>
-        </label>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !selectedRoleId || creatingSession} title={createSessionUnavailableReason || '请先选择角色'}>
-          <PlusIcon />
-          {creatingSession ? '正在准备…' : '使用此角色'}
-        </button>
-        </div>
-        {roles.length === 0 && <p className="ui-chat-setup-note">还没有可用角色。<button type="button" className="ui-text-action" onClick={() => navigate('/agents')}>配置模型与角色</button></p>}
-      </details>
+      {selectedThread && <details className="ui-chat-setup"><summary>对话详情</summary><dl className="ui-thread-detail-body"><div><dt>对话编号</dt><dd><code>{selectedThread.id}</code></dd></div><div><dt>工作区</dt><dd>{selectedThread.workspaceRef}</dd></div><div><dt>助手</dt><dd>{history?.session.role_snapshot?.role_name || '通用助手'}</dd></div></dl></details>}
 
       {projectionStale && (
         <div className="live-projection-note" role="status">
@@ -793,33 +799,21 @@ export const LiveChatView: React.FC = () => {
       )}
 
       {!selectedThread ? (
-        <div className="live-chat-empty-content">
-          <EmptyState
-            icon={MessageSquare}
-            titleAs="h4"
-            title={emptyPresentation.title}
-            description={emptyPresentation.description}
-            action={emptyPresentation.action === 'none' ? undefined : (
-              <button type="button" className="btn btn-primary" onClick={handleEmptyAction}
-                disabled={emptyPresentation.action === 'create-thread' && !canCreateThread}>
-                {emptyPresentation.label}
-              </button>
-            )}
-          />
+        <div className="live-chat-empty-content live-chat-welcome">
+          <MessageSquare size={28} aria-hidden="true" />
+          <h2>{conversationId ? deepLinkLookup === 'loading' ? '正在查找这段对话…' : deepLinkLookup === 'failed' ? '暂时无法确认这段对话' : deepLinkNotFound ? '找不到这段对话' : '正在打开对话…' : setup?.ready ? '想先做什么？' : '先连接一个模型'}</h2>
+          <p>{conversationId ? deepLinkLookup === 'failed' ? '连接或列表读取失败。请刷新并查找，当前没有创建新对话。' : deepLinkLookup === 'loading' ? '正在从服务端读取最新对话列表。' : deepLinkNotFound ? '最新列表中暂未找到该对话。你可以再刷新一次核对。' : '正在同步对话内容。' : setupError || (setup?.ready ? '写下你的问题或任务，通用助手会开始处理。' : '连接模型后就能直接开始对话。')}</p>
+          {conversationId && <button type="button" className="btn btn-secondary" onClick={retryDeepLink} disabled={deepLinkLookup === 'loading'}>{connectionStatus === 'connected' ? '刷新并查找' : '重新连接并查找'}</button>}
+          {createError && <div className="live-alert live-alert-error" role="alert">{createError}</div>}
+          {(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary" onClick={() => void clearCreateUncertainty()}>刷新并核对原请求</button>}
+          {recoveredConversationId && <button type="button" className="btn btn-primary" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}
+          {!conversationId && <><textarea className="textarea" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="描述你想完成的工作…" aria-label="对话草稿" rows={3} /><button type="button" className="btn btn-primary" onClick={() => void beginConversation(true)} disabled={createBusy || createOutcomeUnknown || phase !== 'ready' || setupLoading}>{setup?.ready ? (createBusy ? '正在准备…' : '开始对话') : '连接模型'}</button></>}
         </div>
       ) : (
         <>
 
 
-          {!selectedThread.sessionId && (
-            <div className="live-alert live-alert-warn" role="alert">
-              <AlertTriangle size={17} aria-hidden="true" />
-              <div className="live-alert-content">
-                <strong>选择角色以开始工作</strong>
-                <span>当前会话尚未绑定运行。请在“会话与运行设置”中选择角色并确认；绑定完成前不能发送消息。</span>
-              </div>
-            </div>
-          )}
+          {!selectedThread.sessionId && <div className="live-alert live-alert-warn" role="status">这段旧对话还未准备好助手。发送消息时会自动准备，草稿会保留。</div>}
 
           {visibleApprovals.length > 0 && (
             <section className="live-approvals-section" aria-labelledby="live-approvals-title">
@@ -851,10 +845,9 @@ export const LiveChatView: React.FC = () => {
               <div className="live-panel-heading">
                 <div>
                   <h2 id="live-messages-title">对话记录</h2>
-                  <p>任务内容与执行结果保存在当前会话中。</p>
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refreshHistory()} disabled={historyLoading || phase !== 'ready' || !selectedThread.sessionId} aria-label="刷新会话记录">
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void refreshHistory(); void refreshMetadata(); }} disabled={historyLoading || phase !== 'ready' || !selectedThread.sessionId} aria-label="刷新对话记录">
                     <RefreshCw size={13} aria-hidden="true" />刷新历史
                   </button>
                 {selectedThread.sessionId && (
@@ -884,9 +877,9 @@ export const LiveChatView: React.FC = () => {
                 <div className="live-composer-extras">
                   <button type="button" className="btn btn-ghost btn-sm live-reference-toggle" aria-expanded={pickerVisible} onClick={() => setReferencePickerOpen((current) => !current)} disabled={!workbenchConnected || !selectedThread.sessionId}>@ 添加引用</button>
                   {references.length > 0 && <ul className="live-reference-chips" aria-label="待发送引用">{references.map((item, index) => <li key={`${item.content_hash}:${index}`}><details><summary>{item.source} · {item.size_bytes.toLocaleString()} B · {item.content_hash.slice(0, 8)}{item.truncated ? ' · 摘要已截断' : ''}</summary><p>{item.summary}</p><small>SHA-256 {item.content_hash}</small></details><button type="button" aria-label={`移除引用 ${item.source}`} onClick={() => setReferences((current) => current.filter((_, position) => position !== index))}>×</button></li>)}</ul>}
-                  {pickerVisible && <div className="live-reference-picker"><label>引用类型<select className="select" value={referenceKind} onChange={(event) => { setReferenceKind(event.target.value as ReferenceKind); setReferenceTarget(''); }} disabled={!workbenchConnected || referenceBusy}><option value="file">文件</option><option value="thread">会话摘要</option><option value="artifact">可引用工件</option></select></label>
-                    {referenceKind === 'thread' ? <label>目标会话<select className="select" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} disabled={!workbenchConnected || referenceBusy}><option value="">选择会话</option>{threads.filter((item) => item.id !== selectedThread.id && item.workspaceRef === selectedThread.workspaceRef).map((item) => <option key={item.id} value={item.id}>{item.title || item.id}</option>)}</select></label>
-                      : referenceKind === 'artifact' ? <><label>当前会话可引用工件<select className="select" value={referenceTarget} onChange={(event) => setReferenceTarget(event.target.value)} disabled={!workbenchConnected || referenceBusy || artifactBusy}><option value="">选择可引用工件</option>{artifactChoices.map((item) => <option key={item.id} value={item.id}>{item.source} · {item.id.slice(0, 12)}</option>)}</select></label>
+                  {pickerVisible && <div className="live-reference-picker"><SearchSelect label="引用类型" value={referenceKind} onChange={(value) => { setReferenceKind(value as ReferenceKind); setReferenceTarget(''); }} disabled={!workbenchConnected || referenceBusy} options={[{ value: 'file', label: '文件' }, { value: 'thread', label: '对话摘要' }, { value: 'artifact', label: '可引用内容' }]} />
+                    {referenceKind === 'thread' ? <SearchSelect label="目标对话" value={referenceTarget} onChange={setReferenceTarget} placeholder="选择对话" disabled={!workbenchConnected || referenceBusy} options={threads.filter((item) => item.id !== selectedThread.id && item.workspaceRef === selectedThread.workspaceRef).map((item) => ({ value: item.id, label: metadata[item.id]?.title || item.title || '新对话', detail: item.id }))} />
+                      : referenceKind === 'artifact' ? <><SearchSelect label="可引用内容" value={referenceTarget} onChange={setReferenceTarget} placeholder="选择内容" disabled={!workbenchConnected || referenceBusy || artifactBusy} options={artifactChoices.map((item) => ({ value: item.id, label: item.source, detail: item.summary }))} />
                         {artifactBusy && <span role="status">正在读取可引用工件…</span>}{artifactError && <><span role="alert">{artifactError}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => { setArtifactLoaded(false); setArtifactChoices([]); setArtifactCursor(null); setArtifactReload((current) => current + 1); }} disabled={artifactBusy}>重试读取</button></>}{artifactCursor !== null && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void loadMoreArtifacts()} disabled={artifactBusy}>加载更多工件</button>}
                         {artifactChoices.filter((item) => item.id === referenceTarget).map((item) => <p className="live-artifact-choice" key={item.id}>{item.summary} · {item.media_type} · {item.size_bytes.toLocaleString()} B · SHA-256 {item.content_hash.slice(0, 16)}…</p>)}</>
                         : <><PathInput key={`${selectedThreadId}:${selectedThread?.workspaceRef}`} label="项目内文件" kind="file" relativeTo={selectedThread?.workspaceRef || ''} value={referenceTarget} onChange={setReferenceTarget} list="live-reference-files" placeholder="输入或选择文件路径" disabled={!workbenchConnected || referenceBusy || !selectedThread?.workspaceRef} /><datalist id="live-reference-files">{files.filter((item) => item.kind === 'file').map((item) => <option key={item.path} value={item.path} />)}</datalist></>}
@@ -897,7 +890,7 @@ export const LiveChatView: React.FC = () => {
                   {selectedExtensionCommand && <label className="live-extension-arguments">{selectedExtensionCommand.kind === 'skill' ? 'Skill 命令参数' : '扩展命令参数'}（JSON 对象）<textarea className="input" value={extensionArguments} onChange={(event) => setExtensionArguments(event.target.value)} rows={3} aria-describedby="extension-argument-hint" /><small id="extension-argument-hint">{selectedExtensionCommand.parameters ? `参数 Schema：${JSON.stringify(selectedExtensionCommand.parameters)}` : '无参数 Schema。'} 输入值仅用于执行当前命令。</small></label>}
                   {extensionApproval && <div className="live-alert" role="group" aria-label="动态命令审批"><span>命令等待人工审批：<code>{extensionApproval.approvalId}</code></span><button type="button" className="btn btn-primary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: true }).then(() => { setExtensionApproval(undefined); return pending.run(); }).catch((error: unknown) => { if (outcomeNeedsReconciliation(error)) setExtensionOutcomeUnknown(true); setWorkbenchError(`审批或原命令失败：${requestError(error)}`); }).finally(() => setCommandBusy(false)); }}>允许并提交</button><button type="button" className="btn btn-secondary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: false }).then(() => { setExtensionApproval(undefined); setWorkbenchNotice('已拒绝命令。'); }).catch((error: unknown) => setWorkbenchError(`拒绝失败：${requestError(error)}`)).finally(() => setCommandBusy(false)); }}>拒绝</button></div>}
                   {extensionOutcomeUnknown && <div className="live-alert live-alert-error" role="alert">命令仍在进行或结果未知，请先查看会话记录和审计；不要重复提交。<button type="button" className="btn btn-secondary btn-sm" onClick={() => setExtensionOutcomeUnknown(false)}>已人工核对</button></div>}
-                  {reviewCommand && <label className="live-reviewer-role">审查角色<select className="select" value={effectiveReviewerRoleId} onChange={(event) => setReviewerRoleId(event.target.value)} disabled={commandBusy || reviewerRoles.length === 0}><option value="" disabled>选择严格只读角色</option>{reviewerRoles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.id}</option>)}</select>{reviewerRoles.length === 0 && <span>需要仅允许 read_file、search_files、git_diff 的角色。</span>}</label>}
+                  {reviewCommand && <div className="live-reviewer-role"><SearchSelect label="审查角色" value={effectiveReviewerRoleId} onChange={setReviewerRoleId} placeholder="选择只读角色" disabled={commandBusy || reviewerRoles.length === 0} options={reviewerRoles.map((role) => ({ value: role.id!, label: role.name, detail: role.id }))} />{reviewerRoles.length === 0 && <span>需要先配置只读角色。</span>}</div>}
                 </div>
                 <textarea
                   value={draft}
@@ -908,20 +901,20 @@ export const LiveChatView: React.FC = () => {
                       void handleSubmit();
                     }
                   }}
-                  placeholder={manualReconcileRequired ? '需要人工核对，确认状态后才能发送' : selectedThread?.sessionId ? '描述你想完成的工作，Enter 发送，Shift+Enter 换行' : '请先选择角色并绑定运行'}
+                  placeholder={manualReconcileRequired ? '需要人工核对，确认状态后才能发送' : '描述你想完成的工作，Enter 发送，Shift+Enter 换行'}
                   aria-label="向会话发送消息"
-                  disabled={!selectedThread?.sessionId || !selectedThread.workspaceRef || busy || commandBusy || phase !== 'ready'}
+                  disabled={!selectedThread.workspaceRef || (selectedThread.sessionId ? busy : connectionStatus !== 'connected') || commandBusy || phase !== 'ready' || createBusy || createOutcomeUnknown}
                   rows={2}
                 />
-                <button type="button" className="btn btn-primary btn-icon" onClick={() => void handleSubmit()} disabled={!canSend || commandBusy} aria-label={draft.startsWith('/') ? '执行命令' : '发送消息'} title={draft.startsWith('/') ? '执行命令' : '发送消息'}>
+                <button type="button" className="btn btn-primary btn-icon" onClick={() => void handleSubmit()} disabled={!(selectedThread.sessionId ? canSend : Boolean(draft.trim()) && !createBusy && !createOutcomeUnknown && phase === 'ready' && connectionStatus === 'connected') || commandBusy} aria-label={draft.startsWith('/') ? '执行命令' : '发送消息'} title={draft.startsWith('/') ? '执行命令' : '发送消息'}>
                   {command.status === 'sending' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <SendHorizontal size={16} aria-hidden="true" />}
                 </button>
               </div>
-              <p className="live-composer-note">输入 / 查看命令，输入 @ 添加引用。文件变更后请重新添加引用；引用失效时消息会被拒绝，草稿仍会保留。</p>
+              <details className="live-composer-note"><summary>输入与引用说明</summary><p>输入 / 查看命令，输入 @ 添加引用。文件变更后请重新添加引用；引用失效时消息会被拒绝，草稿仍会保留。</p></details>
             {history && history.next_cursor !== null && <button type="button" className="btn btn-secondary" disabled={historyLoading} onClick={() => void loadMoreHistory()}>加载更多历史</button>}
               </section>
 
-            {selectedThread.sessionId && <LiveWorkbenchPanel threadId={selectedThread.id} connected={workbenchConnected} onChanged={refresh} />}
+            {selectedThread.sessionId && <details className="live-workbench-entry" onToggle={(event) => { if (event.currentTarget.open) setWorkbenchMounted(true); }}><summary>协作与高级工具</summary>{workbenchMounted && <LiveWorkbenchPanel threadId={selectedThread.id} connected={workbenchConnected} onChanged={async () => { await refresh(); }} />}</details>}
             <details className="live-inspector-column ui-chat-inspector" onToggle={(event) => { if (!event.currentTarget.open) setShowTerminal(false); }}><summary>运行详情与文件</summary><div className="ui-chat-inspector-body" aria-label="运行详情">
           <details className="live-thread-summary ui-thread-details"><summary>会话信息 <StatusBadge status={selectedThread.status} label={statusLabel(selectedThread.status)} size="sm" /></summary><div className="ui-thread-detail-body" aria-label="会话信息">
             <div className="live-thread-summary-main">

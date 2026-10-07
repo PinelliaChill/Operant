@@ -11,6 +11,7 @@ export function visibleThreadTree(
   threads: LiveThread[],
   query: string,
   collapsedIds: readonly string[],
+  titles: Readonly<Record<string, string>> = {},
 ): ThreadTreeRow[] {
   const byId = new Map(threads.map((thread) => [thread.id, thread]));
   const children = new Map<string, LiveThread[]>();
@@ -23,7 +24,7 @@ export function visibleThreadTree(
   const visible = new Set<string>();
   if (query) {
     for (const thread of threads) {
-      if (!thread.title.toLowerCase().includes(query) && !thread.id.toLowerCase().includes(query)) continue;
+      if (!(titles[thread.id] || thread.title).toLowerCase().includes(query) && !thread.id.toLowerCase().includes(query)) continue;
       let current: LiveThread | undefined = thread;
       const seen = new Set<string>();
       while (current && !seen.has(current.id)) {
