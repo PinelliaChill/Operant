@@ -1538,7 +1538,10 @@ def create_app(
             # These routes own durable bounded command journals. Do not persist
             # a second snapshot or truncate their typed projection results.
             return await call_next(request)
-        if request.url.path.startswith(("/v1/local-control/", "/v1/extensions")) or (
+        if (
+            request.url.path == "/v1/setup/local-control/sessions"
+            or request.url.path.startswith(("/v1/local-control/", "/v1/extensions"))
+        ) or (
             request.url.path.startswith("/v1/workbench/threads/")
             and request.url.path.endswith(("/extension-commands", "/skill-commands"))
         ):

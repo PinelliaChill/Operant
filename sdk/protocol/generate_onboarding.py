@@ -46,6 +46,8 @@ EXPECTED_OPERATION_IDS = {
     "addSkillSource",
     "removeSkillSource",
     "listLocalApplications",
+    "openConversationLocalControl",
+    "listConversationLocalControlSessions",
     "listTeamTemplates",
     "startTemplateTeam",
 }

@@ -36,7 +36,10 @@ test('B2-3 management UI exposes the required command families and unknown-resul
     'dataset_export', 'dataset_delete', 'cleanup_resume', 'skill_discover', 'skill_install', 'skill_disable', 'skill_enable', 'skill_uninstall',
     'artifact_pin', 'artifact_archive', 'artifact_schedule', 'artifact_trash', 'artifact_restore', 'artifact_audit',
   ]) assert.match(management, new RegExp(action));
-  assert.match(management, /未知写结果/);
+  assert.match(management, /if \(isUnknown\) addNotification\('warn'/);
+  assert.match(management, /未自动重放|不会自动重放/);
+  assert.match(management, /error\.outcomeUnknown && <p>/);
+  assert.match(management, /onClick=\{\(\) => void refresh\(\)\}/);
   assert.match(management, /role="alert"/);
   assert.match(management, /aria-live="polite"/);
   assert.match(management, /requestEpoch/);

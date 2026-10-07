@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { B25ClientLike, B2ModelClientLike } from './b25-state';
 import { useB25Governance } from './b25-state';
 import { B25Presentation } from './B25Presentation';
+import { SearchSelect } from '../../components/SearchSelect';
 
 export interface B25GovernanceProject {
   project_id: string;
@@ -67,40 +68,31 @@ export const B25GovernancePanel: React.FC<B25GovernancePanelProps> = ({
       <div className="b2-memory-card-header">
         <div>
           <h2 id="b25-governance-title">高级知识治理</h2>
-          <p>当前约定、历史事实、候选冲突和后台整理都以 B2-5 服务端 Projection 为准。</p>
         </div>
-        <span className="b2-memory-status">B2-5 / MP-4</span>
       </div>
 
       <div className="b2-memory-card b25-governance-scope">
-        <label htmlFor="b25-governance-project">项目范围</label>
-        <select
-          id="b25-governance-project"
-          className="select"
+        <SearchSelect
+          label="项目范围"
           value={projectId}
-          onChange={(event) => setProjectId(event.target.value)}
+          onChange={setProjectId}
           disabled={activeProjects.length === 0}
-        >
-          <option value="">{activeProjects.length ? '请选择项目' : '服务端尚未返回可用项目'}</option>
-          {activeProjects.map((project) => (
-            <option key={project.project_id} value={project.project_id}>
-              {project.name} · {project.project_id}
-            </option>
-          ))}
-        </select>
+          placeholder={activeProjects.length ? '请选择项目' : '暂无可用项目'}
+          options={activeProjects.map((project) => ({ value: project.project_id, label: project.name }))}
+        />
         {connectionStatus !== 'connected' && (
           <p className="b2-memory-warning" role="status">
-            Core 连接已断开；保留已读取的治理内容，只读操作可继续查看，写操作已禁用。恢复连接后请刷新。
+            连接已断开。已读取的内容仍可查看；恢复连接后请刷新。
           </p>
         )}
         {!client && (
           <p className="b2-memory-warning" role="alert">
-            B2-5 高级治理接口尚未接入；现有基础管理仍可继续使用。
+            高级知识整理暂不可用。
           </p>
         )}
         {client && !controller.supported && (
           <p className="b2-memory-warning" role="alert">
-            当前 Core 不支持 B2-5 高级治理接口；现有基础管理仍可继续使用，未提交任何 B2-5 命令。
+            当前服务版本不支持高级知识整理。请更新后重试。
           </p>
         )}
       </div>

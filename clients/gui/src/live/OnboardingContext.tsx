@@ -1,11 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { OnboardingClient, OnboardingError, type ConversationInitialization, type ConversationMetadata, type ConversationStart, type SetupState } from '../../../../sdk/typescript-client/onboarding';
+import { OnboardingClient, type ConversationInitialization, type ConversationMetadata, type ConversationStart, type SetupState } from '../../../../sdk/typescript-client/onboarding';
 import { useOperant } from '../context/ClientContext';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
 import { useLive } from './LiveContext';
 import { metadataRefreshKey } from './metadataRefreshKey';
 import type { PendingConversationSend } from './pendingConversationSend';
 import { confirmedCreateMetadata, createRequestStorageKey, mergeConversationMetadata, renameIsConfirmed } from './createRequestRecovery';
+import { requestErrorCopy } from '../lib/requestErrorCopy';
+import { isWriteOutcomeUnknown } from '../lib/writeOutcome';
 
 interface OnboardingContextValue {
   client: OnboardingClient;
@@ -34,8 +36,7 @@ interface OnboardingContextValue {
 }
 
 const Context = createContext<OnboardingContextValue | null>(null);
-const message = (error: unknown) => error instanceof Error ? error.message : '请求失败，请刷新后重试。';
-const uncertain = (error: unknown) => !(error instanceof OnboardingError) || error.code === 'transport_unavailable' || error.recovery === 'manual_reconcile' || error.recovery === 'retry_same_idempotency_key';
+const message = requestErrorCopy;
 
 export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { clientMode, connectionStatus } = useOperant();
@@ -148,7 +149,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     } catch (error: unknown) {
       if (!stored) {
         setCreateError('无法保存创建请求的核对标识，已停止新建。请检查本地存储权限后重试。');
-      } else if (uncertain(error)) {
+      } else if (isWriteOutcomeUnknown(error)) {
         setCreateOutcomeUnknown(true);
         setCreateError(`新建结果尚未确认：${message(error)}。请刷新并核对原请求，不要重复创建。`);
       } else {
@@ -170,7 +171,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return true;
     } catch (error: unknown) {
       setCreateError(`${message(error)} 请刷新标题后核对。`);
-      if (uncertain(error)) { setRenameOutcomeUnknown(true); setRenamePendingTarget({ threadId, title }); }
+      if (isWriteOutcomeUnknown(error)) { setRenameOutcomeUnknown(true); setRenamePendingTarget({ threadId, title }); }
       return false;
     } finally { renameInFlight.current = false; }
   }, [client, metadata, renameOutcomeUnknown]);

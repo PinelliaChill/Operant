@@ -82,6 +82,14 @@ def test_onboarding_client_uses_formal_routes_and_safe_validation(tmp_path: Path
         assert marker not in str(error.value.detail)
         assert requests[0].url.endswith("/v1/protocol/onboarding")
         assert requests[-1].headers["Idempotency-Key"] == "validation-key"
+        assert client.list_conversation_local_control_sessions() == {"items": []}
+        with pytest.raises(OnboardingError) as unknown:
+            client.list_conversation_local_control_sessions(request_id="unknown-control-request")
+        assert unknown.value.code == "command_outcome_unknown"
+        assert unknown.value.recovery == "manual_reconcile"
+        assert requests[-1].url.endswith(
+            "/v1/setup/local-control/sessions?request_id=unknown-control-request"
+        )
         digest = hashlib.sha256(generate_onboarding.SCHEMA_PATH.read_bytes().rstrip()).hexdigest()
         assert digest == ONBOARDING_SCHEMA_DIGEST
 
@@ -98,6 +106,7 @@ def test_setup_respects_configured_local_authorizer(tmp_path: Path) -> None:
             "/v1/setup/connections",
             "/v1/setup/skill-sources",
             "/v1/setup/local-apps",
+            "/v1/setup/local-control/sessions",
             "/v1/setup/team-templates",
         ):
             assert client.get(path).status_code == 403

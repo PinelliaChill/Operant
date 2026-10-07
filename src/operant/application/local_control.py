@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from operant.application.remote_execution import (
@@ -25,6 +25,7 @@ from operant.domain.remote_execution import (
     RemoteCapability,
     RemoteTargetLease,
     RemoteTargetRegistration,
+    RemoteTargetStatus,
 )
 from operant.persistence.sqlite import ConflictError
 from operant.plugins.capability_registry import CapabilityPluginRecord, CapabilityPluginRegistry
@@ -39,11 +40,95 @@ from operant.remote.local_computer import ComputerTargetPolicy, LocalComputerCon
 from operant.remote.local_worker import BROWSER_PLUGIN, COMPUTER_PLUGIN
 from operant.remote.operator import CapabilityLeaseBinding
 from operant.remote.sealed_input import seal_browser_input
+from operant.remote.tool_extensions import _BROWSER_NAMES, _COMPUTER_NAMES
 from operant.remote.transient_artifacts import TransientCapabilityArtifacts
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def conversation_local_control_tools(kind: str) -> tuple[str, ...]:
+    """Tools granted only to a new conversation with a verified local session."""
+    if kind == "browser":
+        return _BROWSER_NAMES
+    if kind == "computer":
+        return tuple(name for name in _COMPUTER_NAMES if "clipboard" not in name)
+    raise ValueError("unknown local control capability kind")
+
+
+def local_control_tool_names() -> frozenset[str]:
+    return frozenset((*_BROWSER_NAMES, *_COMPUTER_NAMES))
+
+
+_SNAPSHOT_BINDING_FIELDS = (
+    "session_id",
+    "plugin_id",
+    "target_id",
+    "scope_digest",
+    "source_digest",
+    "generation",
+    "plugin_version",
+    "target_identity",
+)
+
+
+@dataclass(frozen=True)
+class LocalControlSnapshotBinding:
+    """Non-secret identity frozen into one new conversation snapshot."""
+
+    kind: Literal["browser", "computer"]
+    session_id: str
+    plugin_id: str
+    target_id: str
+    scope_digest: str
+    source_digest: str
+    generation: str
+    plugin_version: str
+    target_identity: str
+
+    def config_sources(self) -> dict[str, str]:
+        prefix = f"local_control.{self.kind}."
+        return {f"{prefix}{field}": str(getattr(self, field)) for field in _SNAPSHOT_BINDING_FIELDS}
+
+
+def snapshot_control_bindings(
+    config_sources: Mapping[str, str],
+) -> tuple[LocalControlSnapshotBinding, ...]:
+    """Parse only complete Core-written markers; never infer a global binding."""
+    marked = {
+        key: value for key, value in config_sources.items() if key.startswith("local_control.")
+    }
+    if not marked:
+        return ()
+    bindings: list[LocalControlSnapshotBinding] = []
+    expected_keys: set[str] = set()
+    for kind in ("browser", "computer"):
+        prefix = f"local_control.{kind}."
+        if not any(key.startswith(prefix) for key in marked):
+            continue
+        keys = {f"{prefix}{field}" for field in _SNAPSHOT_BINDING_FIELDS}
+        if not keys.issubset(marked):
+            raise PermissionError("local control snapshot binding is incomplete")
+        try:
+            binding = LocalControlSnapshotBinding(
+                kind=kind,
+                session_id=marked[f"{prefix}session_id"],
+                plugin_id=marked[f"{prefix}plugin_id"],
+                target_id=marked[f"{prefix}target_id"],
+                scope_digest=marked[f"{prefix}scope_digest"],
+                source_digest=marked[f"{prefix}source_digest"],
+                generation=marked[f"{prefix}generation"],
+                plugin_version=marked[f"{prefix}plugin_version"],
+                target_identity=marked[f"{prefix}target_identity"],
+            )
+        except (TypeError, ValueError) as exc:
+            raise PermissionError("local control snapshot binding is invalid") from exc
+        bindings.append(binding)
+        expected_keys.update(keys)
+    if set(marked) != expected_keys:
+        raise PermissionError("local control snapshot has an unknown binding marker")
+    return tuple(bindings)
 
 
 @dataclass
@@ -55,6 +140,8 @@ class LocalControlSession:
     lease: RemoteTargetLease
     connector: RemoteTargetConnector
     computer_bundle_id: str | None = None
+    authorized_targets: tuple[str, ...] = ()
+    conversation_only: bool = False
     state: str = "active"
     last_error: str | None = None
     last_job_id: str | None = None
@@ -188,7 +275,12 @@ class LocalControlManager:
         return [dict(row) for row in rows]
 
     def open(
-        self, plugin_id: str, key: str, computer_bundle_id: str | None = None
+        self,
+        plugin_id: str,
+        key: str,
+        computer_bundle_id: str | None = None,
+        *,
+        conversation_only: bool = False,
     ) -> LocalControlSession:
         record = self.registry.get(plugin_id, require_enabled=True)
         if plugin_id == COMPUTER_PLUGIN.plugin_id:
@@ -202,7 +294,11 @@ class LocalControlManager:
         session_id = "local-control-" + hashlib.sha256(key.encode()).hexdigest()[:24]
         if session_id in self.sessions:
             existing = self.sessions[session_id]
-            if existing.plugin_id != plugin_id or existing.computer_bundle_id != computer_bundle_id:
+            if (
+                existing.plugin_id != plugin_id
+                or existing.computer_bundle_id != computer_bundle_id
+                or existing.conversation_only != conversation_only
+            ):
                 raise ValueError("local session idempotency key changed plugin")
             return existing
         if any(s.plugin_id == plugin_id and s.state != "closed" for s in self.sessions.values()):
@@ -251,6 +347,8 @@ class LocalControlManager:
             raise
         session = LocalControlSession(session_id, plugin_id, target_id, identity, lease, connector)
         session.computer_bundle_id = computer_bundle_id
+        session.authorized_targets = record.allowed_targets
+        session.conversation_only = conversation_only
         self.sessions[session_id] = session
         return session
 
@@ -380,10 +478,10 @@ class LocalControlManager:
             return session
 
     def bindings(self) -> dict[str, CapabilityLeaseBinding]:
-        bindings = {}
+        bindings: dict[str, CapabilityLeaseBinding] = {}
         for session in self.sessions.values():
             with session.lock:
-                if session.state != "active":
+                if session.state != "active" or session.conversation_only:
                     continue
                 try:
                     self._authorized_record(session)
@@ -394,6 +492,69 @@ class LocalControlManager:
                     lease.target_id, lease.lease_id, lease.token, lease.fencing
                 )
         return bindings
+
+    def verified_snapshot_binding(
+        self,
+        session_id: str,
+        *,
+        expected: LocalControlSnapshotBinding | None = None,
+    ) -> tuple[LocalControlSnapshotBinding, CapabilityLeaseBinding]:
+        """Validate one exact local session and its durable fenced lease."""
+        try:
+            session = self.get(session_id, active=True)
+        except (KeyError, ValueError) as exc:
+            raise PermissionError("selected local control session is unavailable") from exc
+        with session.lock:
+            self.get(session_id, active=True)
+            if not session.conversation_only:
+                raise PermissionError("choose a conversation-only local control session")
+            record = self._authorized_record(session)
+            lease = session.lease
+            try:
+                with self.repository.store._connect() as connection:
+                    self.repository._require_live_lease(
+                        connection,
+                        target_id=session.target_id,
+                        lease_id=lease.lease_id,
+                        token=lease.token,
+                        fencing=lease.fencing,
+                        now=_now(),
+                    )
+                target = self.repository.get_target(session.target_id)
+            except (KeyError, ConflictError) as exc:
+                raise PermissionError("selected local control lease is no longer active") from exc
+            plugin = (
+                BROWSER_PLUGIN if session.plugin_id == BROWSER_PLUGIN.plugin_id else COMPUTER_PLUGIN
+            )
+            if (
+                target.status is not RemoteTargetStatus.ONLINE
+                or target.endpoint_ref != session.plugin_id
+                or target.identity_public_key != session.identity
+                or target.policy_ref != f"local-control:{record.source_digest}"
+                or target.capability_manifest.version != plugin.protocol_version
+                or set(target.capability_manifest.capabilities) != set(plugin.capabilities)
+                or set(target.capability_manifest.supported_operations) != set(plugin.operations)
+                or lease.target_id != session.target_id
+            ):
+                raise PermissionError("selected local control target changed")
+            binding = LocalControlSnapshotBinding(
+                kind=self.kind(session),
+                session_id=session.session_id,
+                plugin_id=session.plugin_id,
+                target_id=session.target_id,
+                scope_digest=canonical_action_hash({"allowed_targets": record.allowed_targets}),
+                source_digest=record.source_digest,
+                generation=record.generation,
+                plugin_version=record.version,
+                target_identity=session.identity,
+            )
+            if expected is not None and binding != expected:
+                raise PermissionError(
+                    "local control authorization changed; open a new conversation"
+                )
+            return binding, CapabilityLeaseBinding(
+                lease.target_id, lease.lease_id, lease.token, lease.fencing
+            )
 
     def observe(self, session_id: str, key: str) -> dict[str, Any]:
         session = self.get(session_id, active=True)
@@ -420,7 +581,7 @@ class LocalControlManager:
             return {"job_id": job.job_id}
 
     @staticmethod
-    def kind(session: LocalControlSession) -> str:
+    def kind(session: LocalControlSession) -> Literal["browser", "computer"]:
         return "browser" if session.plugin_id == BROWSER_PLUGIN.plugin_id else "computer"
 
     @staticmethod

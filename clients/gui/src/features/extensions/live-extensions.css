@@ -215,3 +215,9 @@
 .local-advanced > summary { cursor: pointer; color: var(--text-secondary); font-weight: 600; }
 .local-advanced[open] > summary { margin-bottom: 12px; }
 .local-advanced > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.local-conversation-start { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-surface); }
+.local-conversation-start:target { border-color: var(--border-focus); scroll-margin-top: 24px; }
+.local-conversation-start > p { font-size: 13px; }
+.local-conversation-start ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; overflow-wrap: anywhere; font-size: 13px; color: var(--text-secondary); }
+.local-conversation-start .btn { justify-self: start; }
+@media (max-width: 600px) { .local-conversation-start .btn { justify-self: stretch; } }

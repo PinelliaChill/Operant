@@ -7,22 +7,33 @@ import base64
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
 from threading import RLock
 from typing import Any, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from operant.application.local_control import LocalControlManager
+from operant.application.local_control import (
+    LocalControlManager,
+    LocalControlSnapshotBinding,
+    conversation_local_control_tools,
+    local_control_tool_names,
+    snapshot_control_bindings,
+)
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.service import ApplicationService
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
+from operant.domain.models import RoleSnapshot, ToolPolicy
 from operant.domain.security import Capability, SecurityAuditEvent
 from operant.plugins.capability_registry import CapabilityPluginRegistry
 from operant.plugins.local_extensions import list_operations, run_operation
 from operant.protocol import canonical_action_hash
 from operant.remote.local_worker import COMPUTER_PLUGIN
+from operant.remote.operator import CapabilityLeaseBinding
 from operant.remote.tool_extensions import local_capability_tool_extensions
+from operant.tools.extensions import ToolExtension
 
 
 class LocalControlKeyBody(BaseModel):
@@ -77,22 +88,91 @@ def install_local_control_routes(
     app.router.on_shutdown.insert(0, manager.close)
     previous_factory = service.tool_extension_factory
 
-    def tool_factory(path: Any, policy: Any) -> Any:
-        extensions = previous_factory(path, policy) if previous_factory is not None else {}
-        # The factory takes only Core-owned memory bindings. Tokens never enter
-        # GUI state, package environments, SQLite, or model arguments.
-        if getattr(app.state, "local_control_origin", None):
+    class SnapshotAwareToolFactory:
+        def __call__(self, path: Path, policy: ToolPolicy) -> dict[str, ToolExtension]:
+            extensions = previous_factory(path, policy) if previous_factory is not None else {}
+            # Legacy explicit ext roles keep their existing process-wide binding.
+            if getattr(app.state, "local_control_origin", None):
+                extensions.update(
+                    local_capability_tool_extensions(
+                        path,
+                        policy,
+                        bindings=manager.bindings(),
+                        core_origin=app.state.local_control_origin,
+                    )
+                )
+            return extensions
+
+        def for_snapshot(self, path: Path, snapshot: RoleSnapshot) -> dict[str, ToolExtension]:
+            selected = snapshot_control_bindings(snapshot.config_sources)
+            if not selected:
+                return self(path, snapshot.tool_policy)
+            origin = getattr(app.state, "local_control_origin", None)
+            if not isinstance(origin, str) or not origin:
+                raise PermissionError("local control listener is unavailable")
+            bindings: dict[str, CapabilityLeaseBinding] = {
+                item.kind: manager.verified_snapshot_binding(item.session_id, expected=item)[1]
+                for item in selected
+            }
+            local_names = local_control_tool_names()
+            ordinary_policy = snapshot.tool_policy.model_copy(
+                update={
+                    "allowed_tools": tuple(
+                        name
+                        for name in snapshot.tool_policy.allowed_tools
+                        if name not in local_names
+                    )
+                }
+            )
+            ordinary = (
+                previous_factory(path, ordinary_policy) if previous_factory is not None else {}
+            )
+            extensions = {name: item for name, item in ordinary.items() if name not in local_names}
             extensions.update(
                 local_capability_tool_extensions(
                     path,
-                    policy,
-                    bindings=manager.bindings(),
-                    core_origin=app.state.local_control_origin,
+                    snapshot.tool_policy,
+                    bindings=bindings,
+                    core_origin=origin,
                 )
             )
-        return extensions
+            required = {
+                name for item in selected for name in conversation_local_control_tools(item.kind)
+            }
+            if not required.issubset(extensions):
+                raise PermissionError("bound local control tools are unavailable")
+            # A Run keeps WorkspaceTools alive across human takeover. Resolve
+            # its exact session again before each invocation so a resumed
+            # session uses the new fenced lease; never substitute a global one.
+            for marker in selected:
+                for name in local_names.intersection(extensions):
+                    if not name.startswith(f"ext_{marker.kind}_"):
+                        continue
+                    extension = extensions[name]
 
-    service.tool_extension_factory = tool_factory
+                    async def execute_bound(
+                        arguments: dict[str, Any],
+                        *,
+                        bound_marker: LocalControlSnapshotBinding = marker,
+                        tool_name: str = name,
+                    ) -> dict[str, Any]:
+                        current = manager.verified_snapshot_binding(
+                            bound_marker.session_id, expected=bound_marker
+                        )[1]
+                        refreshed = local_capability_tool_extensions(
+                            path,
+                            snapshot.tool_policy,
+                            bindings={bound_marker.kind: current},
+                            core_origin=origin,
+                        ).get(tool_name)
+                        if refreshed is None:
+                            raise PermissionError("bound local control tool is unavailable")
+                        return await refreshed.execute(arguments)
+
+                    extensions[name] = replace(extension, execute=execute_bound)
+            return extensions
+
+    service.tool_extension_factory = SnapshotAwareToolFactory()
 
     def require_local(request: Request) -> None:
         if not local_authorizer(request):
@@ -178,7 +258,11 @@ def install_local_control_routes(
                     return cast(dict[str, Any], json.loads(prior.response_json))
                 raise HTTPException(
                     status_code=409,
-                    detail={"code": "command_outcome_unknown", "command_execution_id": prior.id},
+                    detail={
+                        "code": "command_outcome_unknown",
+                        "message": "本机操作结果尚未确认。请先核对记录，暂时不要重试。",
+                        "command_execution_id": prior.id,
+                    },
                 )
             guard(operation, target, arguments, key, capabilities)
             command, created = service.store.reserve_command_execution(
@@ -201,6 +285,11 @@ def install_local_control_routes(
                 )
                 raise
             return result
+
+    # Onboarding is installed earlier; resolve these trusted closures at request time.
+    app.state.local_control_prepare_request = require_local
+    app.state.local_control_mutation = mutation
+    app.state.local_control_call = call
 
     @app.get("/v1/local-control/plugins", operation_id="listLocalCapabilityPlugins")
     async def list_plugins(request: Request) -> dict[str, Any]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,11 @@ from typing import Any
 from operant.application.configuration import ConfigPatch, ConfigService
 from operant.application.default_skill_pack import install_default_skill_pack
 from operant.application.defaults import default_role_presets
+from operant.application.local_control import (
+    LocalControlManager,
+    LocalControlSnapshotBinding,
+    snapshot_control_bindings,
+)
 from operant.application.service import ApplicationService
 from operant.contracts.b2_3 import ManagementCommand
 from operant.contracts.onboarding import (
@@ -42,10 +48,32 @@ _UNTITLED = "新对话"
 
 
 class OnboardingService:
-    def __init__(self, service: ApplicationService, repo: Any) -> None:
+    def __init__(
+        self,
+        service: ApplicationService,
+        repo: Any,
+        *,
+        local_control_manager: Callable[[], LocalControlManager | None] | None = None,
+    ) -> None:
         self.service = service
         self.repo = repo
+        self.local_control_manager = local_control_manager
         self._setup_lock = asyncio.Lock()
+
+    def _control_bindings(
+        self, session_ids: tuple[str, ...]
+    ) -> tuple[LocalControlSnapshotBinding, ...]:
+        if not session_ids:
+            return ()
+        manager = self.local_control_manager() if self.local_control_manager is not None else None
+        if manager is None:
+            raise PermissionError("local control is unavailable")
+        bindings = tuple(
+            manager.verified_snapshot_binding(session_id)[0] for session_id in session_ids
+        )
+        if len({binding.kind for binding in bindings}) != len(bindings):
+            raise ValueError("choose at most one browser and one computer control session")
+        return bindings
 
     def state(self) -> SetupState:
         profiles = [profile for profile in self.service.list_model_profiles() if profile.enabled]
@@ -198,7 +226,7 @@ class OnboardingService:
             raise ValueError("selected assistant or model is inactive")
         effort = self._run_effort(role, profile, workspace.id, workspace.workspace_ref)
         fingerprint = canonical_action_hash(
-            {"operation": "initialize_conversation", "body": body.model_dump(mode="json")}
+            {"operation": "initialize_conversation", "body": body.command_payload()}
         )
         prior = self.repo.get_command(idempotency_key, fingerprint)
         if prior is not None:
@@ -231,7 +259,16 @@ class OnboardingService:
                     or session.role_snapshot.model_profile_id != profile_id
                 ):
                     raise ConflictError("conversation already uses another assistant or model")
+                if body.local_control_session_ids:
+                    existing = snapshot_control_bindings(session.role_snapshot.config_sources)
+                    if tuple(sorted(binding.session_id for binding in existing)) != (
+                        body.local_control_session_ids
+                    ):
+                        raise ConflictError(
+                            "conversation already uses another local control session"
+                        )
             else:
+                bindings = self._control_bindings(body.local_control_session_ids)
                 await self._ensure_project(workspace.id, workspace.workspace_ref)
                 session = self.service.create_session(
                     role_id,
@@ -240,8 +277,10 @@ class OnboardingService:
                     thread_id=thread.id,
                     workspace_ref=workspace.workspace_ref,
                     _onboarding_command=(idempotency_key, fingerprint),
+                    _local_control_bindings=bindings,
                 )
         else:
+            bindings = self._control_bindings(body.local_control_session_ids)
             await self._ensure_project(workspace.id, workspace.workspace_ref)
             thread = ConversationThread(workspace_ref=workspace.workspace_ref)
             session = self.service.create_session(
@@ -252,6 +291,7 @@ class OnboardingService:
                 _new_thread=thread,
                 _onboarding_command=(idempotency_key, fingerprint),
                 _onboarding_title=body.title,
+                _local_control_bindings=bindings,
             )
             thread = self.service.store.get_thread_by_legacy_ref(
                 ThreadLegacyRef(source_type=LegacySourceType.SESSION, source_id=session.id)

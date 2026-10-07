@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
@@ -117,6 +117,22 @@ class ConversationStart(OnboardingModel):
     role_id: str | None = Field(default=None, max_length=200)
     model_profile_id: str | None = Field(default=None, max_length=200)
     title: str | None = Field(default=None, min_length=1, max_length=100)
+    local_control_session_ids: tuple[
+        Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_-]+$")], ...
+    ] = Field(default=(), max_length=2)
+
+    @field_validator("local_control_session_ids")
+    @classmethod
+    def unique_control_sessions(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("本机控制会话不能重复")
+        return tuple(sorted(value))
+
+    def command_payload(self) -> dict[str, Any]:
+        payload = self.model_dump(mode="json")
+        if not self.local_control_session_ids:
+            payload.pop("local_control_session_ids")
+        return payload
 
     @field_validator("title")
     @classmethod
@@ -183,6 +199,25 @@ class LocalApplication(OnboardingModel):
 
 class LocalApplicationList(OnboardingModel):
     items: list[LocalApplication]
+
+
+class ConversationLocalControlOpen(OnboardingModel):
+    plugin_id: Literal["operant.chrome.browser", "operant.macos.computer"]
+    computer_bundle_id: str | None = Field(default=None, max_length=253)
+
+
+class ConversationLocalControlSession(OnboardingModel):
+    session_id: str
+    plugin_id: Literal["operant.chrome.browser", "operant.macos.computer"]
+    target_id: str
+    computer_bundle_id: str | None = None
+    allowed_targets: tuple[str, ...] = Field(max_length=100)
+    state: Literal["active", "human_control", "closed", "failed"]
+    last_error: str | None = None
+
+
+class ConversationLocalControlSessionList(OnboardingModel):
+    items: list[ConversationLocalControlSession]
 
 
 class CollaborationTemplateView(OnboardingModel):

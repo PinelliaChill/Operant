@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from operant.application.local_control import LocalControlSnapshotBinding
     from operant.memory_plugins.manager import MemoryManager
 
 import asyncio
@@ -768,6 +769,7 @@ class ApplicationService:
         _new_thread: ConversationThread | None = None,
         _onboarding_command: tuple[str, str] | None = None,
         _onboarding_title: str | None = None,
+        _local_control_bindings: tuple[LocalControlSnapshotBinding, ...] = (),
     ) -> Session:
         if (role_id is None) == (new_role is None):
             raise ValueError("provide exactly one of role_id or new_role")
@@ -810,6 +812,23 @@ class ApplicationService:
             workspace_ref=configuration_workspace,
             run_overrides=ConfigPatch.model_validate(run_patch),
         )
+        effective_values = dict(config.values)
+        local_sources: dict[str, str] = {}
+        if _local_control_bindings:
+            from operant.application.local_control import conversation_local_control_tools
+
+            policy = ToolPolicy.model_validate(effective_values["tool_policy"])
+            allowed = list(policy.allowed_tools)
+            seen_kinds: set[str] = set()
+            for binding in _local_control_bindings:
+                if binding.kind in seen_kinds:
+                    raise ValueError("a local control kind cannot be bound twice")
+                seen_kinds.add(binding.kind)
+                allowed.extend(conversation_local_control_tools(binding.kind))
+                local_sources.update(binding.config_sources())
+            effective_values["tool_policy"] = policy.model_copy(
+                update={"allowed_tools": tuple(dict.fromkeys(allowed))}
+            ).model_dump(mode="json")
         normalized_workspace_ref = workspace_ref
         return self.factory.create_session(
             role_id,
@@ -821,11 +840,12 @@ class ApplicationService:
             _onboarding_command=_onboarding_command,
             _onboarding_title=_onboarding_title,
             effective_config={
-                **config.values,
+                **effective_values,
                 "config_sources": {
                     key: f"{source.scope_type}:{source.scope_id}"
                     for key, source in config.sources.items()
-                },
+                }
+                | local_sources,
                 "config_workspace_ref": normalized_workspace_ref,
                 "config_project_id": project_id,
             },
@@ -3516,16 +3536,26 @@ class ApplicationService:
                 def reference_reader(artifact_id: str) -> dict[str, Any]:
                     return read_context_reference(self, thread_id, tuple(references), artifact_id)
 
+            snapshot = session.role_snapshot
+            factory = self.tool_extension_factory
+            if any(key.startswith("local_control.") for key in snapshot.config_sources):
+                from operant.application.local_control import snapshot_control_bindings
+
+                snapshot_control_bindings(snapshot.config_sources)
+                resolver = getattr(factory, "for_snapshot", None)
+                if not callable(resolver):
+                    raise PermissionError("bound local control is unavailable")
+                extensions = resolver(self.store.path, snapshot)
+            else:
+                extensions = (
+                    factory(self.store.path, snapshot.tool_policy) if factory is not None else None
+                )
             tools = WorkspaceTools(
                 workspace,
-                policy=session.role_snapshot.tool_policy,
+                policy=snapshot.tool_policy,
                 collaboration=collaboration,
                 reference_reader=reference_reader,
-                extensions=(
-                    self.tool_extension_factory(self.store.path, session.role_snapshot.tool_policy)
-                    if self.tool_extension_factory is not None
-                    else None
-                ),
+                extensions=extensions,
             )
             normalized_workspace = str(Path(workspace).resolve())
             manager = self.memory_manager
