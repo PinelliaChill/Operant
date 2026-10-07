@@ -22,3 +22,8 @@ export function mergeConversationMetadata(
 export function renameIsConfirmed(metadata: ConversationMetadata, requestedTitle: string): boolean {
   return metadata.title === requestedTitle;
 }
+
+/** A read-only title warning must never hide an unresolved write result. */
+export function visibleOnboardingError(createError: string, metadataWarning: string): string {
+  return createError || metadataWarning;
+}

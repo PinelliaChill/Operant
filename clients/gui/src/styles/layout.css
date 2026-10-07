@@ -4389,8 +4389,8 @@ body.no-scroll {
 }
 
 .live-sidebar-error strong {
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-family: inherit;
+  font-size: 12px;
 }
 
 .live-sidebar-empty {
@@ -4582,8 +4582,8 @@ body.no-scroll {
 }
 
 .live-alert-content strong {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: inherit;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 

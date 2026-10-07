@@ -208,7 +208,7 @@ function manualReconcileError(value: unknown, fallback: string): LiveError {
 function threadSelectionLockedError(): LiveError {
   return {
     code: 'thread_switch_blocked',
-    message: '当前 Thread 仍有运行、Session 或 Approval 命令等待 Core 终态/Projection；请等待结果后再切换。',
+    message: '当前对话仍有操作正在执行或等待确认，请等待结果后再切换。',
     retryable: false,
     recovery: 'wait_for_projection',
   };
@@ -669,7 +669,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         idempotencyKey: pendingSession.idempotencyKey,
         error: {
           code: 'session_thread_projection_pending',
-          message: `Core 已创建 Session ${pendingSession.sessionId}，但 ThreadProjection.legacy_refs 尚未返回对应 session ref；不会重复创建。`,
+          message: '已为当前对话准备助手，正在同步；请勿重复创建。',
           retryable: false,
           recovery: 'none',
         },
@@ -784,7 +784,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // connected. The raw error/detail remains on the mapped event.
       const detail = manualReconcileError(
         event.error,
-        'SSE 返回 manual_reconcile_required / outcome_unknown，必须人工核对。',
+        '这次操作的结果尚未确认，请刷新并核对；不会自动重试。',
       );
       markManualReconcile(detail.message);
       const accepted = cursorTrackerRef.current.accept(frame);
@@ -864,7 +864,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (streamResult.receipt.recovery === 'manual_reconcile' || containsManualReconcile(streamResult.receipt)) {
         const detail = manualReconcileError(
           streamResult.receipt,
-          'Core Receipt 要求 manual_reconcile，必须人工核对。',
+          '这次操作的结果尚未确认，请刷新并核对；不会自动重试。',
         );
         markManualReconcile(detail.message);
         setLastError(detail);
@@ -1082,7 +1082,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (input.threadId !== selectedThread.id) {
       const detail: LiveError = {
         code: 'thread_selection_changed',
-        message: '当前选中的 Thread 已变化，请重新选择后再创建 Session。',
+        message: '当前对话已切换，请重新选择后再继续。',
         retryable: false,
         recovery: 'refresh_and_retry',
       };
@@ -1121,7 +1121,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         idempotencyKey,
         error: {
           code: 'session_thread_projection_pending',
-          message: `Core 已创建 Session ${session.id}，等待 ThreadProjection.legacy_refs 返回对应 session ref。`,
+          message: '已为当前对话准备助手，正在同步；请勿重复创建。',
           retryable: false,
           recovery: 'none',
         },
@@ -1205,7 +1205,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!sessionId) {
       const detail: LiveError = {
         code: 'session_required',
-        message: '取消 Session 必须先选择一个已绑定的 Core Session。',
+        message: '请先打开已连接助手的对话，再取消运行。',
         retryable: false,
         recovery: 'none',
       };
@@ -1226,7 +1226,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         cancelSessionIdRef.current = null;
         const detail: LiveError = {
           code: 'session_cancel_rejected',
-          message: 'Core 未接受 Session 取消请求，运行状态仍由服务端 Projection 决定。',
+          message: '取消请求未被接受。运行状态未改变，请刷新后核对。',
           retryable: false,
           recovery: 'none',
           detail: result,
@@ -1241,7 +1241,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         idempotencyKey,
         error: {
           code: 'session_cancel_projection_pending',
-          message: 'Core 已接受取消请求，等待 Thread/Task Projection 返回终态；accepted 不等于已完成。',
+          message: '取消请求已接受，正在等待运行结束；请刷新核对，暂不视为已取消。',
           retryable: false,
           recovery: 'none',
         },
@@ -1371,17 +1371,17 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const createSessionUnavailableReason = manualReconcileRequired
     ? '需要人工核对，不能创建新命令。'
     : command.status === 'awaiting_projection'
-      ? command.error?.message || '等待 Core ThreadProjection 校正，不能重复创建 Session。'
+      ? command.error?.message || '正在同步当前对话，请勿重复创建。'
     : !selectedThread
-      ? '请先选择一个 Core Thread；Session 必须绑定到明确的 Thread。'
+      ? '请先选择要使用的对话。'
     : selectedThread.status !== 'active'
-      ? '当前 Thread 不是 active，Core 不允许绑定新的 Session。'
+      ? '当前对话暂不能连接新助手，请刷新状态。'
     : selectedThread.sessionId
-      ? '当前 Thread 已绑定 Session，不能再创建第二个 Session。'
+      ? '当前对话已连接助手，无需再次创建。'
     : connectionStatus !== 'connected' || phase !== 'ready'
-      ? 'Core 尚未连接或协议尚未协商。'
+      ? '尚未连接，请等待连接恢复。'
       : stream.status !== 'connected'
-        ? 'SSE 正在回放或发生错误。'
+        ? '正在同步连接，或连接暂时不可用。'
         : undefined;
 
   const value = useMemo<LiveContextValue>(() => ({
@@ -1501,7 +1501,7 @@ export function useLive(): LiveContextValue {
 }
 
 export function liveThreadTitle(thread: LiveThread | undefined): string {
-  return thread?.title || thread?.id || '未命名 Thread';
+  return thread?.title || thread?.id || '未命名对话';
 }
 
 export function sessionRoleId(session: LiveSession | undefined): string | undefined {

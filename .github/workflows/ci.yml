@@ -35,7 +35,7 @@ jobs:
     # Always emit the existing required check names, including for documentation.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -73,7 +73,7 @@ jobs:
           uv run --no-sync ruff check .
           uv run --no-sync mypy src
           uv lock --check --offline --python "${{ matrix.python-version }}"
-          uv run --no-sync pytest
+          uv run --no-sync pytest --durations=10
       - name: 无后端改动
         if: needs.changes.outputs.backend != 'true'
         run: echo "No backend changes; required check completed without product tests."

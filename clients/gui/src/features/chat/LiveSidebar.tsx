@@ -7,6 +7,8 @@ import { useLive } from '../../live/LiveContext';
 import type { LiveProjectProjection } from '../../live/liveState';
 import { formatRelativeDay } from '../../lib/format';
 import { visibleThreadTree } from './liveThreadTree';
+import { requestErrorCopy } from '../../lib/requestErrorCopy';
+import { visibleOnboardingError } from '../../live/createRequestRecovery';
 
 interface LiveSidebarProps {
   onNavigate?: () => void;
@@ -42,7 +44,8 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
     projectionStale,
     command,
   } = useLive();
-  const { setup, metadata, bootstrap, initializeConversation, getRouteRevision, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const { setup, metadata, bootstrap, initializeConversation, getRouteRevision, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const onboardingError = visibleOnboardingError(createError, metadataWarning);
   const [query, setQuery] = useState('');
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
   const [collapsedThreads, setCollapsedThreads] = useState<string[]>([]);
@@ -151,11 +154,11 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
       <div className="rail-sidebar-scroll">
         {lastError && (
           <div className="live-sidebar-error" role="alert">
-            <strong>{lastError.code}</strong>
-            <span>{lastError.message}</span>
+            <strong>{requestErrorCopy(lastError)}</strong>
+            <details><summary>查看错误详情</summary><code>{lastError.code}</code><p>{lastError.message}</p>{lastError.recovery && <code>{lastError.recovery}</code>}</details>
           </div>
         )}
-        {createError && <div className="live-sidebar-error" role="alert"><span>{createError}</span>{(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearCreateUncertainty()}>刷新并核对</button>}{recoveredConversationId && <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}</div>}
+        {onboardingError && <div className="live-sidebar-error" role="alert"><span>{onboardingError}</span>{(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearCreateUncertainty()}>刷新并核对</button>}{recoveredConversationId && <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}</div>}
 
         {phase === 'ready' && filteredProjects.length === 0 && (
           <div className="rail-sidebar-empty live-sidebar-empty">
@@ -233,7 +236,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
 
         {phase !== 'ready' && !lastError && (
           <div className="live-sidebar-empty" role="status">
-            {phase === 'connecting' ? '正在读取 Core Projection…' : '尚未建立 Core 连接'}
+            {phase === 'connecting' ? '正在读取对话…' : '尚未连接'}
           </div>
         )}
         {command.status === 'awaiting_projection' && (

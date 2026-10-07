@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { confirmedCreateMetadata, createRequestStorageKey, mergeConversationMetadata, renameIsConfirmed } from '../src/live/createRequestRecovery.ts';
+import { confirmedCreateMetadata, createRequestStorageKey, mergeConversationMetadata, renameIsConfirmed, visibleOnboardingError } from '../src/live/createRequestRecovery.ts';
 
 const item = (threadId: string, title: string, revision = 1) => ({ thread_id: threadId, title, title_source: 'manual' as const, revision });
 
@@ -18,4 +18,17 @@ test('a short metadata page preserves prior titles and never replaces a newer re
   assert.equal(merged.new.title, '新对话');
   assert.equal(renameIsConfirmed(item('old', '想要的标题'), '想要的标题'), true);
   assert.equal(renameIsConfirmed(item('old', '原标题'), '想要的标题'), false);
+});
+
+test('an interleaved title read failure cannot hide an unknown create or rename', () => {
+  let writeError = '新建结果尚未确认，请按原请求核对。';
+  let titleWarning = '标题读取失败，请刷新。';
+  assert.equal(visibleOnboardingError(writeError, titleWarning), writeError);
+  titleWarning = ''; // The next successful title read clears only its own warning.
+  assert.equal(visibleOnboardingError(writeError, titleWarning), writeError);
+  writeError = '改名结果尚未确认，请核对原请求。';
+  titleWarning = '标题读取失败，请刷新。';
+  assert.equal(visibleOnboardingError(writeError, titleWarning), writeError);
+  writeError = '';
+  assert.equal(visibleOnboardingError(writeError, titleWarning), titleWarning);
 });

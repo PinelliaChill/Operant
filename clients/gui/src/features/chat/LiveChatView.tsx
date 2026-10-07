@@ -36,6 +36,8 @@ import { approvalId, outcomeNeedsReconciliation, requestCode, requestError, requ
 import { parseExtensionArguments } from './extensionCommandArguments';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
 import { useOnboarding } from '../../live/OnboardingContext';
+import { visibleOnboardingError } from '../../live/createRequestRecovery';
+import { requestErrorCopy } from '../../lib/requestErrorCopy';
 import type { LiveApproval, LiveEvent } from '../../live/liveState';
 import { approvalsForSession, canDecideApproval, formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
@@ -119,15 +121,14 @@ const LiveErrorBanner: React.FC<{
   <div className="live-alert live-alert-error" role="alert">
     <AlertTriangle size={17} aria-hidden="true" />
     <div className="live-alert-content">
-      <strong>{code}</strong>
-      <span>{message}</span>
-      {recovery && <span className="live-alert-recovery">{recovery}</span>}
+      <strong>{requestErrorCopy({ code, message, recovery })}</strong>
+      <details><summary>查看错误详情</summary><code>{code}</code><p>{message}</p>{recovery && <code>{recovery}</code>}</details>
     </div>
     <div className="live-alert-actions">
       {onRetry && (
         <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
           <RefreshCw size={13} aria-hidden="true" />
-          重试
+          重新连接
         </button>
       )}
       {onClear && (
@@ -294,7 +295,8 @@ export const LiveChatView: React.FC = () => {
     loadFiles,
     clearError,
   } = useLive();
-  const { setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const { setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const onboardingError = visibleOnboardingError(createError, metadataWarning);
   const projectSelectRef = useRef<HTMLButtonElement>(null);
   const [showFiles, setShowFiles] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
@@ -765,7 +767,7 @@ export const LiveChatView: React.FC = () => {
         />
       )}
       {workbenchError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>{workbenchError}</span></div>}
-      {createError && selectedThread && <div className="live-alert live-alert-error" role="alert">{createError}{(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearCreateUncertainty()}>刷新并核对</button>}{recoveredConversationId && <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}</div>}
+      {onboardingError && selectedThread && <div className="live-alert live-alert-error" role="alert">{onboardingError}{(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearCreateUncertainty()}>刷新并核对</button>}{recoveredConversationId && <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}</div>}
       {renaming && selectedThread && <div className="live-rename"><label>对话名称<input className="input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} maxLength={100} autoFocus onKeyDown={(event) => { if (event.key === 'Enter') void saveTitle(); if (event.key === 'Escape') setRenaming(false); }} /></label><button type="button" className="btn btn-primary btn-sm" disabled={renameBusy || !titleDraft.trim()} onClick={() => void saveTitle()}>保存名称</button><button type="button" className="btn btn-ghost btn-sm" onClick={() => setRenaming(false)}>取消</button></div>}
       {workbenchNotice && <div className="live-workbench-notice" role="status">{workbenchNotice}</div>}
       {terminalCleanupId && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>终端 {terminalCleanupId} 的清理结果未确认；请人工核查。打开终端面板可刷新状态。本提示不改变审计记录。</span></div>}
@@ -775,7 +777,9 @@ export const LiveChatView: React.FC = () => {
           <AlertTriangle size={17} aria-hidden="true" />
           <div className="live-alert-content">
             <strong>需要人工核对</strong>
-            <span>{manualReconcileReason || '结果未知，请刷新并核对运行状态。系统不会自动重试，也不会猜测运行结果。'}</span>
+            <span>{manualReconcileReason ? requestErrorCopy(new Error(manualReconcileReason)) : '结果未知，请刷新并核对运行状态。系统不会自动重试，也不会猜测运行结果。'}</span>
+            {manualReconcileReason && !manualReconcileReason.includes('不会自动重试') && <span>系统不会自动重试。</span>}
+            {manualReconcileReason && <details><summary>查看错误详情</summary>{manualReconcileReason}</details>}
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refreshConversation()} disabled={phase !== 'ready'}>
             刷新并核对状态
@@ -804,7 +808,7 @@ export const LiveChatView: React.FC = () => {
           <h2>{conversationId ? deepLinkLookup === 'loading' ? '正在查找这段对话…' : deepLinkLookup === 'failed' ? '暂时无法确认这段对话' : deepLinkNotFound ? '找不到这段对话' : '正在打开对话…' : setup?.ready ? '想先做什么？' : '先连接一个模型'}</h2>
           <p>{conversationId ? deepLinkLookup === 'failed' ? '连接或列表读取失败。请刷新并查找，当前没有创建新对话。' : deepLinkLookup === 'loading' ? '正在从服务端读取最新对话列表。' : deepLinkNotFound ? '最新列表中暂未找到该对话。你可以再刷新一次核对。' : '正在同步对话内容。' : setupError || (setup?.ready ? '写下你的问题或任务，通用助手会开始处理。' : '连接模型后就能直接开始对话。')}</p>
           {conversationId && <button type="button" className="btn btn-secondary" onClick={retryDeepLink} disabled={deepLinkLookup === 'loading'}>{connectionStatus === 'connected' ? '刷新并查找' : '重新连接并查找'}</button>}
-          {createError && <div className="live-alert live-alert-error" role="alert">{createError}</div>}
+          {onboardingError && <div className="live-alert live-alert-error" role="alert">{onboardingError}</div>}
           {(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary" onClick={() => void clearCreateUncertainty()}>刷新并核对原请求</button>}
           {recoveredConversationId && <button type="button" className="btn btn-primary" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}
           {!conversationId && <><textarea className="textarea" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="描述你想完成的工作…" aria-label="对话草稿" rows={3} /><button type="button" className="btn btn-primary" onClick={() => void beginConversation(true)} disabled={createBusy || createOutcomeUnknown || phase !== 'ready' || setupLoading}>{setup?.ready ? (createBusy ? '正在准备…' : '开始对话') : '连接模型'}</button></>}

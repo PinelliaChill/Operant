@@ -12,6 +12,7 @@ import { isWriteOutcomeUnknown } from '../../lib/writeOutcome';
 import { localStateLabel } from '../../lib/statusCopy';
 import { approvalId, idempotencyKey, LOCAL_EXTENSION_CHANGE_EVENT, optionalText, projection, projectionItems, requestCode, requestError, requiredText, stringList } from './localProjection';
 import { chooseConversationControlSession, confirmedControlOpen, controlApprovalAction, controlOpenStorageKey, openedControlCanStartConversation, readPendingControlOpen, sameControlTargets, type ControlSessionChoice, type PendingControlOpen } from './conversationLocalControl';
+import { visibleOnboardingError } from '../../live/createRequestRecovery';
 
 type Plugin = { id: string; digest: string; state: string; targets: string[] };
 type Category = 'tool' | 'command' | 'event' | 'provider' | 'runtime' | 'capability_driver';
@@ -57,7 +58,8 @@ function mapExternal(value: Record<string, unknown>): ExternalPlugin {
 export const LocalExtensionsPanel: React.FC = () => {
   const navigate = useNavigate();
   const { phase56Client, phase45Client, connectionStatus } = useOperant();
-  const { client: onboardingClient, setup, initializeConversation, getRouteRevision, createBusy, createOutcomeUnknown, createError, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const { client: onboardingClient, setup, initializeConversation, getRouteRevision, createBusy, createOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const onboardingError = visibleOnboardingError(createError, metadataWarning);
   const { selectedProjectId } = useLive();
   const selectedProjectIdRef = useRef(selectedProjectId);
   selectedProjectIdRef.current = selectedProjectId;
@@ -342,6 +344,7 @@ export const LocalExtensionsPanel: React.FC = () => {
     {conversationError && <p className="live-alert live-alert-error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{conversationError}</p>}
     {conversationNotice && <p className="live-alert" role="status">{conversationNotice}</p>}
     {createOutcomeUnknown && <div className="local-unknown-stack" role="group" aria-label="核对新对话"><strong>新对话结果待核对</strong><p>{createError || '请按原请求刷新核对，不要重复创建。'}</p><button type="button" className="btn btn-secondary" disabled={conversationBusy || disconnected} onClick={() => void clearCreateUncertainty()}>刷新并核对原请求</button></div>}
+    {!createOutcomeUnknown && onboardingError && <p className="live-alert live-alert-error" role="alert">{onboardingError}</p>}
     {recoveredConversationId && <button type="button" className="btn btn-secondary" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已找到的对话</button>}
     {pendingControlOpen && <div className="local-unknown-stack" role="group" aria-label="核对本机控制会话"><strong>{pendingControlOpen.approvalId ? '本机控制等待审批或核对' : '本机控制结果待核对'}</strong><p>原请求已保存。确认结果前不会开启另一个控制会话。</p><div className="local-actions">{pendingControlOpen.approvalId && controlApprovalAction(controlApprovalStatus, Boolean(pendingControlOpen.decisionSubmitted)) === 'decide' && <><button type="button" className="btn btn-primary" disabled={conversationBusy || disconnected} onClick={() => void decideControlApproval(true)}>批准</button><button type="button" className="btn btn-secondary" disabled={conversationBusy || disconnected} onClick={() => void decideControlApproval(false)}>拒绝</button></>}{pendingControlOpen.approvalId && controlApprovalAction(controlApprovalStatus, Boolean(pendingControlOpen.decisionSubmitted)) === 'continue' && <button type="button" className="btn btn-primary" disabled={conversationBusy || disconnected} onClick={() => void continueApprovedControlOpen()}>继续原请求</button>}{pendingControlOpen.approvalId && <button type="button" className="btn btn-secondary" disabled={conversationBusy || disconnected} onClick={() => void checkControlApproval(pendingControlOpen)}>刷新审批状态</button>}<button type="button" className="btn btn-secondary" disabled={conversationBusy || disconnected || !pendingControlOpen.key} onClick={() => void reconcileControlOpen()}>核对控制会话</button></div><details className="local-advanced"><summary>请求详情</summary><code>{pendingControlOpen.key || '标识不可读取'}</code>{pendingControlOpen.approvalId && <p>审批编号：<code>{pendingControlOpen.approvalId}</code></p>}</details></div>}
     {pending && <div className="local-approval" role="group" aria-label="扩展操作审批"><span>审批 ID：<code>{pending.approvalId}</code></span><div className="local-actions"><button type="button" className="btn btn-primary" disabled={busy || disconnected} onClick={() => void decide(true)}>允许并提交</button><button type="button" className="btn btn-danger" disabled={busy || disconnected} onClick={() => void decide(false)}>拒绝</button></div></div>}

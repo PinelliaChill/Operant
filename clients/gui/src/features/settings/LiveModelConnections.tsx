@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { OnboardingError, type ConnectionCreate, type OAuthAttempt, type ProviderConnection } from '../../../../../sdk/typescript-client/onboarding';
+import { type ConnectionCreate, type OAuthAttempt, type ProviderConnection } from '../../../../../sdk/typescript-client/onboarding';
 import { useOnboarding } from '../../live/OnboardingContext';
+import { isWriteOutcomeUnknown } from '../../lib/writeOutcome';
 import { ModelConnectionsView } from './ModelConnectionsView';
 
 const errorText = (value: unknown) => value instanceof Error ? value.message : '请求失败，请刷新后核对。';
-const uncertain = (value: unknown) => !(value instanceof OnboardingError) || value.code === 'transport_unavailable' || value.recovery === 'manual_reconcile' || value.recovery === 'retry_same_idempotency_key';
 
 export const LiveModelConnections: React.FC = () => {
   const { client, bootstrap, refreshSetup, draft } = useOnboarding();
@@ -46,7 +46,7 @@ export const LiveModelConnections: React.FC = () => {
     if (inFlight.current || writeUncertain) return null;
     inFlight.current = true; setBusy(true); setError(''); setErrorDetail('');
     try { return await run(); }
-    catch (cause: unknown) { setError(`${label}失败，请刷新连接列表核对状态。`); setErrorDetail(errorText(cause)); if (uncertain(cause)) setWriteUncertain(true); return null; }
+    catch (cause: unknown) { setError(`${label}失败，请刷新连接列表核对状态。`); setErrorDetail(errorText(cause)); if (isWriteOutcomeUnknown(cause)) setWriteUncertain(true); return null; }
     finally { inFlight.current = false; setBusy(false); }
   }, [writeUncertain]);
 

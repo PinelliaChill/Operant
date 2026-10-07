@@ -4,6 +4,7 @@ import { useOperant } from '../context/ClientContext';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
 import { useLive } from './LiveContext';
 import { metadataRefreshKey } from './metadataRefreshKey';
+import { readConversationMetadata, type MetadataReadResult } from './metadataRead';
 import type { PendingConversationSend } from './pendingConversationSend';
 import { confirmedCreateMetadata, createRequestStorageKey, mergeConversationMetadata, renameIsConfirmed } from './createRequestRecovery';
 import { requestErrorCopy } from '../lib/requestErrorCopy';
@@ -26,9 +27,10 @@ interface OnboardingContextValue {
   createOutcomeUnknown: boolean;
   renameOutcomeUnknown: boolean;
   createError: string;
+  metadataWarning: string;
   recoveredConversationId: string | null;
   refreshSetup: () => Promise<SetupState | null>;
-  refreshMetadata: () => Promise<boolean>;
+  refreshMetadata: () => Promise<MetadataReadResult['status']>;
   bootstrap: (modelProfileId?: string) => Promise<boolean>;
   initializeConversation: (input?: ConversationStart) => Promise<ConversationInitialization | null>;
   renameConversation: (threadId: string, title: string) => Promise<boolean>;
@@ -64,6 +66,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   });
   const [createOutcomeUnknown, setCreateOutcomeUnknown] = useState(Boolean(pendingCreateKey));
   const [createError, setCreateError] = useState(pendingCreateKey ? '上次新建对话的结果尚未确认。请刷新并核对原请求。' : '');
+  const [metadataWarning, setMetadataWarning] = useState('');
   const [recoveredConversationId, setRecoveredConversationId] = useState<string | null>(null);
   const createInFlight = useRef(false);
   const metadataReadEpoch = useRef(0);
@@ -76,6 +79,12 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     else localStorage.removeItem(createStorageKey);
     setPendingCreateKey(key);
   }, [createStorageKey]);
+  const showMetadataWarning = useCallback((warning: string) => {
+    setMetadataWarning(warning);
+  }, []);
+  const clearMetadataWarning = useCallback(() => {
+    setMetadataWarning('');
+  }, []);
 
   const refreshSetup = useCallback(async () => {
     if (clientMode !== 'live' || connectionStatus !== 'connected') return null;
@@ -89,22 +98,16 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     finally { setSetupLoading(false); }
   }, [client, clientMode, connectionStatus]);
   const refreshMetadata = useCallback(async () => {
-    if (clientMode !== 'live' || connectionStatus !== 'connected') return false;
+    if (clientMode !== 'live' || connectionStatus !== 'connected') return 'failed' as const;
     const epoch = ++metadataReadEpoch.current;
-    try {
-      const page = await client.listConversationMetadata({ limit: 500 });
-      let selected: ConversationMetadata | null = null;
-      let selectedError: unknown = null;
-      if (live.selectedThreadId) {
-        try { selected = await client.getConversationMetadata(live.selectedThreadId); }
-        catch (error: unknown) { selectedError = error; }
-      }
-      if (epoch !== metadataReadEpoch.current) return false;
-      setMetadata((current) => mergeConversationMetadata(current, selected ? [...page.items, selected] : page.items));
-      if (selectedError) setCreateError(`当前对话标题读取失败：${message(selectedError)}。请刷新后核对。`);
-      return !selectedError;
-    } catch (error: unknown) { if (epoch === metadataReadEpoch.current) setCreateError(`标题读取失败：${message(error)}。请刷新后核对。`); return false; }
-  }, [client, clientMode, connectionStatus, live.selectedThreadId]);
+    const result = await readConversationMetadata(client, live.selectedThreadId, () => epoch === metadataReadEpoch.current);
+    if (result.status === 'superseded') return 'superseded';
+    if (result.items) setMetadata((current) => mergeConversationMetadata(current, result.items!));
+    if (result.status === 'failed') {
+      showMetadataWarning(`${result.scope === 'selected' ? '当前对话标题' : '标题'}暂时无法读取，请刷新核对。`);
+    } else clearMetadataWarning();
+    return result.status;
+  }, [client, clientMode, connectionStatus, live.selectedThreadId, showMetadataWarning, clearMetadataWarning]);
 
   const titleRefreshKey = metadataRefreshKey(live.threads, live.selectedThreadId, live.stream.events);
 
@@ -125,7 +128,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setSetup(next); setSetupError('');
       await live.refresh();
       return next.ready;
-    } catch (error: unknown) { setSetupError(`${message(error)} 请刷新后核对设置状态。`); return false; }
+    } catch (error: unknown) { setSetupError(message(error)); return false; }
     finally { actionInFlight.current = false; }
   }, [client, live]);
 
@@ -143,22 +146,22 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setCreateOutcomeUnknown(false);
       try {
         await live.refresh();
-        if (!await refreshMetadata()) setCreateError('对话已创建，但标题暂时无法读取。请刷新对话列表核对。');
-      } catch { setCreateError('对话已创建，但列表暂时无法同步。请刷新后打开。'); }
+        if (await refreshMetadata() === 'failed') showMetadataWarning('对话已创建，但标题暂时无法读取。请刷新对话列表核对。');
+      } catch { showMetadataWarning('对话已创建，但列表暂时无法同步。请刷新后打开。'); }
       return result;
     } catch (error: unknown) {
       if (!stored) {
         setCreateError('无法保存创建请求的核对标识，已停止新建。请检查本地存储权限后重试。');
       } else if (isWriteOutcomeUnknown(error)) {
         setCreateOutcomeUnknown(true);
-        setCreateError(`新建结果尚未确认：${message(error)}。请刷新并核对原请求，不要重复创建。`);
+        setCreateError('没有收到创建结果。请刷新并核对原请求，暂时不要重试。');
       } else {
         try { storeCreateKey(null); } catch { /* A stale key remains a safe recovery barrier. */ }
         setCreateError(message(error));
       }
       return null;
     } finally { createInFlight.current = false; setCreateBusy(false); }
-  }, [client, connectionStatus, createOutcomeUnknown, live, refreshMetadata, storeCreateKey]);
+  }, [client, connectionStatus, createOutcomeUnknown, live, refreshMetadata, showMetadataWarning, storeCreateKey]);
 
   const renameConversation = useCallback(async (threadId: string, title: string) => {
     if (renameInFlight.current || renameOutcomeUnknown) return false;
@@ -170,8 +173,10 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setRenamePendingTarget(null); setRenameOutcomeUnknown(false);
       return true;
     } catch (error: unknown) {
-      setCreateError(`${message(error)} 请刷新标题后核对。`);
-      if (isWriteOutcomeUnknown(error)) { setRenameOutcomeUnknown(true); setRenamePendingTarget({ threadId, title }); }
+      if (isWriteOutcomeUnknown(error)) {
+        setCreateError('改名结果尚未确认。请刷新标题核对原请求，暂时不要再次改名。');
+        setRenameOutcomeUnknown(true); setRenamePendingTarget({ threadId, title });
+      } else setCreateError(message(error));
       return false;
     } finally { renameInFlight.current = false; }
   }, [client, metadata, renameOutcomeUnknown]);
@@ -193,8 +198,8 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setCreateError('已找到先前创建的对话，可直接打开。');
         try {
           await live.refresh();
-          if (!await refreshMetadata()) setCreateError('已确认创建，但对话列表暂时无法同步。可直接打开该对话。');
-        } catch { setCreateError('已确认创建，但对话列表暂时无法同步。可直接打开该对话。'); }
+          if (await refreshMetadata() === 'failed') showMetadataWarning('已确认创建，但对话列表暂时无法同步。可直接打开该对话。');
+        } catch { showMetadataWarning('已确认创建，但对话列表暂时无法同步。可直接打开该对话。'); }
       }
       if (renameOutcomeUnknown && renamePendingTarget) {
         const current = await client.getConversationMetadata(renamePendingTarget.threadId);
@@ -206,12 +211,12 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setRenamePendingTarget(null); setRenameOutcomeUnknown(false);
         if (!pendingCreateKey) setCreateError('标题已按原请求更新。');
       }
-    } catch (error: unknown) {
-      setCreateError(`原请求核对失败：${message(error)}。请恢复连接后重试；不要重复提交。`);
+    } catch {
+      setCreateError('原请求暂时无法核对。请恢复连接后刷新，暂时不要重复提交。');
     }
-  }, [client, connectionStatus, live, pendingCreateKey, refreshMetadata, renameOutcomeUnknown, renamePendingTarget, storeCreateKey]);
+  }, [client, connectionStatus, live, pendingCreateKey, refreshMetadata, renameOutcomeUnknown, renamePendingTarget, showMetadataWarning, storeCreateKey]);
 
-  return <Context.Provider value={{ client, setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, noteRouteChange, pendingSend, setPendingSend, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, recoveredConversationId, refreshSetup, refreshMetadata, bootstrap, initializeConversation, renameConversation, clearCreateUncertainty }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ client, setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, noteRouteChange, pendingSend, setPendingSend, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, refreshSetup, refreshMetadata, bootstrap, initializeConversation, renameConversation, clearCreateUncertainty }}>{children}</Context.Provider>;
 };
 
 export function useOnboarding(): OnboardingContextValue {
