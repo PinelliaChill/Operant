@@ -1,5 +1,10 @@
 # Operant Beta 候选安装、升级与回退
 
+本页保留手工候选的安装流程；已发布的自包含安装包见[根 README](../../README.md)。
+本轮首次引导会为默认工作区接入六项内置技能；已有角色、快照和旧 CLI 手工配置保持原值。
+模型 OAuth 的应用配置见[桌面说明](../../clients/desktop/README.md#gemini-oauth-应用配置)，
+真实可用状态以[本轮验收](../design/onboarding-ux/acceptance.md)为准。
+
 本说明适用于同一源码提交构建的 Python Core、TUI 和 macOS arm64 桌面候选。桌面 App 不内置 Core：启动时从 `PATH` 查找 `operant`，固定连接 `127.0.0.1:8000`。当前候选没有 Developer ID 签名、公证、DMG 或自动更新；Ubuntu 只安装 Core/TUI 和任务 5 已验收的私有远程命令行，不安装 macOS App。
 
 所有操作使用独立的绝对路径。已有 Core 必须先正常退出，且要核对 8000 端口归属。不要对正在使用的数据库做升级或回退。备份包含运行态文件，可能含敏感信息；只保存在私有目录，传输时用可信通道，不提交仓库。

@@ -73,6 +73,7 @@
 | S6 | 页内安装应用/网站按钮不改变设置路由，Tab到对应目标；跳到主内容不改路由。105项合成目录首批100项，继续加载后可打开第105项正文；没有把第一页当完整目录 | native-final-navigation-files.json、project-pagination-fixture.json |
 | S6 | 最新普通能力页手动控制默认关闭；任务三标签、定时任务中文触发和高级折叠、协作只选模板输入任务、记忆常用开关、审计说明删除和知识配置分离通过 | native-daily-copy-delivery-candidate.json |
 | S6 | 最新知识文案为“保存和查找项目知识”“已保存与待确认”；空状态提供添加入口，高级整理默认关闭，无写操作 | native-knowledge-copy-final.json |
+| S6 | 最新文件页已打开welcome.txt后，对无运行任务的隔离Core做40秒受控断线并自动恢复。连接失败时选择和刷新禁用，正文预览卸载；恢复只重载目录，没有恢复旧正文缓存，再点击文件正确读取。无模型调用、数据库迁移或凭据读取/复制，原用户Core未动 | native-project-file-disconnect-recovery.json、project-file-disconnect-recovery-process.json |
 | 构建 | 冻结 wheel 的 278 项源/SDK/协议/技能文件逐项一致，隔离安装后导入路径与健康接口正确 | wheel-frozen-readback.json、frozen-runtime-import.json、frozen-runtime-health.json |
 
 中间构建证据对应契约 `234d2316…`。最新 Core wheel 已重建，278 项逐文件一致；
@@ -129,7 +130,7 @@ delivery-candidate-startup.json及verify-delivery-candidate-processes.json；不
 - v25迁移：三项通过，覆盖v24历史保留、旧观察无来源、空库回退、缺表拒绝、三外键及fencing/digest约束；旧1–24摘要未变。首轮测试夹具遗漏既有目标/动作外键失败，已补齐正式Repository父记录后通过；生产外键未放宽。格式、ruff和两源文件mypy通过。日志 observation-v25-migration-final-pytest.log、observation-v25-migration-mypy.log。
 - v25来源与完整SDK闭环：**76通过、1条件跳过**；强化ASK前租约断言后6项定向复验通过。成功Job、后置观察及来源原子保存；接管、范围变化、未知结果与无来源旧观察不可继续写。新观察哈希绑定新Job，未延长旧有效期。见 post-observation-v25-final-status.json。
 - 明确Bundle ID的macOS读取：**22项通过**，脚本仅编译核对；真实输入、点击和恢复读取另见S5第五轮。见 computer-frontmost-fixed-20261008-status.json。
-- 增量冻结检查：格式593文件、ruff、mypy204源文件通过；协议与首次配置6项通过，公开Schema和旧迁移摘要不变。GUI最终**191项**、类型、独立构建及包体预算通过，日志退出码与输入/输出摘要见gui-route-file-final-report.json。最终提交的完整门禁和CodeQL仍待运行。
+- 增量冻结检查：格式593文件、ruff、mypy204源文件通过；协议与首次配置6项通过，公开Schema和旧迁移摘要不变。GUI最终**191项**、类型、独立构建及包体预算通过，日志退出码与输入/输出摘要见gui-route-file-final-report.json。完整门禁已在冻结6271186的双版本CI通过；CodeQL仍有两项high，未算通过。
 - 后置条件不匹配的本机非幂等动作：72项、Operator6项通过；可能已执行时为manual_reconcile_required，无新观察/来源，阻断继续派发。普通remote/幂等动作保留FAILED。异常与权限边界按确定性测试验收，不声明该异常分支已做原生故障注入。见postcondition-unknown-status.json。
 - 项目文件分页与范围：适配器9项通过，GUI全量193项、类型、构建及包体预算通过，276项输入与61项输出冻结；断线卸载旧正文预览。见gui-delivery-copy-final-report.json和原生105项分页场景。
 - 完整 pytest v4：**1380 passed、12 skipped**，退出 0，28 分 46 秒；见 pytest-final-v4.log 与同名 status.json。
@@ -153,6 +154,7 @@ delivery-candidate-startup.json及verify-delivery-candidate-processes.json；不
   原因见 ci-468c9db-summary.json。下一版将作业时限调整为60分钟、输出10条慢用例，完整测试集不变。
 - 提交 `b1a3c8b`：CI 37636666859 双版本及 GUI 全通过；Python3.10/3.12 各 **1394通过、16跳过**，GUI **181项**，TUI **34项**。60分钟时限没有删减测试。CodeQL 分析作业成功，但汇总检查报两项高等级问题：凭据摘要及来源路径；不能算 CodeQL 通过，修复后的扫描仍待运行。
 - 当前审批桥定向检查 **47通过、1条件跳过**；模型凭据和完整 Core 中间件 **22项通过**；协议、持久、会话和首次配置 **13项通过**。GUI **182项**、类型和构建通过；Memory 常用设置与高级配置分离，已批准的“继续原请求”直接创建并进入对话。后端、GUI 当前改动仍需冻结候选和新 CI。
+- 冻结 `6271186`：CI37781913471全部作业通过，Python3.10/3.12各**1496通过、16跳过、1警告**，TUI各**34项**；GUI**193项**、类型和构建通过，格式593、ruff、mypy204与锁检查通过。CodeQL37781908519的分析作业成功，汇总仍有旧凭据摘要和技能目录路径两项high；测试夹具告警在当前PR实例为fixed，未抑制告警，安全扫描仍未通过。所有作业已收齐后再处理修复。见ci-6271186-final-snapshot.json、ci-6271186-final-summary.json、ci-6271186-all.log及codeql-6271186-summary.json。
 - 提交 `6bf0553`：CI 37718265823 全部作业通过；Python3.10/3.12 各 **1417通过、16跳过、1警告**，GUI **182项**、TUI **34项**。CodeQL 分析作业成功，但汇总检查报三项高等级问题：旧摘要兼容核对、对应旧格式测试夹具、来源路径；尚未完成审查处理，不能算 CodeQL 通过。见 ci-6bf0553-snapshot.json、ci-6bf0553-all.log。
 - 后续 GUI **187项**、类型与独立构建通过，仅保留当时工具输出。最新冻结 GUI **190项**、类型、独立构建及每资产500KiB包体预算通过，273项输入和60项输出摘要保存于 gui-native-ux-final-report.json；包含错误来源隔离、终态审批禁用和旧路由。首次检查189通过/1失败及类型错误日志保留，修复后重跑通过。随后旧流程错误文案的补修需新构建与回读。
 - SSE 心跳定向检查 **23项通过**，包含正式 Session 路由、SDK 流读取、等待审批、取消与租约回收。12秒注释心跳不是持久 Event，不改变 Cursor；第三次原生运行等待100秒后成功继续。见 session-sse-heartbeat-status.json、native-keepalive-wait.json。
@@ -210,7 +212,11 @@ delivery-candidate-startup.json及verify-delivery-candidate-processes.json；不
   [官方资格说明](https://developers.openai.com/siwc/quickstart)。
 - 最新三成员读取任务虽然 Runtime completed，审查回复为 REWORK，指出未证明全部成员读取；不把运行成功当作任务通过。见 native-final-review.json。最后按规划/执行/审查职责复验，真实回复正确且 APPROVED；历史 REWORK 仍保留。
 - TextEdit 的具体目标授权未取得，没有授权其访问。本轮仅使用用户明确批准的自有临时 Cocoa 应用，不含剪贴板或其他应用；真实输入、点击、接管恢复、取消与撤销已通过，临时应用已退出并保留可恢复副本。
-- 条件跳过不作为能力通过。OAuth外部条件、最终安全修复选择、完整门禁与未覆盖界面补验仍保留在原范围中，整轮尚未完成。
+- 条件跳过不作为能力通过。OAuth外部条件、最终安全修复选择及安全扫描仍保留在原范围中，整轮尚未完成。
+
+最新隔离环境复核Gemini应用客户端ID/secret均未配置，未打印其值或调用Google。
+自有项目启用API、授权页面/测试用户及Desktop app客户端的准备流程已写入桌面说明，
+不自动发布Google应用或接受账号条款。见gemini-application-configuration-current.json。
 
 最终候选的CLI模型发现复验被自动批准审查拒绝：当前授权未具体点名凭据接收地址axon.ystone.top。
 已请求用户明确批准该目的地，尚未运行此调用，也不换入口绕过；历史真实模型结果仍按原候选保留。

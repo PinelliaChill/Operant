@@ -55,6 +55,19 @@ node scripts/check-bundle.mjs ../../.operant/gui-verification-dist
 
 该目录由隔离的预览服务使用；原窗口的服务、数据与静态目录保持独立。
 
+## Gemini OAuth 应用配置
+
+以下由 Operant 应用维护者准备，普通用户在连接页登录并选择自己的 Cloud 项目。
+按 [Google 官方流程](https://ai.google.dev/gemini-api/docs/oauth)，在自有项目启用 Generative Language API，
+配置 Google Auth platform 的授权页面和测试用户，再在 Clients 中创建 Desktop app 客户端。
+账号条款和真实授权由账号所有者完成；隔离验收不发布应用或改变组织权限。
+
+将该客户端的 `OPERANT_GEMINI_OAUTH_CLIENT_ID` 和 `OPERANT_GEMINI_OAUTH_CLIENT_SECRET`
+配置在目标 Core 的受保护、未提交 `.env`，或只注入该进程。不要写入源码、SQLite、日志或聊天。
+首次连接还需用户的 Google Cloud 项目 ID，调用通过 `x-goog-user-project` 使用该项目；
+后续登录复用同一客户端和项目。客户端配置、账号登录与模型可用分别核对，不能互相代替。
+缺配置时保留现有对话并给出连接入口；真实登录、目录、流式工具调用、续期和撤销均通过后才算验收。
+
 ## 使用边界
 
 - 首次使用在“连接模型”中选择服务商和模型；系统准备通用助手及个人工作区。演示切换位于开发设置。
