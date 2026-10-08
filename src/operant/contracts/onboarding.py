@@ -34,6 +34,13 @@ class ProviderConnectionList(OnboardingModel):
     items: list[ProviderConnection]
 
 
+class ConnectionRequestResult(OnboardingModel):
+    request_id: str
+    status: Literal["completed", "unconfirmed", "unavailable"]
+    connection: ProviderConnection | None = None
+    message: str | None = None
+
+
 class ConnectionCreate(OnboardingModel):
     provider: ProviderKind = "openai-compatible"
     name: str | None = Field(default=None, min_length=1, max_length=100)

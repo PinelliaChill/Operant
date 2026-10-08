@@ -198,6 +198,39 @@ class UXRepository:
         value = json.loads(row["body_json"]).get("_credential_fingerprint_version")
         return None if value is None else str(value)
 
+    def get_connection_request_snapshot(
+        self, key: str, connection_id: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Read a connection and its original command receipt in one SQLite snapshot."""
+        with self.store._connect() as connection:
+            connection.execute("BEGIN")
+            saved = connection.execute(
+                "SELECT body_json FROM ux_model_connections WHERE id=?", (connection_id,)
+            ).fetchone()
+            command = connection.execute(
+                "SELECT fingerprint,body_json FROM ux_commands WHERE key=?", (key,)
+            ).fetchone()
+
+        def decoded_object(raw: str) -> dict[str, Any] | None:
+            try:
+                value = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+            return dict(value) if isinstance(value, dict) else None
+
+        # An existing but malformed row is unconfirmed, never a successful
+        # receipt or an absent connection.
+        record = None if saved is None else decoded_object(saved["body_json"]) or {}
+        receipt = (
+            None
+            if command is None
+            else {
+                "fingerprint": str(command["fingerprint"]),
+                "result": decoded_object(command["body_json"]),
+            }
+        )
+        return record, receipt
+
     def get_conversation_command_metadata(self, key: str) -> ConversationMetadata | None:
         """Read the atomic creation receipt without repeating a mutation."""
         with self.store._connect() as connection:

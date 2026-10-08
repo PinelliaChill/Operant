@@ -36,6 +36,9 @@ interface ModelConnectionsProps {
   error: string;
   errorDetail?: string;
   writeUncertain: boolean;
+  reconcileMessage?: string;
+  pendingRequestId?: string;
+  confirmedRequestId?: string;
   attempt?: OAuthAttemptView | null;
   onRefresh: () => void;
   onCreateKeyConnection: (input: ConnectionCreate) => Promise<boolean>;
@@ -47,11 +50,14 @@ interface ModelConnectionsProps {
   onAcknowledge: () => void;
 }
 
-export const ModelConnectionsView: React.FC<ModelConnectionsProps> = ({ connections, loading, busy, error, errorDetail, writeUncertain, attempt, onRefresh, onCreateKeyConnection, onStartOAuth, onCancelOAuth, onDiscover, onSelectModel, onDisconnect, onAcknowledge }) => {
+export const ModelConnectionsView: React.FC<ModelConnectionsProps> = ({ connections, loading, busy, error, errorDetail, writeUncertain, reconcileMessage, pendingRequestId, confirmedRequestId, attempt, onRefresh, onCreateKeyConnection, onStartOAuth, onCancelOAuth, onDiscover, onSelectModel, onDisconnect, onAcknowledge }) => {
   const [service, setService] = useState<'openai' | 'gemini' | 'custom'>('openai');
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
+  useEffect(() => {
+    if (confirmedRequestId) { setApiKey(''); setName(''); setBaseUrl(''); setFormError(''); }
+  }, [confirmedRequestId]);
   const apiKeyRef = useRef<HTMLInputElement>(null);
   const [geminiProjectId, setGeminiProjectId] = useState('');
   const [geminiClientId, setGeminiClientId] = useState('');
@@ -95,7 +101,8 @@ export const ModelConnectionsView: React.FC<ModelConnectionsProps> = ({ connecti
   return <div className="model-connections">
     <div className="model-connections-heading"><div><h1>模型连接</h1><p>连接模型后，就可以开始对话。</p></div><button type="button" className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy || loading}><RefreshCw size={14} aria-hidden="true" />刷新</button></div>
     {error && <div className="live-alert live-alert-error" role="alert">{(errorDetail && knownModelConnectionErrorLabel(errorDetail)) || error}<details><summary>查看原因</summary>{errorDetail || error}</details></div>}
-    {writeUncertain && <div className="live-alert live-alert-error" role="alert">连接操作的结果尚未确认。请刷新列表并核对状态后继续。<button type="button" className="btn btn-secondary btn-sm" onClick={onAcknowledge}>我已核对</button></div>}
+    {writeUncertain && <div className="live-alert live-alert-error model-request-recovery" role="alert"><p>{reconcileMessage || '连接操作的结果尚未确认，请先核对，暂时不要重复提交。'}</p><div className="model-request-recovery-actions"><button type="button" className="btn btn-secondary btn-sm" onClick={onAcknowledge} disabled={busy || loading}>{pendingRequestId ? '核对原请求' : '刷新核对'}</button>{pendingRequestId && <details><summary>核对详情</summary><p>请求编号：<code>{pendingRequestId}</code></p></details>}</div></div>}
+    {!writeUncertain && reconcileMessage && <p role="status">{reconcileMessage}</p>}
     <div className="model-connections-options">
       <section className="model-connections-card"><h2>ChatGPT</h2><p>使用账号登录并选择可用模型。</p>{(!chatgptConnection || canReauthorizeModelConnection(chatgptConnection.status, chatgptConnection.error)) ? <button type="button" className="btn btn-primary" onClick={() => onStartOAuth('chatgpt', chatgptConnection?.connection_id)} disabled={busy || writeUncertain}>{chatgptConnection ? '重新授权 ChatGPT' : '连接 ChatGPT'}</button> : <p>账号已添加，请查看下方连接状态。</p>}</section>
       <section className="model-connections-card"><h2>Gemini</h2><p>使用 Google 账号登录并选择可用模型。</p><label>Google Cloud 项目编号<input className="input" value={geminiProjectId} onChange={(event) => setGeminiProjectId(event.target.value)} placeholder="你的项目 ID" /></label><details><summary>高级：使用自己的桌面 OAuth 客户端</summary><label>客户端 ID<input className="input" value={geminiClientId} onChange={(event) => setGeminiClientId(event.target.value)} autoComplete="off" /></label><label>客户端密钥<input className="input" type="password" value={geminiClientSecret} onChange={(event) => setGeminiClientSecret(event.target.value)} autoComplete="off" /></label></details>{(!geminiConnection || canReauthorizeModelConnection(geminiConnection.status, geminiConnection.error)) ? <button type="button" className="btn btn-primary" onClick={() => onStartOAuth('gemini', geminiConnection?.connection_id, geminiProjectId.trim(), geminiClientId.trim() || undefined, geminiClientSecret || undefined)} disabled={busy || writeUncertain || !geminiProjectId.trim()}>{geminiConnection ? '重新登录 Gemini' : '连接 Gemini'}</button> : <p>账号已添加，请查看下方连接状态。</p>}</section>

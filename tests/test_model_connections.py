@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -88,6 +89,15 @@ class _Repo:
     def get_command_fingerprint_version(self, key: str) -> str | None:
         command = self.commands.get(key)
         return None if command is None else command[1].get("_credential_fingerprint_version")
+
+    def get_connection_request_snapshot(
+        self, key: str, connection_id: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        command = self.commands.get(key)
+        receipt = (
+            None if command is None else {"fingerprint": command[0], "result": dict(command[1])}
+        )
+        return self.records.get(connection_id), receipt
 
     def save_command(self, key: str, fingerprint: str, result: dict[str, Any]) -> None:
         self.commands[key] = (fingerprint, result)
@@ -1617,16 +1627,35 @@ def test_connection_routes_restrict_origin_and_keep_secret_out_of_responses(tmp_
         repo.records[created.json()["connection_id"]].pop("create_fingerprint_version")
         CredentialStore(tmp_path / ".env").delete("OPERANT_CONNECTION_REQUEST_FINGERPRINT_KEY")
         guards_before_legacy = gateway.guards
-        assert (
-            client.post("/v1/setup/connections", json=body, headers=headers).json()
-            == created.json()
-        )
+        legacy_retry = client.post("/v1/setup/connections", json=body, headers=headers)
+        assert legacy_retry.status_code == 409
+        assert legacy_retry.json()["detail"] == {
+            "code": "manual_reconcile_required",
+            "message": "请求结果待核对，请勿重复提交。",
+            "request_id": "create-test",
+        }
         assert gateway.guards == guards_before_legacy
         assert (
             CredentialStore(tmp_path / ".env").get("OPERANT_CONNECTION_REQUEST_FINGERPRINT_KEY")
             is None
         )
         assert repo.commands["create-test"] == (legacy_fingerprint, saved_result)
+        checked = client.get("/v1/setup/connections/requests/create-test")
+        assert checked.status_code == 200
+        assert checked.headers["cache-control"] == "no-store"
+        assert checked.json() == {
+            "request_id": "create-test",
+            "status": "completed",
+            "connection": created.json(),
+            "message": None,
+        }
+        assert (
+            client.get(
+                "/v1/setup/connections/requests/create-test",
+                headers={"Origin": "https://evil.example"},
+            ).status_code
+            == 403
+        )
         assert (
             client.post(
                 "/v1/setup/connections", json={**body, "api_key": "different"}, headers=headers
@@ -1642,12 +1671,45 @@ def test_connection_routes_restrict_origin_and_keep_secret_out_of_responses(tmp_
 
         # A historical write may have committed the connection before its receipt.
         repo.commands.pop("create-test")
-        assert (
-            client.post("/v1/setup/connections", json=body, headers=headers).json()
-            == created.json()
+        assert client.get("/v1/setup/connections/requests/create-test").json()["status"] == (
+            "unconfirmed"
         )
+        assert client.post("/v1/setup/connections", json=body, headers=headers).json()[
+            "detail"
+        ] == {
+            "code": "manual_reconcile_required",
+            "message": "请求结果待核对，请勿重复提交。",
+            "request_id": "create-test",
+        }
         assert len(repo.records) == 1
-        assert repo.commands["create-test"] == (legacy_fingerprint, saved_result)
+        assert "create-test" not in repo.commands
+        repo.commands["legacy-oauth-secret"] = (
+            "a" * 64,
+            {"attempt_id": "old-attempt", "provider": "gemini", "status": "pending"},
+        )
+        before_oauth_legacy = gateway.guards
+        old_oauth = client.post(
+            "/v1/setup/oauth/start",
+            json={
+                "provider": "gemini",
+                "client_id": "synthetic-client-id",
+                "client_secret": "synthetic-client-secret",
+                "project_id": "synthetic-project",
+            },
+            headers={"Idempotency-Key": "legacy-oauth-secret"},
+        )
+        assert old_oauth.status_code == 409
+        assert old_oauth.json()["detail"] == {
+            "code": "manual_reconcile_required",
+            "message": "请求结果待核对，请勿重复提交。",
+            "request_id": "legacy-oauth-secret",
+        }
+        assert "authorization_url" not in old_oauth.text
+        assert gateway.guards == before_oauth_legacy
+        assert (
+            CredentialStore(tmp_path / ".env").get("OPERANT_CONNECTION_REQUEST_FINGERPRINT_KEY")
+            is None
+        )
         oauth_headers = {"Idempotency-Key": "oauth-start-test"}
         started = client.post(
             "/v1/setup/oauth/start", json={"provider": "chatgpt"}, headers=oauth_headers
@@ -1694,6 +1756,9 @@ def test_connection_routes_restrict_origin_and_keep_secret_out_of_responses(tmp_
         assert selected.status_code == 200
         assert repo.get_setting("default_model_profile_id") == selected.json()["model_profile_id"]
         assert client.delete(f"/v1/setup/connections/{connection_id}").status_code == 200
+        assert client.get("/v1/setup/connections/requests/create-test").json()["status"] == (
+            "unavailable"
+        )
     assert repo.records == {}
 
 
@@ -1790,6 +1855,170 @@ def test_request_fingerprint_rejects_missing_key_for_existing_receipt(tmp_path: 
     assert not store.path.exists()
 
 
+def test_credential_store_never_overwrites_an_existing_create_reference(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    reference = "OPERANT_CONNECTION_SYNTHETIC_API_KEY"
+    values = [f"synthetic-value-{index}" for index in range(12)]
+
+    def put_once(value: str) -> bool:
+        return CredentialStore(path).put_if_absent(reference, value)
+
+    try:
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            written = list(executor.map(put_once, values))
+        assert written.count(True) == 1
+        selected = values[written.index(True)]
+        store = CredentialStore(path)
+        assert store.contains(reference)
+        assert store.get(reference) == selected
+        assert not store.put_if_absent(reference, "different-synthetic-value")
+        assert store.get(reference) == selected
+    finally:
+        os.environ.pop(reference, None)
+
+
+def test_connection_request_lookup_checks_real_receipt_and_connection(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "operant.db")
+    store.initialize()
+    repo = UXRepository(store)
+
+    class Gateway:
+        def guard(self, **kwargs: Any) -> tuple[Any, Any, None]:
+            return (
+                SimpleNamespace(action_hash="hash"),
+                SimpleNamespace(
+                    decision=SimpleNamespace(value="allow"),
+                    lease=object(),
+                    reason_code=None,
+                    approval_id=None,
+                ),
+                None,
+            )
+
+        def consume(self, lease: Any, action: Any) -> None:
+            pass
+
+    app = FastAPI()
+    install_model_connection_routes(
+        app,
+        cast(Any, SimpleNamespace(store=store)),
+        repo,
+        action_gateway=cast(Any, Gateway()),
+    )
+    with TestClient(app, base_url="http://127.0.0.1:4343") as client:
+        key = "real-request-snapshot"
+        created = client.post(
+            "/v1/setup/connections",
+            json={"provider": "openai-compatible", "api_key": "synthetic-secret"},
+            headers={"Idempotency-Key": key},
+        )
+        assert created.status_code == 201
+        connection_id = created.json()["connection_id"]
+        checked = client.get(f"/v1/setup/connections/requests/{key}")
+        assert checked.status_code == 200
+        assert checked.headers["cache-control"] == "no-store"
+        assert checked.json()["status"] == "completed"
+        assert checked.json()["connection"] == created.json()
+        assert "synthetic-secret" not in checked.text
+
+        original = repo.get_connection(connection_id)
+        assert original is not None
+        repo.save_connection(connection_id, {**original, "create_fingerprint": "0" * 64})
+        assert client.get(f"/v1/setup/connections/requests/{key}").json()["status"] == (
+            "unconfirmed"
+        )
+        repo.save_connection(connection_id, original)
+        with store._connect() as connection:
+            connection.execute(
+                "UPDATE ux_commands SET body_json=? WHERE key=?",
+                (json.dumps({"connection_id": connection_id}), key),
+            )
+        assert client.get(f"/v1/setup/connections/requests/{key}").json()["status"] == (
+            "unconfirmed"
+        )
+        with store._connect() as connection:
+            connection.execute("UPDATE ux_commands SET body_json=? WHERE key=?", ("[]", key))
+        assert client.get(f"/v1/setup/connections/requests/{key}").json()["status"] == (
+            "unconfirmed"
+        )
+        repo.delete_connection(connection_id)
+        assert client.get(f"/v1/setup/connections/requests/{key}").json()["status"] == (
+            "unavailable"
+        )
+
+
+def test_create_does_not_replace_orphaned_credential_after_db_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SQLiteStore(tmp_path / "operant.db")
+    store.initialize()
+    repo = UXRepository(store)
+
+    class Gateway:
+        def guard(self, **kwargs: Any) -> tuple[Any, Any, None]:
+            return (
+                SimpleNamespace(action_hash="hash"),
+                SimpleNamespace(
+                    decision=SimpleNamespace(value="allow"),
+                    lease=object(),
+                    reason_code=None,
+                    approval_id=None,
+                ),
+                None,
+            )
+
+        def consume(self, lease: Any, action: Any) -> None:
+            pass
+
+    app = FastAPI()
+    install_model_connection_routes(
+        app,
+        cast(Any, SimpleNamespace(store=store)),
+        repo,
+        action_gateway=cast(Any, Gateway()),
+    )
+    key = "failed-after-env-write"
+    connection_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"operant:model-connection:{key}"))
+    reference = secret_ref(connection_id, "API_KEY")
+    real_save = repo.save_connection
+
+    def fail_save(connection_id: str, record: dict[str, Any]) -> None:
+        raise OSError("synthetic database failure")
+
+    try:
+        monkeypatch.setattr(repo, "save_connection", fail_save)
+        with TestClient(
+            app, base_url="http://127.0.0.1:4343", raise_server_exceptions=False
+        ) as client:
+            first = client.post(
+                "/v1/setup/connections",
+                json={"provider": "openai-compatible", "api_key": "first-synthetic-value"},
+                headers={"Idempotency-Key": key},
+            )
+            assert first.status_code == 500
+            assert CredentialStore(tmp_path / ".env").get(reference) == "first-synthetic-value"
+            assert repo.get_connection(connection_id) is None
+            monkeypatch.setattr(repo, "save_connection", real_save)
+            retry = client.post(
+                "/v1/setup/connections",
+                json={"provider": "openai-compatible", "api_key": "second-synthetic-value"},
+                headers={"Idempotency-Key": key},
+            )
+            assert retry.status_code == 409
+            assert retry.json()["detail"] == {
+                "code": "manual_reconcile_required",
+                "message": "请求结果待核对，请勿重复提交。",
+                "request_id": key,
+            }
+            assert client.get(f"/v1/setup/connections/requests/{key}").json()["status"] == (
+                "unavailable"
+            )
+            assert CredentialStore(tmp_path / ".env").get(reference) == "first-synthetic-value"
+            assert repo.get_connection(connection_id) is None
+    finally:
+        os.environ.pop(reference, None)
+
+
 def test_full_core_model_setup_has_one_private_receipt_and_no_oauth_url_cache(
     tmp_path: Path,
 ) -> None:
@@ -1802,6 +2031,11 @@ def test_full_core_model_setup_has_one_private_receipt_and_no_oauth_url_cache(
         first = client.post("/v1/setup/connections", json=payload, headers=headers)
         assert first.status_code == 201
         assert first.headers["idempotency-key"] == headers["Idempotency-Key"]
+        checked = client.get(f"/v1/setup/connections/requests/{headers['Idempotency-Key']}")
+        assert checked.status_code == 200
+        assert checked.headers["cache-control"] == "no-store"
+        assert checked.json()["status"] == "completed"
+        assert checked.json()["connection"] == first.json()
         assert (
             client.post("/v1/setup/connections", json=payload, headers=headers).json()
             == first.json()
@@ -1843,3 +2077,24 @@ def test_full_core_model_setup_has_one_private_receipt_and_no_oauth_url_cache(
         assert payload["api_key"] not in serialized
         assert "authorization_url" not in serialized
         assert "code_challenge" not in serialized
+
+        # The real Core exception handler must preserve the typed recovery
+        # semantics; a bare HTTP 409 would let the GUI clear its request barrier.
+        repo = UXRepository(store)
+        connection_id = first.json()["connection_id"]
+        record = repo.get_connection(connection_id)
+        assert record is not None
+        legacy_fingerprint = "a" * 64
+        record["create_fingerprint"] = legacy_fingerprint
+        record.pop("create_fingerprint_version")
+        repo.save_connection(connection_id, record)
+        with store._connect() as connection:
+            connection.execute(
+                "UPDATE ux_commands SET fingerprint=?,body_json=? WHERE key=?",
+                (legacy_fingerprint, json.dumps(first.json()), headers["Idempotency-Key"]),
+            )
+        legacy_retry = client.post("/v1/setup/connections", json=payload, headers=headers)
+        assert legacy_retry.status_code == 409
+        assert legacy_retry.json()["error"]["code"] == "manual_reconcile_required"
+        assert legacy_retry.json()["error"]["recovery"] == "manual_reconcile"
+        assert legacy_retry.json()["detail"]["request_id"] == headers["Idempotency-Key"]

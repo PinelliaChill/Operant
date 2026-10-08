@@ -36,6 +36,7 @@ EXPECTED_OPERATION_IDS = {
     "renameConversation",
     "listModelConnections",
     "createModelConnection",
+    "getModelConnectionRequest",
     "discoverConnectionModels",
     "selectConnectionModel",
     "deleteModelConnection",

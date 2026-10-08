@@ -6,6 +6,7 @@ const copy: Record<string, string> = {
   approval_required: '此操作需要人工确认。请处理当前审批后继续。',
   command_outcome_unknown: '操作结果尚未确认。请按原请求刷新核对，勿再次提交。',
   outcome_unknown: '操作结果尚未确认。请按原请求刷新核对，勿再次提交。',
+  manual_reconcile_required: '原请求需要核对。请查询原请求结果，暂时不要重复提交。',
   command_in_progress: '原请求仍在处理中。请稍后刷新，勿再次提交。',
   conflict: '状态已变化。请刷新并核对后重试。',
   not_found: '目标记录未找到。请刷新列表，确认它是否已关闭或移除。',

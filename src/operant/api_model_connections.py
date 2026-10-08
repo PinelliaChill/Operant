@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
+from pydantic import ValidationError
 
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.service import ApplicationService
@@ -22,6 +23,7 @@ from operant.contracts.onboarding import (
     ConnectionModels,
     ConnectionModelSelection,
     ConnectionProfile,
+    ConnectionRequestResult,
     OAuthAttempt,
     OAuthStart,
     ProviderConnection,
@@ -154,9 +156,8 @@ def _digest(operation: str, target: str, payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _legacy_credential_digest(value: str) -> str:
-    """Match an existing receipt only; never create a new unkeyed secret digest."""
-    return hashlib.sha256(value.encode()).hexdigest()
+def _connection_id_for_request(request_id: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"operant:model-connection:{request_id}"))
 
 
 def install_model_connection_routes(
@@ -226,26 +227,23 @@ def install_model_connection_routes(
         action_gateway.consume(result.lease, action)
         return key, fingerprint, None
 
-    def secret_payload_digest(
-        key: str,
-        context: str,
-        value: str,
-        previous_fingerprint: str | None = None,
-        previous_version: str | None = None,
-    ) -> tuple[str, str]:
-        saved_command = repo.get_command_fingerprint(key)
-        saved = saved_command or previous_fingerprint
-        version = (
-            repo.get_command_fingerprint_version(key)
-            if saved_command is not None
-            else previous_version
+    def manual_reconcile_request(key: str) -> HTTPException:
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "manual_reconcile_required",
+                "message": "请求结果待核对，请勿重复提交。",
+                "request_id": key,
+            },
         )
-        if version not in {None, _SECRET_FINGERPRINT_VERSION}:
-            raise HTTPException(
-                status_code=409, detail="request fingerprint version is unavailable"
-            )
-        if saved is not None and version is None:
-            return _legacy_credential_digest(value), ""
+
+    def secret_payload_digest(key: str, context: str, value: str) -> tuple[str, str]:
+        saved_command = repo.get_command_fingerprint(key)
+        version = repo.get_command_fingerprint_version(key) if saved_command is not None else None
+        if saved_command is not None and version != _SECRET_FINGERPRINT_VERSION:
+            # An unversioned receipt can only be checked by hashing the supplied
+            # secret again. Leave it untouched and use the read-only request query.
+            raise manual_reconcile_request(key)
 
         def authorize_private_key() -> None:
             prepare_command(
@@ -261,7 +259,7 @@ def install_model_connection_routes(
                     context,
                     value,
                     before_create=authorize_private_key,
-                    allow_create=saved is None,
+                    allow_create=saved_command is None,
                 ),
                 _SECRET_FINGERPRINT_VERSION,
             )
@@ -290,6 +288,54 @@ def install_model_connection_routes(
         require_local(request)
         return ProviderConnectionList(items=[_view(record) for record in repo.list_connections()])
 
+    @app.get(
+        "/v1/setup/connections/requests/{request_id}",
+        operation_id="getModelConnectionRequest",
+        response_model=ConnectionRequestResult,
+    )
+    def get_connection_request(
+        request: Request, response: Response, request_id: str
+    ) -> ConnectionRequestResult:
+        response.headers["Cache-Control"] = "no-store"
+        require_local(request)
+        connection_id = _connection_id_for_request(request_id)
+        record, receipt = repo.get_connection_request_snapshot(request_id, connection_id)
+        if record is None:
+            return ConnectionRequestResult(request_id=request_id, status="unavailable")
+        try:
+            connection = _view(record)
+        except ValidationError:
+            connection = None
+        if receipt is not None and connection is not None:
+            raw_result = receipt.get("result")
+            if isinstance(raw_result, dict):
+                result = dict(raw_result)
+                receipt_version = result.pop("_credential_fingerprint_version", None)
+                try:
+                    original = ProviderConnection.model_validate(result)
+                except ValidationError:
+                    original = None
+                if (
+                    original is not None
+                    and original.connection_id == connection_id
+                    and original.auth_method == "api_key"
+                    and original.provider == connection.provider
+                    and connection.auth_method == original.auth_method
+                    and record.get("create_fingerprint") == receipt.get("fingerprint")
+                    and record.get("create_fingerprint_version") == receipt_version
+                ):
+                    # This proves the old saved result belongs to this stable
+                    # connection, never that a newly supplied secret would match.
+                    return ConnectionRequestResult(
+                        request_id=request_id, status="completed", connection=connection
+                    )
+        return ConnectionRequestResult(
+            request_id=request_id,
+            status="unconfirmed",
+            connection=connection,
+            message="该连接存在，但无法核对原请求结果。",
+        )
+
     @app.post(
         "/v1/setup/connections",
         operation_id="createModelConnection",
@@ -315,69 +361,97 @@ def install_model_connection_routes(
         ):
             raise HTTPException(status_code=400, detail="OAuth fields require OAuth sign-in")
         supplied_key = idempotency_key or str(uuid.uuid4())
-        connection_id = str(
-            uuid.uuid5(uuid.NAMESPACE_URL, f"operant:model-connection:{supplied_key}")
-        )
+        connection_id = _connection_id_for_request(supplied_key)
         previous = repo.get_connection(connection_id)
-        payload = body.model_dump(mode="json", exclude={"api_key", "client_secret"})
-        payload["api_key_digest"], fingerprint_version = secret_payload_digest(
-            supplied_key,
-            "model-connection-api-key",
-            body.api_key.get_secret_value(),
-            previous.get("create_fingerprint") if previous is not None else None,
-            previous.get("create_fingerprint_version") if previous is not None else None,
-        )
-        key, fingerprint, cached = prepare_command(
-            operation="create",
-            target="model-connections",
-            payload=payload,
-            idempotency_key=supplied_key,
-        )
-        if cached is not None:
-            return ProviderConnection.model_validate(cached)
-        if previous is not None:
-            if previous.get("create_fingerprint") != fingerprint:
-                raise HTTPException(status_code=409, detail="model connection command conflict")
-            result = _view(previous)
-            save_command(key, fingerprint, result, fingerprint_version=fingerprint_version)
-            return result
-        base_url = body.base_url or (
-            "https://generativelanguage.googleapis.com/v1"
-            if body.provider == "gemini"
-            else "https://api.openai.com/v1"
-        )
         if (
-            body.provider == "gemini"
-            and base_url.rstrip("/") != "https://generativelanguage.googleapis.com/v1"
+            previous is not None
+            and previous.get("create_fingerprint") is not None
+            and previous.get("create_fingerprint_version") != _SECRET_FINGERPRINT_VERSION
         ):
-            raise HTTPException(status_code=400, detail="Gemini uses its official API endpoint")
+            raise manual_reconcile_request(supplied_key)
+        saved_command = repo.get_command_fingerprint(supplied_key)
+        if (
+            saved_command is not None
+            and repo.get_command_fingerprint_version(supplied_key) != _SECRET_FINGERPRINT_VERSION
+        ):
+            raise manual_reconcile_request(supplied_key)
         try:
-            # ModelProfile applies the same URL validation used by existing profiles.
-            ModelProfile(
-                name="connection validation",
-                provider=body.provider,
-                model_id="pending",
-                base_url=base_url,
-                secret_ref=secret_ref(connection_id, "API_KEY"),
-            )
-            credentials.put(secret_ref(connection_id, "API_KEY"), body.api_key.get_secret_value())
-            record: dict[str, Any] = {
-                "connection_id": connection_id,
-                "name": body.name or ("Gemini" if body.provider == "gemini" else "API connection"),
-                "provider": body.provider,
-                "auth_method": "api_key",
-                "status": "connected",
-                "base_url": base_url,
-                "model_ids": [],
-                "profile_ids": [],
-                "secret_ref": secret_ref(connection_id, "API_KEY"),
-                "create_fingerprint": fingerprint,
-                "create_fingerprint_version": fingerprint_version or None,
-            }
-            repo.save_connection(connection_id, record)
-            result = _view(record)
-            save_command(key, fingerprint, result, fingerprint_version=fingerprint_version)
-            return result
+            # The per-request lock serializes duplicate Core processes. The
+            # credential store also refuses replacement under its global env lock.
+            with credentials.locked(f"model-create-{connection_id.replace('-', '')}"):
+                previous = repo.get_connection(connection_id)
+                if previous is not None and (
+                    previous.get("create_fingerprint") is None
+                    or previous.get("create_fingerprint_version") != _SECRET_FINGERPRINT_VERSION
+                ):
+                    raise manual_reconcile_request(supplied_key)
+                reference = secret_ref(connection_id, "API_KEY")
+                if previous is None and credentials.contains(reference):
+                    # A former process may have written the secret but not the
+                    # metadata. Its outcome needs a human check, not an overwrite.
+                    raise manual_reconcile_request(supplied_key)
+                payload = body.model_dump(mode="json", exclude={"api_key", "client_secret"})
+                payload["api_key_digest"], fingerprint_version = secret_payload_digest(
+                    supplied_key, "model-connection-api-key", body.api_key.get_secret_value()
+                )
+                key, fingerprint, cached = prepare_command(
+                    operation="create",
+                    target="model-connections",
+                    payload=payload,
+                    idempotency_key=supplied_key,
+                )
+                if cached is not None:
+                    if previous is None or previous.get("create_fingerprint") != fingerprint:
+                        raise manual_reconcile_request(supplied_key)
+                    return ProviderConnection.model_validate(cached)
+                if previous is not None:
+                    if previous.get("create_fingerprint") != fingerprint:
+                        raise HTTPException(
+                            status_code=409, detail="model connection command conflict"
+                        )
+                    result = _view(previous)
+                    save_command(key, fingerprint, result, fingerprint_version=fingerprint_version)
+                    return result
+                base_url = body.base_url or (
+                    "https://generativelanguage.googleapis.com/v1"
+                    if body.provider == "gemini"
+                    else "https://api.openai.com/v1"
+                )
+                if (
+                    body.provider == "gemini"
+                    and base_url.rstrip("/") != "https://generativelanguage.googleapis.com/v1"
+                ):
+                    raise HTTPException(
+                        status_code=400, detail="Gemini uses its official API endpoint"
+                    )
+                # ModelProfile applies the same URL validation used by existing profiles.
+                ModelProfile(
+                    name="connection validation",
+                    provider=body.provider,
+                    model_id="pending",
+                    base_url=base_url,
+                    secret_ref=reference,
+                )
+                if not credentials.put_if_absent(reference, body.api_key.get_secret_value()):
+                    raise manual_reconcile_request(supplied_key)
+                record: dict[str, Any] = {
+                    "connection_id": connection_id,
+                    "name": body.name
+                    or ("Gemini" if body.provider == "gemini" else "API connection"),
+                    "provider": body.provider,
+                    "auth_method": "api_key",
+                    "status": "connected",
+                    "base_url": base_url,
+                    "model_ids": [],
+                    "profile_ids": [],
+                    "secret_ref": reference,
+                    "create_fingerprint": fingerprint,
+                    "create_fingerprint_version": fingerprint_version,
+                }
+                repo.save_connection(connection_id, record)
+                result = _view(record)
+                save_command(key, fingerprint, result, fingerprint_version=fingerprint_version)
+                return result
         except (ValueError, CredentialError) as exc:
             raise HTTPException(
                 status_code=400, detail="model connection configuration is invalid"

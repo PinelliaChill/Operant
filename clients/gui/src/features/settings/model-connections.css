@@ -19,3 +19,10 @@
 .model-connections-detail dt { color: var(--text-secondary); }
 .model-connections-detail dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 680px) { .model-connections { padding: 20px 16px 100px; } }
+.model-request-recovery { display: block; }
+.model-request-recovery > p { margin: 0 0 var(--space-3, 12px); }
+.model-request-recovery-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-3, 12px); }
+.model-request-recovery-actions > button { flex: 0 0 auto; }
+.model-request-recovery-actions > details { min-width: 0; max-width: 100%; }
+.model-request-recovery-actions summary { white-space: nowrap; }
+.model-request-recovery-actions code { overflow-wrap: anywhere; }

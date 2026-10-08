@@ -93,6 +93,23 @@ class CredentialStore:
     def put(self, reference: str, value: str) -> None:
         self.put_many({reference: value})
 
+    def contains(self, reference: str) -> bool:
+        """Check a protected reference without loading its value into the environment."""
+        self._check_reference(reference)
+        return any(line.partition("=")[0] == reference for line in self._read_lines())
+
+    def put_if_absent(self, reference: str, value: str) -> bool:
+        """Never replace an earlier credential after an uncertain create result."""
+        self._check_reference(reference)
+        if not value or any(char in value for char in ("\x00", "\n", "\r")):
+            raise CredentialError("invalid credential")
+        with self.locked("env"):
+            if self.contains(reference):
+                return False
+            self._rewrite_locked({reference: value})
+            os.environ[reference] = value
+        return True
+
     def put_many(self, values: dict[str, str]) -> None:
         for reference, value in values.items():
             self._check_reference(reference)
@@ -113,31 +130,34 @@ class CredentialStore:
 
     def _rewrite(self, changes: Mapping[str, str | None]) -> None:
         with self.locked("env"):
-            lines = self._read_lines()
-            updated = [line for line in lines if line.partition("=")[0] not in changes]
-            if updated and not updated[-1].endswith("\n"):
-                updated[-1] += "\n"
-            for reference, value in changes.items():
-                if value is not None:
-                    updated.append(f"{reference}={json.dumps(value, ensure_ascii=False)}\n")
-            parent = self.path.parent
-            self._check_directory(parent)
-            fd, name = tempfile.mkstemp(prefix=".operant-env-", dir=parent)
+            self._rewrite_locked(changes)
+
+    def _rewrite_locked(self, changes: Mapping[str, str | None]) -> None:
+        lines = self._read_lines()
+        updated = [line for line in lines if line.partition("=")[0] not in changes]
+        if updated and not updated[-1].endswith("\n"):
+            updated[-1] += "\n"
+        for reference, value in changes.items():
+            if value is not None:
+                updated.append(f"{reference}={json.dumps(value, ensure_ascii=False)}\n")
+        parent = self.path.parent
+        self._check_directory(parent)
+        fd, name = tempfile.mkstemp(prefix=".operant-env-", dir=parent)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as output:
+                output.writelines(updated)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(name, self.path)
+            directory_fd = os.open(parent, os.O_RDONLY)
             try:
-                os.fchmod(fd, 0o600)
-                with os.fdopen(fd, "w", encoding="utf-8") as output:
-                    output.writelines(updated)
-                    output.flush()
-                    os.fsync(output.fileno())
-                os.replace(name, self.path)
-                directory_fd = os.open(parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                os.fsync(directory_fd)
             finally:
-                if os.path.exists(name):
-                    os.unlink(name)
+                os.close(directory_fd)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
 
     @contextmanager
     def locked(self, name: str) -> Iterator[None]:
