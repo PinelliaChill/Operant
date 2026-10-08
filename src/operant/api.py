@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -1539,8 +1540,48 @@ def create_app(
             # a second snapshot or truncate their typed projection results.
             return await call_next(request)
         if (
+            request.method == "POST"
+            and (
+                request.url.path in {"/v1/setup/connections", "/v1/setup/oauth/start"}
+                or re.fullmatch(
+                    r"/v1/setup/connections/[^/]+/(?:models|profiles)", request.url.path
+                )
+                is not None
+            )
+        ) or (
+            request.method == "DELETE"
+            and re.fullmatch(r"/v1/setup/(?:connections|oauth)/[^/]+", request.url.path) is not None
+        ):
+            # Model setup owns its private receipts and keyed secret matching.
+            # A second generic receipt would hash credentials without that key
+            # and could persist an OAuth authorization URL or a pre-approval ASK.
+            key = request.headers.get("Idempotency-Key")
+            if key is None:
+                key = new_id("idem")
+            if not key or len(key) > 300:
+                return protocol_response(
+                    status_code=400,
+                    code="invalid_idempotency_key",
+                    message="Idempotency-Key must contain between 1 and 300 characters",
+                )
+            request.scope["headers"] = [
+                (name, value)
+                for name, value in request.scope["headers"]
+                if name.lower() != b"idempotency-key"
+            ] + [(b"idempotency-key", key.encode("latin-1"))]
+            response = await call_next(request)
+            response.headers["Idempotency-Key"] = key
+            return response
+        if (
             request.url.path == "/v1/setup/local-control/sessions"
             or request.url.path.startswith(("/v1/local-control/", "/v1/extensions"))
+            or (
+                request.method == "POST"
+                and re.fullmatch(
+                    r"/v1/(?:browser|computer)/(?:[^/]+/observe|act)", request.url.path
+                )
+                is not None
+            )
         ) or (
             request.url.path.startswith("/v1/workbench/threads/")
             and request.url.path.endswith(("/extension-commands", "/skill-commands"))

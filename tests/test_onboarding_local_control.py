@@ -3,19 +3,23 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
 
 import operant.api_local_control as local_control_api
+import operant.remote.operator as local_operator
 from operant.api import create_app
 from operant.application.local_control import snapshot_control_bindings
 from operant.application.security import PolicyEngine
-from operant.domain.models import ModelProfile, RolePreset, ToolPolicy
+from operant.domain.messages import Message, ModelResponse, ProviderEvent, ToolCall, ToolDefinition
+from operant.domain.models import ModelProfile, RolePreset, RoleSnapshot, ToolPolicy
 from operant.domain.security import (
     Capability,
     PolicyBundle,
@@ -23,6 +27,9 @@ from operant.domain.security import (
     PolicyLayer,
     PolicyRule,
 )
+from operant.persistence.security import SQLiteSecurityRepository
+from sdk.python_client.phase56_generated import Phase56Client
+from sdk.python_client.transport import Phase1EError, TransportRequest, TransportResponse
 
 
 class _Connector:
@@ -34,6 +41,159 @@ class _Connector:
 
     def cancel(self, _job_id: str) -> None:
         pass
+
+
+class _ObserveProvider:
+    def __init__(
+        self,
+        *,
+        two_calls: bool = False,
+        tool_name: str = "ext_browser_observe",
+        arguments_json: str = "{}",
+    ) -> None:
+        self.turn = 0
+        self.two_calls = two_calls
+        self.tool_name = tool_name
+        self.arguments_json = arguments_json
+
+    async def list_models(self, *, base_url: str, secret_ref: str) -> list[str]:
+        return ["test-model"]
+
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        self.turn += 1
+        if self.turn == 1:
+            yield ProviderEvent(
+                event_type="model.completed",
+                response=ModelResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="observe-call",
+                            name=self.tool_name,
+                            arguments_json=self.arguments_json,
+                        ),
+                        *(
+                            (
+                                ToolCall(
+                                    id="observe-call-2",
+                                    name="ext_browser_observe",
+                                    arguments_json="{}",
+                                ),
+                            )
+                            if self.two_calls
+                            else ()
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+            )
+            return
+        yield ProviderEvent(
+            event_type="model.completed",
+            response=ModelResponse(content="Observed.", finish_reason="stop"),
+        )
+
+
+def test_phase56_observation_sdk_preserves_approval_binding_and_original_key(
+    tmp_path: Path,
+) -> None:
+    app, service, manager, client = _app(tmp_path)
+    browser = manager.registry.install("operant.chrome.browser", ("https://example.test",))
+    manager.registry.set_enabled(browser.plugin_id, True)
+    opened = client.post(
+        "/v1/setup/local-control/sessions",
+        json={"plugin_id": browser.plugin_id},
+        headers={"Idempotency-Key": "sdk-browser-session"},
+    )
+    assert opened.status_code == 200, opened.text
+    session = manager.get(opened.json()["session_id"])
+    assert (
+        app.state.remote_execution_controller.authorization.gateway
+        is app.state.phase45_action_gateway
+    )
+    app.state.phase45_action_gateway.engine = PolicyEngine(
+        PolicyBundle(
+            bundle_id="ask-sdk-observation",
+            version="ask-sdk.v1",
+            default_decision=PolicyDecision.ASK,
+            rules=(),
+        )
+    )
+
+    def transport(request: TransportRequest) -> TransportResponse:
+        path = urlsplit(request.url).path
+        response = client.request(
+            request.method,
+            path,
+            headers=dict(request.headers),
+            content=request.body,
+        )
+        return TransportResponse(
+            status=response.status_code, headers=dict(response.headers), body=response.content
+        )
+
+    sdk = Phase56Client("http://127.0.0.1:8000", transport=transport)
+    key = "sdk-observe-original-key"
+    body = {
+        "lease_id": session.lease.lease_id,
+        "token": session.lease.token,
+        "fencing": session.lease.fencing,
+        "target_ref": session.target_id,
+        "idempotency_key": key,
+    }
+    try:
+        with pytest.raises(Phase1EError) as asked:
+            sdk.observe_browser(session.target_id, body, idempotency_key=key)
+        assert asked.value.code == "http_409"
+        assert isinstance(asked.value.detail, dict)
+        assert asked.value.detail["code"] == "approval_required"
+        approval_id = asked.value.detail["approval_id"]
+        assert asked.value.detail["action_hash"]
+        assert asked.value.detail["policy_version"] == "ask-sdk.v1"
+        with service.store._connect() as connection:
+            count = connection.execute("SELECT COUNT(*) FROM remote_execution_jobs").fetchone()[0]
+        assert count == 0
+        approved = client.post(
+            f"/v1/security/approvals/{approval_id}",
+            json={"approved": True, "reason_code": "test exact observation"},
+        )
+        assert approved.status_code == 200
+        assert (
+            app.state.phase45_action_gateway.phase_repository.get_phase45_approval(approval_id)[
+                "status"
+            ]
+            == "approved"
+        )
+        inner_action = app.state.phase45_action_gateway.repository.get_security_action(
+            asked.value.detail["action_hash"]
+        )
+        inner_evaluation = app.state.phase45_action_gateway.engine.evaluate(inner_action)
+        assert inner_evaluation.decision is PolicyDecision.ASK
+        assert inner_evaluation.policy_version == "ask-sdk.v1"
+        assert (
+            app.state.phase45_action_gateway.phase_repository.get_phase45_approval(approval_id)[
+                "policy_version"
+            ]
+            == inner_evaluation.policy_version
+        )
+        created = sdk.observe_browser(session.target_id, body, idempotency_key=key)
+        assert isinstance(created.get("job_id"), str)
+        assert (
+            app.state.phase45_action_gateway.phase_repository.get_phase45_approval(approval_id)[
+                "status"
+            ]
+            == "consumed"
+        )
+        with service.store._connect() as connection:
+            count = connection.execute("SELECT COUNT(*) FROM remote_execution_jobs").fetchone()[0]
+        assert count == 1
+    finally:
+        service.close()
 
 
 def _app(tmp_path: Path) -> tuple[Any, Any, Any, TestClient]:
@@ -554,5 +714,258 @@ def test_retained_local_tool_rechecks_same_session_after_takeover(
         with pytest.raises(PermissionError):
             asyncio.run(observe.execute({}))
         assert calls == [original_lease_id, resumed_lease_id, resumed_lease_id]
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "approved",
+        "two_calls",
+        "denied",
+        "cancelled",
+        "wrong_key",
+        "wrong_inner_arguments",
+        "navigate",
+        "navigate_wrong_url",
+        "hard_deny",
+        "expired",
+        "takeover",
+        "unknown",
+    ),
+)
+@pytest.mark.asyncio
+async def test_bound_observation_uses_session_approval_then_exact_phase45_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    app, service, manager, client = _app(tmp_path)
+    browser = manager.registry.install("operant.chrome.browser", ("https://example.test",))
+    manager.registry.set_enabled(browser.plugin_id, True)
+    opened = client.post(
+        "/v1/setup/local-control/sessions",
+        json={"plugin_id": browser.plugin_id},
+        headers={"Idempotency-Key": "approval-browser-session"},
+    )
+    assert opened.status_code == 200, opened.text
+    created = client.post(
+        "/v1/setup/conversations",
+        json={"local_control_session_ids": [opened.json()["session_id"]]},
+        headers={"Idempotency-Key": "approval-conversation"},
+    )
+    assert created.status_code == 200, created.text
+    session_id = created.json()["session_id"]
+    workspace = service.get_session(session_id).role_snapshot.config_workspace_ref
+    assert workspace is not None
+    gateway = app.state.phase45_action_gateway
+    assert app.state.remote_execution_controller.authorization.gateway is gateway
+    gateway.engine = PolicyEngine(
+        PolicyBundle(
+            bundle_id="ask-bound-observation",
+            version="ask-observe.v1",
+            default_decision=PolicyDecision.ASK,
+            rules=(),
+        )
+    )
+    original = local_control_api.local_capability_tool_extensions
+    action_mode = mode.startswith("navigate")
+    tool_name = "ext_browser_navigate" if action_mode else "ext_browser_observe"
+    tool_arguments = (
+        {
+            "url": "https://example.test/page",
+            "observation_hash": "a" * 64,
+            "idempotency_key": "model-supplied-key",
+        }
+        if action_mode
+        else {}
+    )
+    keys: list[str] = []
+    nested_ids: list[str] = []
+
+    def extensions(path: Path, policy: ToolPolicy, **kwargs: Any) -> dict[str, Any]:
+        result = original(path, policy, **kwargs)
+        bindings = kwargs.get("bindings")
+        if not isinstance(bindings, dict) or "browser" not in bindings:
+            return result
+        binding = bindings["browser"]
+        extension = result[tool_name]
+
+        async def observe(arguments: dict[str, Any]) -> dict[str, Any]:
+            key = (
+                arguments.get("idempotency_key")
+                if action_mode
+                else local_operator._OBSERVATION_KEY.get()
+            )
+            assert isinstance(key, str)
+            if action_mode:
+                assert key != "model-supplied-key"
+            else:
+                assert arguments == {}
+            keys.append(key)
+            if mode == "hard_deny":
+                gateway.engine = PolicyEngine(
+                    PolicyBundle(
+                        bundle_id="deny-bound-observation",
+                        version="deny-observe.v1",
+                        default_decision=PolicyDecision.DENY,
+                        rules=(),
+                    )
+                )
+            action, decision, _ = gateway.guard(
+                tool="remote_target_job",
+                operation="navigate" if action_mode else "observe_browser",
+                target_id=binding.target_id,
+                arguments={
+                    "target_id": binding.target_id,
+                    "lease_id": binding.lease_id,
+                    "lease_fencing": binding.fencing,
+                    "capability": "browser.navigate" if action_mode else "browser.observe",
+                    "arguments": {
+                        "target_ref": binding.target_id,
+                        **(
+                            {
+                                "observation_hash": "a" * 64,
+                                "precondition": {},
+                                "arguments": {
+                                    "url": "https://example.test/other"
+                                    if mode == "navigate_wrong_url"
+                                    else "https://example.test/page"
+                                },
+                                "postcondition": {},
+                                "observation_content_hash": "b" * 64,
+                            }
+                            if action_mode
+                            else {}
+                        ),
+                        **(
+                            {"unexpected": "other-action"}
+                            if mode == "wrong_inner_arguments"
+                            else {}
+                        ),
+                    },
+                },
+                capabilities=(
+                    Capability.REMOTE_TARGET_EXEC,
+                    Capability.BROWSER_NAVIGATE if action_mode else Capability.BROWSER_OBSERVE,
+                ),
+                idempotency_key=key + "-changed" if mode == "wrong_key" else key,
+            )
+            if decision.decision.value == "ask":
+                assert decision.approval_id is not None
+                nested_ids.append(decision.approval_id)
+                if mode == "expired":
+                    with service.store._connect() as connection:
+                        connection.execute(
+                            "UPDATE phase45_approval_requests SET expires_at=? WHERE id=?",
+                            ("2000-01-01T00:00:00+00:00", decision.approval_id),
+                        )
+                if mode == "takeover":
+                    manager.transition(opened.json()["session_id"], "human_control")
+                raise Phase1EError(
+                    "http_409",
+                    "approval required",
+                    detail={
+                        "code": "approval_required",
+                        "approval_id": decision.approval_id,
+                        "action_hash": action.action_hash,
+                        "policy_version": action.policy_version,
+                    },
+                )
+            if decision.decision.value == "deny":
+                raise Phase1EError("http_403", "policy denied")
+            assert decision.decision.value == "allow" and decision.lease is not None
+            gateway.consume(decision.lease, action)
+            if mode == "unknown":
+                raise Phase1EError("manual_reconcile_required", "Job outcome unknown")
+            return {
+                "job_id": "fixture-job",
+                "observation": {"body": {"url": "https://example.test"}},
+            }
+
+        result[tool_name] = replace(extension, execute=observe)
+        return result
+
+    monkeypatch.setattr(local_control_api, "local_capability_tool_extensions", extensions)
+    service.provider.delegate = _ObserveProvider(
+        two_calls=mode == "two_calls",
+        tool_name=tool_name,
+        arguments_json=json.dumps(tool_arguments),
+    )
+
+    async def consume() -> list[Any]:
+        return [
+            event
+            async for event in service.run_session(
+                session_id, user_message="Observe the browser", workspace=workspace
+            )
+        ]
+
+    try:
+        task = asyncio.create_task(consume())
+        for _ in range(100):
+            pending = service.list_pending_approvals(session_id)
+            if pending:
+                break
+            await asyncio.sleep(0.01)
+        assert pending and pending[0]["tool_call_id"] == "observe-call"
+        assert keys == []
+        if mode == "cancelled":
+            assert service.cancel_session(session_id)
+        else:
+            service.decide_approval(session_id, "observe-call", approved=mode != "denied")
+        if mode == "two_calls":
+            for _ in range(100):
+                pending = service.list_pending_approvals(session_id)
+                if pending:
+                    break
+                await asyncio.sleep(0.01)
+            assert pending and pending[0]["tool_call_id"] == "observe-call-2"
+            service.decide_approval(session_id, "observe-call-2", approved=True)
+        events = await task
+        assert [event.event_type for event in events].count("tool.approval_required") == (
+            2 if mode == "two_calls" else 1
+        )
+        if mode == "denied":
+            assert events[-1].event_type == "agent.completed"
+            assert keys == [] and nested_ids == []
+            assert [event.event_type for event in events].count("tool.failed") == 1
+        elif mode == "cancelled":
+            assert events[-1].event_type == "agent.cancelled"
+            assert keys == [] and nested_ids == []
+        elif mode in {"approved", "navigate", "unknown"}:
+            assert events[-1].event_type == (
+                "agent.failed" if mode == "unknown" else "agent.completed"
+            )
+            assert len(keys) == 2 and keys[0] == keys[1]
+            assert len(nested_ids) == 1
+            assert (
+                gateway.phase_repository.get_phase45_approval(nested_ids[0])["status"] == "consumed"
+            )
+            nested = gateway.phase_repository.get_phase45_approval(nested_ids[0])
+            audit = SQLiteSecurityRepository(service.store).list_security_audit(
+                nested["action_hash"]
+            )
+            assert [item.event_type for item in audit].count("approval.decided") == 1
+            assert [item.event_type for item in audit].count("approval.consumed") == 1
+            assert [event.event_type for event in events].count("tool.completed") == (
+                0 if mode == "unknown" else 1
+            )
+        elif mode == "two_calls":
+            assert events[-1].event_type == "agent.completed"
+            assert len(keys) == 4 and keys[0] == keys[1] and keys[2] == keys[3]
+            assert keys[0] != keys[2]
+            assert len(nested_ids) == 2
+            assert all(
+                gateway.phase_repository.get_phase45_approval(approval_id)["status"] == "consumed"
+                for approval_id in nested_ids
+            )
+        else:
+            assert events[-1].event_type == "agent.failed"
+            assert len(keys) == 1
+            if nested_ids:
+                assert (
+                    gateway.phase_repository.get_phase45_approval(nested_ids[0])["status"]
+                    != "consumed"
+                )
     finally:
         service.close()

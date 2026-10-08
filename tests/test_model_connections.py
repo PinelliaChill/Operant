@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import stat
@@ -20,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from operant.api_model_connections import install_model_connection_routes
+from operant.contracts.onboarding import ConnectionCreate
 from operant.domain.messages import Message, MessageRole, ToolDefinition
 from operant.domain.models import ModelProfile, RoleSnapshot
 from operant.model_connections.credentials import CredentialError, CredentialStore
@@ -74,7 +76,19 @@ class _Repo:
             from operant.persistence.sqlite import ConflictError
 
             raise ConflictError("conflict")
-        return command[1]
+        return {
+            field: value
+            for field, value in command[1].items()
+            if field != "_credential_fingerprint_version"
+        }
+
+    def get_command_fingerprint(self, key: str) -> str | None:
+        command = self.commands.get(key)
+        return None if command is None else command[0]
+
+    def get_command_fingerprint_version(self, key: str) -> str | None:
+        command = self.commands.get(key)
+        return None if command is None else command[1].get("_credential_fingerprint_version")
 
     def save_command(self, key: str, fingerprint: str, result: dict[str, Any]) -> None:
         self.commands[key] = (fingerprint, result)
@@ -1572,6 +1586,7 @@ def test_connection_routes_restrict_origin_and_keep_secret_out_of_responses(tmp_
             == 403
         )
         assert repo.records == {}
+        assert not (tmp_path / ".env").exists()
         gateway.decision = "allow"
         headers = {
             "Idempotency-Key": "create-test",
@@ -1579,6 +1594,7 @@ def test_connection_routes_restrict_origin_and_keep_secret_out_of_responses(tmp_
         }
         created = client.post("/v1/setup/connections", json=body, headers=headers)
         assert created.status_code == 201
+        assert repo.get_command_fingerprint_version("create-test") == "hmac-v1"
         before = gateway.guards
         assert client.post("/v1/setup/connections", json=body, headers=headers).json() == (
             created.json()
@@ -1590,6 +1606,57 @@ def test_connection_routes_restrict_origin_and_keep_secret_out_of_responses(tmp_
             ).status_code
             == 409
         )
+
+        # Recreate the old on-disk receipt format, without rewriting its result.
+        legacy_payload = ConnectionCreate.model_validate(body).model_dump(
+            mode="json", exclude={"api_key", "client_secret"}
+        )
+        legacy_payload["api_key_digest"] = hashlib.sha256(body["api_key"].encode()).hexdigest()
+        legacy_fingerprint = hashlib.sha256(
+            json.dumps(
+                {"operation": "create", "target": "model-connections", "payload": legacy_payload},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        saved_result = dict(repo.commands["create-test"][1])
+        saved_result.pop("_credential_fingerprint_version", None)
+        repo.commands["create-test"] = (legacy_fingerprint, saved_result)
+        repo.records[created.json()["connection_id"]]["create_fingerprint"] = legacy_fingerprint
+        repo.records[created.json()["connection_id"]].pop("create_fingerprint_version")
+        CredentialStore(tmp_path / ".env").delete("OPERANT_CONNECTION_REQUEST_FINGERPRINT_KEY")
+        guards_before_legacy = gateway.guards
+        assert (
+            client.post("/v1/setup/connections", json=body, headers=headers).json()
+            == created.json()
+        )
+        assert gateway.guards == guards_before_legacy
+        assert (
+            CredentialStore(tmp_path / ".env").get("OPERANT_CONNECTION_REQUEST_FINGERPRINT_KEY")
+            is None
+        )
+        assert repo.commands["create-test"] == (legacy_fingerprint, saved_result)
+        assert (
+            client.post(
+                "/v1/setup/connections", json={**body, "api_key": "different"}, headers=headers
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                "/v1/setup/connections", json={**body, "name": "Changed name"}, headers=headers
+            ).status_code
+            == 409
+        )
+
+        # A historical write may have committed the connection before its receipt.
+        repo.commands.pop("create-test")
+        assert (
+            client.post("/v1/setup/connections", json=body, headers=headers).json()
+            == created.json()
+        )
+        assert len(repo.records) == 1
+        assert repo.commands["create-test"] == (legacy_fingerprint, saved_result)
         oauth_headers = {"Idempotency-Key": "oauth-start-test"}
         started = client.post(
             "/v1/setup/oauth/start", json={"provider": "chatgpt"}, headers=oauth_headers
@@ -1680,3 +1747,108 @@ def test_oauth_polling_keeps_url_in_memory_only_with_real_repository(tmp_path: P
     assert len(rows) == 1
     assert "authorization_url" not in rows[0]["body_json"]
     assert "code_challenge" not in rows[0]["body_json"]
+
+
+def test_request_fingerprint_is_private_stable_and_serializes_creation(tmp_path: Path) -> None:
+    store = CredentialStore(tmp_path / ".env")
+    grants: list[bool] = []
+    value = "synthetic-key-for-request-matching"
+
+    def digest(_: int) -> str:
+        return store.request_fingerprint(
+            "api-key", value, before_create=lambda: grants.append(True), allow_create=True
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(digest, range(8)))
+    assert len(set(results)) == 1
+    assert grants == [True]
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+    assert value not in store.path.read_text()
+    assert results[0] != hashlib.sha256(value.encode()).hexdigest()
+    reopened = CredentialStore(store.path)
+    assert (
+        reopened.request_fingerprint(
+            "api-key",
+            value,
+            before_create=lambda: pytest.fail("unexpected key creation"),
+            allow_create=False,
+        )
+        == results[0]
+    )
+    assert (
+        reopened.request_fingerprint(
+            "oauth-secret",
+            value,
+            before_create=lambda: pytest.fail("unexpected key creation"),
+            allow_create=False,
+        )
+        != results[0]
+    )
+
+
+def test_request_fingerprint_rejects_missing_key_for_existing_receipt(tmp_path: Path) -> None:
+    store = CredentialStore(tmp_path / ".env")
+    with pytest.raises(CredentialError, match="fingerprint key is missing"):
+        store.request_fingerprint(
+            "api-key",
+            "synthetic-key",
+            before_create=lambda: pytest.fail("must not replace lost key"),
+            allow_create=False,
+        )
+    assert not store.path.exists()
+
+
+def test_full_core_model_setup_has_one_private_receipt_and_no_oauth_url_cache(
+    tmp_path: Path,
+) -> None:
+    from operant.api import create_app
+
+    app = create_app(tmp_path / "core.sqlite")
+    with TestClient(app, base_url="http://127.0.0.1:4343") as client:
+        headers = {"Idempotency-Key": "full-core-api-connect"}
+        payload = {"provider": "openai-compatible", "api_key": "synthetic-api-key-for-core-receipt"}
+        first = client.post("/v1/setup/connections", json=payload, headers=headers)
+        assert first.status_code == 201
+        assert first.headers["idempotency-key"] == headers["Idempotency-Key"]
+        assert (
+            client.post("/v1/setup/connections", json=payload, headers=headers).json()
+            == first.json()
+        )
+        oauth_headers = {"Idempotency-Key": "full-core-oauth-start"}
+        started = client.post(
+            "/v1/setup/oauth/start", json={"provider": "chatgpt"}, headers=oauth_headers
+        )
+        assert started.status_code == 200
+        assert started.json()["authorization_url"]
+        replayed = client.post(
+            "/v1/setup/oauth/start", json={"provider": "chatgpt"}, headers=oauth_headers
+        )
+        assert replayed.json()["authorization_url"] == started.json()["authorization_url"]
+        assert replayed.headers["cache-control"] == "no-store"
+        assert (
+            client.post(
+                "/v1/setup/connections", json=payload, headers={"Idempotency-Key": ""}
+            ).status_code
+            == 400
+        )
+        store = app.state.operant_service.store
+        with store._connect() as connection:
+            private = connection.execute(
+                "SELECT fingerprint,body_json FROM ux_commands ORDER BY key"
+            ).fetchall()
+            generic = connection.execute(
+                "SELECT COUNT(*) FROM command_executions WHERE idempotency_key IN (?,?)",
+                (headers["Idempotency-Key"], oauth_headers["Idempotency-Key"]),
+            ).fetchone()[0]
+        assert generic == 0
+        assert len(private) == 2
+        assert all(len(row["fingerprint"]) == 64 for row in private)
+        assert any(
+            json.loads(row["body_json"]).get("_credential_fingerprint_version") == "hmac-v1"
+            for row in private
+        )
+        serialized = json.dumps([dict(row) for row in private])
+        assert payload["api_key"] not in serialized
+        assert "authorization_url" not in serialized
+        assert "code_challenge" not in serialized

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.security import PolicyEngine, balanced_policy_bundle
 from operant.application.service import ApplicationService
 from operant.contracts.b2_3 import ManagementCommand
+from operant.domain.actions import CommandExecution
 from operant.domain.commands import WorkspaceInitialization
 from operant.domain.security import (
     Capability,
@@ -27,6 +29,7 @@ from operant.persistence.onboarding import UXRepository
 from operant.persistence.phase45 import SQLitePhase45Repository
 from operant.persistence.security import SQLiteSecurityRepository
 from operant.persistence.sqlite import SQLiteStore
+from operant.protocol import canonical_action_hash
 from operant.skills.sources import default_skill_roots
 
 
@@ -173,6 +176,118 @@ def test_source_add_persists_and_delete_preserves_explicit_root(tmp_path: Path) 
     )
 
 
+@pytest.mark.parametrize("alias_kind", ["home", "symlink"])
+def test_legacy_canonical_source_receipt_replays_without_new_add(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias_kind: str
+) -> None:
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    added = tmp_path / "added"
+    added.mkdir()
+    canonical = added.resolve()
+    if alias_kind == "home":
+        monkeypatch.setenv("HOME", str(tmp_path))
+        requested = "~/added"
+    else:
+        alias = tmp_path / "alias"
+        alias.symlink_to(added, target_is_directory=True)
+        requested = str(alias)
+    root_ref = "user-" + hashlib.sha256(str(canonical).encode()).hexdigest()[:12]
+    settings = _Settings()
+    settings.values["skill_sources.v1"] = {root_ref: str(canonical)}
+    client, app = _client(configured, settings)
+    old_view = next(
+        item
+        for item in client.get("/v1/setup/skill-sources").json()["items"]
+        if item["root_ref"] == root_ref
+    )
+    key = f"legacy-{alias_kind}"
+    canonical_receipt_fingerprint = canonical_action_hash(
+        {"operation": "skill_source_add", "path": str(canonical)}
+    )
+    gateway = app.state.phase45_action_gateway
+    action, decision, _ = gateway.guard(
+        tool="skill_source",
+        operation="add",
+        target_id=hashlib.sha256(str(canonical).encode()).hexdigest()[:32],
+        arguments={"request_hash": canonical_receipt_fingerprint},
+        capabilities=(Capability.WORKSPACE_WRITE,),
+        idempotency_key=key,
+    )
+    assert decision.lease is not None
+    gateway.consume(decision.lease, action)
+    store = app.state.skill_source_test_service.store
+    command, created = store.reserve_command_execution(
+        CommandExecution(
+            command_type="skill_source.change",
+            idempotency_key=key,
+            action_hash=canonical_receipt_fingerprint,
+        )
+    )
+    assert created
+    store.complete_command_execution(
+        command.id, response_json=json.dumps(old_view), http_status=200
+    )
+
+    def forbidden_change(_key: str, _value: Any) -> None:
+        raise AssertionError("completed source request must not add another source")
+
+    def forbidden_scan(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("completed source request must not scan sources again")
+
+    monkeypatch.setattr(settings, "set_setting", forbidden_change)
+    monkeypatch.setattr(source_module, "SkillDiscovery", forbidden_scan)
+    replay = client.post(
+        "/v1/setup/skill-sources",
+        json={"path": requested},
+        headers={"Idempotency-Key": key},
+    )
+    assert replay.status_code == 200
+    assert replay.json() == old_view
+    assert settings.values["skill_sources.v1"] == {root_ref: str(canonical)}
+    if alias_kind == "symlink":
+        other = tmp_path / "other"
+        other.mkdir()
+        alias.unlink()
+        alias.symlink_to(other, target_is_directory=True)
+        changed = client.post(
+            "/v1/setup/skill-sources",
+            json={"path": requested},
+            headers={"Idempotency-Key": key},
+        )
+        assert changed.status_code == 409
+
+
+def test_unknown_legacy_source_receipt_is_not_retried(tmp_path: Path) -> None:
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    added = tmp_path / "added"
+    added.mkdir()
+    settings = _Settings()
+    client, app = _client(configured, settings)
+    key = "unknown-legacy-source"
+    canonical_receipt_fingerprint = canonical_action_hash(
+        {"operation": "skill_source_add", "path": str(added.resolve())}
+    )
+    command, created = app.state.skill_source_test_service.store.reserve_command_execution(
+        CommandExecution(
+            command_type="skill_source.change",
+            idempotency_key=key,
+            action_hash=canonical_receipt_fingerprint,
+        )
+    )
+    assert created and command.response_json is None
+
+    replay = client.post(
+        "/v1/setup/skill-sources",
+        json={"path": str(added)},
+        headers={"Idempotency-Key": key},
+    )
+    assert replay.status_code == 409
+    assert replay.json()["detail"]["code"] == "command_outcome_unknown"
+    assert settings.values == {}
+
+
 def test_source_rejects_remote_origin_and_missing_directory(tmp_path: Path) -> None:
     configured = tmp_path / "configured"
     configured.mkdir()
@@ -190,13 +305,32 @@ def test_source_rejects_remote_origin_and_missing_directory(tmp_path: Path) -> N
     )
 
 
-def test_source_hard_deny_prevents_registration(tmp_path: Path) -> None:
+def test_source_expands_current_home_only_after_authorization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    added = tmp_path / "skills"
+    added.mkdir()
+    client, _ = _client(configured, _Settings())
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    created = client.post(
+        "/v1/setup/skill-sources",
+        json={"path": "~/skills"},
+        headers={"Idempotency-Key": "current-home-source"},
+    )
+    assert created.status_code == 200
+    assert created.json()["path"] == str(added)
+
+
+def test_source_hard_deny_prevents_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     configured = tmp_path / "configured"
     configured.mkdir()
     added = tmp_path / "added"
     added.mkdir()
-    blocked = tmp_path / "blocked"
-    blocked.mkdir()
     settings = _Settings()
     client, app = _client(configured, settings)
     registered = client.post(
@@ -222,9 +356,18 @@ def test_source_hard_deny_prevents_registration(tmp_path: Path) -> None:
             ),
         )
     )
+
+    def forbidden_resolution(_path: str | Path) -> Path:
+        raise AssertionError("denied source must not be resolved or inspected")
+
+    def forbidden_expansion(_path: Path) -> Path:
+        raise AssertionError("denied source must not look up a home directory")
+
+    monkeypatch.setattr(source_module, "_source_path", forbidden_resolution)
+    monkeypatch.setattr(Path, "expanduser", forbidden_expansion)
     denied = client.post(
         "/v1/setup/skill-sources",
-        json={"path": str(blocked)},
+        json={"path": "~otheruser/skills"},
         headers={"Idempotency-Key": "denied-source"},
     )
     assert denied.status_code == 403

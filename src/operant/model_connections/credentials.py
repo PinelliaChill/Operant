@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import ast
 import fcntl
+import hmac
 import json
 import os
 import re
+import secrets
 import stat
 import tempfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -29,6 +31,29 @@ class CredentialStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+
+    def request_fingerprint(
+        self,
+        context: str,
+        value: str,
+        *,
+        before_create: Callable[[], None],
+        allow_create: bool,
+    ) -> str:
+        """Keep request matching opaque to someone with only the metadata DB."""
+        reference = "OPERANT_CONNECTION_REQUEST_FINGERPRINT_KEY"
+        with self.locked("request-fingerprint"):
+            key = self.get(reference)
+            if key is None:
+                if not allow_create:
+                    raise CredentialError("request fingerprint key is missing")
+                before_create()
+                key = secrets.token_hex(32)
+                self.put(reference, key)
+            if not re.fullmatch(r"[0-9a-f]{64}", key):
+                raise CredentialError("invalid request fingerprint key")
+        message = json.dumps([context, value], separators=(",", ":")).encode()
+        return hmac.digest(bytes.fromhex(key), message, "sha256").hex()
 
     def get(self, reference: str) -> str | None:
         self._check_reference(reference)

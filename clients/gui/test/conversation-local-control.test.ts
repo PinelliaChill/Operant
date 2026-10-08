@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chooseConversationControlSession, confirmedControlOpen, controlApprovalAction, controlOpenStorageKey, openedControlCanStartConversation, readPendingControlOpen } from '../src/features/extensions/conversationLocalControl.ts';
+import { approvalStillAllowsContinuation, chooseConversationControlSession, confirmedControlOpen, controlApprovalAction, controlOpenStorageKey, controlRouteStillCurrent, openedControlCanStartConversation, readPendingControlOpen } from '../src/features/extensions/conversationLocalControl.ts';
 
 const computer = 'operant.macos.computer';
 const browser = 'operant.chrome.browser';
@@ -44,4 +44,15 @@ test('an uncertain approval decision cannot be submitted again from the UI', () 
   assert.equal(controlApprovalAction('pending', true), 'read_only');
   assert.equal(controlApprovalAction('approved', true), 'continue');
   assert.equal(controlApprovalAction('consumed', true), 'read_only');
+});
+
+test('approved continuation requires the original approval and unchanged route and workspace', () => {
+  assert.equal(approvalStillAllowsContinuation({ approval_id: 'approval-1', status: 'approved' }, 'approval-1'), true);
+  assert.equal(approvalStillAllowsContinuation({ approval_id: 'approval-1', status: 'pending' }, 'approval-1'), false);
+  assert.equal(approvalStillAllowsContinuation({ approval_id: 'other', status: 'approved' }, 'approval-1'), false);
+  const clicked = { revision: 2, href: 'http://localhost/settings?section=tools', workspaceId: 'workspace-1' };
+  assert.equal(controlRouteStillCurrent(clicked, { ...clicked }), true);
+  assert.equal(controlRouteStillCurrent(clicked, { ...clicked, revision: 3 }), false);
+  assert.equal(controlRouteStillCurrent(clicked, { ...clicked, href: 'http://localhost/chat/thread-2' }), false);
+  assert.equal(controlRouteStillCurrent(clicked, { ...clicked, workspaceId: 'workspace-2' }), false);
 });

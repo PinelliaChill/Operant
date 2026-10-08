@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from operant.remote.local_browser import BrowserTargetError, BrowserTargetPolicy
@@ -8,12 +10,14 @@ from operant.remote.operator import (
     CapabilityLeaseBinding,
     CapabilityOperationError,
     ComputerCapabilityOperator,
+    bound_observation_key,
 )
 
 
 class FakePhase56Client:
     def __init__(self) -> None:
         self.observations = 0
+        self.observation_keys: list[str] = []
         self.actions: list[dict[str, object]] = []
         self.result: dict[str, object] = {}
 
@@ -22,6 +26,7 @@ class FakePhase56Client:
     ) -> dict[str, object]:
         assert target_id == "target-test"
         assert request["token"] == "test-lease-token-123456"
+        self.observation_keys.append(str(request["idempotency_key"]))
         self.observations += 1
         return {"job_id": "observation-job"}
 
@@ -66,6 +71,23 @@ def test_operator_reads_durable_observation_without_exposing_lease() -> None:
     assert operator.observe()["observation"]["observation_hash"] == "a" * 64
     assert "test-lease-token" not in repr(operator.binding)
     assert client.observations == 1
+
+
+@pytest.mark.asyncio
+async def test_bound_observation_key_survives_worker_thread_and_resets() -> None:
+    client = FakePhase56Client()
+    client.result = {
+        "status": "succeeded",
+        "result": {"status": "succeeded"},
+        "observation": {"observation_hash": "a" * 64, "body": {"url": "about:blank"}},
+    }
+    operator = _operator(client)
+    with bound_observation_key("same-tool-call-key"):
+        await asyncio.to_thread(operator.observe)
+        await asyncio.to_thread(operator.observe)
+    await asyncio.to_thread(operator.observe)
+    assert client.observation_keys[:2] == ["same-tool-call-key", "same-tool-call-key"]
+    assert client.observation_keys[2] != "same-tool-call-key"
 
 
 def test_operator_rejects_other_origin_and_credential_before_core_call() -> None:

@@ -1501,7 +1501,7 @@ export function useLive(): LiveContextValue {
 }
 
 export function liveThreadTitle(thread: LiveThread | undefined): string {
-  return thread?.title || thread?.id || '未命名对话';
+  return thread?.title && thread.title !== thread.id ? thread.title : '新对话';
 }
 
 export function sessionRoleId(session: LiveSession | undefined): string | undefined {

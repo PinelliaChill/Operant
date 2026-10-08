@@ -45,6 +45,7 @@ from operant.providers.router import ConnectionProviderRouter
 _DESKTOP_ORIGINS = frozenset(
     {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}
 )
+_SECRET_FINGERPRINT_VERSION = "hmac-v1"
 
 
 def _view(record: dict[str, Any]) -> ProviderConnection:
@@ -153,6 +154,11 @@ def _digest(operation: str, target: str, payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _legacy_credential_digest(value: str) -> str:
+    """Match an existing receipt only; never create a new unkeyed secret digest."""
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
 def install_model_connection_routes(
     app: FastAPI,
     service: ApplicationService,
@@ -220,9 +226,58 @@ def install_model_connection_routes(
         action_gateway.consume(result.lease, action)
         return key, fingerprint, None
 
-    def save_command(key: str, fingerprint: str, value: Any) -> None:
+    def secret_payload_digest(
+        key: str,
+        context: str,
+        value: str,
+        previous_fingerprint: str | None = None,
+        previous_version: str | None = None,
+    ) -> tuple[str, str]:
+        saved_command = repo.get_command_fingerprint(key)
+        saved = saved_command or previous_fingerprint
+        version = (
+            repo.get_command_fingerprint_version(key)
+            if saved_command is not None
+            else previous_version
+        )
+        if version not in {None, _SECRET_FINGERPRINT_VERSION}:
+            raise HTTPException(
+                status_code=409, detail="request fingerprint version is unavailable"
+            )
+        if saved is not None and version is None:
+            return _legacy_credential_digest(value), ""
+
+        def authorize_private_key() -> None:
+            prepare_command(
+                operation="initialize_request_matching_key",
+                target="model-connections",
+                payload={"format": _SECRET_FINGERPRINT_VERSION},
+                idempotency_key="model-connection-request-matching-key:v1",
+            )
+
         try:
-            repo.save_command(key, fingerprint, value.model_dump(mode="json"))
+            return (
+                credentials.request_fingerprint(
+                    context,
+                    value,
+                    before_create=authorize_private_key,
+                    allow_create=saved is None,
+                ),
+                _SECRET_FINGERPRINT_VERSION,
+            )
+        except CredentialError as exc:
+            raise HTTPException(
+                status_code=400, detail="credential storage is unavailable"
+            ) from exc
+
+    def save_command(
+        key: str, fingerprint: str, value: Any, *, fingerprint_version: str = ""
+    ) -> None:
+        try:
+            result = value.model_dump(mode="json")
+            if fingerprint_version:
+                result["_credential_fingerprint_version"] = fingerprint_version
+            repo.save_command(key, fingerprint, result)
         except ConflictError as exc:
             raise HTTPException(status_code=409, detail="idempotency result conflict") from exc
 
@@ -259,25 +314,32 @@ def install_model_connection_routes(
             or body.project_id is not None
         ):
             raise HTTPException(status_code=400, detail="OAuth fields require OAuth sign-in")
+        supplied_key = idempotency_key or str(uuid.uuid4())
+        connection_id = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"operant:model-connection:{supplied_key}")
+        )
+        previous = repo.get_connection(connection_id)
         payload = body.model_dump(mode="json", exclude={"api_key", "client_secret"})
-        payload["api_key_digest"] = hashlib.sha256(
-            body.api_key.get_secret_value().encode()
-        ).hexdigest()
+        payload["api_key_digest"], fingerprint_version = secret_payload_digest(
+            supplied_key,
+            "model-connection-api-key",
+            body.api_key.get_secret_value(),
+            previous.get("create_fingerprint") if previous is not None else None,
+            previous.get("create_fingerprint_version") if previous is not None else None,
+        )
         key, fingerprint, cached = prepare_command(
             operation="create",
             target="model-connections",
             payload=payload,
-            idempotency_key=idempotency_key,
+            idempotency_key=supplied_key,
         )
         if cached is not None:
             return ProviderConnection.model_validate(cached)
-        connection_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"operant:model-connection:{key}"))
-        previous = repo.get_connection(connection_id)
         if previous is not None:
             if previous.get("create_fingerprint") != fingerprint:
                 raise HTTPException(status_code=409, detail="model connection command conflict")
             result = _view(previous)
-            save_command(key, fingerprint, result)
+            save_command(key, fingerprint, result, fingerprint_version=fingerprint_version)
             return result
         base_url = body.base_url or (
             "https://generativelanguage.googleapis.com/v1"
@@ -299,7 +361,7 @@ def install_model_connection_routes(
                 secret_ref=secret_ref(connection_id, "API_KEY"),
             )
             credentials.put(secret_ref(connection_id, "API_KEY"), body.api_key.get_secret_value())
-            record = {
+            record: dict[str, Any] = {
                 "connection_id": connection_id,
                 "name": body.name or ("Gemini" if body.provider == "gemini" else "API connection"),
                 "provider": body.provider,
@@ -310,10 +372,11 @@ def install_model_connection_routes(
                 "profile_ids": [],
                 "secret_ref": secret_ref(connection_id, "API_KEY"),
                 "create_fingerprint": fingerprint,
+                "create_fingerprint_version": fingerprint_version or None,
             }
             repo.save_connection(connection_id, record)
             result = _view(record)
-            save_command(key, fingerprint, result)
+            save_command(key, fingerprint, result, fingerprint_version=fingerprint_version)
             return result
         except (ValueError, CredentialError) as exc:
             raise HTTPException(
@@ -480,16 +543,18 @@ def install_model_connection_routes(
     ) -> OAuthAttempt:
         response.headers["Cache-Control"] = "no-store"
         require_local(request)
+        supplied_key = idempotency_key or str(uuid.uuid4())
         payload = body.model_dump(mode="json", exclude={"client_secret"})
+        fingerprint_version = ""
         if body.client_secret is not None:
-            payload["client_secret_digest"] = hashlib.sha256(
-                body.client_secret.get_secret_value().encode()
-            ).hexdigest()
+            payload["client_secret_digest"], fingerprint_version = secret_payload_digest(
+                supplied_key, "model-oauth-client-secret", body.client_secret.get_secret_value()
+            )
         key, fingerprint, cached = prepare_command(
             operation="oauth_start",
             target=body.connection_id or "model-connections",
             payload=payload,
-            idempotency_key=idempotency_key,
+            idempotency_key=supplied_key,
         )
         if cached is not None:
             attempt_id = cached.get("attempt_id")
@@ -536,9 +601,10 @@ def install_model_connection_routes(
             expires_at=datetime.fromtimestamp(attempt.started_at + 600, tz=timezone.utc),
         )
         # State and nonce belong only to the in-memory OAuth attempt, not SQLite.
-        repo.save_command(
-            key, fingerprint, result.model_dump(mode="json", exclude={"authorization_url"})
-        )
+        stored_result = result.model_dump(mode="json", exclude={"authorization_url"})
+        if fingerprint_version:
+            stored_result["_credential_fingerprint_version"] = fingerprint_version
+        repo.save_command(key, fingerprint, stored_result)
         return result
 
     @app.get(

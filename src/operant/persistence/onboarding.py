@@ -176,7 +176,27 @@ class UXRepository:
             return None
         if row["fingerprint"] != fingerprint:
             raise ConflictError("请求编号已用于另一项操作")
-        return dict(json.loads(row["body_json"]))
+        result = dict(json.loads(row["body_json"]))
+        result.pop("_credential_fingerprint_version", None)
+        return result
+
+    def get_command_fingerprint(self, key: str) -> str | None:
+        """Read the private matching version before validating a legacy receipt."""
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT fingerprint FROM ux_commands WHERE key=?", (key,)
+            ).fetchone()
+        return None if row is None else str(row["fingerprint"])
+
+    def get_command_fingerprint_version(self, key: str) -> str | None:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT body_json FROM ux_commands WHERE key=?", (key,)
+            ).fetchone()
+        if row is None:
+            return None
+        value = json.loads(row["body_json"]).get("_credential_fingerprint_version")
+        return None if value is None else str(value)
 
     def get_conversation_command_metadata(self, key: str) -> ConversationMetadata | None:
         """Read the atomic creation receipt without repeating a mutation."""

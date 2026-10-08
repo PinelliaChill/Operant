@@ -47,6 +47,16 @@ export interface PendingControlOpen {
   decisionSubmitted?: boolean;
 }
 
+export function approvalStillAllowsContinuation(approval: Record<string, unknown>, approvalId: string): boolean {
+  return approval.approval_id === approvalId && approval.status === 'approved';
+}
+
+export interface ControlRouteSnapshot { revision: number; href: string; workspaceId: string | null }
+
+export function controlRouteStillCurrent(clicked: ControlRouteSnapshot, current: ControlRouteSnapshot): boolean {
+  return clicked.revision === current.revision && clicked.href === current.href && clicked.workspaceId === current.workspaceId;
+}
+
 export function controlApprovalAction(
   status: string | null,
   decisionSubmitted: boolean,

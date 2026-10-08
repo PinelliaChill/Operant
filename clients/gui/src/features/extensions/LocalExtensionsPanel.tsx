@@ -11,7 +11,7 @@ import type { LocalApplication } from '../../../../../sdk/typescript-client/onbo
 import { isWriteOutcomeUnknown } from '../../lib/writeOutcome';
 import { localStateLabel } from '../../lib/statusCopy';
 import { approvalId, idempotencyKey, LOCAL_EXTENSION_CHANGE_EVENT, optionalText, projection, projectionItems, requestCode, requestError, requiredText, stringList } from './localProjection';
-import { chooseConversationControlSession, confirmedControlOpen, controlApprovalAction, controlOpenStorageKey, openedControlCanStartConversation, readPendingControlOpen, sameControlTargets, type ControlSessionChoice, type PendingControlOpen } from './conversationLocalControl';
+import { approvalStillAllowsContinuation, chooseConversationControlSession, confirmedControlOpen, controlApprovalAction, controlOpenStorageKey, controlRouteStillCurrent, openedControlCanStartConversation, readPendingControlOpen, sameControlTargets, type ControlSessionChoice, type PendingControlOpen } from './conversationLocalControl';
 import { visibleOnboardingError } from '../../live/createRequestRecovery';
 
 type Plugin = { id: string; digest: string; state: string; targets: string[] };
@@ -211,10 +211,10 @@ export const LocalExtensionsPanel: React.FC = () => {
         setControlApprovalStatus('pending');
         setConversationError('开启本机控制需要你确认。批准后会继续原请求。');
       } else if (isWriteOutcomeUnknown(reason)) {
-        setConversationError(`开启结果尚未确认：${requestError(reason)}。请刷新并核对原请求，不要再次开启。`);
+        setConversationError('没有收到控制会话的开启结果。请刷新并核对原请求，暂时不要重试。');
       } else {
         try { rememberControlOpen(null); } catch { /* Keep the safe recovery barrier. */ }
-        setConversationError(`无法开启本机控制：${requestError(reason)}。请核对授权目标后重试。`);
+        setConversationError(`无法开启本机控制。${requestError(reason)}`);
       }
       return null;
     }
@@ -227,7 +227,8 @@ export const LocalExtensionsPanel: React.FC = () => {
     const routeRevision = getRouteRevision();
     const locationHref = window.location.href;
     const workspaceId = selectedProjectId;
-    const stillHere = () => getRouteRevision() === routeRevision && window.location.href === locationHref && selectedProjectIdRef.current === workspaceId;
+    const clickedRoute = { revision: routeRevision, href: locationHref, workspaceId };
+    const stillHere = () => controlRouteStillCurrent(clickedRoute, { revision: getRouteRevision(), href: window.location.href, workspaceId: selectedProjectIdRef.current });
     try {
       if (!setup?.ready) throw new Error('请先完成模型连接和首次设置，再创建对话。');
       const [pluginPage, conversationPage, localSessionPage] = await Promise.all([
@@ -293,17 +294,25 @@ export const LocalExtensionsPanel: React.FC = () => {
 
   const continueApprovedControlOpen = async () => {
     const request = pendingControlOpen;
-    if (!request?.approvalId || controlApprovalStatus !== 'approved' || conversationInFlight.current || disconnected) return;
+    if (!request?.approvalId || controlApprovalStatus !== 'approved' || conversationInFlight.current || createBusy || createOutcomeUnknown || disconnected) return;
     conversationInFlight.current = true; setConversationBusy(true); setConversationError('');
+    const clickedRoute = { revision: getRouteRevision(), href: window.location.href, workspaceId: selectedProjectId };
+    const stillHere = () => controlRouteStillCurrent(clickedRoute, { revision: getRouteRevision(), href: window.location.href, workspaceId: selectedProjectIdRef.current });
     try {
+      const approval = await phase45Client.getPhase45Approval(request.approvalId);
+      if (!approvalStillAllowsContinuation(approval, request.approvalId)) {
+        setControlApprovalStatus(typeof approval.status === 'string' && ['pending', 'consumed', 'denied', 'expired'].includes(approval.status) ? approval.status as 'pending' | 'consumed' | 'denied' | 'expired' : 'error');
+        throw new Error('审批状态已变化。请刷新并核对原请求。');
+      }
       const pluginPage = await phase56Client.listLocalCapabilityPlugins();
       const plugin = projectionItems(pluginPage, '本机能力插件').map(mapPlugin).find((item) => item.id === request.pluginId);
       const expected = request.computerBundleId ? [request.computerBundleId] : plugin?.targets ?? [];
       if (!plugin || plugin.state !== 'enabled' || !sameControlTargets(expected, request.expectedTargets) || (request.computerBundleId && !plugin.targets.includes(request.computerBundleId))) {
         throw new Error('授权目标已变化。请刷新并核对原审批，暂不继续开启。');
       }
+      if (!stillHere()) return;
       const sessionId = await openConversationControl({ key: request.key, pluginId: request.pluginId, expectedTargets: request.expectedTargets, ...(request.computerBundleId ? { computerBundleId: request.computerBundleId } : {}) });
-      if (sessionId) setConversationNotice('控制会话已开启。点击对应能力卡片即可创建新对话。');
+      if (sessionId) await createConversationWithControl(sessionId, stillHere);
     } catch (reason: unknown) {
       setConversationError(requestError(reason));
     } finally { conversationInFlight.current = false; setConversationBusy(false); }

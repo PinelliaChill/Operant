@@ -3,7 +3,7 @@ import { useMatch, useNavigate } from 'react-router-dom';
 import { ChevronRight, FolderKanban, PanelLeftClose, Plus, Search } from 'lucide-react';
 import { useOnboarding } from '../../live/OnboardingContext';
 import { StatusBadge } from '../../components/StatusBadge';
-import { useLive } from '../../live/LiveContext';
+import { liveThreadTitle, useLive } from '../../live/LiveContext';
 import type { LiveProjectProjection } from '../../live/liveState';
 import { formatRelativeDay } from '../../lib/format';
 import { visibleThreadTree } from './liveThreadTree';
@@ -60,7 +60,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
       if (!normalizedQuery) return true;
       if (project.name.toLowerCase().includes(normalizedQuery)) return true;
       if (project.workspaceRef.toLowerCase().includes(normalizedQuery)) return true;
-      return projectThreads(project, threads).some((thread) => (metadata[thread.id]?.title || thread.title).toLowerCase().includes(normalizedQuery));
+      return projectThreads(project, threads).some((thread) => (metadata[thread.id]?.title || liveThreadTitle(thread)).toLowerCase().includes(normalizedQuery));
     }),
     [metadata, normalizedQuery, threads, visibleProjects]
   );
@@ -208,7 +208,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                         className="live-thread-tree-toggle"
                         onClick={() => toggleThread(thread.id)}
                         aria-expanded={normalizedQuery ? true : !collapsedThreads.includes(thread.id)}
-                        aria-label={`${normalizedQuery || !collapsedThreads.includes(thread.id) ? '折叠' : '展开'} ${metadata[thread.id]?.title || thread.title || '新对话'} 的子对话`}
+                        aria-label={`${normalizedQuery || !collapsedThreads.includes(thread.id) ? '折叠' : '展开'} ${metadata[thread.id]?.title || liveThreadTitle(thread)} 的子对话`}
                       ><ChevronRight size={13} aria-hidden="true" className={normalizedQuery || !collapsedThreads.includes(thread.id) ? 'expanded' : ''} /></button>
                         : <span className="live-thread-tree-spacer" aria-hidden="true" />}
                       <button
@@ -216,10 +216,10 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                         className={`rail-sidebar-row${thread.id === (selectedThreadId || activeThreadId) ? ' active' : ''}`}
                         onClick={() => goThread(thread.id)}
                         aria-current={thread.id === (selectedThreadId || activeThreadId) ? 'page' : undefined}
-                        aria-label={`${depth > 0 ? `第 ${depth} 层子对话，` : ''}${metadata[thread.id]?.title || thread.title || '新对话'}，${threadStatusLabel(thread.status)}`}
+                        aria-label={`${depth > 0 ? `第 ${depth} 层子对话，` : ''}${metadata[thread.id]?.title || liveThreadTitle(thread)}，${threadStatusLabel(thread.status)}`}
                       >
                         <span className="rail-sidebar-row-main">
-                          <span className="rail-sidebar-row-title">{metadata[thread.id]?.title || thread.title || '新对话'}</span>
+                          <span className="rail-sidebar-row-title">{metadata[thread.id]?.title || liveThreadTitle(thread)}</span>
                           <span className="rail-sidebar-row-sub">{threadStatusLabel(thread.status)}</span>
                         </span>
                         <span className="rail-sidebar-time">{formatRelativeDay(thread.updatedAt)}</span>

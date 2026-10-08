@@ -35,13 +35,23 @@ _DEFAULT_LABELS = {
 }
 
 
-def _source_path(raw: str | Path) -> Path:
-    path = Path(raw).expanduser()
-    if not path.is_absolute() or len(str(path)) > 4_096:
+def _requested_source_path(raw: str | Path) -> Path:
+    supplied = str(raw)
+    if len(supplied) > 4_096 or not supplied:
         raise ValueError("Skill source path must be a bounded absolute directory")
-    if any(character in str(path) for character in ("\x00", "\n", "\r")):
+    if any(character in supplied for character in ("\x00", "\n", "\r")):
         raise ValueError("Skill source path contains a control character")
-    return path.resolve(strict=False)
+    path = Path(supplied)
+    if not path.is_absolute() and not supplied.startswith("~"):
+        raise ValueError("Skill source path must be a bounded absolute directory")
+    return path
+
+
+def _source_path(raw: str | Path) -> Path:
+    try:
+        return _requested_source_path(raw).expanduser().resolve(strict=False)
+    except RuntimeError as exc:
+        raise ValueError("Skill source home directory is unavailable") from exc
 
 
 def _saved_sources(repo: Any) -> dict[str, str]:
@@ -309,17 +319,31 @@ def install_skill_source_routes(
     ) -> SkillSourceView:
         require_local(request)
         try:
-            path = _source_path(body.path)
-            if not path.is_dir() or path in {Path(path.anchor), Path.home().resolve()}:
-                raise ValueError("choose an existing Skill directory")
+            requested = _requested_source_path(body.path)
             key = command_key(idempotency_key, response)
-            fingerprint = canonical_action_hash(
+            raw_guard_fingerprint = canonical_action_hash(
+                {"operation": "skill_source_add", "path": str(requested)}
+            )
+            # The security journal binds this lexical request before any path
+            # lookup. Its versioned key preserves older canonical-path actions;
+            # the UX command journal still uses the original key and canonical
+            # target, so a completed receipt can be returned without a new add.
+            guard_key = "skill-source-add-v2:" + hashlib.sha256(key.encode()).hexdigest()
+            guard(
+                "add",
+                hashlib.sha256(str(requested).encode()).hexdigest()[:32],
+                raw_guard_fingerprint,
+                guard_key,
+            )
+            path = _source_path(requested)
+            canonical_receipt_fingerprint = canonical_action_hash(
                 {"operation": "skill_source_add", "path": str(path)}
             )
-            guard("add", hashlib.sha256(str(path).encode()).hexdigest()[:32], fingerprint, key)
-            prior = prior_result(key, fingerprint)
+            prior = prior_result(key, canonical_receipt_fingerprint)
             if prior is not None:
                 return SkillSourceView.model_validate(prior)
+            if not path.is_dir() or path in {Path(path.anchor), Path.home().resolve()}:
+                raise ValueError("choose an existing Skill directory")
             saved = _saved_sources(repo)
             current = refresh_skill_sources()
             duplicate = next(
@@ -330,9 +354,9 @@ def install_skill_source_routes(
                 raise ValueError("Skill source reference collision")
             if duplicate is None and len(saved) >= 8:
                 raise ValueError("too many additional Skill sources")
-            command, created = reserve(key, fingerprint)
+            command, created = reserve(key, canonical_receipt_fingerprint)
             if not created:
-                replay = prior_result(key, fingerprint)
+                replay = prior_result(key, canonical_receipt_fingerprint)
                 assert replay is not None
                 return SkillSourceView.model_validate(replay)
             if duplicate is None:

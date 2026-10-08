@@ -720,8 +720,29 @@ const SettingsPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, o
   };
   return (
     <div className="b2-memory" data-panel="settings">
-      <section className="b2-memory-card"><div className="b2-memory-card-header"><div><h2>记忆开关</h2><p>关闭全局记忆后，所有项目都将停用记忆。</p></div><Power size={18} aria-hidden="true" /></div><div className="b2-memory-actions"><span className="b2-memory-status" data-status={state.global_enabled ? 'enabled' : 'disabled'}>全局：{state.global_enabled ? '已开启' : '已关闭'}</span><ActionButton label={state.global_enabled ? '关闭全局记忆' : '开启全局记忆'} tone={state.global_enabled ? 'ghost' : 'primary'} onClick={() => void switchMemory(!state.global_enabled)} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /></div><div className="b2-memory-form"><label htmlFor="settings-project">项目范围</label><ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="settings-project" /><div className="b2-memory-actions">{projectId && <><span className="b2-memory-status" data-status={state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? 'enabled' : 'disabled'}>项目：{state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? '已开启' : '已关闭'}</span><ActionButton label="切换项目记忆" onClick={() => { const project = state.projects.find((entry) => entry.project_id === projectId); if (project) void switchMemory(!project.memory_enabled, project.project_id); }} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="迁移项目记忆" onClick={() => void execute({ action: 'memory_migrate', project_id: projectId, confirmed: true }, '迁移项目记忆')} disabled={busy} icon={<RefreshCw size={13} aria-hidden="true" />} /></>}</div><div className="b2-memory-actions"><ActionButton label="打开高级知识治理" onClick={() => onTab('knowledge')} disabled={busy} icon={<ExternalLink size={13} aria-hidden="true" />} /></div></div></section>
-      <section aria-labelledby="settings-source-title"><div className="b2-memory-card-header"><div><h2 id="settings-source-title">配置来源与作用域</h2><p>用于核对不同范围的设置来源。</p></div><div className="b2-memory-actions"><Link className="btn btn-secondary btn-sm" to="/settings?section=advanced">打开运行配置 <ExternalLink size={13} aria-hidden="true" /></Link><ActionButton label="查看项目知识" onClick={() => onTab('knowledge')} icon={<ExternalLink size={13} aria-hidden="true" />} disabled={busy} /></div></div>{state.settings.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Settings2} title="暂无配置" description="服务端尚未返回设置来源。" /></div> : <div className="b2-memory-grid">{state.settings.map((setting) => <article key={`${setting.scope}-${setting.key}`} className="b2-memory-card"><div className="b2-memory-card-header"><h3>{setting.key}</h3><span className="b2-memory-status">{setting.scope}</span></div><div className="b2-memory-meta"><span>来源：{setting.source}</span><span>生效：{setting.effective_at}</span></div><pre className="b2-memory-record-content">{safeJson(setting.value)}</pre></article>)}</div>}</section>
+      <section className="b2-memory-card">
+        <div className="b2-memory-card-header"><div><h2>记忆开关</h2><p>关闭全局记忆后，所有项目都将停用记忆。</p></div><Power size={18} aria-hidden="true" /></div>
+        <div className="b2-memory-actions">
+          <span className="b2-memory-status" data-status={state.global_enabled ? 'enabled' : 'disabled'}>全局：{state.global_enabled ? '已开启' : '已关闭'}</span>
+          <ActionButton label={state.global_enabled ? '关闭全局记忆' : '开启全局记忆'} tone={state.global_enabled ? 'ghost' : 'primary'} onClick={() => void switchMemory(!state.global_enabled)} disabled={busy} icon={<Power size={13} aria-hidden="true" />} />
+        </div>
+        <div className="b2-memory-form">
+          <label htmlFor="settings-project">项目范围</label>
+          <ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="settings-project" />
+          <div className="b2-memory-actions">{projectId && <>
+            <span className="b2-memory-status" data-status={state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? 'enabled' : 'disabled'}>项目：{state.projects.find((project) => project.project_id === projectId)?.memory_enabled ? '已开启' : '已关闭'}</span>
+            <ActionButton label="切换项目记忆" onClick={() => { const project = state.projects.find((entry) => entry.project_id === projectId); if (project) void switchMemory(!project.memory_enabled, project.project_id); }} disabled={busy} icon={<Power size={13} aria-hidden="true" />} />
+          </>}</div>
+        </div>
+      </section>
+      <details className="b2-memory-card">
+        <summary>高级：迁移与配置</summary>
+        <div className="b2-memory-actions">
+          <ActionButton label="迁移项目记忆" onClick={() => void execute({ action: 'memory_migrate', project_id: projectId, confirmed: true }, '迁移项目记忆')} disabled={busy || !projectId} icon={<RefreshCw size={13} aria-hidden="true" />} />
+          <ActionButton label="查看项目知识" onClick={() => onTab('knowledge')} disabled={busy} icon={<ExternalLink size={13} aria-hidden="true" />} />
+          <Link className="btn btn-secondary btn-sm" to="/settings?section=advanced">打开高级设置 <ExternalLink size={13} aria-hidden="true" /></Link>
+        </div>
+      </details>
     </div>
   );
 };

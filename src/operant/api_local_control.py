@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Literal, cast
 
+from cryptography.exceptions import InvalidTag
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,16 +25,23 @@ from operant.application.local_control import (
 )
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.service import ApplicationService
-from operant.domain.actions import CommandExecution, CommandExecutionStatus
+from operant.domain.actions import (
+    ApprovalStatus,
+    CommandExecution,
+    CommandExecutionStatus,
+    ToolActionReceiptStatus,
+)
 from operant.domain.models import RoleSnapshot, ToolPolicy
-from operant.domain.security import Capability, SecurityAuditEvent
+from operant.domain.security import Capability, PolicyDecision, SecurityAuditEvent
 from operant.plugins.capability_registry import CapabilityPluginRegistry
 from operant.plugins.local_extensions import list_operations, run_operation
 from operant.protocol import canonical_action_hash
 from operant.remote.local_worker import COMPUTER_PLUGIN
-from operant.remote.operator import CapabilityLeaseBinding
+from operant.remote.operator import CapabilityLeaseBinding, bound_observation_key
+from operant.remote.sealed_input import open_browser_input
 from operant.remote.tool_extensions import local_capability_tool_extensions
-from operant.tools.extensions import ToolExtension
+from operant.tools.extensions import ToolExtension, ToolInvocation, current_tool_invocation
+from sdk.python_client.transport import Phase1EError
 
 
 class LocalControlKeyBody(BaseModel):
@@ -87,6 +95,240 @@ def install_local_control_routes(
     # Must close adapters before the Service/SQLite shutdown hook.
     app.router.on_shutdown.insert(0, manager.close)
     previous_factory = service.tool_extension_factory
+
+    def matches_local_action(
+        inner_arguments: dict[str, Any],
+        *,
+        tool_name: str,
+        tool_arguments: dict[str, Any],
+        binding: CapabilityLeaseBinding,
+        request_key: str,
+    ) -> bool:
+        expected_capability = {
+            "ext_browser_observe": "browser.observe",
+            "ext_browser_navigate": "browser.navigate",
+            "ext_browser_fill": "browser.submit",
+            "ext_browser_click": "browser.submit",
+            "ext_browser_press_key": "browser.submit",
+            "ext_browser_capture_viewport": "browser.screenshot",
+            "ext_computer_observe": "computer.observe",
+            "ext_computer_click_button": "computer.input",
+            "ext_computer_type_text": "computer.input",
+            "ext_computer_press_key": "computer.input",
+            "ext_computer_capture_window": "computer.screenshot",
+            "ext_computer_read_clipboard": "computer.clipboard.read",
+            "ext_computer_write_clipboard": "computer.clipboard.write",
+        }.get(tool_name)
+        if inner_arguments.get("capability") != expected_capability:
+            return False
+        payload = inner_arguments.get("arguments")
+        if not isinstance(payload, dict) or payload.get("target_ref") != binding.target_id:
+            return False
+        if tool_name in {"ext_browser_observe", "ext_computer_observe"}:
+            return (
+                set(payload).issubset({"target_ref", "observation_generation"})
+                and not tool_arguments
+            )
+        if (
+            set(payload)
+            != {
+                "target_ref",
+                "observation_hash",
+                "precondition",
+                "arguments",
+                "postcondition",
+                "observation_content_hash",
+            }
+            or payload.get("observation_hash") != tool_arguments.get("observation_hash")
+            or payload.get("precondition") != {}
+            or payload.get("postcondition") != {}
+            or not isinstance(payload.get("observation_content_hash"), str)
+            or len(payload["observation_content_hash"]) != 64
+        ):
+            return False
+        action_arguments = payload.get("arguments")
+        if not isinstance(action_arguments, dict):
+            return False
+        field = {
+            "ext_browser_navigate": "url",
+            "ext_browser_click": "selector",
+            "ext_browser_press_key": "key",
+            "ext_computer_click_button": "button_name",
+            "ext_computer_press_key": "key",
+        }.get(tool_name)
+        if field is not None:
+            return action_arguments == {field: tool_arguments.get(field)}
+        if tool_name in {
+            "ext_browser_capture_viewport",
+            "ext_computer_capture_window",
+            "ext_computer_read_clipboard",
+        }:
+            return action_arguments == {}
+        sealed = action_arguments.get("value_sealed")
+        value = tool_arguments.get("value")
+        if not isinstance(sealed, str) or not isinstance(value, str):
+            return False
+        if tool_name == "ext_browser_fill":
+            label = tool_arguments.get("selector")
+            if (
+                action_arguments.keys() != {"selector", "value_sealed"}
+                or action_arguments.get("selector") != label
+            ):
+                return False
+            selector = label
+        elif tool_name == "ext_computer_type_text":
+            label = tool_arguments.get("element_name")
+            if (
+                action_arguments.keys() != {"element_name", "value_sealed"}
+                or action_arguments.get("element_name") != label
+            ):
+                return False
+            selector = f"computer:type_text:{label}"
+        elif tool_name == "ext_computer_write_clipboard":
+            if action_arguments.keys() != {"value_sealed"}:
+                return False
+            selector = "computer:write_clipboard"
+        else:
+            return False
+        if not isinstance(selector, str):
+            return False
+        try:
+            return (
+                open_browser_input(
+                    sealed,
+                    token=binding.token,
+                    target_id=binding.target_id,
+                    lease_id=binding.lease_id,
+                    fencing=binding.fencing,
+                    observation_hash=str(tool_arguments.get("observation_hash", "")),
+                    selector=selector,
+                    idempotency_key=request_key,
+                )
+                == value
+            )
+        except (InvalidTag, UnicodeDecodeError, ValueError):
+            return False
+
+    def approve_nested_phase45(
+        error: Phase1EError,
+        *,
+        invocation: ToolInvocation,
+        tool_name: str,
+        request_key: str,
+        binding: CapabilityLeaseBinding,
+        capabilities: tuple[Capability, ...],
+        tool_arguments: dict[str, Any],
+    ) -> None:
+        detail = error.detail
+        if (
+            error.code not in {"approval_required", "http_409"}
+            or not isinstance(detail, dict)
+            or detail.get("code") != "approval_required"
+        ):
+            raise error
+        approval_id = detail.get("approval_id")
+        action_hash = detail.get("action_hash")
+        policy_version = detail.get("policy_version")
+        if (
+            not isinstance(approval_id, str)
+            or not approval_id
+            or not isinstance(action_hash, str)
+            or not action_hash
+            or not isinstance(policy_version, str)
+            or not policy_version
+        ):
+            raise PermissionError("local capability approval binding is incomplete")
+        if invocation.tool_name != tool_name or invocation.session_lease is None:
+            raise PermissionError("local capability tool invocation is not bound")
+        receipt = service.store.get_tool_action_receipt(invocation.receipt_id)
+        if (
+            receipt.status is not ToolActionReceiptStatus.IN_PROGRESS
+            or receipt.action_hash != invocation.action_hash
+            or receipt.idempotency_key != invocation.tool_call_id
+            or receipt.command_name != tool_name
+        ):
+            raise PermissionError("local capability tool receipt changed")
+        service.store.assert_session_run_lease(invocation.session_lease)
+        if invocation.session_lease.agent_id != receipt.agent_id:
+            raise PermissionError("local capability Agent lease changed")
+        approval = service.store.get_approval_request(receipt.session_id, invocation.tool_call_id)
+        decision = service.store.get_approval_decision(approval.id)
+        if (
+            approval.status is not ApprovalStatus.APPROVED
+            or approval.agent_id != receipt.agent_id
+            or approval.tool_action_receipt_id != receipt.id
+            or approval.action_hash != receipt.action_hash
+            or decision is None
+            or not decision.approved
+            or decision.approval_id != approval.id
+            or decision.decided_by not in {"user", "reviewer"}
+        ):
+            raise PermissionError("local capability Session approval is unavailable")
+        phase_approval = gateway.phase_repository.get_phase45_approval(approval_id)
+        inner = gateway.repository.get_security_action(action_hash)
+        operation = tool_name.removeprefix("ext_browser_").removeprefix("ext_computer_")
+        if operation == "observe":
+            operation = (
+                "observe_browser" if tool_name.startswith("ext_browser_") else "observe_computer"
+            )
+        inner_args = inner.normalized_arguments
+        if (
+            phase_approval["status"] not in {"pending", "approved"}
+            or phase_approval["action_hash"] != action_hash
+            or phase_approval["policy_version"] != policy_version
+            or phase_approval["target"] != inner.normalized_target.model_dump(mode="json")
+            or inner.action_hash != action_hash
+            or inner.principal != gateway.principal
+            or inner.policy_version != policy_version
+            or inner.tool != "remote_target_job"
+            or inner.operation != operation
+            or inner.idempotency_key != request_key
+            or inner.normalized_target.target_id != binding.target_id
+            or inner_args.get("target_id") != binding.target_id
+            or inner_args.get("lease_id") != binding.lease_id
+            or inner_args.get("lease_fencing") != binding.fencing
+            or not matches_local_action(
+                inner_args,
+                tool_name=tool_name,
+                tool_arguments=tool_arguments,
+                binding=binding,
+                request_key=request_key,
+            )
+            or not set(capabilities).issubset(inner.requested_capabilities)
+            or Capability.REMOTE_TARGET_EXEC not in inner.requested_capabilities
+        ):
+            raise PermissionError("local capability Phase45 approval changed")
+        current = gateway.engine.evaluate(inner)
+        if (
+            current.decision is not PolicyDecision.ASK
+            or current.hard_deny
+            or current.policy_version != policy_version
+        ):
+            raise PermissionError("local capability security policy changed")
+        if phase_approval["status"] == "pending":
+            nested_decision, changed = gateway.phase_repository.decide_phase45_approval(
+                approval_id,
+                approved=True,
+                decided_by=decision.decided_by,
+                reason_code=f"session_approval:{approval.id}",
+            )
+        else:
+            nested_decision, changed = phase_approval, False
+        if changed:
+            gateway.repository.append_security_audit(
+                SecurityAuditEvent(
+                    action_hash=inner.action_hash,
+                    principal=inner.principal,
+                    event_type="approval.decided",
+                    decision=PolicyDecision.ALLOW,
+                    detail={
+                        "approval_id": nested_decision["approval_id"],
+                        "decided_by": decision.decided_by,
+                        "reason_code": nested_decision["reason_code"],
+                        "session_approval_id": approval.id,
+                    },
+                )
+            )
 
     class SnapshotAwareToolFactory:
         def __call__(self, path: Path, policy: ToolPolicy) -> dict[str, ToolExtension]:
@@ -155,7 +397,20 @@ def install_local_control_routes(
                         *,
                         bound_marker: LocalControlSnapshotBinding = marker,
                         tool_name: str = name,
+                        required_capabilities: tuple[Capability, ...] = extension.capabilities,
                     ) -> dict[str, Any]:
+                        invocation = current_tool_invocation()
+                        request_key: str | None = None
+                        forwarded = dict(arguments)
+                        if invocation is not None:
+                            request_key = (
+                                "agent-local:"
+                                + hashlib.sha256(
+                                    f"{invocation.receipt_id}\0{tool_name}".encode()
+                                ).hexdigest()
+                            )
+                            if "idempotency_key" in forwarded:
+                                forwarded["idempotency_key"] = request_key
                         current = manager.verified_snapshot_binding(
                             bound_marker.session_id, expected=bound_marker
                         )[1]
@@ -167,9 +422,47 @@ def install_local_control_routes(
                         ).get(tool_name)
                         if refreshed is None:
                             raise PermissionError("bound local control tool is unavailable")
-                        return await refreshed.execute(arguments)
+                        try:
+                            with bound_observation_key(request_key):
+                                return await refreshed.execute(forwarded)
+                        except Phase1EError as error:
+                            if invocation is None or request_key is None:
+                                raise
+                            current = manager.verified_snapshot_binding(
+                                bound_marker.session_id, expected=bound_marker
+                            )[1]
+                            approve_nested_phase45(
+                                error,
+                                invocation=invocation,
+                                tool_name=tool_name,
+                                request_key=request_key,
+                                binding=current,
+                                capabilities=required_capabilities,
+                                tool_arguments=arguments,
+                            )
+                            assert invocation.session_lease is not None
+                            service.store.assert_session_run_lease(invocation.session_lease)
+                            refreshed = local_capability_tool_extensions(
+                                path,
+                                snapshot.tool_policy,
+                                bindings={bound_marker.kind: current},
+                                core_origin=origin,
+                            ).get(tool_name)
+                            if refreshed is None:
+                                raise PermissionError(
+                                    "bound local control tool is unavailable"
+                                ) from error
+                            with bound_observation_key(request_key):
+                                return await refreshed.execute(forwarded)
 
-                    extensions[name] = replace(extension, execute=execute_bound)
+                    extensions[name] = replace(
+                        extension,
+                        execute=execute_bound,
+                        side_effecting=True,
+                        capabilities=tuple(
+                            dict.fromkeys((*extension.capabilities, Capability.REMOTE_TARGET_EXEC))
+                        ),
+                    )
             return extensions
 
     service.tool_extension_factory = SnapshotAwareToolFactory()

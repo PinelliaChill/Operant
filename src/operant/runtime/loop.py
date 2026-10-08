@@ -15,6 +15,7 @@ from operant.domain.models import RoleSnapshot
 from operant.protocol import redact_public_text
 from operant.providers.base import ModelProvider
 from operant.runtime.feedback import NoProgressDetector, test_failure_feedback
+from operant.tools.extensions import ToolInvocation, bind_tool_invocation
 from operant.tools.workspace import (
     ApprovalCallback,
     ApprovalRequired,
@@ -371,9 +372,21 @@ class AgentLoop:
                             )
                             if authorize_tool_action is not None:
                                 authorize_tool_action(claim)
-                        result = self._safe_tool_result(
-                            await self.tools.execute(call.name, arguments)
+                        invocation = (
+                            ToolInvocation(
+                                tool_call_id=call.id,
+                                tool_name=call.name,
+                                receipt_id=claim.receipt_id,
+                                action_hash=claim.action_hash,
+                                session_lease=getattr(action_gateway, "lease", None),
+                            )
+                            if claim is not None
+                            else None
                         )
+                        with bind_tool_invocation(invocation):
+                            result = self._safe_tool_result(
+                                await self.tools.execute(call.name, arguments)
+                            )
                         event_type = "tool.completed"
                         is_error = False
                         if claim is not None:
@@ -434,13 +447,25 @@ class AgentLoop:
                                 )
                                 if authorize_tool_action is not None:
                                     authorize_tool_action(claim)
-                            result = self._safe_tool_result(
-                                await self.tools.execute(
-                                    call.name,
-                                    arguments,
-                                    approved_categories=frozenset({exc.category}),
+                            invocation = (
+                                ToolInvocation(
+                                    tool_call_id=call.id,
+                                    tool_name=call.name,
+                                    receipt_id=claim.receipt_id,
+                                    action_hash=claim.action_hash,
+                                    session_lease=getattr(action_gateway, "lease", None),
                                 )
+                                if claim is not None
+                                else None
                             )
+                            with bind_tool_invocation(invocation):
+                                result = self._safe_tool_result(
+                                    await self.tools.execute(
+                                        call.name,
+                                        arguments,
+                                        approved_categories=frozenset({exc.category}),
+                                    )
+                                )
                             event_type = "tool.completed"
                             is_error = False
                             if claim is not None:

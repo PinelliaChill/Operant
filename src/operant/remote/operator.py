@@ -7,7 +7,9 @@ replays an uncertain write, or treats a queued Job as completed.
 from __future__ import annotations
 
 import time
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -21,6 +23,17 @@ from sdk.python_client.phase56_generated import (
     ObserveCapabilityBody,
     Phase56Client,
 )
+
+_OBSERVATION_KEY: ContextVar[str | None] = ContextVar("operant_local_observation_key", default=None)
+
+
+@contextmanager
+def bound_observation_key(key: str | None) -> Iterator[None]:
+    token = _OBSERVATION_KEY.set(key)
+    try:
+        yield
+    finally:
+        _OBSERVATION_KEY.reset(token)
 
 
 class CapabilityOperationError(RuntimeError):
@@ -112,7 +125,7 @@ class BrowserCapabilityOperator(_CapabilityOperator):
         self.policy = policy
 
     def observe(self) -> dict[str, Any]:
-        operation_id = f"browser-observe:{uuid4().hex}"
+        operation_id = _OBSERVATION_KEY.get() or f"browser-observe:{uuid4().hex}"
         response = self.client.observe_browser(
             self.binding.target_id,
             cast(
@@ -271,7 +284,7 @@ class ComputerCapabilityOperator(_CapabilityOperator):
         self.allowed_bundle_ids = allowed_bundle_ids
 
     def observe(self) -> dict[str, Any]:
-        operation_id = f"computer-observe:{uuid4().hex}"
+        operation_id = _OBSERVATION_KEY.get() or f"computer-observe:{uuid4().hex}"
         response = self.client.observe_computer(
             self.binding.target_id,
             cast(
