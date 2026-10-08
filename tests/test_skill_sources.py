@@ -288,6 +288,111 @@ def test_unknown_legacy_source_receipt_is_not_retried(tmp_path: Path) -> None:
     assert settings.values == {}
 
 
+@pytest.mark.parametrize("reopened", [False, True])
+@pytest.mark.parametrize("replacement", ["source", "ancestor"])
+def test_saved_source_link_replacement_needs_explicit_new_registration(
+    tmp_path: Path, reopened: bool, replacement: str
+) -> None:
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    parent = tmp_path / "registered-parent"
+    source = parent / "skills"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text(
+        "---\nname: original-skill\ndescription: Original root\n---\nOriginal.\n",
+        encoding="utf-8",
+    )
+    outside_parent = tmp_path / "outside-parent"
+    outside = outside_parent / "skills"
+    outside.mkdir(parents=True)
+    (outside / "SKILL.md").write_text(
+        "---\nname: replacement-skill\ndescription: New target\n---\nReplacement.\n",
+        encoding="utf-8",
+    )
+    settings = _Settings()
+    client, app = _client(configured, settings)
+    added = client.post(
+        "/v1/setup/skill-sources",
+        json={"path": str(source)},
+        headers={"Idempotency-Key": "register-original"},
+    )
+    assert added.status_code == 200
+    original_ref = added.json()["root_ref"]
+    repository = SQLitePhase45Repository(app.state.skill_source_test_service.store)
+    assert any(item["root_ref"] == original_ref for item in repository.list_skill_candidates())
+
+    if replacement == "source":
+        source.rename(parent / "skills-original")
+        source.symlink_to(outside, target_is_directory=True)
+    else:
+        parent.rename(tmp_path / "registered-parent-original")
+        parent.symlink_to(outside_parent, target_is_directory=True)
+    if reopened:
+        client, app = _client(configured, settings)
+        repository = SQLitePhase45Repository(app.state.skill_source_test_service.store)
+
+    views = client.get("/v1/setup/skill-sources").json()["items"]
+    old_view = next(item for item in views if item["root_ref"] == original_ref)
+    assert old_view["path"] == str(source)
+    assert old_view["enabled"] is False
+    assert old_view["issue"] == "目录已改变，请重新添加来源"
+    assert original_ref not in app.state.b23_skill_roots
+    assert not any(item["root_ref"] == original_ref for item in repository.list_skill_candidates())
+    assert not any(
+        item["name"] == "replacement-skill" for item in repository.list_skill_candidates()
+    )
+
+    replacement_added = client.post(
+        "/v1/setup/skill-sources",
+        json={"path": str(source)},
+        headers={"Idempotency-Key": "register-new-target"},
+    )
+    assert replacement_added.status_code == 200
+    new_ref = replacement_added.json()["root_ref"]
+    assert new_ref != original_ref
+    assert replacement_added.json()["path"] == str(outside)
+    assert app.state.b23_skill_roots[new_ref] == outside
+    assert {item["name"] for item in repository.list_skill_candidates()} == {"replacement-skill"}
+
+
+def test_default_source_can_point_to_shared_skill_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared = tmp_path / "shared-skills"
+    shared.mkdir()
+    (shared / "SKILL.md").write_text(
+        "---\nname: shared-skill\ndescription: Shared source\n---\nShared.\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    default_root = workspace / ".agents" / "skills"
+    default_root.parent.mkdir(parents=True)
+    default_root.symlink_to(shared, target_is_directory=True)
+    monkeypatch.setattr(
+        source_module,
+        "default_skill_roots",
+        lambda _workspace: {"workspace-agents": default_root},
+    )
+    service = _Service(tmp_path)
+    app = FastAPI()
+    app.state.skill_source_defaults_enabled = True
+    app.state.skill_source_workspace = workspace
+    app.state.b23_skill_roots = {}
+    app.state.phase45_action_gateway = Phase45ActionGateway(
+        SQLiteSecurityRepository(service.store),
+        SQLitePhase45Repository(service.store),
+        PolicyEngine(balanced_policy_bundle()),
+    )
+    install_skill_source_routes(app, service, _Settings())  # type: ignore[arg-type]
+
+    source = TestClient(app).get("/v1/setup/skill-sources").json()["items"][0]
+    assert source["enabled"] is True
+    assert source["path"] == str(shared)
+    assert {
+        item["name"] for item in SQLitePhase45Repository(service.store).list_skill_candidates()
+    } == {"shared-skill"}
+
+
 def test_source_rejects_remote_origin_and_missing_directory(tmp_path: Path) -> None:
     configured = tmp_path / "configured"
     configured.mkdir()

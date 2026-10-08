@@ -192,6 +192,13 @@ function safeJson(value: unknown): string {
   return valueText(redactValue(value));
 }
 
+function pluginDisplayName(plugin: { name: string } | undefined, pluginId: string): string {
+  const name = plugin?.name || pluginId;
+  if (pluginId === 'memory-standard' && (name === 'memory-standard-config.v1' || name === pluginId)) return '标准记忆';
+  if (pluginId === 'memory-notebook' && (name === 'memory-notebook-config.v1' || name === pluginId)) return '笔记记忆';
+  return name;
+}
+
 function statusLabel(value: string): string {
   const labels: Record<string, string> = {
     active: '已启用',
@@ -545,7 +552,7 @@ const KnowledgePanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, 
   return (
     <div className="b2-memory" data-panel="knowledge">
       <section className="b2-memory-card">
-        <div className="b2-memory-card-header"><div><h2>项目知识</h2><p>保存、搜索和审阅正式记录与修改提议。</p></div><Sparkles size={18} aria-hidden="true" /></div>
+        <div className="b2-memory-card-header"><div><h2>项目知识</h2><p>保存和查找项目知识。</p></div><Sparkles size={18} aria-hidden="true" /></div>
         <div className="b2-memory-form">
           <label htmlFor="knowledge-project">项目范围</label>
           <ProjectSelect projects={state.projects} value={projectId} onChange={setProjectId} id="knowledge-project" />
@@ -575,8 +582,8 @@ const KnowledgePanel: React.FC<ManagementPanelProps> = ({ state, execute, busy, 
         <B26ExperiencePanel management={state} projectId={projectId} connectionStatus={connectionStatus} onMutation={refresh} />
       </details>
       <section aria-labelledby="knowledge-records-title">
-        <div className="b2-memory-card-header"><div><h2 id="knowledge-records-title">正式记录与候选提议</h2><p>{records.length} 条记录</p></div><span className="b2-memory-status">{state.global_enabled ? '全局记忆已开启' : '全局记忆已关闭'}</span></div>
-        {records.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Sparkles} title="暂无项目知识" description="查询没有返回记录，或当前项目尚未保存知识。" /></div> : <div className="b2-memory-grid">{records.map((record) => <KnowledgeRecord key={record.record_id} record={record} execute={execute} busy={busy} />)}</div>}
+        <div className="b2-memory-card-header"><div><h2 id="knowledge-records-title">已保存与待确认</h2><p>{records.length} 条记录</p></div><span className="b2-memory-status">{state.global_enabled ? '全局记忆已开启' : '全局记忆已关闭'}</span></div>
+        {records.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Sparkles} title="暂无项目知识" description="添加第一条项目知识。" /></div> : <div className="b2-memory-grid">{records.map((record) => <KnowledgeRecord key={record.record_id} record={record} execute={execute} busy={busy} />)}</div>}
       </section>
     </div>
   );
@@ -615,7 +622,7 @@ const DatasetCard: React.FC<{
   };
   return (
       <article className="b2-memory-card" data-state={dataset.state} data-retained="true">
-      <div className="b2-memory-card-header"><div><h3>{plugin?.name ?? dataset.plugin_id}</h3><p>保留数据集 <code>{dataset.dataset_id}</code></p></div><StatusBadge status={statusKind(dataset.state)} label={statusLabel(dataset.state)} size="sm" /></div>
+      <div className="b2-memory-card-header"><div><h3>{pluginDisplayName(plugin, dataset.plugin_id)}</h3><p>保留数据集 <code>{dataset.dataset_id}</code></p></div><StatusBadge status={statusKind(dataset.state)} label={statusLabel(dataset.state)} size="sm" /></div>
       <div className="b2-memory-meta"><span>{dataset.record_count} 条记录</span><span>{dataset.installation_id ? `安装 ${dataset.installation_id}` : '当前没有安装'}</span></div>
       {cleanupPending && <div className="b2-memory-status" data-status="pending" role="status">清理计划仍在执行，完成后可再次查询状态。</div>}
       {cleanupBlocked && <div className="b2-memory-warning" data-severity="error" role="alert"><strong>清理被阻断：</strong>{dataset.exceptions.length > 0 ? dataset.exceptions.join('；') : '服务端需要人工处理后才能继续。'}</div>}
@@ -674,19 +681,19 @@ const PluginPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) =
   return (
     <div className="b2-memory" data-panel="plugins">
       <section className="b2-memory-card">
-        <div className="b2-memory-card-header"><div><h2>插件目录</h2><p>安装目录中的正式插件包，运行模式和卸载数据策略由用户明确选择。</p></div><PackageOpen size={18} aria-hidden="true" /></div>
-        <div className="b2-memory-form">
+        <div className="b2-memory-card-header"><div><h2>插件目录</h2><p>选择需要安装的插件。</p></div><PackageOpen size={18} aria-hidden="true" /></div>
+        <details><summary>安装选项（高级）</summary><div className="b2-memory-form">
           <label htmlFor="plugin-mode">运行模式</label>
-          <select id="plugin-mode" className="select" value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}><option value="isolated">isolated（隔离）</option><option value="trusted_in_process">trusted_in_process（受信进程内）</option></select>
+          <select id="plugin-mode" className="select" value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}><option value="isolated">隔离运行</option><option value="trusted_in_process">在受信进程中运行</option></select>
           <label htmlFor="plugin-retained-dataset">接回保留数据集（可选）</label>
           <select id="plugin-retained-dataset" className="select" value={retainedDataset} onChange={(event) => setRetainedDataset(event.target.value)}><option value="">不接回</option>{state.datasets.filter((dataset) => !dataset.installation_id).map((dataset) => <option key={dataset.dataset_id} value={dataset.dataset_id}>{dataset.plugin_id} · {dataset.dataset_id}</option>)}</select>
 
-        </div>
-        {state.catalog.length === 0 ? <EmptyState icon={PackageOpen} title="插件目录为空"  /> : <div className="b2-memory-grid">{state.catalog.map((plugin) => <article key={plugin.plugin_id} className="b2-memory-card"><div className="b2-memory-card-header"><div><h3>{plugin.name}</h3><p><code>{plugin.plugin_id}</code></p></div><ActionButton label="安装" tone="primary" onClick={() => void install(plugin.plugin_id)} disabled={busy} icon={<Plus size={13} aria-hidden="true" />} /></div><p>{plugin.description}</p><details><summary>配置 Schema</summary><pre className="b2-memory-record-content">{safeJson(plugin.config_schema)}</pre></details></article>)}</div>}
+        </div></details>
+        {state.catalog.length === 0 ? <EmptyState icon={PackageOpen} title="插件目录为空"  /> : <div className="b2-memory-grid">{state.catalog.map((plugin) => <article key={plugin.plugin_id} className="b2-memory-card"><div className="b2-memory-card-header"><div><h3>{pluginDisplayName(plugin, plugin.plugin_id)}</h3></div><ActionButton label="安装" tone="primary" onClick={() => void install(plugin.plugin_id)} disabled={busy} icon={<Plus size={13} aria-hidden="true" />} /></div><p>{plugin.description}</p><details><summary>插件详情（高级）</summary><p>插件编号：<code>{plugin.plugin_id}</code></p><pre className="b2-memory-record-content">{safeJson(plugin.config_schema)}</pre></details></article>)}</div>}
       </section>
 
       <section aria-labelledby="plugin-installations-title">
-        <div className="b2-memory-card-header"><div><h2 id="plugin-installations-title">已安装插件</h2><p>{state.installations.length} 个安装实例；关闭、配置、项目选择和卸载都通过正式命令。</p></div><StatusBadge status="active" label={`${state.installations.length} 个`} size="sm" /></div>
+        <div className="b2-memory-card-header"><div><h2 id="plugin-installations-title">已安装插件</h2><p>管理插件状态、项目范围和配置。</p></div><StatusBadge status="active" label={`${state.installations.length} 个`} size="sm" /></div>
         {state.installations.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Unplug} title="暂无安装实例" description="从上方插件目录选择安装。" /></div> : <div className="b2-memory-grid">{state.installations.map((installation) => {
           const plugin = state.catalog.find((entry) => entry.plugin_id === installation.plugin_id);
           const relatedDataset = state.datasets.find((dataset) => dataset.dataset_id === installation.dataset_id);
@@ -698,7 +705,7 @@ const PluginPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) =
             : relatedDataset?.state === 'retained'
               ? '安装副本已卸载；保留数据集仍可从下方重装。'
               : '安装副本已卸载，数据集已保留。';
-          return <article key={installation.installation_id} className="b2-memory-card" data-state={installation.state}><div className="b2-memory-card-header"><div><h3>{plugin?.name ?? installation.plugin_id}</h3><p><code>{installation.installation_id}</code></p></div><StatusBadge status={statusKind(installation.state)} label={statusLabel(installation.state)} size="sm" /></div><div className="b2-memory-meta"><span>模式：{installation.mode}</span><span>认证：{installation.certification_status}</span><span>dataset <code>{installation.dataset_id}</code></span><span>{state.projects.filter((project) => project.installation_id === installation.installation_id).map((project) => project.name).join('、') || '尚未选择项目'}</span></div>{lifecycleClosed && <p className="b2-memory-warning" role="status">{lifecycleMessage}</p>}{canToggle && <div className="b2-memory-actions"><ActionButton label={installation.state === 'enabled' || installation.state === 'active' ? '关闭插件' : '启用插件'} onClick={() => void execute({ action: installation.state === 'enabled' || installation.state === 'active' ? 'plugin_disable' : 'plugin_enable', installation_id: installation.installation_id, confirmed: true }, installation.state === 'enabled' || installation.state === 'active' ? '关闭插件' : '启用插件')} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="配置" onClick={() => { setConfigInstallation(installation.installation_id); setConfigText(safeJson(installation.config)); setConfigError(''); }} disabled={busy || !canConfigure} icon={<Settings2 size={13} aria-hidden="true" />} /><ActionButton label="选择项目" onClick={() => setSelectedProject(selectedProject || state.projects.find((project) => !project.archived)?.project_id || '')} disabled={busy || state.projects.length === 0} icon={<Link2 size={13} aria-hidden="true" />} /><ActionButton label={uninstallTarget === installation.installation_id ? '收起卸载选项' : '卸载'} tone="ghost" onClick={() => { if (uninstallTarget === installation.installation_id) setUninstallTarget(null); else void uninstall(installation); }} disabled={busy} icon={<Trash2 size={13} aria-hidden="true" />} /></div>}
+          return <article key={installation.installation_id} className="b2-memory-card" data-state={installation.state}><div className="b2-memory-card-header"><div><h3>{pluginDisplayName(plugin, installation.plugin_id)}</h3></div><StatusBadge status={statusKind(installation.state)} label={statusLabel(installation.state)} size="sm" /></div><div className="b2-memory-meta"><span>{state.projects.filter((project) => project.installation_id === installation.installation_id).map((project) => project.name).join('、') || '尚未选择项目'}</span></div><details><summary>安装详情（高级）</summary><p>安装编号：<code>{installation.installation_id}</code></p><p>运行模式：{installation.mode === 'isolated' ? '隔离运行' : '受信进程内运行'}</p><p>认证状态：{installation.certification_status}</p><p>数据集：<code>{installation.dataset_id}</code></p></details>{lifecycleClosed && <p className="b2-memory-warning" role="status">{lifecycleMessage}</p>}{canToggle && <div className="b2-memory-actions"><ActionButton label={installation.state === 'enabled' || installation.state === 'active' ? '关闭插件' : '启用插件'} onClick={() => void execute({ action: installation.state === 'enabled' || installation.state === 'active' ? 'plugin_disable' : 'plugin_enable', installation_id: installation.installation_id, confirmed: true }, installation.state === 'enabled' || installation.state === 'active' ? '关闭插件' : '启用插件')} disabled={busy} icon={<Power size={13} aria-hidden="true" />} /><ActionButton label="配置" onClick={() => { setConfigInstallation(installation.installation_id); setConfigText(safeJson(installation.config)); setConfigError(''); }} disabled={busy || !canConfigure} icon={<Settings2 size={13} aria-hidden="true" />} /><ActionButton label="选择项目" onClick={() => setSelectedProject(selectedProject || state.projects.find((project) => !project.archived)?.project_id || '')} disabled={busy || state.projects.length === 0} icon={<Link2 size={13} aria-hidden="true" />} /><ActionButton label={uninstallTarget === installation.installation_id ? '收起卸载选项' : '卸载'} tone="ghost" onClick={() => { if (uninstallTarget === installation.installation_id) setUninstallTarget(null); else void uninstall(installation); }} disabled={busy} icon={<Trash2 size={13} aria-hidden="true" />} /></div>}
             {!lifecycleClosed && selectedProject && <div className="b2-memory-inline-form"><label htmlFor={`binding-project-${installation.installation_id}`}>选择项目</label><ProjectSelect projects={state.projects} value={selectedProject} onChange={setSelectedProject} id={`binding-project-${installation.installation_id}`} /><ActionButton label="确认选择" tone="primary" onClick={() => void selectBinding(installation)} disabled={busy || !selectedProject} icon={<Check size={13} aria-hidden="true" />} /></div>}
             {!lifecycleClosed && configInstallation === installation.installation_id && <div className="b2-memory-form">{configError && <FormError message={configError} id={`config-error-${installation.installation_id}`} />}<label htmlFor={`plugin-config-${installation.installation_id}`}>插件配置 JSON</label><textarea id={`plugin-config-${installation.installation_id}`} className="input" rows={5} value={configText} onChange={(event) => setConfigText(event.target.value)} aria-describedby={configError ? `config-error-${installation.installation_id}` : undefined} /><div className="b2-memory-actions"><ActionButton label="保存配置" tone="primary" onClick={() => void configure(installation)} disabled={busy} icon={<Check size={13} aria-hidden="true" />} /><ActionButton label="取消" tone="ghost" onClick={() => setConfigInstallation(null)} disabled={busy} icon={<X size={13} aria-hidden="true" />} /></div></div>}
             {!lifecycleClosed && uninstallTarget === installation.installation_id && <div className="b2-memory-form b2-memory-warning"><fieldset><legend>卸载数据策略</legend><label className="b2-memory-check b2-memory-policy-btn--keep" data-policy="keep"><input type="radio" name={`data-policy-${installation.installation_id}`} value="keep" checked={dataPolicy === 'keep'} onChange={() => setDataPolicy('keep')} />保留数据集，卸载后继续管理/导出</label><label className="b2-memory-check b2-memory-policy-btn--delete" data-policy="delete"><input type="radio" name={`data-policy-${installation.installation_id}`} value="delete" checked={dataPolicy === 'delete'} onChange={() => setDataPolicy('delete')} />删除数据集及其中记录</label></fieldset><label className="b2-memory-check"><input type="checkbox" checked={uninstallConfirmed} onChange={(event) => setUninstallConfirmed(event.target.checked)} />我确认执行“{dataPolicy === 'keep' ? '保留' : '删除'}”策略</label><ActionButton label="提交卸载" tone="primary" onClick={() => void uninstall(installation)} disabled={busy || !uninstallConfirmed} icon={<Trash2 size={13} aria-hidden="true" />} /></div>}
@@ -706,7 +713,7 @@ const PluginPanel: React.FC<ManagementPanelProps> = ({ state, execute, busy }) =
         })}</div>}
       </section>
 
-      <section aria-labelledby="dataset-title"><div className="b2-memory-card-header"><div><h2 id="dataset-title">保留数据集</h2><p>插件卸载后仍可导出、删除或重新接回。</p></div></div>{state.datasets.length === 0 ? <div className="b2-memory-card"><EmptyState icon={Download} title="暂无数据集" description="保留数据集会在卸载后继续出现在这里。" /></div> : <div className="b2-memory-grid">{state.datasets.map((dataset) => <DatasetCard key={dataset.dataset_id} dataset={dataset} execute={execute} busy={busy} catalog={state.catalog} />)}</div>}</section>
+      <details className="b2-memory-details" open={state.datasets.length > 0}><summary>卸载后保留的数据（高级） · {state.datasets.length} 个</summary><section aria-labelledby="dataset-title"><h2 id="dataset-title">保留数据集</h2>{state.datasets.length === 0 ? <EmptyState icon={Download} title="暂无数据集" /> : <div className="b2-memory-grid">{state.datasets.map((dataset) => <DatasetCard key={dataset.dataset_id} dataset={dataset} execute={execute} busy={busy} catalog={state.catalog} />)}</div>}</section></details>
     </div>
   );
 };

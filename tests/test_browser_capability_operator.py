@@ -9,6 +9,7 @@ from operant.remote.operator import (
     BrowserCapabilityOperator,
     CapabilityLeaseBinding,
     CapabilityOperationError,
+    CapabilityOutcomeUnknownError,
     ComputerCapabilityOperator,
     bound_observation_key,
 )
@@ -118,7 +119,7 @@ def test_operator_keeps_unknown_click_job_for_reconciliation() -> None:
         "result": {"error_code": "plugin.outcome_unknown"},
     }
     operator = _operator(client)
-    with pytest.raises(CapabilityOperationError) as failure:
+    with pytest.raises(CapabilityOutcomeUnknownError) as failure:
         operator.act(
             "click",
             observation_hash="a" * 64,
@@ -128,6 +129,23 @@ def test_operator_keeps_unknown_click_job_for_reconciliation() -> None:
     assert failure.value.job_id == "action-job"
     assert failure.value.status == "manual_reconcile_required"
     assert len(client.actions) == 1
+
+
+def test_operator_distinguishes_failed_observation_from_unknown_timeout() -> None:
+    client = FakePhase56Client()
+    operator = _operator(client)
+    client.result = {"status": "failed", "result": {"error_code": "computer.permission_required"}}
+    with pytest.raises(CapabilityOperationError) as failed:
+        operator.observe()
+    assert type(failed.value) is CapabilityOperationError
+    assert failed.value.status == "failed"
+
+    operator.wait_seconds = 1
+    client.result = {"status": "running"}
+    with pytest.raises(CapabilityOutcomeUnknownError) as unknown:
+        operator.observe()
+    assert unknown.value.status == "timeout"
+    assert unknown.value.job_id == "observation-job"
 
 
 def test_computer_operator_binds_app_and_preserves_unknown_job() -> None:
@@ -156,7 +174,7 @@ def test_computer_operator_binds_app_and_preserves_unknown_job() -> None:
         "status": "manual_reconcile_required",
         "result": {"error_code": "plugin.outcome_unknown"},
     }
-    with pytest.raises(CapabilityOperationError) as failure:
+    with pytest.raises(CapabilityOutcomeUnknownError) as failure:
         operator.click_button(
             button_name="Run", observation_hash="a" * 64, idempotency_key="click-1"
         )

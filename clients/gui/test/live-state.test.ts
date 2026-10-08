@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   canBindSessionToThread,
   canDecideApproval,
+  errorForSelectedThread,
+  normalizedTerminalErrorScope,
   commandStateAfterTerminalEvent,
   approvalProjectionResolved,
   LIVE_EVENT_WINDOW_SIZE,
@@ -162,7 +164,7 @@ test('an unbound Thread does not borrow a page-local cached Session', () => {
 });
 
 test('an approval remains actionable while its run awaits projection', () => {
-  const approval = { status: 'pending' } as never;
+  const approval = { status: 'pending', sessionId: 'session-current', continuationAvailable: true } as never;
   const idleAction = { status: 'idle' } as never;
   const commandStatus = 'awaiting_projection';
 
@@ -175,7 +177,7 @@ test('an approval remains actionable while its run awaits projection', () => {
 });
 
 test('an approval submission in flight prevents duplicate decisions', () => {
-  const approval = { status: 'pending' } as never;
+  const approval = { status: 'pending', sessionId: 'session-current', continuationAvailable: true } as never;
   for (const status of ['sending', 'awaiting_projection'] as const) {
     assert.equal(
       canDecideApproval(approval, { status } as never, 'connected', 'connected', false),
@@ -186,6 +188,48 @@ test('an approval submission in flight prevents duplicate decisions', () => {
     canDecideApproval(approval, { status: 'idle' } as never, 'connected', 'connected', true),
     false,
   );
+});
+
+test('terminal and non-continuable approvals cannot be decided, including before the refreshed approval arrives', () => {
+  const idle = { status: 'idle' } as const;
+  const pending = { status: 'pending', sessionId: 'session-current', continuationAvailable: true } as const;
+  assert.equal(canDecideApproval(pending, idle, 'connected', 'connected', false, 'session-current'), false);
+  assert.equal(canDecideApproval({ ...pending, continuationAvailable: false }, idle, 'connected', 'connected', false), false);
+  assert.equal(canDecideApproval(pending, idle, 'connected', 'connected', false, 'session-other'), true);
+});
+
+test('an old terminal error stays with its Thread and Session while an unknown-write warning remains global', () => {
+  const oldError = { code: 'agent_failed', message: '任务失败', retryable: false, recovery: 'none' };
+  const origin = { threadId: 'thread-old', sessionId: 'session-old', error: oldError };
+  assert.equal(errorForSelectedThread(oldError, origin, 'thread-old', 'session-old', false), oldError);
+  assert.equal(errorForSelectedThread(oldError, origin, 'thread-new', 'session-new', false), undefined);
+  assert.equal(errorForSelectedThread(oldError, origin, 'thread-old', 'session-new', false), undefined);
+  const unknownWrite = { code: 'manual_reconcile_required', message: '创建结果待核对', retryable: false, recovery: 'manual_reconcile' };
+  assert.equal(errorForSelectedThread(unknownWrite, origin, 'thread-new', 'session-new', true), unknownWrite);
+});
+
+test('an unknown capability outcome preserves manual reconciliation instead of offering a retry', () => {
+  const terminal = { ...event(1), event_type: 'agent.failed', payload: { error_type: 'CapabilityOutcomeUnknownError', recoverable: true } };
+  const error = terminalEventError(terminal);
+  assert.equal(error?.code, 'command_outcome_unknown');
+  assert.equal(error?.recovery, 'manual_reconcile');
+  assert.equal(error?.retryable, false);
+  assert.match(error?.message ?? '', /核对.*不要重试/);
+  assert.equal(terminalEventError({ ...terminal, payload: { error_type: 'CapabilityOperationError' } })?.code, 'agent_failed');
+});
+
+test('a normalized terminal error retains its original run scope without hiding unrelated errors', () => {
+  const original = { code: 'agent_failed', message: '任务失败', retryable: false, recovery: 'none' };
+  const origin = { threadId: 'thread-old', sessionId: 'session-old', error: original };
+  const normalized = { ...original };
+  const updated = normalizedTerminalErrorScope(origin, normalized, 'thread-old', 'session-old');
+  assert.equal(updated?.error, normalized);
+  assert.equal(errorForSelectedThread(normalized, updated, 'thread-new', 'session-new', false), undefined);
+  assert.equal(errorForSelectedThread(normalized, updated, 'thread-old', 'session-old', false), normalized);
+  const unknown = { code: 'manual_reconcile_required', message: '结果待核对', retryable: false, recovery: 'manual_reconcile' };
+  assert.equal(normalizedTerminalErrorScope(origin, unknown, 'thread-old', 'session-old'), origin);
+  assert.equal(errorForSelectedThread(unknown, origin, 'thread-new', 'session-new', true), unknown);
+  assert.equal(normalizedTerminalErrorScope(origin, normalized, 'thread-new', 'session-new'), origin);
 });
 
 test('approval projection correction keeps the active stream generation', () => {

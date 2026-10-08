@@ -7,7 +7,6 @@ import { liveThreadTitle, useLive } from '../../live/LiveContext';
 import type { LiveProjectProjection } from '../../live/liveState';
 import { formatRelativeDay } from '../../lib/format';
 import { visibleThreadTree } from './liveThreadTree';
-import { requestErrorCopy } from '../../lib/requestErrorCopy';
 import { visibleOnboardingError } from '../../live/createRequestRecovery';
 
 interface LiveSidebarProps {
@@ -35,6 +34,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   const {
     phase,
     projects,
+    projectNames,
     threads,
     selectedProjectId,
     selectedThreadId,
@@ -58,11 +58,11 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   const filteredProjects = useMemo(
     () => visibleProjects.filter((project) => {
       if (!normalizedQuery) return true;
-      if (project.name.toLowerCase().includes(normalizedQuery)) return true;
+      if ((projectNames[project.id] || project.name).toLowerCase().includes(normalizedQuery)) return true;
       if (project.workspaceRef.toLowerCase().includes(normalizedQuery)) return true;
       return projectThreads(project, threads).some((thread) => (metadata[thread.id]?.title || liveThreadTitle(thread)).toLowerCase().includes(normalizedQuery));
     }),
-    [metadata, normalizedQuery, threads, visibleProjects]
+    [metadata, normalizedQuery, projectNames, threads, visibleProjects]
   );
 
   const toggleProject = (projectId: string) => {
@@ -152,12 +152,6 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
       </div>}
 
       <div className="rail-sidebar-scroll">
-        {lastError && (
-          <div className="live-sidebar-error" role="alert">
-            <strong>{requestErrorCopy(lastError)}</strong>
-            <details><summary>查看错误详情</summary><code>{lastError.code}</code><p>{lastError.message}</p>{lastError.recovery && <code>{lastError.recovery}</code>}</details>
-          </div>
-        )}
         {onboardingError && <div className="live-sidebar-error" role="alert"><span>{onboardingError}</span>{(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearCreateUncertainty()}>刷新并核对</button>}{recoveredConversationId && <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}</div>}
 
         {phase === 'ready' && filteredProjects.length === 0 && (
@@ -167,6 +161,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
         )}
 
         {filteredProjects.map((project) => {
+          const displayName = projectNames[project.id] || project.name;
           const isCollapsed = collapsedProjects.includes(project.id);
           const allProjectThreads = projectThreads(project, threads);
           const projectThreadList = visibleThreadTree(allProjectThreads, normalizedQuery, collapsedThreads, Object.fromEntries(Object.entries(metadata).map(([id, item]) => [id, item.title])));
@@ -181,12 +176,12 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                     if (selectProject(project.id)) toggleProject(project.id);
                   }}
                   aria-expanded={!isCollapsed}
-                  aria-label={`项目 ${project.name}，${projectThreadList.length} 个会话`}
+                  aria-label={`项目 ${displayName}，${projectThreadList.length} 个会话`}
                 >
                   <FolderKanban size={13} aria-hidden="true" />
                   <span className="rail-sidebar-project-info">
                     <span className="rail-sidebar-project-name-row">
-                      <span className="rail-sidebar-project-name">{project.name}</span>
+                      <span className="rail-sidebar-project-name">{displayName}</span>
                       {!project.writable && <span className="live-readonly-badge">只读</span>}
                     </span>
                     <span className="rail-sidebar-project-path" title={project.workspaceRef}>

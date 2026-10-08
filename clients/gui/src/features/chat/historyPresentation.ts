@@ -5,6 +5,13 @@ const TOOL_ACTIONS: Record<string, string> = {
   run_command: '运行命令',
   search_files: '搜索文件',
   git_diff: '查看代码变更',
+  ext_browser_observe: '查看网页',
+  ext_browser_navigate: '打开网页',
+  ext_browser_fill: '填写网页',
+  ext_browser_click: '点击网页按钮',
+  ext_computer_observe: '读取窗口',
+  ext_computer_type_text: '填写窗口',
+  ext_computer_click_button: '点击窗口按钮',
 };
 
 export function toolActionLabel(toolName: string): string {
@@ -28,6 +35,7 @@ export function systemEventLabel(eventType: string, summary: string | null | und
   if (event === 'agent.started' || event === 'session.started') return '开始处理';
   if (event === 'agent.timed_out' || event === 'session.timed_out') return '任务超时';
   if (event === 'agent.completed' || event === 'session.completed') return '任务已完成';
+  if (event === 'agent.cancelled' || event === 'session.cancelled') return '任务已取消';
   if (event === 'agent.failed' || event === 'session.run_failed') return '任务执行失败';
   if (event === 'tool.completed') return '工具已完成';
   if (event === 'tool.failed') return '工具执行失败';

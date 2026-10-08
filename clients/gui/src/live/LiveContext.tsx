@@ -10,6 +10,8 @@ import React, {
 import { Phase1E } from '@operant/sdk';
 import type * as B2 from '../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../context/ClientContext';
+import { B23ManagementAdapter, normalizeB23Error, type B23UiError } from './b23Adapter';
+import { readProjectDisplayNames } from './projectDisplayNames';
 import {
   B2LiveAdapter,
   normalizeB2Error,
@@ -48,6 +50,9 @@ import {
   canDecideApproval,
   commandStateAfterTerminalEvent,
   eventNeedsManualReconcile,
+  errorForSelectedThread,
+  errorNeedsManualReconcile,
+  normalizedTerminalErrorScope,
   isApprovalProjectionEvent,
   isTerminalEvent,
   projectionGeneration,
@@ -69,6 +74,9 @@ export interface LiveContextValue {
   adapter: LiveClientAdapter;
   b2Adapter: B2LiveAdapter;
   projects: LiveProjectProjection[];
+  projectNames: Record<string, string>;
+  projectNameError?: B23UiError;
+  refreshProjectNames: () => Promise<void>;
   threads: LiveThread[];
   /** Session details returned by the generated createSession Command. */
   sessions: LiveSession[];
@@ -96,6 +104,7 @@ export interface LiveContextValue {
   lastError?: LiveError;
   command: LiveCommandState;
   approvalAction: LiveActionState;
+  terminalSessionId: string | null;
   manualReconcileRequired: boolean;
   manualReconcileReason?: string;
   deepLinkTargetId: string | null;
@@ -178,13 +187,6 @@ function roleIdForSession(session: LiveSession | undefined): string | undefined 
   return roleId && roleId.trim() ? roleId : undefined;
 }
 
-function errorNeedsManualReconcile(error: LiveError): boolean {
-  return error.recovery === 'manual_reconcile'
-    || error.code.includes('manual_reconcile')
-    || error.code.includes('outcome_unknown')
-    || containsManualReconcile(error.detail);
-}
-
 function manualReconcileError(value: unknown, fallback: string): LiveError {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const candidate = value as { code?: unknown; message?: unknown; detail?: unknown };
@@ -219,11 +221,15 @@ function frameHasTerminalProjection(event: LiveEvent): boolean {
 }
 
 export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { phase1eClient, b2Client, clientMode, connectionStatus, setActiveWorkspace } = useOperant();
+  const { phase1eClient, b2Client, b23Client, clientMode, connectionStatus, setActiveWorkspace } = useOperant();
   const adapter = useMemo(() => new LiveClientAdapter(phase1eClient), [phase1eClient]);
   const b2Adapter = useMemo(() => new B2LiveAdapter(b2Client), [b2Client]);
+  const managementAdapter = useMemo(() => new B23ManagementAdapter(b23Client), [b23Client]);
   const [phase, setPhase] = useState<LiveProjectionPhase>('idle');
   const [projects, setProjects] = useState<LiveProjectProjection[]>([]);
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  const [projectNameError, setProjectNameError] = useState<B23UiError | undefined>();
+  const projectNameRequestRef = useRef(0);
   const [threads, setThreads] = useState<LiveThread[]>([]);
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   const [approvals, setApprovals] = useState<LiveApproval[]>([]);
@@ -245,6 +251,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [lastError, setLastError] = useState<LiveError | undefined>();
   const [command, setCommand] = useState<LiveCommandState>({ status: 'idle' });
   const [approvalAction, setApprovalAction] = useState<LiveActionState>({ status: 'idle' });
+  const [terminalRunScope, setTerminalRunScope] = useState<{ threadId: string; sessionId: string } | null>(null);
   const [manualReconcileRequired, setManualReconcileRequired] = useState(false);
   const [manualReconcileReason, setManualReconcileReason] = useState<string | undefined>();
   const [deepLinkTargetId, setDeepLinkTargetId] = useState<string | null>(initialDeepLinkTarget);
@@ -263,7 +270,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const createSessionKeyRef = useRef<string | null>(null);
   const createSessionInputRef = useRef<string | null>(null);
   const pendingApprovalRef = useRef<PendingApprovalDecision | null>(null);
-  const terminalErrorRef = useRef<LiveError | undefined>(undefined);
+  const terminalErrorRef = useRef<{ threadId: string; sessionId: string | null; error: LiveError } | undefined>(undefined);
   const commandRef = useRef<LiveCommandState>({ status: 'idle' });
   const approvalActionRef = useRef<LiveActionState>({ status: 'idle' });
   const commandDispatchingRef = useRef(false);
@@ -473,7 +480,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const resolveDeepLink = useCallback((threadId: string | null): boolean => {
     if (!threadId) {
-      if (rejectThreadSelection(null)) return false;
+      // The root chat route retains the current conversation; it does not
+      // request an empty selection while a run is active.
       deepLinkTargetRef.current = null;
       setDeepLinkTargetId(null);
       setDeepLinkNotFound(false);
@@ -647,7 +655,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!selectionLocked) {
       selectedProjectIdRef.current = nextProjectId;
       setSelectedProjectId(nextProjectId);
-      setLastError((current) => manualReconcileRef.current ? current : terminalErrorRef.current);
+      setLastError((current) => manualReconcileRef.current ? current : errorForSelectedThread(terminalErrorRef.current?.error, terminalErrorRef.current, nextThreadId, effectiveThread?.sessionId ?? null, false));
     }
 
     const pendingSession = pendingSessionRef.current;
@@ -691,6 +699,38 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return true;
   }, [adapter, b2Adapter, setActiveWorkspace]);
 
+  const refreshProjectNames = useCallback(async () => {
+    if (clientMode !== 'live') return;
+    const request = ++projectNameRequestRef.current;
+    try {
+      const names = await readProjectDisplayNames(managementAdapter);
+      if (request !== projectNameRequestRef.current) return;
+      setProjectNames(names);
+      setProjectNameError(undefined);
+    } catch (error: unknown) {
+      if (request !== projectNameRequestRef.current) return;
+      setProjectNames({});
+      setProjectNameError(normalizeB23Error(error).detail);
+    }
+  }, [clientMode, managementAdapter]);
+
+  useEffect(() => {
+    if (clientMode === 'live' && phase === 'ready') void refreshProjectNames();
+  }, [clientMode, phase, refreshProjectNames]);
+
+  useEffect(() => {
+    let previousSection = window.location.hash.split(/[/?]/)[1] || '';
+    const onHashChange = () => {
+      const nextSection = window.location.hash.split(/[/?]/)[1] || '';
+      if (previousSection !== 'chat' && nextSection === 'chat' && phaseRef.current === 'ready') {
+        void refreshProjectNames();
+      }
+      previousSection = nextSection;
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [refreshProjectNames]);
+
   const refresh = useCallback(async () => {
     if (clientMode !== 'live') return false;
     if (connectionStatusRef.current !== 'connected' && phaseRef.current !== 'connecting') return false;
@@ -702,6 +742,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         phaseRef.current = 'ready';
         setPhase('ready');
         await refreshHistory();
+        await refreshProjectNames();
         return true;
       }
       return false;
@@ -712,7 +753,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       applyError(error);
       return false;
     }
-  }, [applyError, clientMode, loadProjection, refreshHistory]);
+  }, [applyError, clientMode, loadProjection, refreshHistory, refreshProjectNames]);
 
   const correctProjection = useCallback(async () => {
     if (clientMode !== 'live' || manualReconcileRef.current) return;
@@ -821,13 +862,24 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       lastEvent: event,
       error: undefined,
     }));
+    if (event.event_type === 'agent.started') {
+      const sessionId = event.session_id || selectedSessionIdRef.current;
+      setTerminalRunScope((current) => current?.threadId === threadId && current.sessionId === sessionId ? null : current);
+      const previousError = terminalErrorRef.current;
+      if (previousError?.threadId === threadId && previousError.sessionId === sessionId) {
+        terminalErrorRef.current = undefined;
+        setLastError((current) => current === previousError.error ? undefined : current);
+      }
+    }
     const terminalOutcome = terminalRunOutcome(event);
     if (terminalOutcome !== null) {
       const pendingRun = pendingRunRef.current;
       if (pendingRun?.threadId === threadId) pendingRunRef.current = null;
       setCommand((current) => commandStateAfterTerminalEvent(event, current));
       const terminalError = terminalEventError(event);
-      terminalErrorRef.current = terminalError;
+      terminalErrorRef.current = terminalError ? { threadId, sessionId: event.session_id || selectedSessionIdRef.current, error: terminalError } : undefined;
+      const terminalSessionId = event.session_id || selectedSessionIdRef.current;
+      if (terminalSessionId) setTerminalRunScope({ threadId, sessionId: terminalSessionId });
       if (terminalError) {
         setLastError(terminalError);
         setStream((current) => ({ ...current, error: terminalError }));
@@ -923,6 +975,9 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!manualReconcileRef.current) setStream((current) => ({ ...current, status: 'connected', error: undefined }));
     } catch (error: unknown) {
       const detail = applyError(error);
+      if (pendingRun) terminalErrorRef.current = normalizedTerminalErrorScope(
+        terminalErrorRef.current, detail, pendingRun.threadId, pendingRun.sessionId,
+      );
       setStream((current) => ({ ...current, status: 'error', error: detail }));
       setCommand((current) => ({ status: 'error', error: detail, idempotencyKey: current.idempotencyKey }));
     }
@@ -955,9 +1010,13 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     phaseRef.current = 'idle';
     setPhase('idle');
     setProjects([]);
+    ++projectNameRequestRef.current;
+    setProjectNames({});
+    setProjectNameError(undefined);
     setThreads([]);
     setSessions([]);
     setApprovals([]);
+    setTerminalRunScope(null);
     setModels([]);
     setRoles([]);
     setHistory(null);
@@ -1150,6 +1209,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (commandDispatchingRef.current) return false;
     commandDispatchingRef.current = true;
     terminalErrorRef.current = undefined;
+    setTerminalRunScope(null);
     setLastError(undefined);
     setStream((current) => ({ ...current, error: undefined }));
     const previousRun = pendingRunRef.current;
@@ -1176,6 +1236,9 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return streamCompleted;
     } catch (error: unknown) {
       const detail = applyError(error, false);
+      terminalErrorRef.current = normalizedTerminalErrorScope(
+        terminalErrorRef.current, detail, run.threadId, run.sessionId,
+      );
       if (!detail.retryable && !errorNeedsManualReconcile(detail)) {
         // A definitive command rejection is not an in-flight run.  Retryable
         // transport failures intentionally keep the pending key so reconnect
@@ -1289,6 +1352,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         connectionStatus,
         stream.status,
         manualReconcileRequired,
+        terminalRunScope?.threadId === selectedThreadIdRef.current ? terminalRunScope.sessionId : null,
       )
       || approvalDispatchingRef.current
     ) return;
@@ -1316,7 +1380,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       approvalDispatchingRef.current = false;
     }
-  }, [adapter, approvalAction.status, applyError, clientMode, connectionStatus, correctProjection, manualReconcileRequired, phase, stream.status]);
+  }, [adapter, approvalAction.status, applyError, clientMode, connectionStatus, correctProjection, manualReconcileRequired, phase, stream.status, terminalRunScope]);
 
   const loadFiles = useCallback(async (workspaceId: string, relativePath = '') => {
     if (clientMode !== 'live' || phase !== 'ready' || connectionStatus !== 'connected') return;
@@ -1366,6 +1430,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     && !manualReconcileRequired
     && !cancelCommandInFlight
     && Boolean(selectedThread?.sessionId)
+    && !(terminalRunScope && selectedThread && terminalRunScope.threadId === selectedThread.id && terminalRunScope.sessionId === selectedThread.sessionId)
     && sessionTask?.source.source_id === selectedThread?.sessionId
     && Boolean(sessionTask?.actions.some((action) => action.action === 'cancel' && action.availability === 'available'));
   const createSessionUnavailableReason = manualReconcileRequired
@@ -1384,11 +1449,19 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ? '正在同步连接，或连接暂时不可用。'
         : undefined;
 
+  const visibleLastError = errorForSelectedThread(lastError, terminalErrorRef.current, selectedThreadId, selectedSessionId, manualReconcileRequired);
+  const visibleStreamError = errorForSelectedThread(stream.error, terminalErrorRef.current, selectedThreadId, selectedSessionId, manualReconcileRequired);
+  const visibleStream = visibleStreamError === stream.error ? stream : { ...stream, error: visibleStreamError };
+  const terminalSessionId = terminalRunScope?.threadId === selectedThreadId ? terminalRunScope.sessionId : null;
+
   const value = useMemo<LiveContextValue>(() => ({
     phase,
     adapter,
     b2Adapter,
     projects,
+    projectNames,
+    projectNameError,
+    refreshProjectNames,
     threads,
     sessions,
     sessionOptions,
@@ -1408,11 +1481,12 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loadMoreHistory,
     files,
     filesWorkspaceId,
-    stream,
+    stream: visibleStream,
     projectionStale,
-    lastError,
+    lastError: visibleLastError,
     command,
     approvalAction,
+    terminalSessionId,
     manualReconcileRequired,
     manualReconcileReason,
     deepLinkTargetId,
@@ -1461,7 +1535,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     history,
     historyError,
     historyLoading,
-    lastError,
+    visibleLastError,
     loadFiles,
     manualReconcileReason,
     manualReconcileRequired,
@@ -1469,6 +1543,9 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     models,
     phase,
     projects,
+    projectNames,
+    projectNameError,
+    refreshProjectNames,
     projectionStale,
     reconnect,
     refresh,
@@ -1487,7 +1564,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     sessions,
     sessionOptions,
     roles,
-    stream,
+    visibleStream,
+    terminalSessionId,
     threads,
   ]);
 

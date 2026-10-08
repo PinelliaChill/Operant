@@ -9,6 +9,8 @@ const copy: Record<string, string> = {
   command_in_progress: '原请求仍在处理中。请稍后刷新，勿再次提交。',
   conflict: '状态已变化。请刷新并核对后重试。',
   not_found: '目标记录未找到。请刷新列表，确认它是否已关闭或移除。',
+  observation_expired: '页面或窗口信息已过期，请重新查看后再操作。',
+  observation_unavailable: '页面或窗口信息不可用，请重新查看后再操作。',
   invalid_error_envelope: '服务返回了无法识别的结果。请刷新并核对状态，勿重复写入。',
   request_validation_failed: '填写内容不符合要求。请检查所选目标和输入后重试。',
 };
@@ -23,6 +25,7 @@ export function requestErrorCopy(error: unknown): string {
   const withoutHttp = message.replace(/^http_\d{3}:\s*/, '');
   if (/^[\u3400-\u9fff]/u.test(withoutHttp) && withoutHttp.length <= 300) return withoutHttp;
   if (code === 'http_401' || code === 'http_403') return copy.permission_denied;
+  if (code === 'http_404') return copy.not_found;
   if (code === 'http_409') return copy.conflict;
   if (code === 'http_422' || code === 'validation_error') return '填写内容不符合要求。请检查所选目标和输入后重试。';
   if (code === 'http_502' || code === 'http_503' || code === 'http_504') return '本机服务暂时不可用。请稍后刷新状态，再决定是否重试。';

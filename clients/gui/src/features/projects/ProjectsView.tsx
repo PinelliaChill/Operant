@@ -25,6 +25,7 @@ import { formatRelativeDay } from '../../lib/format';
 import type { DemoWorkflowDirectoryItem } from '../../demo/types';
 import { useOperant } from '../../context/ClientContext';
 import { LiveManagementView } from '../management/LiveManagementView';
+import { ProjectFilesPanel } from './ProjectFilesPanel';
 import '../tasks/task-hub.css';
 
 /** 预置项目标识颜色 */
@@ -495,12 +496,12 @@ export const ProjectsView: React.FC = () => {
 
 const LiveProjectsHub: React.FC = () => {
   const [params, setParams] = useSearchParams();
-  const tab = params.get('tab') === 'knowledge' ? 'knowledge' : 'projects';
+  const tab = params.get('tab') === 'knowledge' ? 'knowledge' : params.get('tab') === 'files' ? 'files' : 'projects';
   return <div className="task-hub">
     <nav className="task-hub-tabs" aria-label="项目页面">
-      {([['projects', '项目内容'], ['knowledge', '项目知识']] as const).map(([key, label]) => <button key={key} type="button" className={`task-hub-tab${tab === key ? ' active' : ''}`} aria-current={tab === key ? 'page' : undefined} onClick={() => setParams({ tab: key })}>{label}</button>)}
+      {([['projects', '项目内容'], ['files', '文件'], ['knowledge', '项目知识']] as const).map(([key, label]) => <button key={key} type="button" className={`task-hub-tab${tab === key ? ' active' : ''}`} aria-current={tab === key ? 'page' : undefined} onClick={() => setParams({ tab: key })}>{label}</button>)}
     </nav>
-    <LiveManagementView initialTab={tab} focused />
+    {tab === 'files' ? <ProjectFilesPanel /> : <LiveManagementView initialTab={tab} focused />}
   </div>;
 };
 

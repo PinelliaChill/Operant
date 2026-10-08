@@ -120,15 +120,13 @@
 .ui-chat .ui-chat-inspector-body { display: grid; gap: 16px; padding: 0 16px 16px; }
 .ui-chat .ui-chat-inspector .ui-thread-details { margin: 0; }
 .ui-chat .live-inspector-actions { flex-wrap: wrap; justify-content: flex-start; }
-.ui-chat .live-file-preview, .ui-chat .live-terminal-panel { min-width: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); }
-.ui-chat .live-file-preview { margin: 10px; padding: 10px; }
-.ui-chat .live-file-preview-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-.ui-chat .live-file-preview-actions, .ui-chat .live-terminal-approval { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.ui-chat .live-terminal-panel { min-width: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); }
+.ui-chat .live-terminal-approval { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .ui-chat .live-terminal-approval { margin: 10px; font-size: var(--font-size-xs); }
 .ui-chat .live-terminal-approval span { flex: 1 1 180px; overflow-wrap: anywhere; }
-.ui-chat .live-file-preview-heading strong, .ui-chat .live-terminal-panel h2 { display: inline-flex; align-items: center; gap: 6px; }
-.ui-chat .live-file-preview p, .ui-chat .live-terminal-panel p { margin: 8px 10px; color: var(--text-secondary); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
-.ui-chat .live-file-preview pre, .ui-chat .live-terminal-output { overflow: auto; max-height: 320px; margin: 10px 0 0; padding: 12px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: 12px; line-height: 1.5; tab-size: 2; white-space: pre; }
+.ui-chat .live-terminal-panel h2 { display: inline-flex; align-items: center; gap: 6px; }
+.ui-chat .live-terminal-panel p { margin: 8px 10px; color: var(--text-secondary); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+.ui-chat .live-terminal-output { overflow: auto; max-height: 320px; margin: 10px 0 0; padding: 12px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: 12px; line-height: 1.5; tab-size: 2; white-space: pre; }
 .ui-chat .live-terminal-output { min-height: 150px; max-height: 280px; margin: 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-chat .live-file-error, .ui-chat .live-terminal-error { display: flex; align-items: center; gap: 6px; color: var(--status-error, var(--text-primary)) !important; }
 .ui-chat .live-terminal-input { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px; }
@@ -147,7 +145,7 @@
   .ui-chat .live-content-grid { padding: 16px; }
   .ui-chat .live-panel-heading, .ui-chat .live-composer { padding-left: 14px; padding-right: 14px; }
   .ui-chat .live-chat-empty-content { min-height: 230px; padding: 28px 16px; }
-  .ui-chat .live-file-preview-actions .btn, .ui-chat .live-terminal-panel .btn { min-height: 44px; }
+.ui-chat .live-terminal-panel .btn { min-height: 44px; }
 }
 @media (max-width: 540px) {
   .ui-chat .ui-chat-project-bar .live-select-label { flex-basis: 100%; }

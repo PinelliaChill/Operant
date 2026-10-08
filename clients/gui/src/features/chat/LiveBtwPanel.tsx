@@ -43,7 +43,7 @@ export const LiveBtwPanel: React.FC<{ sessionId: string; threadId: string; works
   };
 
   return <details className="live-btw-panel"><summary>BTW 独立提问 <span>只读模型调用 · 不自动写入主线</span></summary>
-    <div className="live-btw-content"><p>在当前 Session 中单独提问。结果先保存在 Sidecar；只有点击“提升到主线”才会加入会话。</p>
+    <div className="live-btw-content"><p>单独提问，结果不会加入当前对话。需要保留时，点击“提升到主线”。</p>
       <label>提问内容<textarea className="input" value={prompt} onChange={(event) => setPrompt(event.target.value)} disabled={!connected || busy} placeholder="输入需要独立分析的问题" /></label>
       <div className="live-btw-actions"><button type="button" className="btn btn-secondary btn-sm" disabled={!connected || !prompt.trim() || busy} onClick={() => void start()}>{busy ? '处理中…' : '独立提问'}</button>{runId && <button type="button" className="btn btn-ghost btn-sm" disabled={!connected || busy} onClick={() => void refresh()}><RefreshCw size={13} />刷新结果</button>}</div>
       {error && <div className="live-alert live-alert-error" role="alert">{error}</div>}{notice && <div className="live-alert" role="status">{notice}</div>}

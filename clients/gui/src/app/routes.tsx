@@ -1,6 +1,8 @@
 import React, { Suspense, lazy } from 'react';
 import { Navigate, createHashRouter } from 'react-router-dom';
 import { RailLayout } from './RailLayout';
+import { legacyRemoteRoute } from './legacyRemoteRoute';
+import { legacyWorkflowRunRoute } from './legacyWorkflowRunRoute';
 
 const ChatView = lazy(() => import('../features/chat/ChatView').then((module) => ({ default: module.ChatView })));
 const TasksView = lazy(() => import('../features/tasks/TasksView').then((module) => ({ default: module.TasksView })));
@@ -54,11 +56,7 @@ export const router = createHashRouter([
         path: 'workflow',
         element: <Navigate to="/collab" replace />,
       },
-      {
-        // 旧工作流界面深链 → 协作总览
-        path: 'workflow/:id',
-        element: <Navigate to="/collab" replace />,
-      },
+      legacyWorkflowRunRoute,
       {
         // 保留深链：工作流群聊界面（寻址 chip + "只看发给我的"过滤）
         path: 'workflow/:id/s/:sid',
@@ -110,10 +108,7 @@ export const router = createHashRouter([
         path: 'approvals',
         element: <Navigate to="/tasks?tab=approvals" replace />,
       },
-      {
-        path: 'remote',
-        element: <Navigate to="/settings?tab=advanced" replace />,
-      },
+      legacyRemoteRoute,
       {
         path: '*',
         element: <Navigate to="/chat" replace />,

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { Bot, Brain, Cpu, Settings2, ShieldCheck, Sliders, Wrench } from 'lucide-react';
 import { useOperant } from '../../context/ClientContext';
@@ -40,6 +40,15 @@ export const SettingsHub: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const old = params.get('tab') || params.get('cat');
   const section = params.get('section');
+  const remotePanel = useRef<HTMLDetailsElement>(null);
+  const showRemote = section === 'advanced' && params.get('page') === 'remote';
+  useEffect(() => {
+    if (!showRemote) return;
+    const frame = requestAnimationFrame(() => {
+      remotePanel.current?.scrollIntoView({ block: 'start' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [showRemote]);
   if (!section && (old === 'knowledge' || old === 'memory')) return <Navigate to="/projects?tab=knowledge" replace />;
   if (!section && old === 'projects') return <Navigate to="/projects" replace />;
   if (!section && old === 'approvals') return <Navigate to="/tasks?tab=approvals" replace />;
@@ -48,6 +57,7 @@ export const SettingsHub: React.FC = () => {
   if (!section && (old === 'plugins' || old === 'plugin')) return <Navigate to="/settings?section=tools&page=plugins" replace />;
   if (!section && (old === 'skills' || old === 'skill')) return <Navigate to="/settings?section=tools&page=skills" replace />;
   if (!section && (old === 'extensions' || old === 'tools')) return <Navigate to="/settings?section=tools&page=local" replace />;
+  if (!section && old === 'remote') return <Navigate to="/settings?section=advanced&page=remote" replace />;
   if (!section && old && LEGACY[old]) return <Navigate to={`/settings?section=${LEGACY[old]}`} replace />;
   const current: Section = SECTIONS.some((entry) => entry.key === section) ? section as Section : 'general';
   const page = params.get('page') || '';
@@ -69,7 +79,7 @@ export const SettingsHub: React.FC = () => {
       {current === 'memory' && <>{subnav([['settings', '记忆设置'], ['retention', '保留与审计']])}{clientMode === 'live' ? <LiveManagementView initialTab={page === 'retention' ? 'retention' : 'settings'} focused /> : <SettingPanel title="记忆"><p>演示模式不保存真实记忆。</p></SettingPanel>}</>}
       {current === 'advanced' && <SettingPanel title="权限与高级">
         <section className="settings-hub-card"><h2><ShieldCheck size={18} aria-hidden="true" />操作权限</h2><PolicySettings /></section>
-        {clientMode === 'live' && <><details className="settings-hub-card"><summary><Settings2 size={16} aria-hidden="true" />运行配置</summary><LiveConfigSettings /></details><details className="settings-hub-card"><summary>远程与设备</summary><RemoteView /></details></>}
+        {clientMode === 'live' && <><details className="settings-hub-card"><summary><Settings2 size={16} aria-hidden="true" />运行配置</summary><LiveConfigSettings /></details><details ref={remotePanel} open={showRemote} className="settings-hub-card"><summary>远程与设备</summary><RemoteView /></details></>}
       </SettingPanel>}
     </div>
   </div>;

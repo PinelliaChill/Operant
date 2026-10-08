@@ -155,4 +155,4 @@ def test_rollback_refuses_to_remove_names(tmp_path: Path) -> None:
     UXRepository(store).rename(thread.id, "要保留的历史")
     with pytest.raises(MigrationError):
         store.rollback(23, isolated=True)
-    assert store.schema_version() == 24
+    assert store.schema_version() == 25

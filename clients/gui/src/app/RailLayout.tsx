@@ -11,6 +11,7 @@
  */
 
 import React, { useState } from 'react';
+import { focusPageSection } from '../lib/focusPageSection';
 import '../styles/ui-refine-shell.css';
 import { NavLink, Outlet, useLocation, useMatch } from 'react-router-dom';
 import {
@@ -495,7 +496,7 @@ export const RailLayout: React.FC = () => {
     <div className="rail-container ui-refined-shell">
       <PendingSendRouteGuard />
       {/* 跳转链接：仅键盘焦点时可见 */}
-      <a href="#main-content" className="skip-link">
+      <a href="#main-content" className="skip-link" onClick={(event) => { event.preventDefault(); focusPageSection('main-content'); }}>
         跳到主内容
       </a>
 

@@ -44,6 +44,10 @@ class CapabilityOperationError(RuntimeError):
         self.status = status
 
 
+class CapabilityOutcomeUnknownError(CapabilityOperationError):
+    """A remote Job may have acted; its original receipt needs manual reconciliation."""
+
+
 @dataclass(frozen=True)
 class CapabilityLeaseBinding:
     target_id: str
@@ -96,6 +100,8 @@ class _CapabilityOperator:
                     if isinstance(result, dict)
                     else "job_failed"
                 )
+                if status == "manual_reconcile_required":
+                    raise CapabilityOutcomeUnknownError(error_code, job_id, str(status))
                 raise CapabilityOperationError(error_code, job_id, str(status))
             if status not in {"queued", "leased", "running"}:
                 raise CapabilityOperationError("projection_invalid", job_id, str(status))
@@ -108,7 +114,7 @@ class _CapabilityOperator:
                         {"idempotency_key": f"operator-timeout:{job_id}"},
                         idempotency_key=f"operator-timeout:{job_id}",
                     )
-                raise CapabilityOperationError("outcome_unknown", job_id, "timeout")
+                raise CapabilityOutcomeUnknownError("outcome_unknown", job_id, "timeout")
             time.sleep(0.1)
 
 

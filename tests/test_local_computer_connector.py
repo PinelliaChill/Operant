@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from typing import Any
 
@@ -14,6 +15,11 @@ from operant.domain.remote_execution import (
 )
 from operant.protocol import canonical_action_hash
 from operant.remote.local_computer import (
+    _CLICK_BUTTON_SCRIPT,
+    _OBSERVE_SCRIPT,
+    _PRESS_KEY_SCRIPT,
+    _TYPE_TEXT_SCRIPT,
+    _WINDOW_PID_SCRIPT,
     ComputerTargetError,
     ComputerTargetPolicy,
     LocalComputerConnector,
@@ -45,6 +51,108 @@ def test_computer_policy_blocks_unlisted_and_sensitive_apps() -> None:
         policy.check("com.example.Other")
     with pytest.raises(ComputerTargetError):
         ComputerTargetPolicy(frozenset({"com.example.Test", "com.apple.Terminal"}))
+
+
+def test_ax_scripts_select_one_standard_app_window_and_ignore_sharing_controls() -> None:
+    for source in (
+        _OBSERVE_SCRIPT,
+        _CLICK_BUTTON_SCRIPT,
+        _TYPE_TEXT_SCRIPT,
+        _PRESS_KEY_SCRIPT,
+        _WINDOW_PID_SCRIPT,
+    ):
+        assert "my selectedWindow(targetProcess," in source
+        assert "AXStandardWindow" in source and "AXMain" in source
+        assert "WindowSharing" in source
+        assert 'elementRole is "AXSheet" or elementRole is "AXDialog"' in source
+        assert "axNodesVisited > 1000" in source
+        assert "front window of targetProcess" not in source
+    assert "my buttonsWithin(taskWindow, 0)" in _OBSERVE_SCRIPT
+    assert "my textControlsWithin(taskWindow, 0)" in _OBSERVE_SCRIPT
+    assert "set expectedApp to item 1 of argv" in _OBSERVE_SCRIPT
+    assert "application processes whose bundle identifier is expectedApp" in _OBSERVE_SCRIPT
+    assert "if frontmost of targetProcess is not true then error" in _OBSERVE_SCRIPT
+    assert _OBSERVE_SCRIPT.index("if appId is not in approvedApps") < _OBSERVE_SCRIPT.index(
+        'my selectedWindow(targetProcess, "")'
+    )
+    assert '"AXTitle", "AXDescription"' in _OBSERVE_SCRIPT
+    assert "AXProtectedContent" in _OBSERVE_SCRIPT
+    assert "(count of matchingButtons) is not 1" in _CLICK_BUTTON_SCRIPT
+    assert "(count of matchingFields) is not 1" in _TYPE_TEXT_SCRIPT
+
+
+@pytest.mark.parametrize(
+    ("stderr", "reason_code"),
+    (
+        ("private window title: execution error: (-1719)", "computer.accessibility_unavailable"),
+        (
+            "execution error: osascript is not allowed assistive access. (-1719)",
+            "computer.permission_required",
+        ),
+        (
+            "execution error: Assistive applications are not enabled. (-25211)",
+            "computer.permission_required",
+        ),
+        ("private window title: execution error: (-25211)", "computer.accessibility_unavailable"),
+        ("execution error: target app is not running", "computer.app_unavailable"),
+        (
+            "execution error: approved App standard window is unavailable",
+            "computer.window_unavailable",
+        ),
+        (
+            "execution error: approved App standard window is ambiguous",
+            "computer.window_ambiguous",
+        ),
+        ("execution error: target window changed", "computer.target_changed"),
+        ("execution error: target app is not foreground", "computer.target_changed"),
+        ("private window title: arbitrary osascript failure", "computer.accessibility_unavailable"),
+    ),
+)
+def test_osascript_failure_exposes_only_fixed_reason_code(
+    monkeypatch: pytest.MonkeyPatch, stderr: str, reason_code: str
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr=stderr
+        ),
+    )
+    with pytest.raises(ComputerTargetError) as failed:
+        MacComputer._script("on run argv\nend run")
+    assert failed.value.reason_code == reason_code
+    assert "private window title" not in str(failed.value)
+    assert "private window title" not in repr(failed.value)
+
+
+@pytest.mark.parametrize("reason_code", ("computer.permission_required", "computer.target_changed"))
+def test_failed_computer_observation_job_keeps_specific_non_sensitive_reason(
+    reason_code: str,
+) -> None:
+    class DeniedComputer:
+        def observe(self) -> dict[str, Any]:
+            raise ComputerTargetError(
+                "private window content",
+                reason_code=reason_code,
+            )
+
+    connector = LocalComputerConnector(
+        target_id="local-computer-test",
+        lease_id="lease-test",
+        lease_token="token-test-1234567890",
+        lease_fencing=1,
+        computer=DeniedComputer(),  # type: ignore[arg-type]
+    )
+    result = connector.execute(_job(RemoteCapability.COMPUTER_OBSERVE, "observe_computer", {}))
+    assert result.result.status is RemoteJobStatus.FAILED
+    assert result.result.error_code == reason_code
+    assert "private window content" not in result.result.model_dump_json()
+    assert (
+        ComputerTargetError(
+            "private window content", reason_code="private window content"
+        ).reason_code
+        == "computer.target_rejected"
+    )
 
 
 def test_computer_connector_checks_observation_and_target_before_input() -> None:
@@ -139,6 +247,56 @@ def test_chosen_computer_app_is_activated_without_launching_other_apps(
         )
 
 
+def test_observe_rejects_changed_frontmost_app_without_exposing_other_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls: list[tuple[str, ...]] = []
+
+    def changed_frontmost(source: str, *arguments: str) -> str:
+        calls.append(arguments)
+        if "set frontmost of targetProcess" in source:
+            return "dev.operant.verification.control-fixture"
+        return "com.example.Other\x1ePrivate window title\x1eHidden control\x1eField\x1eprivate"
+
+    monkeypatch.setattr(MacComputer, "_script", staticmethod(changed_frontmost))
+    computer = MacComputer(
+        ComputerTargetPolicy(frozenset({"dev.operant.verification.control-fixture"})),
+        target_bundle_id="dev.operant.verification.control-fixture",
+    )
+    with pytest.raises(ComputerTargetError) as rejected:
+        computer.observe()
+    assert rejected.value.reason_code == "computer.target_changed"
+    assert "Private window title" not in str(rejected.value)
+    assert "Hidden control" not in str(rejected.value)
+    assert calls == [
+        ("dev.operant.verification.control-fixture",),
+        (
+            "dev.operant.verification.control-fixture",
+            "dev.operant.verification.control-fixture",
+        ),
+    ]
+
+
+def test_legacy_observe_passes_exact_allowlist_before_window_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls: list[tuple[str, ...]] = []
+
+    def observed(source: str, *arguments: str) -> str:
+        assert "set expectedApp to item 1 of argv" in source
+        calls.append(arguments)
+        return "dev.operant.verification.control-fixture\x1eFixture\x1eApply marker\x1eField\x1e"
+
+    monkeypatch.setattr(MacComputer, "_script", staticmethod(observed))
+    computer = MacComputer(
+        ComputerTargetPolicy(frozenset({"dev.operant.verification.control-fixture"}))
+    )
+    assert computer.observe()["bundle_id"] == "dev.operant.verification.control-fixture"
+    assert calls == [("", "dev.operant.verification.control-fixture")]
+
+
 def test_nested_text_area_selector_is_bound_and_content_stays_private(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,7 +319,7 @@ def test_nested_text_area_selector_is_bound_and_content_stays_private(
         == observed
     )
     assert any(
-        "set value of (item 1 of textAreas)" in source
+        "set value of targetField to enteredText" in source
         and args[-2:] == ("AXTextArea:1", "replacement")
         for source, args in calls
     )

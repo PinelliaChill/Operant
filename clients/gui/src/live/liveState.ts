@@ -242,17 +242,44 @@ export type LiveConnectionStatus = 'connected' | 'reconnecting' | 'disconnected'
  * projection is not an approval lock: Core may be waiting for this decision.
  */
 export function canDecideApproval(
-  approval: Pick<LiveApproval, 'status'>,
+  approval: Pick<LiveApproval, 'status' | 'continuationAvailable' | 'sessionId'>,
   action: Pick<LiveActionState, 'status'>,
   connectionStatus: LiveConnectionStatus,
   streamStatus: LiveStreamStatus,
   manualReconcileRequired: boolean,
+  terminalSessionId: string | null = null,
 ): boolean {
   return approval.status === 'pending'
+    && approval.continuationAvailable
+    && approval.sessionId !== terminalSessionId
     && action.status === 'idle'
     && !manualReconcileRequired
     && connectionStatus === 'connected'
     && streamStatus === 'connected';
+}
+
+/** A terminal error belongs to the Thread and Session that produced it. */
+export function errorForSelectedThread(
+  error: LiveError | undefined,
+  origin: { threadId: string; sessionId: string | null; error: LiveError } | undefined,
+  threadId: string | null,
+  sessionId: string | null,
+  manualReconcileRequired: boolean,
+): LiveError | undefined {
+  if (!error || !origin || error !== origin.error || manualReconcileRequired) return error;
+  return origin.threadId === threadId && origin.sessionId === sessionId ? error : undefined;
+}
+
+/** SDK normalization may replace the error object after its terminal frame. */
+export function normalizedTerminalErrorScope(
+  origin: { threadId: string; sessionId: string | null; error: LiveError } | undefined,
+  error: LiveError,
+  threadId: string,
+  sessionId: string,
+): typeof origin {
+  if (!origin || origin.threadId !== threadId || origin.sessionId !== sessionId
+    || origin.error.code !== error.code || errorNeedsManualReconcile(error)) return origin;
+  return { ...origin, error };
 }
 
 /** Keep the selected Thread stable while an outcome is still unknown. */
@@ -433,6 +460,15 @@ export function terminalEventError(event: LiveEvent): LiveError | undefined {
   if (event.error) return event.error;
 
   if (outcome === 'failed') {
+    if (event.payload.error_type === 'CapabilityOutcomeUnknownError') {
+      return {
+        code: 'command_outcome_unknown',
+        message: '操作结果尚未确认。请先核对原任务，暂时不要重试。',
+        retryable: false,
+        recovery: 'manual_reconcile',
+        detail: event.payload,
+      };
+    }
     const recoverable = event.payload.recoverable === true;
     const errorCode: Record<string, string> = {
       'agent.failed': 'agent_failed',
@@ -509,6 +545,13 @@ export function containsManualReconcile(value: unknown, seen = new Set<unknown>(
   seen.add(value);
   if (Array.isArray(value)) return value.some((item) => containsManualReconcile(item, seen));
   return Object.values(value).some((item) => containsManualReconcile(item, seen));
+}
+
+export function errorNeedsManualReconcile(error: LiveError): boolean {
+  return error.recovery === 'manual_reconcile'
+    || error.code.includes('manual_reconcile')
+    || error.code.includes('outcome_unknown')
+    || containsManualReconcile(error.detail);
 }
 
 /**

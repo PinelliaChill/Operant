@@ -4,7 +4,7 @@
 模型、工具、审批、数据库和任务恢复仍由 Python Core 处理。
 
 桌面壳需要匹配版本的 Core，不能只复制 `.app` 就假定已经完成安装。
-当前构建目标是 macOS `.app`；尚无正式 Developer ID 签名、公证、DMG 或自动更新。
+上述源码构建输出为 macOS `.app`；预发布安装包见根 README。尚无正式 Developer ID 签名、公证或自动更新。
 
 ## 从源码启动（macOS）
 
@@ -42,6 +42,18 @@ npm run tauri --prefix clients/desktop -- build
 配置中的构建钩子会先编译 GUI，产物位于 `clients/desktop/src-tauri/target/release/bundle/macos/`。
 双击候选 App 前仍需启动匹配的 Core；若让桌面壳自行启动 Core，启动环境的 `PATH` 必须能找到 `operant`。
 从终端能运行 `uv run operant`，不代表 Finder 启动的 App 也拥有同样的环境。
+
+已有窗口使用 `clients/gui/dist` 时，隔离验收须直接给 Vite 指定另一输出目录，避免覆盖该窗口的文件。
+`npm run build -- --outDir ...` 不会把目录参数传给脚本中的 Vite。先在 `clients/gui` 执行类型检查，
+再构建并检查同一目录：
+
+```bash
+npm run typecheck
+npx vite build --outDir ../../.operant/gui-verification-dist
+node scripts/check-bundle.mjs ../../.operant/gui-verification-dist
+```
+
+该目录由隔离的预览服务使用；原窗口的服务、数据与静态目录保持独立。
 
 ## 使用边界
 

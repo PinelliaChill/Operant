@@ -8,7 +8,7 @@ import { bindPendingConversationSend, draftAfterAccepted, pendingSendMatchesSele
 import { deepLinkLookupDecision } from '../../live/deepLinkLookup';
 import './b2-chat-layout.css';
 import './ui-refine-chat.css';
-import { historyItemLabel } from './chatPresentation';
+import { approvalActionLabel, historyItemLabel } from './chatPresentation';
 import { systemEventLabel, toolActionLabel, toolResultLabel } from './historyPresentation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
@@ -143,23 +143,24 @@ const LiveErrorBanner: React.FC<{
 export const LiveApprovalCard: React.FC<{
   approval: LiveApproval;
   busy: boolean;
+  runEnded?: boolean;
   onDecide: (decision: 'approve' | 'reject') => void;
-}> = ({ approval, busy, onDecide }) => {
-  const action = approval.detail.match(/(?:^|[\s=])(run_command|file_write|network_access|read_file|write_file)(?:\s|$)/)?.[1] || approval.category;
-  const actionName: Record<string, string> = {
-    run_command: '运行命令', file_write: '修改文件', write_file: '修改文件',
-    read_file: '读取文件', network_access: '访问网络', security_policy: '执行受保护操作',
-  };
+}> = ({ approval, busy, runEnded = false, onDecide }) => {
   const statusName: Record<string, string> = { pending: '等待你的决定', approved_once: '已允许一次', approved_for_run: '本次运行已允许', rejected: '已拒绝', expired: '已过期' };
+  const ended = approval.status === 'pending' && runEnded;
+  const unavailable = approval.status === 'pending' && !approval.continuationAvailable;
+  const displayStatus = ended ? '本次运行已结束，请重新开始任务'
+    : unavailable ? '当前无法继续审批，请刷新核对运行状态'
+    : statusName[approval.status] || statusLabel(approval.status);
   return (
   <article className="live-approval-card">
     <div className="live-approval-head">
       <span className="live-approval-icon" aria-hidden="true"><ShieldCheck size={16} /></span>
       <div>
-        <h3>助手请求{actionName[action] || '执行操作'}</h3>
-        <p>{statusName[approval.status] || statusLabel(approval.status)}</p>
+        <h3>助手请求{approvalActionLabel(approval.detail, approval.category)}</h3>
+        <p>{displayStatus}</p>
       </div>
-      <StatusBadge status={approval.status} label={statusName[approval.status] || statusLabel(approval.status)} size="sm" />
+      <StatusBadge status={ended || unavailable ? 'blocked' : approval.status} label={ended || unavailable ? '无法继续' : displayStatus} size="sm" />
     </div>
     <details className="live-approval-details"><summary>查看操作与审批详情</summary><p>{approval.detail || '服务未提供更多动作说明'}</p><dl className="live-approval-meta">
       <div><dt>审批编号</dt><dd><code>{approval.id}</code></dd></div>
@@ -167,11 +168,11 @@ export const LiveApprovalCard: React.FC<{
       <div><dt>到期时间</dt><dd>{approval.expiresAt}</dd></div>
     </dl></details>
     <div className="live-approval-actions">
-      <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDecide('reject')} disabled={busy || approval.status !== 'pending'}>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDecide('reject')} disabled={busy || ended || unavailable || approval.status !== 'pending'}>
         拒绝
       </button>
-      <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve')} disabled={busy || approval.status !== 'pending'}>
-        {busy ? '暂不可操作' : '批准一次'}
+      <button type="button" className="btn btn-primary btn-sm" onClick={() => onDecide('approve')} disabled={busy || ended || unavailable || approval.status !== 'pending'}>
+        {ended || unavailable ? '无法继续' : busy ? '暂不可操作' : '批准一次'}
       </button>
     </div>
   </article>
@@ -188,7 +189,7 @@ const LiveEventTimeline: React.FC<{ events: LiveEvent[]; cursor: LiveEvent['sequ
       <Wifi size={16} aria-hidden="true" className={status === 'connected' ? 'live-icon-ok' : undefined} />
     </div>
     {events.length === 0 ? (
-      <p className="live-panel-empty">尚未收到该 Thread 的已提交事件。</p>
+      <p className="live-panel-empty">暂无运行记录。</p>
     ) : (
       <ol className="live-event-list" aria-live="polite">
         {events.slice(-12).map((event) => (
@@ -264,6 +265,9 @@ export const LiveChatView: React.FC = () => {
   const {
     phase,
     projects,
+    projectNames,
+    projectNameError,
+    refreshProjectNames,
     threads,
     approvals,
     selectedProjectId,
@@ -281,6 +285,7 @@ export const LiveChatView: React.FC = () => {
     lastError,
     command,
     approvalAction,
+    terminalSessionId,
     manualReconcileRequired,
     manualReconcileReason,
     deepLinkNotFound,
@@ -356,6 +361,7 @@ export const LiveChatView: React.FC = () => {
     () => approvalsForSession(approvals, selectedThread?.sessionId ?? null),
     [approvals, selectedThread?.sessionId],
   );
+  const actionableApprovalCount = visibleApprovals.filter((approval) => approval.continuationAvailable && approval.sessionId !== terminalSessionId).length;
   const busy = command.status === 'sending'
     || command.status === 'awaiting_projection'
     || manualReconcileRequired
@@ -788,12 +794,13 @@ export const LiveChatView: React.FC = () => {
       )}
 
       <div className="live-chat-toolbar ui-chat-project-bar">
-        <SearchSelect label="工作项目" buttonRef={projectSelectRef} value={selectedProjectId ?? ''} onChange={(value) => selectProject(value || null)} placeholder="选择项目" options={projects.filter((project) => project.readable).map((project) => ({ value: project.id, label: project.name, detail: project.workspaceRef }))} />
+        <SearchSelect label="工作项目" buttonRef={projectSelectRef} value={selectedProjectId ?? ''} onChange={(value) => selectProject(value || null)} placeholder="选择项目" options={projects.filter((project) => project.readable).map((project) => ({ value: project.id, label: projectNames[project.id] || project.name, detail: project.workspaceRef }))} />
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void beginConversation()}
           disabled={createBusy || createOutcomeUnknown || phase !== 'ready'}>
           <PlusIcon />{createBusy ? '创建中…' : '新建对话'}
         </button>
       </div>
+      {projectNameError && <div className="live-alert live-alert-warn" role="alert">项目名称暂时无法同步，现显示工作区目录名。<button type="button" className="btn btn-secondary btn-sm" onClick={() => void refreshProjectNames()}>重试读取</button><details><summary>查看错误详情</summary><code>{projectNameError.code}</code><p>{projectNameError.message}</p></details></div>}
       {selectedThread && <details className="ui-chat-setup"><summary>对话详情</summary><dl className="ui-thread-detail-body"><div><dt>对话编号</dt><dd><code>{selectedThread.id}</code></dd></div><div><dt>工作区</dt><dd>{selectedThread.workspaceRef}</dd></div><div><dt>助手</dt><dd>{history?.session.role_snapshot?.role_name || '通用助手'}</dd></div></dl></details>}
 
       {projectionStale && (
@@ -823,19 +830,21 @@ export const LiveChatView: React.FC = () => {
             <section className="live-approvals-section" aria-labelledby="live-approvals-title">
               <div className="live-section-heading">
                 <h2 id="live-approvals-title"><ShieldCheck size={16} aria-hidden="true" />待处理审批</h2>
-                <span>{visibleApprovals.length} 项 · 等待你的决定</span>
+                <span>{visibleApprovals.length} 项 · {actionableApprovalCount ? '等待你的决定' : '当前无法继续审批'}</span>
               </div>
               <div className="live-approval-list">
                 {visibleApprovals.map((approval) => (
                   <LiveApprovalCard
                     key={approval.id}
                     approval={approval}
+                    runEnded={terminalSessionId === approval.sessionId}
                     busy={phase !== 'ready' || !canDecideApproval(
                       approval,
                       approvalAction,
                       connectionStatus,
                       stream.status,
                       manualReconcileRequired,
+                      terminalSessionId,
                     )}
                     onDecide={(decision) => void decideApproval(approval, decision)}
                   />

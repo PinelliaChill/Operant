@@ -109,20 +109,27 @@ def install_skill_source_routes(
         definitions: dict[str, Path] = {key: Path(value) for key, value in base_roots.items()}
         if use_defaults:
             definitions.update(default_skill_roots(workspace))
-        definitions.update({key: Path(value) for key, value in _saved_sources(repo).items()})
+        saved_sources = _saved_sources(repo)
+        definitions.update({key: Path(value) for key, value in saved_sources.items()})
         active: dict[str, Path] = {}
         seen: dict[Path, str] = {}
         views: list[SkillSourceView] = []
         for root_ref, raw_path in definitions.items():
             try:
                 path = _source_path(raw_path)
-                exists = path.is_dir()
+                # Added sources are stored as their real paths. A later symlink
+                # replacement must not silently authorize a different root.
+                changed_source = root_ref in saved_sources and path != raw_path
+                exists = not changed_source and path.is_dir()
                 duplicate = seen.get(path) if exists else None
                 if exists and duplicate is None and len(active) < max_roots:
                     seen[path] = root_ref
                     active[root_ref] = path
                 issue = f"与 {duplicate} 指向同一目录" if duplicate else None
-                if not exists:
+                if changed_source:
+                    path = raw_path
+                    issue = "目录已改变，请重新添加来源"
+                elif not exists:
                     issue = "目录不存在或不可读取"
                 elif duplicate is None and root_ref not in active:
                     issue = "技能来源数量已达上限"
@@ -156,7 +163,9 @@ def install_skill_source_routes(
                 for root_ref, path in active.items()
                 if previous_active.get(root_ref) != path
             }
-            removed = set(previous_active) - set(active)
+            removed = (set(previous_active) - set(active)) | {
+                view.root_ref for view in views if not view.enabled
+            }
             for root_ref in removed:
                 phase_repository.replace_skill_candidates(root_ref, ())
                 scan_issues.pop(root_ref, None)

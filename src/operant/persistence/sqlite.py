@@ -133,6 +133,15 @@ from operant.persistence.graph_boundary_schema import (
 from operant.persistence.graph_boundary_schema import (
     upgrade as upgrade_graph_boundaries,
 )
+from operant.persistence.observation_source_schema import (
+    downgrade as downgrade_observation_sources,
+)
+from operant.persistence.observation_source_schema import (
+    schema_contracts as observation_source_schema_contracts,
+)
+from operant.persistence.observation_source_schema import (
+    upgrade as upgrade_observation_sources,
+)
 from operant.persistence.onboarding_schema import (
     downgrade as downgrade_onboarding,
 )
@@ -296,6 +305,7 @@ class WorkflowExecutionLease:
 
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
+        25: "ca66a9f2c8e6b8d1f558fe1598954e2c0cad89f282e31dcd463a2fc75cd27690",
         24: "140dd547a8788ad49a71d205d79a1c2eedac0902f775695aee730f9e1b54fb26",
         23: "cf7675e2379064df54df1f7205e3595aab42ee4d2cec93f82182b916ef72bf02",
         22: "a5f500b2f8e40669c5470ac1f529dae7157f846620c50cf921bf180fb84d3dfb",
@@ -322,6 +332,7 @@ class SQLiteStore:
         14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
+        25: "89eeced68e76aa0a0d13e846cf93dab99a830186834a94c0c929fc1f0cf3c31e",
         24: "1ce29207256d06907415c136e1056488f6c3130ef0e7593698995ceafc9aa738",
         23: "cb2e87a2f13e8e0daed579ad0dc520cbb8684e2c99b5d57beb5592751768dff5",
         22: "19d538d88ff2780bd4ef94ca843198a434ac6364951794e4ad3e7c6de7976430",
@@ -703,6 +714,12 @@ class SQLiteStore:
                 downgrade_remote_command_events,
             ),
             build(24, "onboarding_model_connections", upgrade_onboarding, downgrade_onboarding),
+            build(
+                25,
+                "local_observation_sources",
+                upgrade_observation_sources,
+                downgrade_observation_sources,
+            ),
         )
 
     @staticmethod
@@ -2245,6 +2262,8 @@ class SQLiteStore:
             tables.update(remote_command_event_schema_contracts()[0])
         if version >= 24:
             tables.update(onboarding_schema_contracts()[0])
+        if version >= 25:
+            tables.update(observation_source_schema_contracts()[0])
         return tables
 
     @staticmethod
@@ -2529,6 +2548,8 @@ class SQLiteStore:
             contract.update(remote_command_event_schema_contracts()[1])
         if version >= 24:
             contract.update(onboarding_schema_contracts()[1])
+        if version >= 25:
+            contract.update(observation_source_schema_contracts()[1])
         return contract
 
     @classmethod
@@ -2810,6 +2831,8 @@ class SQLiteStore:
                 upgrade_remote_command_events(connection)
             if version >= 24:
                 upgrade_onboarding(connection)
+            if version >= 25:
+                upgrade_observation_sources(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -3027,6 +3050,8 @@ class SQLiteStore:
             contract.update(remote_command_event_schema_contracts()[2])
         if version >= 24:
             contract.update(onboarding_schema_contracts()[2])
+        if version >= 25:
+            contract.update(observation_source_schema_contracts()[2])
         return contract
 
     @staticmethod
@@ -3253,6 +3278,8 @@ class SQLiteStore:
             contract.update(remote_command_event_schema_contracts()[3])
         if version >= 24:
             contract.update(onboarding_schema_contracts()[3])
+        if version >= 25:
+            contract.update(observation_source_schema_contracts()[3])
         return contract
 
     @staticmethod
@@ -3693,6 +3720,8 @@ class SQLiteStore:
             contract.update(remote_command_event_schema_contracts()[5])
         if version >= 24:
             contract.update(onboarding_schema_contracts()[5])
+        if version >= 25:
+            contract.update(observation_source_schema_contracts()[5])
         return contract
 
     @staticmethod
@@ -3962,6 +3991,8 @@ class SQLiteStore:
             indexes.update(remote_command_event_schema_contracts()[4])
         if version >= 24:
             indexes.update(onboarding_schema_contracts()[4])
+        if version >= 25:
+            indexes.update(observation_source_schema_contracts()[4])
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:

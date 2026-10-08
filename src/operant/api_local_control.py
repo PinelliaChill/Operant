@@ -6,7 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 from threading import RLock
@@ -37,11 +37,31 @@ from operant.plugins.capability_registry import CapabilityPluginRegistry
 from operant.plugins.local_extensions import list_operations, run_operation
 from operant.protocol import canonical_action_hash
 from operant.remote.local_worker import COMPUTER_PLUGIN
-from operant.remote.operator import CapabilityLeaseBinding, bound_observation_key
-from operant.remote.sealed_input import open_browser_input
+from operant.remote.operator import (
+    CapabilityLeaseBinding,
+    CapabilityOperationError,
+    bound_observation_key,
+)
+from operant.remote.sealed_input import bound_sealed_input_retry, open_browser_input
 from operant.remote.tool_extensions import local_capability_tool_extensions
 from operant.tools.extensions import ToolExtension, ToolInvocation, current_tool_invocation
+from operant.tools.workspace import ToolError
 from sdk.python_client.transport import Phase1EError
+
+_EXPIRED_OBSERVATION_TOOL_ERROR = "页面或窗口信息已过期，请重新查看后再操作。"
+_UNAVAILABLE_OBSERVATION_TOOL_ERROR = "页面或窗口信息不可用，请重新查看后再操作。"
+_COMPUTER_OBSERVE_FAILURE_MESSAGES = {
+    "computer.permission_required": "无法查看应用窗口，请在系统设置中检查辅助功能权限。",
+    "computer.app_unavailable": "目标应用未运行或无法切到前台，请打开应用后重新查看。",
+    "computer.window_unavailable": "找不到目标应用的标准窗口，请打开任务窗口后重新查看。",
+    "computer.window_ambiguous": "目标应用有多个可用窗口，请只保留要操作的窗口后重新查看。",
+    "computer.target_changed": "目标应用或窗口已变化，请重新查看后再操作。",
+    "computer.observation_limit": "窗口内容超出安全读取上限，请缩小窗口内容后重新查看。",
+    "computer.observation_invalid": "窗口信息不完整，请重新查看。",
+    "computer.accessibility_unavailable": "暂时无法读取应用窗口，请检查应用和辅助功能权限后重试。",
+    "computer.target_rejected": "无法读取目标应用窗口，请检查应用和权限后重新查看。",
+}
+_COMPUTER_OBSERVE_GENERIC_FAILURE = "无法读取应用窗口，请检查应用状态后重新查看。"
 
 
 class LocalControlKeyBody(BaseModel):
@@ -392,7 +412,7 @@ def install_local_control_routes(
                         continue
                     extension = extensions[name]
 
-                    async def execute_bound(
+                    async def execute_bound_once(
                         arguments: dict[str, Any],
                         *,
                         bound_marker: LocalControlSnapshotBinding = marker,
@@ -426,6 +446,10 @@ def install_local_control_routes(
                             with bound_observation_key(request_key):
                                 return await refreshed.execute(forwarded)
                         except Phase1EError as error:
+                            if error.code == "observation_expired":
+                                raise ToolError(_EXPIRED_OBSERVATION_TOOL_ERROR) from error
+                            if error.code == "observation_unavailable":
+                                raise ToolError(_UNAVAILABLE_OBSERVATION_TOOL_ERROR) from error
                             if invocation is None or request_key is None:
                                 raise
                             current = manager.verified_snapshot_binding(
@@ -452,8 +476,42 @@ def install_local_control_routes(
                                 raise PermissionError(
                                     "bound local control tool is unavailable"
                                 ) from error
-                            with bound_observation_key(request_key):
-                                return await refreshed.execute(forwarded)
+                            try:
+                                with bound_observation_key(request_key):
+                                    return await refreshed.execute(forwarded)
+                            except Phase1EError as retry_error:
+                                if retry_error.code == "observation_expired":
+                                    raise ToolError(
+                                        _EXPIRED_OBSERVATION_TOOL_ERROR
+                                    ) from retry_error
+                                if retry_error.code == "observation_unavailable":
+                                    raise ToolError(
+                                        _UNAVAILABLE_OBSERVATION_TOOL_ERROR
+                                    ) from retry_error
+                                raise
+
+                    async def execute_bound(
+                        arguments: dict[str, Any],
+                        *,
+                        tool_name: str = name,
+                        perform: Callable[
+                            [dict[str, Any]], Awaitable[dict[str, Any]]
+                        ] = execute_bound_once,
+                    ) -> dict[str, Any]:
+                        with bound_sealed_input_retry():
+                            try:
+                                return await perform(arguments)
+                            except CapabilityOperationError as error:
+                                # A terminal failed observation did not write to the
+                                # target. Leave actions, cancellation, timeouts and
+                                # manual reconciliation for explicit inspection.
+                                if tool_name != "ext_computer_observe" or error.status != "failed":
+                                    raise
+                                raise ToolError(
+                                    _COMPUTER_OBSERVE_FAILURE_MESSAGES.get(
+                                        error.code, _COMPUTER_OBSERVE_GENERIC_FAILURE
+                                    )
+                                ) from error
 
                     extensions[name] = replace(
                         extension,

@@ -8,7 +8,7 @@ import hmac
 import json
 import os
 import re
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qsl, quote
@@ -1016,6 +1016,41 @@ def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any], int] | None:
     return event_type, payload, parsed_event_id
 
 
+async def _session_sse_with_heartbeat(
+    source: AsyncGenerator[str, None], *, interval_seconds: float = 12.0
+) -> AsyncIterator[str]:
+    """Keep an admitted Session stream active without advancing its durable cursor."""
+
+    pending: asyncio.Future[str] | None = None
+    has_durable_event = False
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(anext(source))
+            done, _ = await asyncio.wait({pending}, timeout=interval_seconds)
+            if not done:
+                # The command receipt middleware must see a real committed event first.
+                if has_durable_event:
+                    yield ": keep-alive\n\n"
+                continue
+            try:
+                frame = pending.result()
+            except StopAsyncIteration:
+                break
+            if _parse_sse_frame(frame.encode("utf-8")) is not None:
+                has_durable_event = True
+            # Keep one active pull so a disconnect immediately after this yield
+            # still cancels the owned Session generator and its lease.
+            pending = asyncio.ensure_future(anext(source))
+            yield frame
+    finally:
+        if pending is not None:
+            if not pending.done():
+                pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await source.aclose()
+
+
 def _phase1d_stream_start_error(kind: str, exc: Exception) -> dict[str, Any]:
     label = "Review" if kind == "review" else "BTW Sidecar"
     if isinstance(exc, NotFoundError):
@@ -1747,7 +1782,6 @@ def create_app(
                                 recovery=RecoveryAction.MANUAL_RECONCILE,
                             )
                             yield _sse_event("command.stream_error", bounded_error)
-                            await original_iterator.aclose()
                             return
                         if frame_end is None:
                             continue
@@ -1797,6 +1831,8 @@ def create_app(
                             error_code="stream_not_started",
                         )
                     raise
+                finally:
+                    await original_iterator.aclose()
                 if not receipt_closed:
                     store.mark_command_manual_reconcile(
                         execution.id,
@@ -3148,16 +3184,20 @@ def create_app(
                 recovery=RecoveryAction.RETRY_LATER,
             )
 
-        async def stream_events() -> AsyncIterator[str]:
-            try:
-                async for event in service.run_session(
+        async def stream_events() -> AsyncGenerator[str, None]:
+            runtime_events = cast(
+                AsyncGenerator[Any, None],
+                service.run_session(
                     session_id,
                     user_message=request.message,
                     workspace=request.workspace,
                     thread_id=request.thread_id,
                     references=request.references,
                     _admission_granted=True,
-                ):
+                ),
+            )
+            try:
+                async for event in runtime_events:
                     yield _sse_event(
                         event.event_type,
                         event.model_dump(mode="json"),
@@ -3179,10 +3219,13 @@ def create_app(
                 )
                 yield _sse_event("agent.stream_error", payload)
             finally:
-                service.release_session_run(session_id, admitted_lease)
+                try:
+                    await runtime_events.aclose()
+                finally:
+                    service.release_session_run(session_id, admitted_lease)
 
         return StreamingResponse(
-            stream_events(),
+            _session_sse_with_heartbeat(stream_events()),
             media_type="text/event-stream",
             background=BackgroundTask(
                 service.release_session_run,

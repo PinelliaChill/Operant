@@ -7,6 +7,8 @@ test('request errors give recovery action without raw HTTP or English codes', ()
   assert.match(requestErrorCopy({ code: 'approval_required', message: 'http_409: approval_required' }), /人工确认/);
   assert.match(requestErrorCopy({ code: 'http_422', message: 'http_422: validation error' }), /检查/);
   assert.match(requestErrorCopy({ code: 'request_validation_failed', message: 'request validation failed' }), /检查/);
+  assert.match(requestErrorCopy({ code: 'http_404', message: 'Graph Run not found' }), /目标记录未找到/);
+  assert.match(requestErrorCopy({ code: 'observation_expired', message: 'observation expired' }), /重新查看/);
   assert.match(requestErrorCopy({ code: 'command_outcome_unknown', message: 'unknown' }), /勿再次提交/);
   assert.doesNotMatch(requestErrorCopy({ code: 'http_502', message: 'model discovery failed' }), /http_|model discovery/);
   assert.match(requestErrorCopy({ code: 'unmapped_error', message: 'internal failure' }), /刷新并核对结果/);

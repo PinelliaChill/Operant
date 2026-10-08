@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hmac
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from cryptography.hazmat.primitives import hashes
@@ -13,6 +17,22 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 _PREFIX = "operant-browser-input.v1:"
+_RETRY_SEALS: ContextVar[dict[str, tuple[bytes, str]] | None] = ContextVar(
+    "operant_local_tool_retry_seals", default=None
+)
+
+
+@contextmanager
+def bound_sealed_input_retry() -> Iterator[None]:
+    """Reuse one random envelope only during this Tool's exact ASK continuation."""
+
+    cache: dict[str, tuple[bytes, str]] = {}
+    binding = _RETRY_SEALS.set(cache)
+    try:
+        yield
+    finally:
+        cache.clear()
+        _RETRY_SEALS.reset(binding)
 
 
 def _key(token: str, target_id: str, lease_id: str, fencing: int) -> bytes:
@@ -50,18 +70,33 @@ def seal_browser_input(
 ) -> str:
     if len(value) > 2_000:
         raise ValueError("browser input is too long")
+    key = _key(token, target_id, lease_id, fencing)
+    associated = _aad(
+        target_id=target_id,
+        observation_hash=observation_hash,
+        selector=selector,
+        idempotency_key=idempotency_key,
+    )
+    cache = _RETRY_SEALS.get()
+    fingerprint: bytes | None = None
+    if cache is not None:
+        fingerprint = hmac.digest(key, associated + b"\0" + value.encode(), "sha256")
+        if idempotency_key in cache:
+            saved_fingerprint, saved_envelope = cache[idempotency_key]
+            if not hmac.compare_digest(saved_fingerprint, fingerprint):
+                raise ValueError("approved local input binding changed")
+            return saved_envelope
     nonce = os.urandom(12)
-    ciphertext = AESGCM(_key(token, target_id, lease_id, fencing)).encrypt(
+    ciphertext = AESGCM(key).encrypt(
         nonce,
         value.encode(),
-        _aad(
-            target_id=target_id,
-            observation_hash=observation_hash,
-            selector=selector,
-            idempotency_key=idempotency_key,
-        ),
+        associated,
     )
-    return _PREFIX + base64.urlsafe_b64encode(nonce + ciphertext).decode()
+    envelope = _PREFIX + base64.urlsafe_b64encode(nonce + ciphertext).decode()
+    if cache is not None:
+        assert fingerprint is not None
+        cache[idempotency_key] = (fingerprint, envelope)
+    return envelope
 
 
 def open_browser_input(

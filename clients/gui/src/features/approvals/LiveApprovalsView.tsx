@@ -23,6 +23,7 @@ export const LiveApprovalsView: React.FC = () => {
     selectedThread,
     selectedSessionId,
     approvalAction,
+    terminalSessionId,
     manualReconcileRequired,
     stream,
     lastError,
@@ -73,12 +74,14 @@ export const LiveApprovalsView: React.FC = () => {
             <LiveApprovalCard
               key={approval.id}
               approval={approval}
+              runEnded={terminalSessionId === approval.sessionId}
               busy={phase !== 'ready' || !canDecideApproval(
                 approval,
                 approvalAction,
                 connectionStatus,
                 stream.status,
                 manualReconcileRequired,
+                terminalSessionId,
               )}
               onDecide={(decision) => decide(approval, decision)}
             />

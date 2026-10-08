@@ -21,7 +21,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from operant.api_model_connections import install_model_connection_routes
-from operant.contracts.onboarding import ConnectionCreate
 from operant.domain.messages import Message, MessageRole, ToolDefinition
 from operant.domain.models import ModelProfile, RoleSnapshot
 from operant.model_connections.credentials import CredentialError, CredentialStore
@@ -1607,18 +1606,10 @@ def test_connection_routes_restrict_origin_and_keep_secret_out_of_responses(tmp_
             == 409
         )
 
-        # Recreate the old on-disk receipt format, without rewriting its result.
-        legacy_payload = ConnectionCreate.model_validate(body).model_dump(
-            mode="json", exclude={"api_key", "client_secret"}
-        )
-        legacy_payload["api_key_digest"] = hashlib.sha256(body["api_key"].encode()).hexdigest()
-        legacy_fingerprint = hashlib.sha256(
-            json.dumps(
-                {"operation": "create", "target": "model-connections", "payload": legacy_payload},
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
+        # Historical create receipt for the fixed synthetic input above. Keep
+        # this golden value independent of today's DTO and hashing code so a
+        # compatibility regression cannot update both sides of the assertion.
+        legacy_fingerprint = "260df06c7dabada1f82d6aa316ec51f04bdfe4768e0bc3b65d80c353fc37aa7c"
         saved_result = dict(repo.commands["create-test"][1])
         saved_result.pop("_credential_fingerprint_version", None)
         repo.commands["create-test"] = (legacy_fingerprint, saved_result)
