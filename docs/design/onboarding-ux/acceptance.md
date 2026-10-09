@@ -11,7 +11,7 @@
 | UX-04 自动初始化运行 | 已实现 | 通过 | S1 原生自动准备运行并完成文件任务；S2 丢创建响应后保留原请求，退出重开再只读核对，只新增一个 Thread/Session，没有自动运行或发送草稿 |
 | UX-05 简化模型连接 | 已实现 | 通过 | S1 用户在独立原生窗口保存密钥，发现并选择模型后返回原草稿，直接发送任务；无需角色、系统提示词、环境变量名或绑定运行 |
 | UX-06 高级参数与默认值 | 已实现 | 通过 | S1/S6 温度不发送、未知上下文不指定；原生表单默认收起高级参数，服务商切换通过 |
-| UX-07 ChatGPT/Gemini OAuth | 部分 | 受阻 | 早期 ChatGPT 登录被组织策略拒绝。用户随后提供的新回调已返回 code，但凭据交换失败，旧实现丢弃具体状态和原因，不能沿用早期组织策略作为本次结论。用户授权默认账号和个人工作区后，真实交换先超时，60秒候选随后返回400/invalid_grant。官方登记恢复路径已补，真实恢复尚待验证；调用/续期/撤销未验。Google 应用客户端与用户项目待提供 |
+| UX-07 ChatGPT/Gemini OAuth | 部分 | 受阻 | 早期 ChatGPT 登录被组织策略拒绝。用户随后提供的新回调已返回 code，但凭据交换失败，旧实现丢弃具体状态和原因，不能沿用早期组织策略作为本次结论。用户授权默认账号和个人工作区后，真实交换先超时，60秒候选随后返回400/invalid_grant。官方登记恢复路径已补并在原生实际进入权限页，个人套餐不可授权；改选Mountain后正式页面返回组织策略拒绝。调用/续期/撤销未验。Google 应用客户端与用户项目待提供 |
 | UX-08 自动技能目录 | 已实现 | 通过 | S4 默认来源、缺目录、坏项隔离通过；最新隔离 Core 重启后仍扫描已登记的个人工作区，发现标准格式验收技能，21项候选；用户来源根目录变化会停用并要求重新添加 |
 | UX-09 标准技能格式 | 已实现 | 通过 | S4 普通 metadata、多行 description、资源、损坏 YAML、大小和解析安全边界通过 |
 | UX-10 技能链接与去重 | 已实现 | 通过 | S4 登记根内顶层链接、真实路径去重、目录外拒绝与添加来源通过；资源内链接仍按安装完整性边界拒绝 |
@@ -349,3 +349,37 @@ CodeQL #45仍开放；独立源码复核未发现越出已登记真实根的具�
 `f670488a791c56737f6a209f9e33536fe68bb0f3c2102b024683dde757333488`；前端278项输入冻结，
 原生恢复仍待验证。见oauth-registration-continuation-checks.json、
 oauth-registration-continuation-wheel-readback.json和gui-oauth-registration-continuation-report.json。
+
+
+### 原生登记恢复与 Mountain 工作区（2026-10-09）
+
+冻结c3c4a88已推送到Draft PR45，隔离Core18778/PID81494使用
+runtime-oauth-registration-continuation，前端3028/PID81495使用独立冻结构建。原用户Core18768/
+PID22137保持原样；仅备份并沿用v25验收库，不复制凭据或新增迁移。
+
+个人工作区首次登记仍返回400/invalid_grant。原生点击新增“继续连接”后，授权URL复用该次
+已签发的client ID并生成新的state；选择默认账号后进入官方权限页，页面提示
+“所需权限不可用。你无法继续使用此工作空间和套餐。”且继续按钮禁用。已从Operant取消待处理
+登录，原API连接保留；未取得Token，不算登录、发现或调用通过。
+见oauth-personal-registration-continuation-native.json。
+
+用户随后明确改选Mountain。账号选择曾显示Operation timed out，原生Chrome窗口读取仍保留
+旧页面，未用它推断工作区权限。通过CUA正式Chrome Tab的DOM读取核对超时页，点击该页重试
+恢复当前未完成请求，选择默认账号、Mountain及名称Operant。官方权限页的继续按钮可用，
+仅请求基本资料和ChatGPT套餐调用。最终提交被自动审批拒绝：Mountain为新的工作区访问，
+须当次确认；已请求User确认，尚未提交或取得Token。没有回放旧callback/code或更改工作区
+管理员权限。见oauth-Mountain-consent-prepared.json。
+
+完整CI37906688180对应c3c4a88仍在运行，GUI已成功，双Python作业未结束；不能算完整通过。
+此前f723的完整通过保留，当前未覆盖项仍为两家真实OAuth调用/续期/撤销及安全警报#45。
+
+用户当次确认Mountain授权后，原请求已超过10分钟（到期09:04:34Z），未换取凭据；新请求
+在同一冻结候选建立，有效至09:15:55Z，重新选择默认账号、Mountain和Operant名称，权限
+仍为基本资料与套餐调用。官方页面随后明确返回
+`3p_delegated_access_policy_denied`及“你的组织尚未为此应用启用访问权限”。
+因此当前Mountain阻碍确为组织策略，不能混同个人工作区的套餐不可授权或先前交换超时。
+已在Operant取消新待处理请求，原API连接仍可用，未取得Token、未改管理员权限。
+管理员开关的具体路径没有取得可核实的官方或实际管理页证据，不编造设置位置。
+见oauth-Mountain-organization-denied.json；服务商请求ID为068df745-44d8-4e22-b52f-244a53a62e6e，
+证据不保存回调URL、code、state或Token。原生Chrome窗口的账号页读取曾滞后；正式Chrome Tab
+的DOM读出Operation timed out后，恢复的是同一未完成账号选择，没有重放授权码。
