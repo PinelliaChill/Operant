@@ -69,6 +69,11 @@ export function canReauthorizeModelConnection(status: string, error: string | nu
     && (status === 'needs_auth' || error?.trim() === 'chatgpt_plan_usage_disabled');
 }
 
+export function canContinueOAuthRegistration(provider: string, status: string, message?: string | null): boolean {
+  return provider === 'chatgpt' && status === 'error'
+    && message === 'OAuth code exchange failed (HTTP 400; invalid_grant)';
+}
+
 export function canDiscoverConnectionModels(status: string, error: string | null | undefined): boolean {
   return status !== 'needs_auth' && !['chatgpt_plan_usage_disabled', 'revocation_unconfirmed'].includes(error?.trim() ?? '');
 }

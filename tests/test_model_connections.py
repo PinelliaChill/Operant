@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import stat
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -250,6 +251,202 @@ async def test_code_exchange_failure_keeps_status_and_safe_code_without_replay_o
             provider="chatgpt", state=attempt.state, code="private-code", client_id="oaiapp_issued"
         )
     assert len(requests) == 1
+    if expected_code != "invalid_grant":
+        with pytest.raises(OAuthError, match="connection does not exist"):
+            oauth.start(
+                provider="chatgpt",
+                connection_id=attempt.connection_id,
+                redirect_uri=attempt.redirect_uri,
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_exchanges", [1, 2])
+async def test_invalid_grant_continues_issued_registration_with_fresh_pkce(
+    tmp_path: Path, failed_exchanges: int
+) -> None:
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = private.public_key().public_numbers()
+    repo = _Repo()
+    credentials = CredentialStore(tmp_path / ".env")
+    exchanges: list[dict[str, list[str]]] = []
+    token_id = [""]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("jwks.json"):
+            return httpx.Response(
+                200,
+                json={
+                    "keys": [
+                        {
+                            "kid": "key-1",
+                            "kty": "RSA",
+                            "alg": "RS256",
+                            "n": _b64(public.n.to_bytes(256, "big")),
+                            "e": _b64(public.e.to_bytes(3, "big")),
+                        }
+                    ]
+                },
+            )
+        exchanges.append(parse_qs(request.content.decode()))
+        if len(exchanges) <= failed_exchanges:
+            return httpx.Response(400, json={"error": "invalid_grant"})
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "recovered-access",
+                "refresh_token": "recovered-refresh",
+                "id_token": token_id[0],
+                "expires_in": 3600,
+                "scope": "openid offline_access resource.invoke chatgpt.tokens.use.direct",
+            },
+        )
+
+    oauth = OAuthConnections(repo, credentials, transport=httpx.MockTransport(handler))
+    first, first_url = oauth.start(
+        provider="chatgpt",
+        redirect_uri="http://127.0.0.1:4343/internal/model-auth/chatgpt/callback",
+    )
+    first_params = parse_qs(urlsplit(first_url).query)
+    with pytest.raises(OAuthError, match="invalid_grant"):
+        await oauth.complete(
+            provider="chatgpt", state=first.state, code="first-code", client_id="oaiapp_issued"
+        )
+    assert repo.records == {} and not credentials.path.exists()
+    second, second_url = oauth.start(
+        provider="chatgpt", connection_id=first.connection_id, redirect_uri=first.redirect_uri
+    )
+    params = parse_qs(urlsplit(second_url).query)
+    assert second.id != first.id and second.connection_id == first.connection_id
+    assert params["client_id"] == ["oaiapp_issued"]
+    assert "agent_name_hint" not in params and "id_token_hint" not in params
+    for key in ("ext_agent_host_id", "redirect_uri", "resource", "scope"):
+        assert params[key] == first_params[key]
+    for key in ("state", "nonce", "code_challenge"):
+        assert params[key] != first_params[key]
+    assert first.issued_client_id is None
+    with pytest.raises(OAuthError, match="connection does not exist"):
+        oauth.start(
+            provider="chatgpt", connection_id=first.connection_id, redirect_uri=first.redirect_uri
+        )
+    with pytest.raises(OAuthError, match="no longer pending"):
+        await oauth.complete(provider="chatgpt", state=first.state, code="first-code")
+    if failed_exchanges == 2:
+        with pytest.raises(OAuthError, match="invalid_grant"):
+            await oauth.complete(provider="chatgpt", state=second.state, code="second-code")
+        failed_second = second
+        second, next_url = oauth.start(
+            provider="chatgpt", connection_id=first.connection_id, redirect_uri=first.redirect_uri
+        )
+        next_params = parse_qs(urlsplit(next_url).query)
+        assert next_params["client_id"] == ["oaiapp_issued"]
+        assert next_params["state"] != params["state"]
+        assert next_params["code_challenge"] != params["code_challenge"]
+        assert failed_second.issued_client_id is None and failed_second.status == "failed"
+    token_id[0] = _jwt(private, second.nonce)
+    record = await oauth.complete(provider="chatgpt", state=second.state, code="fresh-code")
+    assert record["subject"] == "account-1" and record["client_id"] == "oaiapp_issued"
+    assert record["connection_id"] == first.connection_id
+    assert len(exchanges) == failed_exchanges + 1
+    assert exchanges[-1]["code"] == ["fresh-code"]
+    assert exchanges[-1]["client_id"] == ["oaiapp_issued"]
+    assert exchanges[-1]["code_verifier"] != exchanges[0]["code_verifier"]
+    assert first.status == "failed" and first.error.endswith("invalid_grant)")
+
+
+@pytest.mark.asyncio
+async def test_registration_continuation_is_atomic_across_threads(tmp_path: Path) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    second_entered = threading.Event()
+    clock_calls = [0]
+    pause = [False]
+
+    def clock() -> float:
+        if pause[0]:
+            clock_calls[0] += 1
+            if clock_calls[0] == 1:
+                entered.set()
+                assert release.wait(5)
+            else:
+                second_entered.set()
+        return time.time()
+
+    oauth = OAuthConnections(
+        _Repo(),
+        CredentialStore(tmp_path / ".env"),
+        clock=clock,
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, json={"error": "invalid_grant"})
+        ),
+    )
+    first, _ = oauth.start(
+        provider="chatgpt",
+        redirect_uri="http://127.0.0.1:4343/internal/model-auth/chatgpt/callback",
+    )
+    with pytest.raises(OAuthError, match="invalid_grant"):
+        await oauth.complete(
+            provider="chatgpt", state=first.state, code="old", client_id="oaiapp_issued"
+        )
+
+    def continue_registration() -> str:
+        try:
+            attempt, _ = oauth.start(
+                provider="chatgpt",
+                connection_id=first.connection_id,
+                redirect_uri=first.redirect_uri,
+            )
+            return attempt.id
+        except OAuthError:
+            return "rejected"
+
+    pause[0] = True
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(continue_registration)
+        assert entered.wait(5)
+        b = pool.submit(continue_registration)
+        # The first request pauses after selecting the registration. Without
+        # serialization the second can select and consume that same identity.
+        second_entered.wait(0.25)
+        release.set()
+        results = [a.result(timeout=5), b.result(timeout=5)]
+    assert results.count("rejected") == 1
+    pending = [attempt for attempt in oauth.attempts.values() if attempt.status == "pending"]
+    assert len(pending) == 1 and pending[0].client_id == "oaiapp_issued"
+
+
+@pytest.mark.asyncio
+async def test_deleted_verified_connection_cannot_recover_from_old_failed_attempt(
+    tmp_path: Path,
+) -> None:
+    repo = _Repo()
+    record = {
+        "connection_id": "verified",
+        "provider": "chatgpt",
+        "auth_method": "oauth",
+        "client_id": "oaiapp_verified",
+        "subject": "original-account",
+        "profile_ids": [],
+    }
+    repo.save_connection("verified", record)
+    oauth = OAuthConnections(
+        repo,
+        CredentialStore(tmp_path / ".env"),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, json={"error": "invalid_grant"})
+        ),
+    )
+    attempt, _ = oauth.start(
+        provider="chatgpt",
+        connection_id="verified",
+        redirect_uri="http://127.0.0.1:4343/internal/model-auth/chatgpt/callback",
+    )
+    with pytest.raises(OAuthError, match="invalid_grant"):
+        await oauth.complete(provider="chatgpt", state=attempt.state, code="reauthorize")
+    await oauth.disconnect(record)
+    with pytest.raises(OAuthError, match="connection does not exist"):
+        oauth.start(provider="chatgpt", connection_id="verified", redirect_uri=attempt.redirect_uri)
+    assert repo.records == {} and attempt.status == "failed"
 
 
 @pytest.mark.asyncio
@@ -280,6 +477,13 @@ async def test_oauth_transport_failure_retains_stage_without_logging_private_det
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path.endswith("/oauth/token"):
+            assert request.extensions["timeout"] == {
+                "connect": 15,
+                "read": 60,
+                "write": 15,
+                "pool": 15,
+            }
         if stage == "token_exchange" or request.url.path.endswith("jwks.json"):
             raise exception_type("private-exception-token-and-code", request=request)
         return httpx.Response(
@@ -308,6 +512,14 @@ async def test_oauth_transport_failure_retains_stage_without_logging_private_det
     assert attempt.verifier == "" and attempt.authorization_url is None
     assert repo.records == {} and not credentials.path.exists()
     assert f"stage={stage}" in caplog.text
+    expected_phase = (
+        "connect"
+        if exception_type is httpx.ConnectTimeout
+        else "read"
+        if exception_type is httpx.ReadTimeout
+        else "none"
+    )
+    assert f"timeout_phase={expected_phase}" in caplog.text
     assert "private" not in caplog.text and token_id[0] not in caplog.text
     assert attempt.state not in caplog.text and "http" not in caplog.text
     with pytest.raises(OAuthError, match="no longer pending"):
@@ -1948,6 +2160,99 @@ def test_connection_routes_restrict_origin_and_keep_secret_out_of_responses(tmp_
         after_cancel = client.get(f"/v1/setup/oauth/{attempt_id}")
         assert after_cancel.json()["status"] == "cancelled"
         assert after_cancel.json()["authorization_url"] is None
+        # Exercise the complete local callback/status route without contacting
+        # a real provider or asking the user to authorize again.
+        exchange_calls: list[httpx.Request] = []
+
+        def timeout_exchange(request: httpx.Request) -> httpx.Response:
+            exchange_calls.append(request)
+            raise httpx.ReadTimeout("private-error-description", request=request)
+
+        provider.oauth.transport = httpx.MockTransport(timeout_exchange)
+        failed_start = client.post(
+            "/v1/setup/oauth/start",
+            json={"provider": "chatgpt"},
+            headers={"Idempotency-Key": "oauth-failure-route"},
+        )
+        assert failed_start.status_code == 200
+        failed_id = failed_start.json()["attempt_id"]
+        failed_attempt = provider.oauth.attempts[failed_id]
+        callback_params = {
+            "state": failed_attempt.state,
+            "code": "private-callback-code",
+            "client_id": "oaiapp_route_test",
+        }
+        failed_callback = client.get(
+            "/internal/model-auth/chatgpt/callback", params=callback_params
+        )
+        assert failed_callback.status_code == 400
+        assert failed_callback.headers["cache-control"] == "no-store"
+        assert "不要刷新" in failed_callback.text
+        failed_status = client.get(f"/v1/setup/oauth/{failed_id}")
+        assert failed_status.status_code == 200
+        assert failed_status.headers["cache-control"] == "no-store"
+        assert failed_status.json()["status"] == "error"
+        assert failed_status.json()["message"] == "OAuth request failed (token_exchange; timeout)"
+        assert failed_status.json()["authorization_url"] is None
+        assert "private" not in failed_status.text + failed_callback.text
+        assert failed_attempt.state not in failed_status.text
+        repeated_callback = client.get(
+            "/internal/model-auth/chatgpt/callback", params=callback_params
+        )
+        assert repeated_callback.status_code in {400, 409}
+        assert len(exchange_calls) == 1 and len(repo.records) == 1
+        rejected_retry = client.post(
+            "/v1/setup/oauth/start",
+            json={"provider": "chatgpt", "connection_id": failed_attempt.connection_id},
+            headers={"Idempotency-Key": "oauth-timeout-no-retry"},
+        )
+        assert rejected_retry.status_code == 400 and len(exchange_calls) == 1
+        provider.oauth.transport = httpx.MockTransport(
+            lambda request: httpx.Response(400, json={"error": "invalid_grant"})
+        )
+        registration_start = client.post(
+            "/v1/setup/oauth/start",
+            json={"provider": "chatgpt"},
+            headers={"Idempotency-Key": "oauth-registration-start"},
+        )
+        registration = provider.oauth.attempts[registration_start.json()["attempt_id"]]
+        rejected_grant = client.get(
+            "/internal/model-auth/chatgpt/callback",
+            params={"state": registration.state, "code": "old-code", "client_id": "oaiapp_new"},
+        )
+        assert rejected_grant.status_code == 400
+        continuation_input = {"provider": "chatgpt", "connection_id": registration.connection_id}
+        continuation_headers = {"Idempotency-Key": "oauth-registration-continue"}
+        continued = client.post(
+            "/v1/setup/oauth/start", json=continuation_input, headers=continuation_headers
+        )
+        assert continued.status_code == 200 and len(repo.records) == 1
+        next_url = continued.json()["authorization_url"]
+        assert parse_qs(urlsplit(next_url).query)["client_id"] == ["oaiapp_new"]
+        assert continued.json()["attempt_id"] != registration.id
+        assert continued.json()["connection_id"] == registration.connection_id
+        assert (
+            client.post(
+                "/v1/setup/oauth/start", json=continuation_input, headers=continuation_headers
+            ).json()["authorization_url"]
+            == next_url
+        )
+        assert "authorization_url" not in repo.commands["oauth-registration-continue"][1]
+        assert (
+            client.post(
+                "/v1/setup/oauth/start",
+                json=continuation_input,
+                headers={"Idempotency-Key": "oauth-registration-duplicate"},
+            ).status_code
+            == 400
+        )
+        continued_attempt = provider.oauth.attempts[continued.json()["attempt_id"]]
+        wrong_client = client.get(
+            "/internal/model-auth/chatgpt/callback",
+            params={"state": continued_attempt.state, "code": "new-code", "client_id": "other"},
+        )
+        assert wrong_client.status_code == 400
+        assert continued_attempt.error == "OAuth client ID mismatch"
         connection_id = created.json()["connection_id"]
         assert "secret-value" not in created.text
         assert "secret-value" not in client.get("/v1/setup/connections").text

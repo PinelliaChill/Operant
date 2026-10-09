@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -59,6 +60,7 @@ class Attempt:
     authorization_url: str | None = None
     google_client_secret: str | None = None
     created_new: bool = False
+    issued_client_id: str | None = None
 
 
 _OPENAI = {
@@ -138,6 +140,18 @@ def _request_failure(stage: str, error: Exception) -> str:
     return f"OAuth request failed ({stage}; {category})"
 
 
+def _timeout_phase(error: Exception) -> str:
+    for error_type, phase in (
+        (httpx.ConnectTimeout, "connect"),
+        (httpx.ReadTimeout, "read"),
+        (httpx.WriteTimeout, "write"),
+        (httpx.PoolTimeout, "pool"),
+    ):
+        if isinstance(error, error_type):
+            return phase
+    return "none"
+
+
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
@@ -168,6 +182,7 @@ class OAuthConnections:
         self.transport = transport
         self.clock = clock
         self.attempts: dict[str, Attempt] = {}
+        self._registration_lock = threading.Lock()
         self._refresh_locks: dict[str, asyncio.Lock] = {}
 
     async def _acquire_connection_lock(self, connection_id: str) -> int:
@@ -190,6 +205,26 @@ class OAuthConnections:
         google_client_secret: str | None = None,
         project_id: str | None = None,
     ) -> tuple[Attempt, str]:
+        with self._registration_lock:
+            return self._start(
+                provider=provider,
+                redirect_uri=redirect_uri,
+                connection_id=connection_id,
+                google_client_id=google_client_id,
+                google_client_secret=google_client_secret,
+                project_id=project_id,
+            )
+
+    def _start(
+        self,
+        *,
+        provider: str,
+        redirect_uri: str,
+        connection_id: str | None = None,
+        google_client_id: str | None = None,
+        google_client_secret: str | None = None,
+        project_id: str | None = None,
+    ) -> tuple[Attempt, str]:
         if provider not in {"chatgpt", "gemini"}:
             raise OAuthError("unsupported OAuth provider")
         uri = urlsplit(redirect_uri)
@@ -203,7 +238,21 @@ class OAuthConnections:
         ):
             raise OAuthError("OAuth callback must use the local loopback listener")
         existing = self.repo.get_connection(connection_id) if connection_id else None
-        if connection_id and existing is None:
+        registration = next(
+            (
+                item
+                for item in reversed(self.attempts.values())
+                if provider == "chatgpt"
+                and item.provider == provider
+                and item.connection_id == connection_id
+                and item.created_new
+                and item.status == "failed"
+                and item.error == "OAuth code exchange failed (HTTP 400; invalid_grant)"
+                and item.issued_client_id
+            ),
+            None,
+        )
+        if connection_id and existing is None and registration is None:
             raise OAuthError("connection does not exist")
         if existing and existing.get("provider") != provider:
             raise OAuthError("connection provider does not match")
@@ -211,7 +260,13 @@ class OAuthConnections:
             raise OAuthError("connection authorization method does not match")
         connection_id = connection_id or str(uuid.uuid4())
         if provider == "chatgpt":
-            client_id = str(existing.get("client_id")) if existing else "dynamic_agent_client"
+            client_id = (
+                str(existing.get("client_id"))
+                if existing
+                else str(registration.issued_client_id)
+                if registration
+                else "dynamic_agent_client"
+            )
             host_id = self.repo.get_setting("chatgpt_host_id")
             if not isinstance(host_id, str) or not host_id:
                 host_id = f"urn:uuid:{uuid.uuid4()}"
@@ -292,6 +347,10 @@ class OAuthConnections:
                 )
         endpoint = _OPENAI if provider == "chatgpt" else _GOOGLE
         attempt.authorization_url = f"{endpoint['authorize']}?{urlencode(params)}"
+        if registration:
+            # One explicit continuation, with fresh PKCE/state/nonce. No account
+            # is activated until its signed identity and grant are validated.
+            registration.issued_client_id = None
         return attempt, attempt.authorization_url
 
     def status(self, attempt_id: str) -> dict[str, str | None]:
@@ -355,6 +414,8 @@ class OAuthConnections:
                 if client_id and client_id != attempt.client_id:
                     raise OAuthError("OAuth client ID mismatch")
                 actual_client_id = attempt.client_id
+            if provider == "chatgpt":
+                attempt.issued_client_id = actual_client_id
             stage = "token_exchange"
             token = await self._exchange(attempt, code, actual_client_id)
             stage = "identity_validation"
@@ -450,12 +511,13 @@ class OAuthConnections:
             )
             # No exception text, callback URL, code, token or account data.
             _LOG.warning(
-                "OAuth failure: provider=%s stage=%s category=%s",
+                "OAuth failure: provider=%s stage=%s category=%s timeout_phase=%s",
                 provider,
                 stage,
                 "validation_rejected"
                 if isinstance(exc, OAuthError)
                 else _request_failure(stage, exc),
+                _timeout_phase(exc),
             )
             if attempt.created_new and provider == "gemini":
                 self.repo.delete_connection(attempt.connection_id)
@@ -626,7 +688,10 @@ class OAuthConnections:
             if not client_secret:
                 raise OAuthError("Google desktop client secret is missing")
             form["client_secret"] = client_secret
-        async with httpx.AsyncClient(transport=self.transport, timeout=20) as client:
+        # Bound each network phase and never retry a one-use authorization code.
+        async with httpx.AsyncClient(
+            transport=self.transport, timeout=httpx.Timeout(60, connect=15, write=15, pool=15)
+        ) as client:
             response = await client.post(endpoint["token"], data=form)
         if response.status_code != 200:
             raise OAuthError(_code_exchange_failure(response))

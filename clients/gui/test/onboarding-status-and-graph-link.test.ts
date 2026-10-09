@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { graphRunHref, graphRunIdFromSearch } from '../src/features/collab/graphRunLink.ts';
-import { canDiscoverConnectionModels, canReauthorizeModelConnection, collaborationStatusLabel, localStateLabel, modelConnectionErrorLabel, modelConnectionStatusLabel, oauthStatusLabel, offersApiKeyAlternative } from '../src/lib/statusCopy.ts';
+import { canContinueOAuthRegistration, canDiscoverConnectionModels, canReauthorizeModelConnection, collaborationStatusLabel, localStateLabel, modelConnectionErrorLabel, modelConnectionStatusLabel, oauthStatusLabel, offersApiKeyAlternative } from '../src/lib/statusCopy.ts';
+
+test('only a confirmed ChatGPT invalid grant offers explicit registration continuation', () => {
+  const message = 'OAuth code exchange failed (HTTP 400; invalid_grant)';
+  assert.equal(canContinueOAuthRegistration('chatgpt', 'error', message), true);
+  for (const [provider, status, detail] of [
+    ['gemini', 'error', message], ['chatgpt', 'pending', message],
+    ['chatgpt', 'cancelled', message], ['chatgpt', 'error', 'OAuth request failed (token_exchange; timeout)'],
+    ['chatgpt', 'error', 'OAuth code exchange failed'], ['chatgpt', 'error', 'unavailable'],
+  ]) assert.equal(canContinueOAuthRegistration(provider, status, detail), false);
+});
 
 test('team run link addresses the Graph view and preserves the exact run id', () => {
   const id = 'graph_run/with space';
