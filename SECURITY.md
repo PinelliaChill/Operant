@@ -290,6 +290,13 @@ Tauri `--desktop` bridge 只允许 loopback，并只为固定 Tauri Origin 开�
 不在白名单。Web 页面虽然不使用 CDN，并对模型输出做安全展示，这仍不能代替网络边界。当前不得把
 `/web`、普通 `/v1/*` 或 WSS Gateway 直接暴露到公网，也不得放在未验收的反向代理后面。
 
+本机技能来源管理允许用户登记自选目录；loopback、Host、Origin 与 Action Gateway 不认证同机
+进程或系统用户。当前没有桌面私有请求通道或独立 PWA/TUI 首次配对，不能声称能拒绝同机未授权
+进程。CodeQL 来源路径告警 #45 仍待安全处理。目录根、链接变化和扫描范围检查与调用者身份
+是不同边界，前者通过不代表后者通过。直接启用现有 HTTPS OIDC 中间件会拦住 HTTP 回环模型
+OAuth 回调；新增本机认证时必须保留回调自身的 state/PKCE 检查，不能将模型 Token 当作 Core
+调用凭据。仅有 `0600` 的 Token 文件也不能证明同一系统用户下的进程隔离。
+
 ## Phase 5B Remote Control 与 Relay 边界
 
 当前实现把“用户从远程设备操控本地 Core”和“Core 在远程主机执行”拆成两个独立领域。Remote
