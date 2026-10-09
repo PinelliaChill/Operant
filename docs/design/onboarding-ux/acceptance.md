@@ -306,3 +306,13 @@ loopback、Host、Origin校验不认证同机进程身份；若不可信本机�
 已通过原生入口发起新的ChatGPT授权并打开官方登录页，待用户完成；尚未记录此次换取结果。
 证据见oauth-exchange-diagnostics-wheel-readback.json、verify-oauth-exchange-diagnostics-processes.json、
 oauth-exchange-diagnostics-pytest.log及gui-oauth-exchange-diagnostics-checks.json。
+
+用户随后提供的截图仍显示失败，详情为`OAuth request failed`。4ad版只补非200响应，网络/代理异常、
+成功HTTP下的无效JSON以及本机凭据异常仍被通用catch抹掉；因此前次诊断补修不完整，不能称登录
+问题已修复。新截图对应的Core日志为空，无法恢复此次具体异常。用户明确要求停止反复登录，
+后续不再创建授权请求、打开新登录页或要求用户重复操作，除非用户重新明确授权该动作。
+
+现在补充固定失败阶段和安全异常分类，覆盖凭据交换及身份验证中的超时、代理、连接、协议和
+网络错误，成功HTTP的无效/超限正文，以及凭据保存失败。15个网络/格式负例与1个凭据保存负例
+验证不泄露异常原文、code/token、state或URL，不自动重放，原有API连接保留；这只证明诊断与
+失败边界，不能证明真实登录已恢复。最新定向测试和后续完整门禁仍按新提交记录，旧结果保留。

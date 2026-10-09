@@ -14,10 +14,27 @@ const MODEL_CONNECTION_ERRORS: Record<string, string> = {
   network_error: '网络连接失败，请检查网络后再查找模型。',
   unsupported_capability: '本模型不支持当前请求参数。请调整模型或高级参数后重试。',
   revocation_unconfirmed: '断开连接的撤销尚未确认。请重试断开，不要重新登录。',
+  'OAuth request failed': '登录处理发生异常，旧版本未记录具体原因。请检查应用诊断，暂时不要重复登录。',
+  'OAuth token response is invalid': '登录服务返回的凭据格式无效。请检查应用的登录接口配置。',
+  'OAuth token response is too large': '登录服务返回的数据超出安全限制。请检查应用的登录接口配置。',
+  'ID token signing keys are unavailable': '暂时无法读取账号签名验证信息。请检查网络和登录服务状态。',
+  'ID token validation failed': '账号凭据验证失败。请检查应用的登录配置，暂时不要重复登录。',
 };
 
 export function knownModelConnectionErrorLabel(error: string | null | undefined): string | null {
   if (!error) return null;
+  const request = /^OAuth request failed \((callback_validation|token_exchange|identity_validation|credential_storage); (timeout|proxy_error|connection_error|protocol_error|network_error|http_error|credential_store_error|invalid_response|missing_data|invalid_data)\)$/.exec(error.trim());
+  if (request) {
+    const [, stage, category] = request;
+    const step = ({ callback_validation: '检查登录回调', token_exchange: '换取登录凭据', identity_validation: '验证账号凭据', credential_storage: '保存登录凭据' } as Record<string, string>)[stage];
+    if (category === 'timeout') return `${step}时请求超时。请检查网络和代理，暂时不要重复登录。`;
+    if (category === 'proxy_error') return `${step}时代理连接失败。请检查代理配置，暂时不要重复登录。`;
+    if (['connection_error', 'network_error', 'http_error'].includes(category)) return `${step}时网络连接失败。请检查网络和代理，暂时不要重复登录。`;
+    if (category === 'protocol_error') return `${step}时网络响应不完整。请检查代理和服务状态，暂时不要重复登录。`;
+    if (category === 'credential_store_error') return '本机凭据保存失败。请检查凭据文件权限，暂时不要重复登录。';
+    if (category === 'invalid_response') return `${step}时服务返回了无效数据。请检查登录接口和代理响应，暂时不要重复登录。`;
+    return `${step}时数据校验失败。请检查应用诊断，暂时不要重复登录。`;
+  }
   const exchange = /^OAuth code exchange failed \(HTTP ([1-5]\d{2}); ([a-z0-9_]+)\)$/.exec(error.trim());
   if (exchange) {
     const [, status, code] = exchange;

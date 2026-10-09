@@ -58,3 +58,13 @@ test('OAuth code exchange errors explain the confirmed status without inventing 
   assert.match(modelConnectionErrorLabel(failure(400, 'unknown')), /HTTP 400/);
   assert.doesNotMatch(modelConnectionErrorLabel('OAuth code exchange failed (HTTP 400; secret=value)'), /secret=value/);
 });
+
+test('OAuth transport failures identify the step and avoid asking for another blind login', () => {
+  assert.match(modelConnectionErrorLabel('OAuth request failed (token_exchange; timeout)'), /换取登录凭据.*超时.*暂时不要重复登录/);
+  assert.match(modelConnectionErrorLabel('OAuth request failed (identity_validation; proxy_error)'), /验证账号凭据.*代理连接失败/);
+  assert.match(modelConnectionErrorLabel('OAuth request failed (token_exchange; connection_error)'), /网络连接失败/);
+  assert.match(modelConnectionErrorLabel('OAuth request failed (token_exchange; invalid_response)'), /服务返回了无效数据/);
+  assert.match(modelConnectionErrorLabel('OAuth request failed (credential_storage; credential_store_error)'), /本机凭据保存失败.*文件权限/);
+  assert.match(modelConnectionErrorLabel('OAuth request failed'), /旧版本未记录具体原因.*暂时不要重复登录/);
+  assert.doesNotMatch(modelConnectionErrorLabel('OAuth request failed (secret=value; exception-text)'), /secret=value|exception-text/);
+});

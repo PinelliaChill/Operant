@@ -253,6 +253,147 @@ async def test_code_exchange_failure_keeps_status_and_safe_code_without_replay_o
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["token_exchange", "identity_validation"])
+@pytest.mark.parametrize(
+    ("exception_type", "category"),
+    [
+        (httpx.ConnectTimeout, "timeout"),
+        (httpx.ReadTimeout, "timeout"),
+        (httpx.ConnectError, "connection_error"),
+        (httpx.ProxyError, "proxy_error"),
+        (httpx.RemoteProtocolError, "protocol_error"),
+        (httpx.ReadError, "network_error"),
+    ],
+)
+async def test_oauth_transport_failure_retains_stage_without_logging_private_details(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    stage: str,
+    exception_type: type[httpx.HTTPError],
+    category: str,
+) -> None:
+    repo = _Repo()
+    credentials = CredentialStore(tmp_path / ".env")
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    token_id = [""]
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if stage == "token_exchange" or request.url.path.endswith("jwks.json"):
+            raise exception_type("private-exception-token-and-code", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-access",
+                "refresh_token": "private-refresh",
+                "id_token": token_id[0],
+                "expires_in": 3600,
+                "scope": "openid offline_access resource.invoke chatgpt.tokens.use.direct",
+            },
+        )
+
+    oauth = OAuthConnections(repo, credentials, transport=httpx.MockTransport(handler))
+    attempt, _ = oauth.start(
+        provider="chatgpt",
+        redirect_uri="http://127.0.0.1:4343/internal/model-auth/chatgpt/callback",
+    )
+    token_id[0] = _jwt(private, attempt.nonce)
+    with pytest.raises(OAuthError) as failed:
+        await oauth.complete(
+            provider="chatgpt", state=attempt.state, code="private-code", client_id="oaiapp_issued"
+        )
+    assert str(failed.value) == f"OAuth request failed ({stage}; {category})"
+    assert attempt.error == str(failed.value) and attempt.status == "failed"
+    assert attempt.verifier == "" and attempt.authorization_url is None
+    assert repo.records == {} and not credentials.path.exists()
+    assert f"stage={stage}" in caplog.text
+    assert "private" not in caplog.text and token_id[0] not in caplog.text
+    assert attempt.state not in caplog.text and "http" not in caplog.text
+    with pytest.raises(OAuthError, match="no longer pending"):
+        await oauth.complete(
+            provider="chatgpt", state=attempt.state, code="private-code", client_id="oaiapp_issued"
+        )
+    assert len(requests) == (1 if stage == "token_exchange" else 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (
+            httpx.Response(200, text="<html>private-token</html>"),
+            "OAuth request failed (token_exchange; invalid_response)",
+        ),
+        (httpx.Response(200, json=[]), "OAuth token response is invalid"),
+        (httpx.Response(200, text="private" * 150_000), "OAuth token response is too large"),
+    ],
+)
+async def test_oauth_success_status_with_invalid_body_does_not_lose_failure_reason(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, response: httpx.Response, expected: str
+) -> None:
+    credentials = CredentialStore(tmp_path / ".env")
+    oauth = OAuthConnections(
+        _Repo(), credentials, transport=httpx.MockTransport(lambda _: response)
+    )
+    attempt, _ = oauth.start(
+        provider="chatgpt",
+        redirect_uri="http://127.0.0.1:4343/internal/model-auth/chatgpt/callback",
+    )
+    with pytest.raises(OAuthError) as failed:
+        await oauth.complete(
+            provider="chatgpt", state=attempt.state, code="private-code", client_id="oaiapp_issued"
+        )
+    assert str(failed.value) == expected
+    assert "private" not in caplog.text and "private" not in (attempt.error or "")
+    assert not credentials.path.exists()
+
+
+@pytest.mark.asyncio
+async def test_oauth_credential_failure_keeps_existing_connection_and_safe_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo = _Repo()
+    credentials = CredentialStore(tmp_path / ".env")
+
+    class VerifiedOAuth(OAuthConnections):
+        async def _exchange(self, attempt: Any, code: str, client_id: str) -> dict[str, Any]:
+            return {
+                "access_token": "private-access",
+                "refresh_token": "private-refresh",
+                "id_token": "private-identity",
+                "expires_in": 3600,
+                "scope": "openid offline_access resource.invoke chatgpt.tokens.use.direct",
+            }
+
+        async def _verify_id_token(
+            self, token: Any, provider: str, client_id: str, nonce: str
+        ) -> dict[str, Any]:
+            return {"sub": "verified-account"}
+
+    oauth = VerifiedOAuth(repo, credentials)
+    attempt, _ = oauth.start(
+        provider="chatgpt",
+        redirect_uri="http://127.0.0.1:4343/internal/model-auth/chatgpt/callback",
+    )
+    untouched = {"connection_id": "existing-api", "provider": "openai-compatible"}
+    repo.save_connection("existing-api", untouched)
+
+    def fail_save(values: Any) -> None:
+        raise CredentialError("private-file-path-and-token")
+
+    monkeypatch.setattr(credentials, "put_many", fail_save)
+    with pytest.raises(OAuthError) as failed:
+        await oauth.complete(
+            provider="chatgpt", state=attempt.state, code="private-code", client_id="oaiapp_issued"
+        )
+    assert str(failed.value) == "OAuth request failed (credential_storage; credential_store_error)"
+    assert repo.records == {"existing-api": untouched}
+    assert not credentials.path.exists()
+    assert "private" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_chatgpt_dynamic_oauth_validates_account_and_rotates_tokens(tmp_path: Path) -> None:
     private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public = private.public_key().public_numbers()

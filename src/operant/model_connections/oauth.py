@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import time
 import uuid
@@ -79,6 +80,7 @@ _GOOGLE_SCOPES = (
     "openid email profile https://www.googleapis.com/auth/cloud-platform "
     "https://www.googleapis.com/auth/generative-language.retriever"
 )
+_LOG = logging.getLogger(__name__)
 _CODE_EXCHANGE_ERRORS = frozenset(
     {
         "invalid_grant",
@@ -110,6 +112,30 @@ def _code_exchange_failure(response: httpx.Response) -> str:
         if isinstance(supplied, str) and supplied in _CODE_EXCHANGE_ERRORS:
             code = supplied
     return f"OAuth code exchange failed (HTTP {response.status_code}; {code})"
+
+
+def _request_failure(stage: str, error: Exception) -> str:
+    if isinstance(error, httpx.TimeoutException):
+        category = "timeout"
+    elif isinstance(error, httpx.ProxyError):
+        category = "proxy_error"
+    elif isinstance(error, httpx.ConnectError):
+        category = "connection_error"
+    elif isinstance(error, httpx.ProtocolError):
+        category = "protocol_error"
+    elif isinstance(error, httpx.NetworkError):
+        category = "network_error"
+    elif isinstance(error, httpx.HTTPError):
+        category = "http_error"
+    elif isinstance(error, CredentialError):
+        category = "credential_store_error"
+    elif isinstance(error, json.JSONDecodeError):
+        category = "invalid_response"
+    elif isinstance(error, KeyError):
+        category = "missing_data"
+    else:
+        category = "invalid_data"
+    return f"OAuth request failed ({stage}; {category})"
 
 
 def _b64url(data: bytes) -> str:
@@ -315,6 +341,7 @@ class OAuthConnections:
         if attempt.status != "pending":
             raise OAuthError("OAuth attempt is no longer pending")
         attempt.status = "processing"
+        stage = "callback_validation"
         try:
             if error:
                 raise OAuthError("authorization was declined")
@@ -328,7 +355,9 @@ class OAuthConnections:
                 if client_id and client_id != attempt.client_id:
                     raise OAuthError("OAuth client ID mismatch")
                 actual_client_id = attempt.client_id
+            stage = "token_exchange"
             token = await self._exchange(attempt, code, actual_client_id)
+            stage = "identity_validation"
             claims = await self._verify_id_token(
                 token.get("id_token"), provider, actual_client_id, attempt.nonce
             )
@@ -358,6 +387,7 @@ class OAuthConnections:
                 secret_values[secret_ref(attempt.connection_id, "CLIENT_SECRET")] = (
                     attempt.google_client_secret
                 )
+            stage = "credential_storage"
             fd = await self._acquire_connection_lock(attempt.connection_id)
             try:
                 existing = self.repo.get_connection(attempt.connection_id)
@@ -415,7 +445,18 @@ class OAuthConnections:
             return record
         except (OAuthError, CredentialError, httpx.HTTPError, ValueError, KeyError) as exc:
             attempt.status = "failed"
-            attempt.error = str(exc) if isinstance(exc, OAuthError) else "OAuth request failed"
+            attempt.error = (
+                str(exc) if isinstance(exc, OAuthError) else _request_failure(stage, exc)
+            )
+            # No exception text, callback URL, code, token or account data.
+            _LOG.warning(
+                "OAuth failure: provider=%s stage=%s category=%s",
+                provider,
+                stage,
+                "validation_rejected"
+                if isinstance(exc, OAuthError)
+                else _request_failure(stage, exc),
+            )
             if attempt.created_new and provider == "gemini":
                 self.repo.delete_connection(attempt.connection_id)
             raise OAuthError(attempt.error) from exc
@@ -589,6 +630,8 @@ class OAuthConnections:
             response = await client.post(endpoint["token"], data=form)
         if response.status_code != 200:
             raise OAuthError(_code_exchange_failure(response))
+        if len(response.content) > 1_048_576:
+            raise OAuthError("OAuth token response is too large")
         body = response.json()
         if not isinstance(body, dict):
             raise OAuthError("OAuth token response is invalid")
