@@ -268,6 +268,13 @@ runtime-model-request；GUI为gui-model-request-form-dist，278项输入和61项
 Google；见gemini-application-configuration-c8c30c5.json。ChatGPT组织策略拒绝仍未得到条件变更确认。
 用户准备状态待答；两家登录、模型发现、流式工具调用、续期与撤销的完整真实验收继续保留为受阻。
 
+缺配置的错误引导补修：已明确失败的模型操作改为显示具体原因与下一步，未知写入仍按原请求
+核对。Gemini缺桌面客户端/项目或客户端密钥时，提示高级填写入口；项目或客户端与旧连接不匹配
+时提示使用原配置。GUI198项、类型/构建/预算通过；原生用合成项目ID得到具体中文原因、可打开
+高级字段，既有API连接及配置保留，没有Google登录/调用或凭据输入，见native-model-setup-guidance.json、
+gui-model-setup-guidance-report.json。只有GUI及展示测试改变，Core/SDK/Schema/依赖与已通过c8提交
+输入一致，后端完整门禁及真实模型证据可复用；当前前端为gui-model-setup-guidance-dist。
+
 未采用旧收据迁移方案。用户本次选择不代表允许合并、发行或迁移真实用户库。
 
 ### 技能目录路径告警复核

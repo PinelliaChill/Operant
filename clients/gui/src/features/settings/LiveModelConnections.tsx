@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { type ConnectionCreate, type OAuthAttempt, type ProviderConnection } from '../../../../../sdk/typescript-client/onboarding';
 import { useOnboarding } from '../../live/OnboardingContext';
 import { isWriteOutcomeUnknown } from '../../lib/writeOutcome';
+import { requestErrorCopy } from '../../lib/requestErrorCopy';
 import { ModelConnectionsView } from './ModelConnectionsView';
 import { currentBrowserOrigin } from '../../lib/liveBaseUrl';
 import { decodeModelRequest, encodeModelRequest, modelRequestIsConfirmed, modelRequestResultCopy, modelRequestStorageKey, type PendingModelRequest } from './modelRequestRecovery';
@@ -68,9 +69,10 @@ export const LiveModelConnections: React.FC = () => {
       return result;
     }
     catch (cause: unknown) {
-      setError(dispatched ? `${label}失败，请核对原请求结果。` : '无法保存请求编号，已停止提交。请检查本地存储权限。');
+      const uncertain = dispatched && isWriteOutcomeUnknown(cause);
+      setError(!dispatched ? '无法保存请求编号，已停止提交。请检查本地存储权限。' : uncertain ? `${label}结果尚未确认，请核对原请求。` : requestErrorCopy(cause));
       setErrorDetail(errorText(cause));
-      if (dispatched && isWriteOutcomeUnknown(cause)) setWriteUncertain(true);
+      if (uncertain) setWriteUncertain(true);
       else if (tracked && dispatched) {
         try { storeRequest(null); } catch { setWriteUncertain(true); }
       }

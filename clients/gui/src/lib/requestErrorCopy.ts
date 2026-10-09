@@ -16,6 +16,14 @@ const copy: Record<string, string> = {
   request_validation_failed: '填写内容不符合要求。请检查所选目标和输入后重试。',
 };
 
+const modelSetupCopy: Record<string, string> = {
+  'Google desktop client ID and Cloud project ID are required': 'Gemini 登录还缺配置。请填写 Google Cloud 项目 ID，并在高级选项检查桌面 OAuth 客户端信息。',
+  'Google desktop client secret is required': '缺少 Gemini 客户端密钥。请在高级选项填写后再连接。',
+  'Google OAuth configuration is invalid': 'Gemini 登录配置无效。请检查项目 ID 和桌面 OAuth 客户端信息。',
+  'Google Cloud project does not match this connection': '项目 ID 与当前连接不一致。请使用原项目；要更换项目，请先断开再连接。',
+  'Google OAuth client does not match this connection': 'OAuth 客户端与当前连接不一致。请使用原客户端；要更换，请先断开再连接。',
+};
+
 export function requestErrorCopy(error: unknown): string {
   if (!error || typeof error !== 'object') return '请求未完成。请刷新状态后重试。';
   const source = error as { code?: unknown; message?: unknown; recovery?: unknown };
@@ -24,6 +32,7 @@ export function requestErrorCopy(error: unknown): string {
   if (source.recovery === 'manual_reconcile' || source.recovery === 'retry_same_idempotency_key') return copy.outcome_unknown;
   const message = typeof source.message === 'string' ? source.message.trim() : '';
   const withoutHttp = message.replace(/^http_\d{3}:\s*/, '');
+  if (code === 'http_400' && source.recovery === 'none' && modelSetupCopy[withoutHttp]) return modelSetupCopy[withoutHttp];
   if (/^[\u3400-\u9fff]/u.test(withoutHttp) && withoutHttp.length <= 300) return withoutHttp;
   if (code === 'http_401' || code === 'http_403') return copy.permission_denied;
   if (code === 'http_404') return copy.not_found;

@@ -18,3 +18,19 @@ test('specific Chinese service guidance remains visible', () => {
   assert.equal(requestErrorCopy(new Error('目录不存在或不可读取')), '目录不存在或不可读取');
   assert.equal(requestErrorCopy(new Error('http_409: 目标已变化，请刷新')), '目标已变化，请刷新');
 });
+
+test('confirmed Gemini setup failures name the missing configuration and its entry', () => {
+  const error = (message: string) => ({ code: 'http_400', recovery: 'none', message });
+  assert.match(requestErrorCopy(error('Google desktop client ID and Cloud project ID are required')), /项目 ID.*高级选项.*客户端/);
+  assert.match(requestErrorCopy(error('Google desktop client secret is required')), /缺少.*密钥.*高级选项/);
+  assert.match(requestErrorCopy(error('Google OAuth configuration is invalid')), /配置无效.*检查/);
+  assert.match(requestErrorCopy(error('Google Cloud project does not match this connection')), /项目.*不一致.*原项目/);
+  assert.match(requestErrorCopy(error('Google OAuth client does not match this connection')), /客户端.*不一致.*原客户端/);
+});
+
+test('unknown model setup writes retain reconciliation guidance instead of a configuration retry hint', () => {
+  const message = 'Google desktop client secret is required';
+  assert.match(requestErrorCopy({ code: 'command_outcome_unknown', recovery: 'manual_reconcile', message }), /核对.*勿再次提交/);
+  assert.match(requestErrorCopy({ code: 'http_400', recovery: 'retry_same_idempotency_key', message }), /核对.*勿再次提交/);
+  assert.doesNotMatch(requestErrorCopy({ code: 'http_502', recovery: 'none', message }), /高级选项|客户端密钥/);
+});
