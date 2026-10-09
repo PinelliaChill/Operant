@@ -79,6 +79,37 @@ _GOOGLE_SCOPES = (
     "openid email profile https://www.googleapis.com/auth/cloud-platform "
     "https://www.googleapis.com/auth/generative-language.retriever"
 )
+_CODE_EXCHANGE_ERRORS = frozenset(
+    {
+        "invalid_grant",
+        "invalid_client",
+        "unauthorized_client",
+        "invalid_request",
+        "invalid_scope",
+        "unsupported_grant_type",
+        "access_denied",
+        "server_error",
+        "temporarily_unavailable",
+        "3p_delegated_access_policy_denied",
+        "subscription_sharing_user_not_eligible",
+    }
+)
+
+
+def _code_exchange_failure(response: httpx.Response) -> str:
+    # Error descriptions and arbitrary provider codes may echo credentials.
+    # Keep the actual status and only recognized, bounded machine codes.
+    code = "unknown"
+    if len(response.content) <= 65_536:
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        error = body.get("error") if isinstance(body, dict) else None
+        supplied = error.get("code") if isinstance(error, dict) else error
+        if isinstance(supplied, str) and supplied in _CODE_EXCHANGE_ERRORS:
+            code = supplied
+    return f"OAuth code exchange failed (HTTP {response.status_code}; {code})"
 
 
 def _b64url(data: bytes) -> str:
@@ -557,7 +588,7 @@ class OAuthConnections:
         async with httpx.AsyncClient(transport=self.transport, timeout=20) as client:
             response = await client.post(endpoint["token"], data=form)
         if response.status_code != 200:
-            raise OAuthError("OAuth code exchange failed")
+            raise OAuthError(_code_exchange_failure(response))
         body = response.json()
         if not isinstance(body, dict):
             raise OAuthError("OAuth token response is invalid")

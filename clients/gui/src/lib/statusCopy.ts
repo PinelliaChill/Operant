@@ -18,6 +18,19 @@ const MODEL_CONNECTION_ERRORS: Record<string, string> = {
 
 export function knownModelConnectionErrorLabel(error: string | null | undefined): string | null {
   if (!error) return null;
+  const exchange = /^OAuth code exchange failed \(HTTP ([1-5]\d{2}); ([a-z0-9_]+)\)$/.exec(error.trim());
+  if (exchange) {
+    const [, status, code] = exchange;
+    if (code === 'invalid_grant') return '授权码未被接受。请从 Operant 重新发起登录，不要刷新旧回调页面。';
+    if (['invalid_client', 'unauthorized_client'].includes(code)) return '应用注册信息未被接受。请检查 Operant 的 OAuth 客户端配置。';
+    if (['invalid_request', 'invalid_scope', 'unsupported_grant_type'].includes(code)) return '登录请求配置未被接受。请检查应用的登录配置。';
+    if (['access_denied', '3p_delegated_access_policy_denied'].includes(code)) return '当前账号或工作区未允许这次授权。请检查工作区的外部应用权限。';
+    if (code === 'subscription_sharing_user_not_eligible') return '当前账号或工作区没有 ChatGPT 套餐调用资格。请检查账号资格或连接 API 密钥。';
+    if (['server_error', 'temporarily_unavailable'].includes(code) || status.startsWith('5')) return '登录服务暂时不可用。请稍后从 Operant 重新发起登录。';
+    if (status === '429') return '登录请求过于频繁。请稍后从 Operant 重新发起登录。';
+    if (status === '403') return '登录凭据换取被拒绝（HTTP 403）。请核对账号权限、应用配置和网络限制。';
+    return `登录凭据换取失败（HTTP ${status}）。请查看失败原因并核对状态。`;
+  }
   return MODEL_CONNECTION_ERRORS[error.trim()] ?? null;
 }
 

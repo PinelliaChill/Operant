@@ -191,6 +191,68 @@ def test_credential_store_serializes_concurrent_connections(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "expected_code"),
+    [
+        (
+            httpx.Response(400, json={"error": "invalid_grant", "error_description": "private"}),
+            "invalid_grant",
+        ),
+        (
+            httpx.Response(401, json={"error": {"code": "invalid_client", "message": "private"}}),
+            "invalid_client",
+        ),
+        (
+            httpx.Response(403, json={"error": "3p_delegated_access_policy_denied"}),
+            "3p_delegated_access_policy_denied",
+        ),
+        (httpx.Response(403, json={"detail": "private"}), "unknown"),
+        (httpx.Response(403, text="<html>private</html>"), "unknown"),
+        (httpx.Response(429, text="{not-json-private"), "unknown"),
+        (httpx.Response(503, json={"error": "private-code-and-token"}), "unknown"),
+        (
+            httpx.Response(400, json={"error": "invalid_grant", "extra": "private" * 10_000}),
+            "unknown",
+        ),
+    ],
+)
+async def test_code_exchange_failure_keeps_status_and_safe_code_without_replay_or_secrets(
+    tmp_path: Path, response: httpx.Response, expected_code: str
+) -> None:
+    repo = _Repo()
+    credentials = CredentialStore(tmp_path / ".env")
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return response
+
+    oauth = OAuthConnections(repo, credentials, transport=httpx.MockTransport(handler))
+    attempt, _ = oauth.start(
+        provider="chatgpt",
+        redirect_uri="http://127.0.0.1:4343/internal/model-auth/chatgpt/callback",
+    )
+    verifier = attempt.verifier
+    with pytest.raises(OAuthError) as failed:
+        await oauth.complete(
+            provider="chatgpt", state=attempt.state, code="private-code", client_id="oaiapp_issued"
+        )
+    assert str(failed.value) == (
+        f"OAuth code exchange failed (HTTP {response.status_code}; {expected_code})"
+    )
+    assert attempt.error == str(failed.value)
+    assert "private" not in attempt.error and verifier not in attempt.error
+    assert attempt.status == "failed"
+    assert attempt.verifier == "" and attempt.authorization_url is None
+    assert repo.records == {} and not credentials.path.exists()
+    with pytest.raises(OAuthError, match="no longer pending"):
+        await oauth.complete(
+            provider="chatgpt", state=attempt.state, code="private-code", client_id="oaiapp_issued"
+        )
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_chatgpt_dynamic_oauth_validates_account_and_rotates_tokens(tmp_path: Path) -> None:
     private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public = private.public_key().public_numbers()

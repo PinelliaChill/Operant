@@ -765,7 +765,7 @@ def install_model_connection_routes(
             )
         except OAuthError:
             return PlainTextResponse(
-                "连接失败。请返回 Operant 重试。",
+                "连接失败。请返回 Operant 查看失败原因，不要刷新此页面。",
                 status_code=400,
                 headers={"Cache-Control": "no-store"},
             )

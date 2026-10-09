@@ -44,3 +44,17 @@ test('OAuth connection failures use distinct recovery actions', () => {
   assert.equal(canDiscoverConnectionModels('error', 'revocation_unconfirmed'), false);
   assert.doesNotMatch(modelConnectionErrorLabel('unknown_internal_code'), /unknown_internal_code/);
 });
+
+test('OAuth code exchange errors explain the confirmed status without inventing a cause', () => {
+  const failure = (status: number, code: string) => `OAuth code exchange failed (HTTP ${status}; ${code})`;
+  assert.match(modelConnectionErrorLabel(failure(400, 'invalid_grant')), /授权码未被接受.*不要刷新/);
+  assert.match(modelConnectionErrorLabel(failure(401, 'invalid_client')), /应用注册信息未被接受/);
+  assert.match(modelConnectionErrorLabel(failure(403, '3p_delegated_access_policy_denied')), /工作区.*外部应用权限/);
+  assert.match(modelConnectionErrorLabel(failure(403, 'subscription_sharing_user_not_eligible')), /没有 ChatGPT 套餐调用资格/);
+  assert.match(modelConnectionErrorLabel(failure(503, 'unknown')), /登录服务暂时不可用/);
+  assert.match(modelConnectionErrorLabel(failure(429, 'unknown')), /请求过于频繁/);
+  assert.match(modelConnectionErrorLabel(failure(403, 'unknown')), /HTTP 403.*账号权限.*应用配置.*网络限制/);
+  assert.doesNotMatch(modelConnectionErrorLabel(failure(403, 'unknown')), /授权码已失效|没有.*资格/);
+  assert.match(modelConnectionErrorLabel(failure(400, 'unknown')), /HTTP 400/);
+  assert.doesNotMatch(modelConnectionErrorLabel('OAuth code exchange failed (HTTP 400; secret=value)'), /secret=value/);
+});
