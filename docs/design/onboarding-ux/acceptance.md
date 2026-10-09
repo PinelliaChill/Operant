@@ -383,3 +383,25 @@ PID22137保持原样；仅备份并沿用v25验收库，不复制凭据或新增
 见oauth-Mountain-organization-denied.json；服务商请求ID为068df745-44d8-4e22-b52f-244a53a62e6e，
 证据不保存回调URL、code、state或Token。原生Chrome窗口的账号页读取曾滞后；正式Chrome Tab
 的DOM读出Operation timed out后，恢复的是同一未完成账号选择，没有重放授权码。
+
+
+### 候选构建与 Gemini 配置准备（2026-10-09）
+
+发现同一外置构建目录多次构建后残留77项旧输出；原页面引用的产品输入仍是c3，但不把多余
+旧文件当作本次构建产物。以同一278项输入在全新目录重新构建，得到61项当前输出，构建及
+包体检查通过。仅将隔离前端3028切至gui-oauth-registration-clean-dist/PID36195；
+Core18778/PID81494及原用户Core18768/PID22137保持不变。正式HTTP入口返回的HTML摘要
+与新构建一致，两个Core健康ok；未迁移数据库或复制凭据。
+见gui-oauth-registration-clean-report.json、verify-oauth-registration-clean-processes.json及
+oauth-registration-clean-preview-readback.json。GUI源码未变，201项/类型证据按输入摘要复用。
+
+新CI37906688180的已完成GUI作业原始日志通过正式GitHub Job日志接口取得，确认**201项通过**。
+双Python检查仍在运行；早前gh run view --log在整次运行未结束时取不到日志，不据此重启CI，
+也不将日志暂不可用当作作业失败。
+
+默认Google账号的现有项目已启用Gemini API，
+但Google Auth Platform尚未配置。打开官方向导并准备应用名称Operant；选择当前账号支持邮箱
+及进入下一步被自动审批拒绝，原因是向Google Cloud提交应用资料需要明确当次许可。已请求
+用户许可并保留页面，尚未提交配置、创建客户端、接受用户数据条款或开始免费试用/结算。
+没有读取或复制其他API密钥。见gemini-existing-project-prepared.json。
+该步骤仍属原OAuth范围，未删除；登录、模型、续期及撤销未验收。
