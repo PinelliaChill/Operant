@@ -1,6 +1,6 @@
 # 开箱即用与界面整理验收
 
-> 2026-10-08；记录身份：Codex 主线程；适用对象：本轮实现与验收 Agent。
+> 2026-10-09；记录身份：Codex 主线程；适用对象：本轮实现与验收 Agent。
 > 分支 `codex/onboarding-ux`；基线 `939e3cc`；完整范围见[批准方案](plan.md)。实施中，整轮未完成。
 
 | 需求 | 实现状态 | 验收状态 | 场景与结果 |
@@ -248,7 +248,13 @@ TS/Python Client，旧协议摘要未变。早期旧键自动成功重放改为�
 定向模型连接25项与协议3项通过，GUI196项、类型、独立构建与包体预算通过。首次协议测试误用了
 历史临时导入库，触发v24账本校验失败；改用新的隔离导入库后通过，未改账本或正式迁移。
 日志model-request-integrated-pytest.log保留失败，最终结果见model-request-integrated-final-pytest.log。
-格式、ruff、mypy204、离线锁及diff通过；本次代码变动的完整双版本CI和CodeQL仍需新提交检查。
+格式、ruff、mypy204、离线锁及diff通过。冻结`c8c30c5`的完整CI37801782989已全部通过：
+Python3.10/3.12各**1499通过、16跳过、1警告**，TUI各**34项**，GUI**196项**、类型/构建/包体通过，
+格式593、ruff、mypy204及离线锁通过。4个作业的完整日志与摘要见ci-c8c30c5-final-summary.json、
+ci-c8c30c5-final-status.json。父线程watch曾因GitHub API unexpected EOF退出1，之后通过官方作业
+终态与完整日志核对success，没有把watch错误当作测试失败，也未重新运行该冻结提交的完整门禁。
+CodeQL37801777170分析成功，汇总仍为失败：当前仅#45目录路径high开放，#46旧凭据摘要与#47夹具
+实例均fixed，没有抑制或dismiss；见codeql-c8c30c5-summary.json。CI通过不等于安全扫描通过。
 
 原生丢响应场景：保存成功后代理丢弃返回；列表刷新及重开App仍阻断新提交，表单不跨重开保存。
 原请求GET确认后恢复，实际创建POST仅1次、连接仅1条。窄屏详情换行已修，1280/700/390及深浅
@@ -258,6 +264,9 @@ TS/Python Client，旧协议摘要未变。早期旧键自动成功重放改为�
 runtime-model-request；GUI为gui-model-request-form-dist，278项输入和61项输出冻结、原生挂载通过，
 见gui-model-request-form-report.json。临时库v25沿用，未复制凭据或迁移真实用户库；合成连接已清理，
 保留原隔离模型配置。新候选的正式模型发现及原生合成消息通过，不把API通过当作OAuth通过。
+最新隔离环境再次只核对应用配置是否存在：Gemini客户端ID/secret仍均缺失，未打印配置值、未调用
+Google；见gemini-application-configuration-c8c30c5.json。ChatGPT组织策略拒绝仍未得到条件变更确认。
+用户准备状态待答；两家登录、模型发现、流式工具调用、续期与撤销的完整真实验收继续保留为受阻。
 
 未采用旧收据迁移方案。用户本次选择不代表允许合并、发行或迁移真实用户库。
 
