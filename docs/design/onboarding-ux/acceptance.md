@@ -423,3 +423,14 @@ User随后明确允许在当前Google项目以Operant名称和默认账号支持
 免费试用/结算，也未取得客户端凭据。此记录不推断User是否另有手动操作。
 之后CUA Chrome控制提示需更新ChatGPT浏览器扩展，保留已观察结果，不通过其他入口继续
 付款步骤。User要求先继续其余工作，登录许可仍保留，整体OAuth验收未完成。
+
+
+Gemini表单原标签“项目编号”与实际请求的project_id不一致，容易让用户填数字Project number。
+现统一为“Google Cloud 项目 ID”，不改变字段值、请求或权限。GUI**201项**、类型/构建/包体通过；
+仅一项GUI源输入变化，独立新构建61输出。原生模型设置页核对新标签、字段焦点、高级折叠及
+原API连接可见，未输入凭据、发起授权或调用模型。Core283项输入与c3完整门禁一致，不重复跑
+未受影响的后端场景。见gui-gemini-project-label-report.json、verify-gemini-project-label-processes.json
+及native-gemini-project-id-label.json。
+
+当前PR的CodeQL #45实例在精确c3提交仍open（全局state字段未返回值，以实例state为准）；
+未关闭、抑制或dismiss，不能把分析作业成功当作无安全问题。
