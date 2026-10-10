@@ -8,7 +8,7 @@
 
 import { PathInput } from '../../components/PathInput';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   FileText,
   FolderKanban,
@@ -25,6 +25,8 @@ import { formatRelativeDay } from '../../lib/format';
 import type { DemoWorkflowDirectoryItem } from '../../demo/types';
 import { useOperant } from '../../context/ClientContext';
 import { LiveManagementView } from '../management/LiveManagementView';
+import { ProjectFilesPanel } from './ProjectFilesPanel';
+import '../tasks/task-hub.css';
 
 /** 预置项目标识颜色 */
 const PRESET_COLORS = ['#2563eb', '#ea580c', '#059669', '#7c3aed', '#db2777', '#0891b2'];
@@ -488,8 +490,19 @@ const ProjectDetail: React.FC<{ projectId: string }> = ({ projectId }) => {
 
 export const ProjectsView: React.FC = () => {
   const { clientMode } = useOperant();
-  if (clientMode === 'live') return <LiveManagementView initialTab="projects" />;
+  if (clientMode === 'live') return <LiveProjectsHub />;
   return <DemoProjectsView />;
+};
+
+const LiveProjectsHub: React.FC = () => {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') === 'knowledge' ? 'knowledge' : params.get('tab') === 'files' ? 'files' : 'projects';
+  return <div className="task-hub">
+    <nav className="task-hub-tabs" aria-label="项目页面">
+      {([['projects', '项目内容'], ['files', '文件'], ['knowledge', '项目知识']] as const).map(([key, label]) => <button key={key} type="button" className={`task-hub-tab${tab === key ? ' active' : ''}`} aria-current={tab === key ? 'page' : undefined} onClick={() => setParams({ tab: key })}>{label}</button>)}
+    </nav>
+    {tab === 'files' ? <ProjectFilesPanel /> : <LiveManagementView initialTab={tab} focused />}
+  </div>;
 };
 
 const DemoProjectsView: React.FC = () => {

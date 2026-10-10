@@ -203,3 +203,21 @@
 .local-panel button:focus-visible, .local-panel input:focus-visible, .local-panel select:focus-visible, .local-panel textarea:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 @media (max-width: 760px) { .local-extension-grid, .local-category-list { grid-template-columns: 1fr; } .local-panel { padding: 14px; } }
 @media (max-width: 600px) { .local-actions, .local-panel-heading { align-items: stretch; } .local-actions .btn { min-height: 44px; flex: 1 1 132px; } .local-panel .input, .local-panel .select { font-size: 16px; } }
+.local-capability-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; margin: 18px 0; }
+.local-capability-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-height: 152px; padding: 16px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-card); color: var(--text-primary); font: inherit; text-align: left; }
+.local-capability-card:hover, .local-capability-card.selected { border-color: var(--border-focus); background: var(--accent-subtle); }
+.local-capability-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.local-capability-card > span { color: var(--text-secondary); font-size: var(--font-size-sm); }
+.local-capability-card > small { margin-top: auto; color: var(--accent-on-subtle); }
+.local-target-field { display: block; max-width: 540px; margin-bottom: 14px; }
+.local-target-field > small { display: block; color: var(--text-secondary); margin-top: 5px; }
+.local-advanced { margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 12px; }
+.local-advanced > summary { cursor: pointer; color: var(--text-secondary); font-weight: 600; }
+.local-advanced[open] > summary { margin-bottom: 12px; }
+.local-advanced > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.local-conversation-start { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-surface); }
+.local-conversation-start:target { border-color: var(--border-focus); scroll-margin-top: 24px; }
+.local-conversation-start > p { font-size: 13px; }
+.local-conversation-start ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; overflow-wrap: anywhere; font-size: 13px; color: var(--text-secondary); }
+.local-conversation-start .btn { justify-self: start; }
+@media (max-width: 600px) { .local-conversation-start .btn { justify-self: stretch; } }

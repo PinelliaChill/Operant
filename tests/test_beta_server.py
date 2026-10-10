@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from operant.server import ServerConfigurationError, build_server_config, server_config_snapshot
+from operant.server import (
+    ServerConfigurationError,
+    _setup_origins_from_env,
+    build_server_config,
+    server_config_snapshot,
+)
 
 
 def test_loopback_server_is_bounded_without_remote_gateway(tmp_path: Path) -> None:
@@ -23,6 +28,7 @@ def test_loopback_server_is_bounded_without_remote_gateway(tmp_path: Path) -> No
         "proxy_headers": False,
         "workers": 1,
     }
+    assert config.access_log is False
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "8.8.8.8", "core.example"])
@@ -64,6 +70,33 @@ def test_private_network_requires_tls_and_oauth() -> None:
             ssl_keyfile=None,
             environment={},
         )
+
+
+def test_setup_origin_allowlist_is_explicit_and_loopback_only(tmp_path: Path) -> None:
+    assert _setup_origins_from_env({}) == ()
+    config = build_server_config(
+        host="127.0.0.1",
+        port=8000,
+        ssl_certfile=None,
+        ssl_keyfile=None,
+        environment={
+            "OPERANT_DB_PATH": str(tmp_path / "setup.sqlite3"),
+            "OPERANT_SETUP_ALLOWED_ORIGINS_JSON": '["http://127.0.0.1:3000"]',
+        },
+    )
+    assert config.app.state.setup_allowed_origins == frozenset({"http://127.0.0.1:3000"})
+    for raw in (
+        "[]",
+        '["https://example.test"]',
+        '["http://127.0.0.1"]',
+        '["http://127.0.0.1:bad"]',
+        '["http://user@localhost:3000"]',
+        '["http://localhost:3000/path"]',
+        '["http://localhost:3000?query"]',
+        "invalid-json",
+    ):
+        with pytest.raises(ServerConfigurationError):
+            _setup_origins_from_env({"OPERANT_SETUP_ALLOWED_ORIGINS_JSON": raw})
 
 
 def test_desktop_bridge_has_exact_origin_and_stays_on_loopback(tmp_path: Path) -> None:

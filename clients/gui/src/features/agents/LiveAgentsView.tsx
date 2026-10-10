@@ -7,6 +7,7 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { B2LiveAdapter, normalizeB2Error } from '../../live/b2Adapter';
 import { createIdempotencyKey } from '../../live/liveState';
+import { SearchSelect } from '../../components/SearchSelect';
 import { policyWithRoleTools, ROLE_TOOL_GROUPS, selectedRoleTools } from './roleTools';
 import type { SelectableRoleTool } from './roleTools';
 import './ui-refine-agents.css';
@@ -94,7 +95,7 @@ const LiveErrorBanner: React.FC<{
   </div>
 );
 
-export const LiveAgentsView: React.FC = () => {
+export const LiveAgentsView: React.FC<{ roleOnly?: boolean }> = ({ roleOnly = false }) => {
   const { b2Client, connectionStatus, addNotification } = useOperant();
   const adapter = useMemo(() => new B2LiveAdapter(b2Client), [b2Client]);
   const [models, setModels] = useState<B2.ModelProfile[]>([]);
@@ -259,17 +260,17 @@ export const LiveAgentsView: React.FC = () => {
     <div className="section-view b2-agents-page" data-client-mode="live">
       <header className="section-header b2-agents-header">
         <div className="b2-agents-header-copy">
-          <span className="b2-agents-kicker">模型与角色</span>
-          <h1 className="section-title">模型与角色</h1>
-          <p className="section-sub">先配置可用模型，再编辑角色预设；运行实例保留为只读快照。</p>
+          <span className="b2-agents-kicker">助手设置</span>
+          <h1 className="section-title">{roleOnly ? '助手与角色' : '模型与角色'}</h1>
+          <p className="section-sub">管理助手的职责和工具权限。</p>
         </div>
         <div className="b2-agents-header-actions">
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void load()} disabled={loading || connectionStatus !== 'connected'}>
             <RefreshCw size={14} aria-hidden="true" />刷新
           </button>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={openNewModel} disabled={loading}>
+          {!roleOnly && <button type="button" className="btn btn-secondary btn-sm" onClick={openNewModel} disabled={loading}>
             <Plus size={14} aria-hidden="true" />添加模型
-          </button>
+          </button>}
           <button type="button" className="btn btn-primary btn-sm" onClick={openNewRole} disabled={loading || models.length === 0}>
             <Plus size={14} aria-hidden="true" />新建角色
           </button>
@@ -282,7 +283,7 @@ export const LiveAgentsView: React.FC = () => {
             <div className="live-panel-loading" role="status"><RefreshCw size={16} className="animate-spin" />正在读取模型与角色配置…</div>
           ) : (
             <>
-              <section className="b2-agents-section" aria-labelledby="b2-models-title">
+              {!roleOnly && <section className="b2-agents-section" aria-labelledby="b2-models-title">
                 <div className="b2-agents-section-heading">
                   <div className="b2-agents-section-title">
                     <span className="b2-agents-section-icon"><Database size={17} aria-hidden="true" /></span>
@@ -335,7 +336,7 @@ export const LiveAgentsView: React.FC = () => {
                     ))}
                   </div>
                 )}
-              </section>
+              </section>}
 
               <section className="b2-agents-section" aria-labelledby="b2-roles-title">
                 <div className="b2-agents-section-heading">
@@ -393,7 +394,7 @@ export const LiveAgentsView: React.FC = () => {
                 )}
               </section>
 
-              <section className="b2-agents-section" aria-labelledby="b2-instances-title">
+              {!roleOnly && <section className="b2-agents-section" aria-labelledby="b2-instances-title">
                 <div className="b2-agents-section-heading">
                   <div className="b2-agents-section-title">
                     <span className="b2-agents-section-icon"><Bot size={17} aria-hidden="true" /></span>
@@ -465,7 +466,7 @@ export const LiveAgentsView: React.FC = () => {
                   <button type="button" className="btn btn-secondary" disabled={loading || instanceOffset === 0} onClick={() => setInstanceOffset(Math.max(0, instanceOffset - 100))}>上一页</button>
                   <button type="button" className="btn btn-secondary" disabled={loading || nextInstanceOffset === null} onClick={() => { if (nextInstanceOffset !== null) setInstanceOffset(nextInstanceOffset); }}>下一页</button>
                 </div>
-              </section>
+              </section>}
             </>
           )}
         </div>
@@ -547,8 +548,7 @@ export const LiveAgentsView: React.FC = () => {
                 <p>用于任务选择和运行实例识别。</p>
               </div>
               <div className="b2-agents-field">
-                <label htmlFor="b2-role-model">绑定模型配置</label>
-                <select id="b2-role-model" className="select" value={roleForm.modelProfileId} onChange={(event) => setRoleForm((current) => ({ ...current, modelProfileId: event.target.value, effort: models.find((model) => model.id === event.target.value)?.default_effort || current.effort }))}><option value="">选择模型配置</option>{models.filter((model) => model.id && model.enabled !== false).map((model) => <option key={model.id} value={model.id}>{model.name} · {model.model_id}</option>)}</select>
+                <SearchSelect label="绑定模型配置" value={roleForm.modelProfileId} placeholder="选择模型配置" options={models.filter((model) => model.id && model.enabled !== false).map((model) => ({ value: model.id!, label: model.name, detail: model.model_id }))} onChange={(value) => setRoleForm((current) => ({ ...current, modelProfileId: value, effort: models.find((model) => model.id === value)?.default_effort || current.effort }))} />
                 <p>只能选择已启用的模型配置。</p>
               </div>
             </div>
@@ -565,9 +565,8 @@ export const LiveAgentsView: React.FC = () => {
             <legend>执行参数</legend>
             <div className="b2-agents-field-grid b2-agents-field-grid-2">
               <div className="b2-agents-field">
-                <label htmlFor="b2-role-effort">推理强度（Effort）</label>
-                <select id="b2-role-effort" className="select" value={roleForm.effort} onChange={(event) => setRoleForm((current) => ({ ...current, effort: event.target.value as B2.Effort }))}>{(models.find((model) => model.id === roleForm.modelProfileId)?.supported_efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select>
-                <p>可选项来自绑定 ModelProfile 的能力声明。</p>
+                <SearchSelect label="推理强度" value={roleForm.effort} onChange={(value) => setRoleForm((current) => ({ ...current, effort: value as B2.Effort }))} options={(models.find((model) => model.id === roleForm.modelProfileId)?.supported_efforts ?? []).map((effort) => ({ value: effort, label: effort === 'low' ? '较快' : effort === 'medium' ? '均衡' : effort === 'high' ? '深入' : effort }))} />
+                <p>可选项由所选模型提供。</p>
               </div>
               <div className="b2-agents-field">
                 <label htmlFor="b2-role-turns">最大轮次</label>

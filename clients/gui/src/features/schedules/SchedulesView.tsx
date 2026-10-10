@@ -1,7 +1,7 @@
 /**
- * 调度分区（v8：多入口联动调度与即时触发）
- * - 页头「+ 新建调度」弹窗：支持 Cron 周期表达式与一次性 Timer 倒计时；
- *   调度目标支持工作流模板、指定 Prompt 指令任务与系统巡检脚本；
+ * 定时任务分区（v8：多入口联动定时任务与即时触发）
+ * - 页头「+ 新建定时任务」弹窗：支持 Cron 周期表达式与一次性 Timer 倒计时；
+ *   定时任务目标支持工作流模板、指定 Prompt 指令任务与系统巡检脚本；
  * - 列表卡片：展示触发规则、目标类型、下次运行时间、最近运行状态（成功/运行中/失败）；
  * - 动作：立即运行 (Run Now)、启停开关、删除；
  * - 多入口联动：支持通过 URL 参数 ?new=1&targetType=...&targetId=... 快速预填弹窗创建。
@@ -122,12 +122,12 @@ const DemoSchedulesView: React.FC = () => {
     <div className="section-view">
       <header className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 className="section-title">调度中心</h1>
+          <h1 className="section-title">定时任务</h1>
           <p className="section-sub">按计划或倒计时自动触发工作流与 Prompt 任务（共 {schedules.length} 个）</p>
         </div>
         <button className="btn btn-primary btn-sm" onClick={() => setModalOpen(true)}>
           <Plus size={13} />
-          <span>新建调度</span>
+          <span>新建定时任务</span>
         </button>
       </header>
 
@@ -137,12 +137,12 @@ const DemoSchedulesView: React.FC = () => {
             <div className="section-empty-wrap">
               <EmptyState
                 icon={CalendarClock}
-                title="暂无调度任务"
-                description="点击上方「新建调度」创建周期性 Cron 或一次性倒计时任务。"
+                title="暂无定时任务"
+                description="点击上方「新建定时任务」创建重复执行或执行一次的任务。"
                 action={
                   <button className="btn btn-primary" onClick={() => setModalOpen(true)}>
                     <Plus size={14} />
-                    <span>新建调度</span>
+                    <span>新建定时任务</span>
                   </button>
                 }
               />
@@ -265,8 +265,8 @@ const DemoSchedulesView: React.FC = () => {
                         className="btn btn-ghost btn-icon"
                         style={{ padding: 4, color: 'var(--text-muted)' }}
                         onClick={() => deleteSchedule(s.id)}
-                        title="删除调度"
-                        aria-label="删除调度"
+                        title="删除定时任务"
+                        aria-label="删除定时任务"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -277,20 +277,18 @@ const DemoSchedulesView: React.FC = () => {
             </div>
           )}
 
-          <p className="section-footnote" style={{ marginTop: 24 }}>
-            调度任务由本地 Scheduler 定时驱动，触发时自动派发 Workflow Run 或生成会话消息。
-          </p>
+
         </div>
       </div>
 
-      {/* 新建调度 Modal */}
+      {/* 新建定时任务 Modal */}
       <Modal
         isOpen={modalOpen}
         onClose={() => {
           setModalOpen(false);
           setSearchParams({}, { replace: true });
         }}
-        title="新建调度任务"
+        title="新建定时任务"
         footer={
           <>
             <button
@@ -304,7 +302,7 @@ const DemoSchedulesView: React.FC = () => {
             </button>
             <button className="btn btn-primary" onClick={handleCreate} disabled={!name.trim()}>
               <Plus size={14} />
-              <span>创建调度</span>
+              <span>创建定时任务</span>
             </button>
           </>
         }
@@ -312,7 +310,7 @@ const DemoSchedulesView: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
-              调度名称
+              定时任务名称
             </label>
             <input
               type="text"
@@ -326,7 +324,7 @@ const DemoSchedulesView: React.FC = () => {
 
           <div>
             <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
-              调度类型
+              定时任务类型
             </label>
             <div style={{ display: 'flex', gap: 10 }}>
               <button
@@ -335,7 +333,7 @@ const DemoSchedulesView: React.FC = () => {
                 onClick={() => setType('cron')}
               >
                 <CalendarClock size={13} />
-                <span>Cron 周期循环</span>
+                <span>重复执行</span>
               </button>
               <button
                 type="button"
@@ -343,7 +341,7 @@ const DemoSchedulesView: React.FC = () => {
                 onClick={() => setType('timer')}
               >
                 <Clock size={13} />
-                <span>一次性倒计时 (Timer)</span>
+                <span>执行一次</span>
               </button>
             </div>
           </div>
@@ -391,7 +389,7 @@ const DemoSchedulesView: React.FC = () => {
 
           <div>
             <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
-              调度触发目标
+              定时任务触发目标
             </label>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
               <button

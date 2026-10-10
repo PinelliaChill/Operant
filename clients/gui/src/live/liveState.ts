@@ -242,17 +242,44 @@ export type LiveConnectionStatus = 'connected' | 'reconnecting' | 'disconnected'
  * projection is not an approval lock: Core may be waiting for this decision.
  */
 export function canDecideApproval(
-  approval: Pick<LiveApproval, 'status'>,
+  approval: Pick<LiveApproval, 'status' | 'continuationAvailable' | 'sessionId'>,
   action: Pick<LiveActionState, 'status'>,
   connectionStatus: LiveConnectionStatus,
   streamStatus: LiveStreamStatus,
   manualReconcileRequired: boolean,
+  terminalSessionId: string | null = null,
 ): boolean {
   return approval.status === 'pending'
+    && approval.continuationAvailable
+    && approval.sessionId !== terminalSessionId
     && action.status === 'idle'
     && !manualReconcileRequired
     && connectionStatus === 'connected'
     && streamStatus === 'connected';
+}
+
+/** A terminal error belongs to the Thread and Session that produced it. */
+export function errorForSelectedThread(
+  error: LiveError | undefined,
+  origin: { threadId: string; sessionId: string | null; error: LiveError } | undefined,
+  threadId: string | null,
+  sessionId: string | null,
+  manualReconcileRequired: boolean,
+): LiveError | undefined {
+  if (!error || !origin || error !== origin.error || manualReconcileRequired) return error;
+  return origin.threadId === threadId && origin.sessionId === sessionId ? error : undefined;
+}
+
+/** SDK normalization may replace the error object after its terminal frame. */
+export function normalizedTerminalErrorScope(
+  origin: { threadId: string; sessionId: string | null; error: LiveError } | undefined,
+  error: LiveError,
+  threadId: string,
+  sessionId: string,
+): typeof origin {
+  if (!origin || origin.threadId !== threadId || origin.sessionId !== sessionId
+    || origin.error.code !== error.code || errorNeedsManualReconcile(error)) return origin;
+  return { ...origin, error };
 }
 
 /** Keep the selected Thread stable while an outcome is still unknown. */
@@ -433,6 +460,15 @@ export function terminalEventError(event: LiveEvent): LiveError | undefined {
   if (event.error) return event.error;
 
   if (outcome === 'failed') {
+    if (event.payload.error_type === 'CapabilityOutcomeUnknownError') {
+      return {
+        code: 'command_outcome_unknown',
+        message: '操作结果尚未确认。请先核对原任务，暂时不要重试。',
+        retryable: false,
+        recovery: 'manual_reconcile',
+        detail: event.payload,
+      };
+    }
     const recoverable = event.payload.recoverable === true;
     const errorCode: Record<string, string> = {
       'agent.failed': 'agent_failed',
@@ -442,19 +478,18 @@ export function terminalEventError(event: LiveEvent): LiveError | undefined {
       'session.run_failed': 'session_run_failed',
     };
     const fallbackMessage: Record<string, string> = {
-      'agent.failed': 'Core Agent 运行失败。',
-      'budget.exhausted': 'Core 运行预算已耗尽。',
-      'agent.no_progress': 'Core Agent 因连续无进展而停止。',
-      'agent.max_turns': 'Core Agent 已达到最大轮次。',
-      'session.run_failed': 'Core Session 运行失败。',
+      'agent.failed': '任务运行失败。',
+      'budget.exhausted': '任务预算已用完。',
+      'agent.no_progress': '任务连续没有进展，已停止。',
+      'agent.max_turns': '任务已达到最大轮次。',
+      'session.run_failed': '任务启动失败。',
     };
+    const modelRunFailure = event.event_type === 'agent.failed' || event.event_type === 'session.run_failed';
     return {
       code: errorCode[event.event_type] || 'agent_failed',
-      message: payloadText(event.payload, 'message')
-        || payloadText(event.payload, 'reason')
-        || payloadText(event.payload, 'reason_code')
+      message: (modelRunFailure && payloadText(event.payload, 'message'))
         || fallbackMessage[event.event_type]
-        || `Core ${event.event_type}。`,
+        || '任务运行失败。',
       retryable: recoverable,
       recovery: recoverable ? 'retry_later' : 'none',
       detail: event.payload,
@@ -463,19 +498,15 @@ export function terminalEventError(event: LiveEvent): LiveError | undefined {
   if (outcome === 'cancelled') {
     return {
       code: 'agent_cancelled',
-      message: payloadText(event.payload, 'reason') || 'Core Agent 已取消。',
+      message: '任务已取消。',
       retryable: false,
       recovery: 'none',
       detail: event.payload,
     };
   }
-  const timeoutSeconds = event.payload.timeout_seconds;
-  const timeoutLabel = typeof timeoutSeconds === 'number' || typeof timeoutSeconds === 'string'
-    ? `（${timeoutSeconds} 秒）`
-    : '';
   return {
     code: 'agent_timed_out',
-    message: `Core Agent 运行已超时${timeoutLabel}。`,
+    message: '任务运行超时。',
     retryable: true,
     recovery: 'retry_later',
     detail: event.payload,
@@ -509,6 +540,13 @@ export function containsManualReconcile(value: unknown, seen = new Set<unknown>(
   seen.add(value);
   if (Array.isArray(value)) return value.some((item) => containsManualReconcile(item, seen));
   return Object.values(value).some((item) => containsManualReconcile(item, seen));
+}
+
+export function errorNeedsManualReconcile(error: LiveError): boolean {
+  return error.recovery === 'manual_reconcile'
+    || error.code.includes('manual_reconcile')
+    || error.code.includes('outcome_unknown')
+    || containsManualReconcile(error.detail);
 }
 
 /**

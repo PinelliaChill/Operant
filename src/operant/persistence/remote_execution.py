@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -34,6 +35,14 @@ def _utc(value: datetime) -> datetime:
 
 def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ObservationSource:
+    source_job_id: str
+    lease_id: str
+    lease_fencing: int
+    scope_digest: str
 
 
 class SQLiteRemoteExecutionRepository:
@@ -252,6 +261,26 @@ class SQLiteRemoteExecutionRepository:
         if row is None:
             raise KeyError(lease_id)
         return self._lease(row)
+
+    def assert_live_lease(
+        self,
+        *,
+        target_id: str,
+        lease_id: str,
+        token: str,
+        fencing: int,
+        now: datetime,
+    ) -> None:
+        """Read the same Lease authority used again when a Job is committed."""
+        with self.store._connect() as connection:
+            self._require_live_lease(
+                connection,
+                target_id=target_id,
+                lease_id=lease_id,
+                token=token,
+                fencing=fencing,
+                now=now,
+            )
 
     @staticmethod
     def _require_live_lease(
@@ -575,7 +604,24 @@ class SQLiteRemoteExecutionRepository:
         token: str,
         fencing: int,
         now: datetime,
+        observation: CapabilityObservation | None = None,
+        observation_source: ObservationSource | None = None,
     ) -> RemoteExecutionResult:
+        if (observation is None) != (observation_source is None):
+            raise ValueError("observation and source must be supplied together")
+        if (
+            observation is not None
+            and observation_source is not None
+            and (
+                result.status is not RemoteJobStatus.SUCCEEDED
+                or observation.target_id != target_id
+                or observation.created_at != result.completed_at
+                or observation_source.source_job_id != result.job_id
+                or observation_source.lease_id != lease_id
+                or observation_source.lease_fencing != fencing
+            )
+        ):
+            raise ConflictError("completed observation is not bound to the successful Job")
         with self.store._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._require_live_lease(
@@ -612,6 +658,10 @@ class SQLiteRemoteExecutionRepository:
                     or current.error_code != result.error_code
                 ):
                     raise IdempotencyConflictError("remote result is already bound")
+                if observation is not None and observation_source is not None:
+                    self._record_observation_in_connection(
+                        connection, observation, source=observation_source
+                    )
                 return current
             if job.status not in {RemoteJobStatus.RUNNING, RemoteJobStatus.LEASED}:
                 raise ConflictError("remote job is not running")
@@ -638,6 +688,10 @@ class SQLiteRemoteExecutionRepository:
                 "UPDATE remote_execution_jobs SET status=?,finished_at=? WHERE job_id=?",
                 (result.status.value, result.completed_at.isoformat(), result.job_id),
             )
+            if observation is not None and observation_source is not None:
+                self._record_observation_in_connection(
+                    connection, observation, source=observation_source
+                )
         return result
 
     def cancel_job(self, job_id: str, *, now: datetime) -> RemoteExecutionJob:
@@ -728,30 +782,118 @@ class SQLiteRemoteExecutionRepository:
                 changed.append(job.model_copy(update={"status": status, "finished_at": _utc(now)}))
         return tuple(changed)
 
-    def record_observation(self, observation: CapabilityObservation) -> CapabilityObservation:
+    def record_observation(
+        self, observation: CapabilityObservation, *, source: ObservationSource | None = None
+    ) -> CapabilityObservation:
         with self.store._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                "SELECT * FROM capability_observations WHERE target_id=? AND observation_hash=?",
-                (observation.target_id, observation.observation_hash),
+            return self._record_observation_in_connection(connection, observation, source=source)
+
+    def _record_observation_in_connection(
+        self,
+        connection: sqlite3.Connection,
+        observation: CapabilityObservation,
+        *,
+        source: ObservationSource | None,
+    ) -> CapabilityObservation:
+        if source is not None:
+            job = connection.execute(
+                "SELECT target_id,lease_id,lease_fencing,capability,arguments_json,"
+                "status,finished_at "
+                "FROM remote_execution_jobs WHERE job_id=?",
+                (source.source_job_id,),
             ).fetchone()
-            if existing is not None:
-                return self._observation(existing)
+            result = connection.execute(
+                "SELECT status FROM remote_execution_results WHERE job_id=?",
+                (source.source_job_id,),
+            ).fetchone()
+            if (
+                job is None
+                or result is None
+                or job["status"] != RemoteJobStatus.SUCCEEDED.value
+                or result["status"] != RemoteJobStatus.SUCCEEDED.value
+                or job["target_id"] != observation.target_id
+                or job["lease_id"] != source.lease_id
+                or int(job["lease_fencing"]) != source.lease_fencing
+                or job["capability"] != observation.capability.value
+                or json.loads(job["arguments_json"]).get("target_ref") != observation.target_ref
+                or job["finished_at"] != observation.created_at.isoformat()
+            ):
+                raise ConflictError("local observation source Job is not a matching success")
+        existing = connection.execute(
+            "SELECT * FROM capability_observations WHERE target_id=? AND observation_hash=?",
+            (observation.target_id, observation.observation_hash),
+        ).fetchone()
+        if existing is not None:
+            if source is not None:
+                persisted = self._observation(existing)
+                previous = connection.execute(
+                    "SELECT source_job_id,lease_id,lease_fencing,scope_digest "
+                    "FROM capability_observation_sources WHERE observation_id=?",
+                    (existing["observation_id"],),
+                ).fetchone()
+                if (
+                    persisted.target_id != observation.target_id
+                    or persisted.capability != observation.capability
+                    or persisted.target_ref != observation.target_ref
+                    or persisted.observation_hash != observation.observation_hash
+                    or persisted.body != observation.body
+                    or persisted.artifact_ref != observation.artifact_ref
+                    or previous is None
+                    or ObservationSource(
+                        source_job_id=previous["source_job_id"],
+                        lease_id=previous["lease_id"],
+                        lease_fencing=int(previous["lease_fencing"]),
+                        scope_digest=previous["scope_digest"],
+                    )
+                    != source
+                ):
+                    raise ConflictError("local observation generation changed; observe again")
+            return self._observation(existing)
+        connection.execute(
+            "INSERT INTO capability_observations VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                observation.observation_id,
+                observation.target_id,
+                observation.capability.value,
+                observation.target_ref,
+                observation.observation_hash,
+                _json(observation.body),
+                observation.artifact_ref,
+                observation.created_at.isoformat(),
+                observation.expires_at.isoformat(),
+            ),
+        )
+        if source is not None:
             connection.execute(
-                "INSERT INTO capability_observations VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO capability_observation_sources "
+                "(observation_id,source_job_id,lease_id,lease_fencing,scope_digest) "
+                "VALUES (?,?,?,?,?)",
                 (
                     observation.observation_id,
-                    observation.target_id,
-                    observation.capability.value,
-                    observation.target_ref,
-                    observation.observation_hash,
-                    _json(observation.body),
-                    observation.artifact_ref,
-                    observation.created_at.isoformat(),
-                    observation.expires_at.isoformat(),
+                    source.source_job_id,
+                    source.lease_id,
+                    source.lease_fencing,
+                    source.scope_digest,
                 ),
             )
         return observation
+
+    def get_observation_source(self, observation_id: str) -> ObservationSource | None:
+        with self.store._connect() as connection:
+            row = connection.execute(
+                "SELECT source_job_id,lease_id,lease_fencing,scope_digest "
+                "FROM capability_observation_sources WHERE observation_id=?",
+                (observation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ObservationSource(
+            source_job_id=row["source_job_id"],
+            lease_id=row["lease_id"],
+            lease_fencing=int(row["lease_fencing"]),
+            scope_digest=row["scope_digest"],
+        )
 
     @staticmethod
     def _observation(row: sqlite3.Row) -> CapabilityObservation:

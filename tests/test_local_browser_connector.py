@@ -13,12 +13,14 @@ import httpx
 import pytest
 from websockets.sync.client import connect
 
+import operant.remote.local_browser as local_browser
 from operant.domain.remote_execution import (
     RemoteActionIdempotency,
     RemoteCapability,
     RemoteExecutionJob,
     RemoteJobStatus,
 )
+from operant.remote.connector import RemoteOutcomeUnknown
 from operant.remote.local_browser import (
     BrowserTargetError,
     BrowserTargetPolicy,
@@ -47,6 +49,82 @@ def _job(
         idempotency_key=f"{operation}-{len(arguments)}",
         idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
     )
+
+
+def test_origin_only_navigation_accepts_chrome_root_path_canonicalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin = "http://127.0.0.1:18780"
+
+    class FakeCdp:
+        calls: list[str] = []
+
+        def call(self, method: str, params: dict[str, str]) -> dict[str, object]:
+            assert params == {"url": origin}
+            self.calls.append(method)
+            return {}
+
+        def evaluate(self, expression: str) -> str:
+            return "complete" if expression == "document.readyState" else origin + "/"
+
+    browser = IsolatedChromeBrowser(
+        Path("/unused/chrome"), BrowserTargetPolicy(frozenset({origin}))
+    )
+    cdp = FakeCdp()
+    browser._cdp = cdp  # type: ignore[assignment]
+    observation = {"url": origin + "/", "title": "Synthetic page"}
+    monkeypatch.setattr(browser, "observe", lambda: observation)
+    assert browser.navigate(origin) == observation
+    assert cdp.calls == ["Page.navigate"]
+
+
+@pytest.mark.parametrize(
+    "actual_url",
+    (
+        "http://127.0.0.1:18780/?x=1",
+        "http://127.0.0.1:18780/#section",
+        "http://127.0.0.1:18780/other",
+        "http://localhost:18780/",
+        "http://127.0.0.1:18781/",
+    ),
+)
+def test_navigation_redirect_or_extra_url_data_remains_unknown(
+    monkeypatch: pytest.MonkeyPatch, actual_url: str
+) -> None:
+    origin = "http://127.0.0.1:18780"
+
+    class FakeCdp:
+        def call(self, _method: str, _params: dict[str, str]) -> dict[str, object]:
+            return {}
+
+        def evaluate(self, expression: str) -> str:
+            return "complete" if expression == "document.readyState" else actual_url
+
+    browser = IsolatedChromeBrowser(
+        Path("/unused/chrome"), BrowserTargetPolicy(frozenset({origin}))
+    )
+    browser._cdp = FakeCdp()  # type: ignore[assignment]
+    # The public observation drops query/fragment; the raw location check must
+    # still prevent them from masquerading as the approved destination.
+    monkeypatch.setattr(browser, "observe", lambda: {"url": origin + "/"})
+    ticks = iter(range(0, 1000, 6))
+    monkeypatch.setattr(local_browser.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(local_browser.time, "sleep", lambda _seconds: None)
+    with pytest.raises(RemoteOutcomeUnknown):
+        browser.navigate(origin)
+
+
+@pytest.mark.parametrize("suffix", ("?x=1", "?", "#section", "#"))
+def test_navigation_rejects_query_or_fragment_before_cdp(
+    monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    origin = "http://127.0.0.1:18780"
+    browser = IsolatedChromeBrowser(
+        Path("/unused/chrome"), BrowserTargetPolicy(frozenset({origin}))
+    )
+    monkeypatch.setattr(browser, "start", lambda: pytest.fail("CDP must not start"))
+    with pytest.raises(BrowserTargetError, match="query"):
+        browser.navigate(origin + suffix)
 
 
 def test_browser_viewport_capture_is_bound_to_observation_and_keeps_png_out_of_receipt() -> None:

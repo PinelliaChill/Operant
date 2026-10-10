@@ -2,12 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, FileCode2, GitCompareArrows, Loader2 } from 'lucide-react';
 import { workbenchClient } from '../../live/workbenchClient';
 import type { LiveWorkspaceFile } from '../../live/liveState';
+import { requestErrorCopy } from '../../lib/requestErrorCopy';
+import './live-file-preview.css';
 
 type Preview = { path: string; content: string; content_hash: string; size_bytes: number; truncated: boolean; language?: string | null };
 type Diff = { path: string; diff: string; truncated: boolean };
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : '文件读取失败';
+  return requestErrorCopy(error);
 }
 
 function languageLabel(path: string): string {
@@ -22,7 +24,7 @@ export const LiveFilePreview: React.FC<{
   files: LiveWorkspaceFile[];
   currentPath: string;
   onLoad: (path: string) => void;
-  onReference: (path: string) => void;
+  onReference?: (path: string) => void;
   canReference: boolean;
   loading: boolean;
 }> = ({ workspaceId, files, currentPath, onLoad, onReference, canReference, loading }) => {
@@ -58,10 +60,10 @@ export const LiveFilePreview: React.FC<{
 
   const parentPath = currentPath.split('/').filter(Boolean).slice(0, -1).join('/');
   return <section className="live-panel live-files-panel" aria-labelledby="live-files-title">
-    <div className="live-panel-heading"><div><h2 id="live-files-title">工作区文件</h2><p>按权限读取文件，单次最多 64 KiB</p></div>
+    <div className="live-panel-heading"><div><h2 id="live-files-title">项目文件</h2></div>
       {currentPath && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onLoad(parentPath)} disabled={loading}>返回上级</button>}
     </div>
-    <div className="live-file-path" aria-label="当前目录路径"><span>{currentPath ? `/${currentPath}` : '/'}</span><span className="live-file-project-id">Workspace ID: {workspaceId}</span></div>
+    <div className="live-file-path" aria-label="当前目录路径"><span>{currentPath ? `/${currentPath}` : '/'}</span></div>
     {loading ? <div className="live-panel-loading" role="status"><Loader2 size={16} className="animate-spin" aria-hidden="true" />正在读取目录…</div>
       : files.length === 0 ? <p className="live-panel-empty">当前目录没有可读条目。</p>
         : <ul className="live-file-list">{files.map((file) => <li key={file.path}>
@@ -72,8 +74,9 @@ export const LiveFilePreview: React.FC<{
         </li>)}</ul>}
     {error && <p className="live-file-error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{error}</p>}
     {busy && <p role="status"><Loader2 size={14} className="animate-spin" aria-hidden="true" />正在读取 {selectedPath}…</p>}
-    {preview && <div className="live-file-preview"><div className="live-file-preview-heading"><strong><FileCode2 size={15} aria-hidden="true" />{preview.path}</strong><div className="live-file-preview-actions"><button type="button" className="btn btn-secondary btn-sm" onClick={() => onReference(preview.path)} disabled={!canReference}>@ 引用此文件</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDiff()} disabled={busy}><GitCompareArrows size={13} aria-hidden="true" />查看 Diff</button></div></div>
-      <p>{preview.language || languageLabel(preview.path)} · {preview.size_bytes.toLocaleString()} B · 预览片段哈希 {preview.content_hash.slice(0, 16)}…{preview.truncated ? ' · 预览已截断' : ''}</p>
+    {preview && <div className="live-file-preview"><div className="live-file-preview-heading"><strong><FileCode2 size={15} aria-hidden="true" />{preview.path}</strong><div className="live-file-preview-actions">{onReference && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onReference(preview.path)} disabled={!canReference}>@ 引用此文件</button>}<button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDiff()} disabled={busy}><GitCompareArrows size={13} aria-hidden="true" />查看修改</button></div></div>
+      <p>{preview.language || languageLabel(preview.path)} · {preview.size_bytes.toLocaleString()} B{preview.truncated ? ' · 文件较大，只显示开头' : ''}</p>
+      <details><summary>文件详情</summary><code>预览摘要：{preview.content_hash}</code></details>
       <pre aria-label="文件正文"><code>{preview.content}</code></pre>
     </div>}
     {diff && <div className="live-file-preview"><strong>文件差异 · {diff.path}</strong><p>{diff.truncated ? '差异已截断；请缩小范围核对。' : '当前差异'}</p><pre aria-label="文件差异"><code>{diff.diff || '没有可显示的差异。'}</code></pre></div>}

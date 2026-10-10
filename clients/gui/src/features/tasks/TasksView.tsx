@@ -6,6 +6,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ListTodo } from 'lucide-react';
 import { EmptyState } from '../../components/EmptyState';
 import { StatusBadge } from '../../components/StatusBadge';
@@ -29,6 +30,9 @@ const EMPTY_COPY: Record<TaskFilter, { title: string; description: string }> = {
 
 import { useOperant } from '../../context/ClientContext';
 import { LiveTasksView } from './LiveTasksView';
+import { ApprovalCenterView } from '../approvals/ApprovalCenterView';
+import { SchedulesView } from '../schedules/SchedulesView';
+import './task-hub.css';
 
 interface TaskGroup {
   id: string;
@@ -38,10 +42,19 @@ interface TaskGroup {
 
 export const TasksView: React.FC = () => {
   const { clientMode } = useOperant();
-  if (clientMode === 'live') {
-    return <LiveTasksView />;
-  }
-  return <DemoTasksView />;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab = rawTab === 'approvals' || rawTab === 'schedules' ? rawTab : 'all';
+  return <div className="task-hub">
+    <nav className="task-hub-tabs" aria-label="任务页面">
+      {([['all', '全部任务'], ['approvals', '待审批'], ['schedules', '定时任务']] as const).map(([key, label]) => <button
+        key={key} type="button" className={`task-hub-tab${tab === key ? ' active' : ''}`}
+        aria-current={tab === key ? 'page' : undefined}
+        onClick={() => setSearchParams(key === 'all' ? {} : { tab: key })}
+      >{label}</button>)}
+    </nav>
+    {tab === 'approvals' ? <ApprovalCenterView /> : tab === 'schedules' ? <SchedulesView /> : clientMode === 'live' ? <LiveTasksView /> : <DemoTasksView />}
+  </div>;
 };
 
 const DemoTasksView: React.FC = () => {

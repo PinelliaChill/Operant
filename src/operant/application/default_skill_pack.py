@@ -39,13 +39,12 @@ async def install_default_skill_pack(manager: MemoryManager, *, project_id: str)
     ):
         raise ValueError("an active project is required for the default Skill pack")
     bundled = default_skill_root()
-    if bundled.is_dir():
-        configured = manager.skill_roots.get("operant-default")
-        if configured is not None and configured.resolve() != bundled.resolve():
-            raise ValueError("reserved operant-default Skill root differs from bundled package")
-        manager.skill_roots.setdefault("operant-default", bundled)
-    if not manager.skill_roots:
-        raise ValueError("trusted Skill roots are not configured")
+    if not bundled.is_dir():
+        raise ValueError("bundled default Skill root is unavailable")
+    configured = manager.skill_roots.get("operant-default")
+    if configured is not None and configured.resolve() != bundled.resolve():
+        raise ValueError("reserved operant-default Skill root differs from bundled package")
+    manager.skill_roots.setdefault("operant-default", bundled)
     await manager.execute(ManagementCommand(action="skill_discover"))
     catalog = tuple(
         candidate
@@ -57,13 +56,9 @@ async def install_default_skill_pack(manager: MemoryManager, *, project_id: str)
         matches = [
             candidate
             for candidate in catalog
-            if candidate["name"].casefold() == entry.skill_name.casefold()
+            if candidate["root_ref"] == "operant-default"
+            and candidate["name"].casefold() == entry.skill_name.casefold()
         ]
-        bundled_matches = [
-            candidate for candidate in matches if candidate["root_ref"] == "operant-default"
-        ]
-        if bundled_matches:
-            matches = bundled_matches
         if len(matches) != 1:
             raise ValueError(
                 f"Skill {entry.skill_name!r} must have exactly one discovered candidate"

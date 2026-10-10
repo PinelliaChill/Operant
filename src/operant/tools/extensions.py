@@ -7,14 +7,46 @@ policy name alone never imports a package or creates a callable tool.
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from operant.domain.messages import ToolDefinition
 from operant.domain.security import Capability
 
+if TYPE_CHECKING:
+    from operant.persistence.sqlite import SessionRunLease
+
 EXTENSION_TOOL_NAME = re.compile(r"^ext_[a-z][a-z0-9_]{1,98}$")
+
+
+@dataclass(frozen=True)
+class ToolInvocation:
+    tool_call_id: str
+    tool_name: str
+    receipt_id: str
+    action_hash: str
+    session_lease: SessionRunLease | None
+
+
+_CURRENT_INVOCATION: ContextVar[ToolInvocation | None] = ContextVar(
+    "operant_tool_invocation", default=None
+)
+
+
+@contextmanager
+def bind_tool_invocation(invocation: ToolInvocation | None) -> Iterator[None]:
+    token = _CURRENT_INVOCATION.set(invocation)
+    try:
+        yield
+    finally:
+        _CURRENT_INVOCATION.reset(token)
+
+
+def current_tool_invocation() -> ToolInvocation | None:
+    return _CURRENT_INVOCATION.get()
 
 
 @dataclass(frozen=True)

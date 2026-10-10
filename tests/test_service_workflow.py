@@ -18,6 +18,7 @@ from operant.domain.messages import (
 from operant.domain.models import Budget, ModelProfile, RolePreset, RoleSnapshot, ToolPolicy
 from operant.persistence.graph_team import SQLiteGraphRepository
 from operant.persistence.sqlite import SQLiteStore
+from operant.providers.openai_compatible import ProviderError, provider_failure_payload
 
 
 class ImmediateProvider:
@@ -75,6 +76,23 @@ class FailingProvider(ImmediateProvider):
         if False:
             yield ProviderEvent(event_type="unreachable")
         raise RuntimeError("raw provider detail must not enter persisted events")
+
+
+class DiagnosticFailingProvider(ImmediateProvider):
+    def __init__(self, error: ProviderError) -> None:
+        self.error = error
+
+    async def stream(
+        self,
+        *,
+        snapshot: RoleSnapshot,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDefinition],
+    ) -> AsyncIterator[ProviderEvent]:
+        del snapshot, messages, tools
+        if False:
+            yield ProviderEvent(event_type="unreachable")
+        raise self.error
 
 
 class ConcurrentExplorerProvider(ImmediateProvider):
@@ -512,6 +530,65 @@ async def test_provider_exception_becomes_sanitized_persisted_failure(tmp_path: 
     assert persisted.event_type == "agent.failed"
     assert persisted.payload["error_type"] == "RuntimeError"
     assert "raw provider detail" not in persisted.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_fixed_provider_diagnostic_is_persisted_without_private_exception_text(
+    tmp_path: Path,
+) -> None:
+    secret = "SENTINEL_PROVIDER_SECRET"
+    error = ProviderError(
+        secret,
+        failure_stage="inference_transport",
+        failure_category="proxy_error",
+    )
+    service = service_with_roles(tmp_path, DiagnosticFailingProvider(error))
+    session = service.create_session("role_planner")
+    events = [
+        event
+        async for event in service.run_session(
+            session.id, user_message="Fail safely", workspace=tmp_path
+        )
+    ]
+    expected = {
+        "error_type": "ProviderError",
+        "message": "代理连接失败，请检查代理设置。",
+        "provider_failure": {
+            "stage": "inference_transport",
+            "category": "proxy_error",
+        },
+    }
+    assert events[-1].event_type == "agent.failed"
+    assert events[-1].payload == expected
+    persisted = service.list_events(session.id)[-1]
+    assert persisted.payload == {"turn": 0, **expected}
+    assert secret not in persisted.model_dump_json()
+
+
+def test_legacy_and_unrecognized_provider_failures_keep_only_error_type() -> None:
+    assert provider_failure_payload(ProviderError()) == {"error_type": "ProviderError"}
+    assert provider_failure_payload(ProviderError("private")) == {"error_type": "ProviderError"}
+    assert provider_failure_payload(
+        ProviderError("private", failure_stage="inference_transport", failure_category="private")
+    ) == {"error_type": "ProviderError"}
+    assert provider_failure_payload(
+        ProviderError("private", failure_stage="private", failure_category="proxy_error")
+    ) == {"error_type": "ProviderError"}
+    assert provider_failure_payload(RuntimeError("private")) == {"error_type": "RuntimeError"}
+    for status, category in (
+        (True, "http_error"),
+        (600, "http_error"),
+        ("400", "bad_request"),
+        (400, "permission_denied"),
+    ):
+        assert provider_failure_payload(
+            ProviderError(
+                "private",
+                failure_stage="inference_response",
+                failure_category=category,
+                failure_http_status=status,  # type: ignore[arg-type]
+            )
+        ) == {"error_type": "ProviderError"}
 
 
 @pytest.mark.asyncio

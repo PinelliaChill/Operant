@@ -143,6 +143,167 @@ def test_accepts_bounded_default_pack_frontmatter_variants(tmp_path: Path) -> No
     assert grill.frontmatter["disable-model-invocation"] == "true"
 
 
+def test_standard_multiline_description_and_metadata_do_not_block_other_skills(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "skills"
+    _write_skill(
+        root / "standard",
+        frontmatter=(
+            "name: standard\n"
+            "description: >\n"
+            "  Handles common markdown\n"
+            "  documents safely.\n"
+            "metadata:\n"
+            "  author: Example Author\n"
+            "  version: 1.2\n"
+            "  short-description: Common documents\n"
+            "allowed-tools:\n"
+            "  - Read\n"
+            "  - Search"
+        ),
+    )
+    _write_skill(root / "bad", frontmatter="name: bad\ndescription: !!python/object:os.system bad")
+
+    result = SkillDiscovery([root]).discover()
+
+    assert [candidate.name for candidate in result.candidates] == ["standard"]
+    assert result.candidates[0].description == "Handles common markdown documents safely.\n"
+    assert result.candidates[0].frontmatter["metadata"] == {
+        "author": "Example Author",
+        "version": "1.2",
+        "short-description": "Common documents",
+    }
+    assert [(issue.relative_directory, issue.code) for issue in result.issues] == [
+        ("bad", "candidate_rejected")
+    ]
+
+
+def test_lark_style_frontmatter_is_discovered_as_inert_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    # Mirrors the installed lark-approval header; the body is deliberately inert.
+    _write_skill(
+        root / "lark-approval",
+        frontmatter=(
+            "name: lark-approval\n"
+            "version: 1.0.0\n"
+            'description: "飞书审批 API：审批实例、审批任务管理。"\n'
+            "metadata:\n"
+            "  requires:\n"
+            '    bins: ["lark-cli"]\n'
+            '  cliHelp: "lark-cli approval --help"'
+        ),
+        body="Placeholder body.",
+    )
+    result = SkillDiscovery([root]).discover()
+
+    assert result.issues == ()
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate.trust == "untrusted_candidate"
+    assert candidate.frontmatter["version"] == "1.0.0"
+    assert candidate.frontmatter["metadata"] == {
+        "requires": '{"bins":["lark-cli"]}',
+        "cliHelp": "lark-cli approval --help",
+    }
+    assert candidate.body == "Placeholder body."
+
+
+def test_shallow_metadata_primitives_remain_bounded_opaque_text(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    _write_skill(
+        root / "opaque",
+        frontmatter=(
+            "name: opaque\ndescription: Safe metadata\nversion: 1.2\n"
+            "metadata:\n"
+            "  requires:\n"
+            "    bins: [lark-cli]\n"
+            "    optional: null\n"
+            "    active: true\n"
+            "  tags: [review, 2, false, null]\n"
+            "  cliHelp: |\n"
+            "    lark-cli approval --help\n"
+            "    lark-cli approval instance --help"
+        ),
+    )
+    result = SkillDiscovery([root]).discover()
+
+    assert result.issues == ()
+    metadata = result.candidates[0].frontmatter["metadata"]
+    assert metadata == {
+        "requires": '{"active":true,"bins":["lark-cli"],"optional":null}',
+        "tags": '["review",2,false,null]',
+        "cliHelp": "lark-cli approval --help\nlark-cli approval instance --help",
+    }
+    assert result.candidates[0].frontmatter["version"] == "1.2"
+
+
+@pytest.mark.parametrize(
+    "bad_fields",
+    [
+        "version: .nan",
+        "metadata:\n  bad: .inf",
+        "metadata:\n  requires:\n    bins: [.nan]",
+        "metadata:\n  requires:\n    bins: &tools [lark-cli]",
+        "metadata:\n  requires:\n    bins: !!python/object:os.system payload",
+        "metadata:\n  requires:\n    bins: [lark-cli]\n    bins: [other]",
+        "metadata:\n  requires:\n    nested:\n      bins: [lark-cli]",
+        "metadata:\n  requires:\n    bins: [{name: lark-cli}]",
+        "metadata:\n  requires:\n    bins: [" + ", ".join("item" for _ in range(130)) + "]",
+        "metadata:\n  cliHelp: " + "x" * 1_001,
+    ],
+)
+def test_lark_style_metadata_does_not_relax_yaml_or_complexity_limits(
+    tmp_path: Path, bad_fields: str
+) -> None:
+    root = tmp_path / "skills"
+    _write_skill(root / "safe", frontmatter="name: safe\ndescription: Still available")
+    _write_skill(
+        root / "rejected",
+        frontmatter="name: rejected\ndescription: Invalid metadata\n" + bad_fields,
+    )
+
+    result = SkillDiscovery([root]).discover()
+
+    assert [candidate.name for candidate in result.candidates] == ["safe"]
+    assert [(issue.relative_directory, issue.code) for issue in result.issues] == [
+        ("rejected", "candidate_rejected")
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink is unavailable")
+def test_candidate_link_is_read_only_within_registered_real_roots(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    _write_skill(second / "linked", frontmatter="name: linked\ndescription: In another root")
+    (first / "linked").symlink_to(second / "linked", target_is_directory=True)
+
+    result = SkillDiscovery([first, second]).discover()
+
+    assert len(result.candidates) == 1
+    assert any(
+        candidate.root_index == 0 and candidate.relative_directory == "linked"
+        for candidate in result.candidates
+    )
+    assert not result.issues
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink is unavailable")
+def test_candidate_link_outside_roots_gives_registration_hint(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    outside = tmp_path / "outside"
+    first.mkdir()
+    _write_skill(outside / "linked")
+    (first / "linked").symlink_to(outside / "linked", target_is_directory=True)
+
+    result = SkillDiscovery([first]).discover()
+
+    assert result.candidates == ()
+    assert result.issues[0].code == "symlink_rejected"
+    assert "add its real parent directory" in result.issues[0].message
+
+
 def test_rejects_oversized_manifest_and_bounded_resource_set(tmp_path: Path) -> None:
     root = tmp_path / "skills"
     _write_skill(root / "large", body="x" * 500)

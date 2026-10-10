@@ -272,7 +272,7 @@ def install_phase45_routes(
         root = Path(configured_root)
         if not root_ref or len(root_ref) > 200 or not root.is_absolute():
             raise ValueError("configured skill roots require bounded references and absolute paths")
-        trusted_skill_roots[root_ref] = root.resolve(strict=True)
+        trusted_skill_roots[root_ref] = root.resolve(strict=False)
     trusted_mcp_workspace_roots: dict[str, Path] = {}
     for root_ref, configured_root in (mcp_workspace_roots or {}).items():
         root = Path(configured_root)
@@ -760,10 +760,10 @@ def install_phase45_routes(
 
     @app.post("/v1/skills/discover", operation_id="discoverSkills")
     async def discover_skills(body: SkillDiscoverBody) -> dict[str, Any]:
-        selected_refs = body.root_refs or tuple(sorted(trusted_skill_roots))
-        if any(ref not in trusted_skill_roots for ref in selected_refs):
+        configured = dict(getattr(app.state, "b23_skill_roots", trusted_skill_roots))
+        selected_refs = body.root_refs or tuple(sorted(configured))
+        if any(ref not in configured for ref in selected_refs):
             raise HTTPException(status_code=404, detail="configured skill root not found")
-        selected_roots = tuple(trusted_skill_roots[ref] for ref in selected_refs)
         guard_side_effect(
             tool="skill_discovery",
             operation="read",
@@ -773,19 +773,28 @@ def install_phase45_routes(
             idempotency_key="skill-discovery:"
             + ActionRequest.calculate_hash({"root_refs": list(selected_refs)}),
         )
+        available = {ref: Path(path) for ref, path in configured.items() if Path(path).is_dir()}
+        ordered_refs = tuple(sorted(available))
         try:
-            result = SkillDiscovery(selected_roots, limits=SkillDiscoveryLimits()).discover()
+            result = SkillDiscovery(
+                tuple(available[ref] for ref in ordered_refs), limits=SkillDiscoveryLimits()
+            ).discover()
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         persisted: list[dict[str, Any]] = []
-        for root_index, root_ref in enumerate(selected_refs):
-            root_candidates = tuple(
+        for root_ref in selected_refs:
+            root_index = ordered_refs.index(root_ref) if root_ref in ordered_refs else -1
+            candidates = tuple(
                 candidate for candidate in result.candidates if candidate.root_index == root_index
             )
-            persisted.extend(phase_repository.replace_skill_candidates(root_ref, root_candidates))
+            persisted.extend(phase_repository.replace_skill_candidates(root_ref, candidates))
         return {
             "candidates": persisted,
-            "issues": [issue.model_dump(mode="json") for issue in result.issues],
+            "issues": [
+                issue.model_dump(mode="json")
+                for issue in result.issues
+                if ordered_refs[issue.root_index] in selected_refs
+            ],
         }
 
     @app.get("/v1/skills", operation_id="listSkills")

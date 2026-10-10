@@ -9,6 +9,7 @@
  */
 
 import { PathInput } from '../../components/PathInput';
+import { SearchSelect } from '../../components/SearchSelect';
 import React, { useRef, useState } from 'react';
 import {
   CheckCheck,
@@ -128,7 +129,7 @@ const LivePolicySettings: React.FC = () => {
         <label>主体<input className="input" value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
         <label>工具<input className="input" value={tool} onChange={(event) => setTool(event.target.value)} required /></label>
         <label>操作<input className="input" value={operation} onChange={(event) => setOperation(event.target.value)} required /></label>
-        <label>能力<select className="select" value={capability} onChange={(event) => setCapability(event.target.value as Phase45.Capability)}>{CAPABILITIES.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <SearchSelect label="能力" value={capability} onChange={(value) => setCapability(value as Phase45.Capability)} options={CAPABILITIES.map((item) => ({ value: item, label: item }))} />
         <PathInput label="项目文件夹（可选）" value={workspace} onChange={setWorkspace} placeholder="选择文件夹或填写完整路径" disabled={Boolean(actionLabel)} />
         <button type="submit" className="btn btn-primary" disabled={Boolean(actionLabel) || connectionStatus !== 'connected'}><RefreshCw size={14} aria-hidden="true" />{actionLabel === 'Policy 检查' ? '检查中…' : '检查并解释'}</button>
       </form>
@@ -249,20 +250,7 @@ const DemoPolicySettings: React.FC = () => {
                 <span className="approval-rule-name">{APPROVAL_ACTION_LABELS[row.action]}</span>
                 <span className="approval-rule-desc">{row.desc}</span>
               </div>
-              <select
-                className="select approval-rule-select"
-                value={approvalPolicy.rules[row.action]}
-                aria-label={`${APPROVAL_ACTION_LABELS[row.action]}规则`}
-                onChange={(e) =>
-                  setApprovalRule(row.action, e.target.value as ApprovalRuleDecision)
-                }
-              >
-                {RULE_OPTIONS.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {APPROVAL_RULE_LABELS[opt]}
-                  </option>
-                ))}
-              </select>
+              <SearchSelect label={`${APPROVAL_ACTION_LABELS[row.action]}规则`} value={approvalPolicy.rules[row.action]} onChange={(value) => setApprovalRule(row.action, value as ApprovalRuleDecision)} options={RULE_OPTIONS.map((opt) => ({ value: opt, label: APPROVAL_RULE_LABELS[opt] }))} />
             </div>
           ))}
         </div>

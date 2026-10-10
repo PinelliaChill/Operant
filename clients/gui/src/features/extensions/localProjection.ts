@@ -1,3 +1,5 @@
+import { requestErrorCopy } from '../../lib/requestErrorCopy.ts';
+
 export function projection(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} 格式无效。`);
   return value as Record<string, unknown>;
@@ -24,8 +26,7 @@ export function stringList(value: unknown, label: string): string[] {
 }
 
 export function requestError(value: unknown): string {
-  if (value instanceof Error) return value.message;
-  return 'Core 请求失败。';
+  return requestErrorCopy(value);
 }
 
 export function requestCode(value: unknown): string | undefined {

@@ -1,0 +1,6 @@
+.live-file-preview { min-width: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); margin: 10px; padding: 10px; }
+.live-file-preview-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.live-file-preview-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.live-file-preview-heading strong { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.live-file-preview p { margin: 8px 10px; color: var(--text-secondary); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+.live-file-preview pre { overflow: auto; max-height: 320px; margin: 10px 0 0; padding: 12px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: 12px; line-height: 1.5; tab-size: 2; white-space: pre; }

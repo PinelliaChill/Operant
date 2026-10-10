@@ -7,7 +7,8 @@ import hashlib
 import hmac
 import json
 import os
-from collections.abc import AsyncIterator, Mapping
+import re
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qsl, quote
@@ -77,6 +78,7 @@ from operant.artifacts import (
     ArtifactValidationError,
 )
 from operant.auth import OAuthConfig, OAuthControl, install_oauth_control, oauth_config_from_env
+from operant.caller_pairing.api import install_caller_pairing_routes
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
 from operant.domain.commands import ContextBaselineOperation, SlashCommandKind
 from operant.domain.context import ContextRevision, ReferenceRequest
@@ -103,8 +105,11 @@ from operant.domain.threads import (
     ThreadStatus,
     Turn,
 )
+from operant.local_caller import SELF_AUTHENTICATED_ROUTES
+from operant.local_caller_middleware import CallerPairingCorsMiddleware, SkillSourceCallerMiddleware
 from operant.multiwriter import TrustedGitMultiWriterAdapter
 from operant.multiwriter.container import ContainerWriterLifecycle
+from operant.package_resources import protocol_schema_path
 from operant.persistence.beta import SQLiteRemoteGatewayConnectionRepository
 from operant.persistence.sqlite import (
     ActionOutcomeUnknownError,
@@ -788,6 +793,12 @@ def _command_scope(method: str, path: str) -> str | None:
 
     if method not in {"POST", "PATCH", "DELETE", "PUT"}:
         return None
+    # Pairing and encrypted device messages authenticate and journal within
+    # their own services. Never reserve a generic receipt before that check.
+    if (method, path) in SELF_AUTHENTICATED_ROUTES or (
+        method == "POST" and path == "/v1/local-callers/challenges"
+    ):
+        return None
     if path in {"/v1/models/discover"} or (
         path.startswith("/v1/models/") and path.endswith("/health")
     ):
@@ -1012,6 +1023,41 @@ def _parse_sse_frame(frame: bytes) -> tuple[str, dict[str, Any], int] | None:
     if payload_cursor != parsed_event_id:
         return None
     return event_type, payload, parsed_event_id
+
+
+async def _session_sse_with_heartbeat(
+    source: AsyncGenerator[str, None], *, interval_seconds: float = 12.0
+) -> AsyncIterator[str]:
+    """Keep an admitted Session stream active without advancing its durable cursor."""
+
+    pending: asyncio.Future[str] | None = None
+    has_durable_event = False
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(anext(source))
+            done, _ = await asyncio.wait({pending}, timeout=interval_seconds)
+            if not done:
+                # The command receipt middleware must see a real committed event first.
+                if has_durable_event:
+                    yield ": keep-alive\n\n"
+                continue
+            try:
+                frame = pending.result()
+            except StopAsyncIteration:
+                break
+            if _parse_sse_frame(frame.encode("utf-8")) is not None:
+                has_durable_event = True
+            # Keep one active pull so a disconnect immediately after this yield
+            # still cancels the owned Session generator and its lease.
+            pending = asyncio.ensure_future(anext(source))
+            yield frame
+    finally:
+        if pending is not None:
+            if not pending.done():
+                pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await source.aclose()
 
 
 def _phase1d_stream_start_error(kind: str, exc: Exception) -> dict[str, Any]:
@@ -1327,6 +1373,7 @@ def create_app(
     phase45_policy_engine: Any | None = None,
     phase45_approval_reviewer: Any | None = None,
     phase56_local_authorizer: Authorizer | None = None,
+    caller_confirmation_authorizer: Authorizer | None = None,
     phase56_relay_authorizer: Authorizer | None = None,
     phase56_remote_executor: Any | None = None,
     phase56_memory_connectors: Mapping[str, Any] | None = None,
@@ -1339,10 +1386,17 @@ def create_app(
     oauth_config: OAuthConfig | None = None,
     oauth_http_client: httpx.AsyncClient | None = None,
     plugin_host: PluginHost | None = None,
+    setup_allowed_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     load_local_env()
+    skill_source_defaults_enabled = phase45_skill_roots is None
     if phase45_skill_roots is None:
-        phase45_skill_roots = configured_path_roots("OPERANT_SKILL_ROOTS_JSON")
+        from operant.skills.sources import default_skill_roots
+
+        phase45_skill_roots = {
+            **default_skill_roots(None),
+            **configured_path_roots("OPERANT_SKILL_ROOTS_JSON"),
+        }
     if phase45_mcp_workspace_roots is None:
         phase45_mcp_workspace_roots = configured_path_roots("OPERANT_MCP_WORKSPACE_ROOTS_JSON")
     if phase56_multiwriter_roots is None:
@@ -1382,10 +1436,14 @@ def create_app(
     )
     app.router.add_event_handler("shutdown", service.close)
     app.state.operant_service = service
+    # Explicit local development origins may use the first-party Vite proxy.
+    # Model credential routes still validate each origin as HTTP loopback.
+    app.state.setup_allowed_origins = frozenset(setup_allowed_origins)
     # Explicit trusted bootstrap owns Host configuration; ordinary startup never
     # installs a plugin, reads its package, or creates an engine implicitly.
     app.state.plugin_host = plugin_host
-    app.state.b23_skill_roots = phase45_skill_roots
+    app.state.b23_skill_roots = dict(phase45_skill_roots or {})
+    app.state.skill_source_defaults_enabled = skill_source_defaults_enabled
     if plugin_host is not None:
         app.router.add_event_handler("shutdown", plugin_host.close)
 
@@ -1526,7 +1584,50 @@ def create_app(
             # These routes own durable bounded command journals. Do not persist
             # a second snapshot or truncate their typed projection results.
             return await call_next(request)
-        if request.url.path.startswith(("/v1/local-control/", "/v1/extensions")) or (
+        if (
+            request.method == "POST"
+            and (
+                request.url.path in {"/v1/setup/connections", "/v1/setup/oauth/start"}
+                or re.fullmatch(
+                    r"/v1/setup/connections/[^/]+/(?:models|profiles)", request.url.path
+                )
+                is not None
+            )
+        ) or (
+            request.method == "DELETE"
+            and re.fullmatch(r"/v1/setup/(?:connections|oauth)/[^/]+", request.url.path) is not None
+        ):
+            # Model setup owns its private receipts and keyed secret matching.
+            # A second generic receipt would hash credentials without that key
+            # and could persist an OAuth authorization URL or a pre-approval ASK.
+            key = request.headers.get("Idempotency-Key")
+            if key is None:
+                key = new_id("idem")
+            if not key or len(key) > 300:
+                return protocol_response(
+                    status_code=400,
+                    code="invalid_idempotency_key",
+                    message="Idempotency-Key must contain between 1 and 300 characters",
+                )
+            request.scope["headers"] = [
+                (name, value)
+                for name, value in request.scope["headers"]
+                if name.lower() != b"idempotency-key"
+            ] + [(b"idempotency-key", key.encode("latin-1"))]
+            response = await call_next(request)
+            response.headers["Idempotency-Key"] = key
+            return response
+        if (
+            request.url.path == "/v1/setup/local-control/sessions"
+            or request.url.path.startswith(("/v1/local-control/", "/v1/extensions"))
+            or (
+                request.method == "POST"
+                and re.fullmatch(
+                    r"/v1/(?:browser|computer)/(?:[^/]+/observe|act)", request.url.path
+                )
+                is not None
+            )
+        ) or (
             request.url.path.startswith("/v1/workbench/threads/")
             and request.url.path.endswith(("/extension-commands", "/skill-commands"))
         ):
@@ -1691,7 +1792,6 @@ def create_app(
                                 recovery=RecoveryAction.MANUAL_RECONCILE,
                             )
                             yield _sse_event("command.stream_error", bounded_error)
-                            await original_iterator.aclose()
                             return
                         if frame_end is None:
                             continue
@@ -1741,6 +1841,8 @@ def create_app(
                             error_code="stream_not_started",
                         )
                     raise
+                finally:
+                    await original_iterator.aclose()
                 if not receipt_closed:
                     store.mark_command_manual_reconcile(
                         execution.id,
@@ -3092,16 +3194,20 @@ def create_app(
                 recovery=RecoveryAction.RETRY_LATER,
             )
 
-        async def stream_events() -> AsyncIterator[str]:
-            try:
-                async for event in service.run_session(
+        async def stream_events() -> AsyncGenerator[str, None]:
+            runtime_events = cast(
+                AsyncGenerator[Any, None],
+                service.run_session(
                     session_id,
                     user_message=request.message,
                     workspace=request.workspace,
                     thread_id=request.thread_id,
                     references=request.references,
                     _admission_granted=True,
-                ):
+                ),
+            )
+            try:
+                async for event in runtime_events:
                     yield _sse_event(
                         event.event_type,
                         event.model_dump(mode="json"),
@@ -3123,10 +3229,13 @@ def create_app(
                 )
                 yield _sse_event("agent.stream_error", payload)
             finally:
-                service.release_session_run(session_id, admitted_lease)
+                try:
+                    await runtime_events.aclose()
+                finally:
+                    service.release_session_run(session_id, admitted_lease)
 
         return StreamingResponse(
-            stream_events(),
+            _session_sse_with_heartbeat(stream_events()),
             media_type="text/event-stream",
             background=BackgroundTask(
                 service.release_session_run,
@@ -3637,22 +3746,83 @@ def create_app(
     install_workbench_file_routes(app, service)
     install_workbench_resource_routes(app, service)
     install_phase23_routes(app, store)
+    model_reviewer = ApprovalModelReviewer(
+        provider=service.provider,
+        get_profile=service.get_model_profile,
+    )
     install_phase45_routes(
         app,
         store,
-        skill_roots=phase45_skill_roots,
+        skill_roots=app.state.b23_skill_roots,
         mcp_workspace_roots=phase45_mcp_workspace_roots,
         policy_engine=phase45_policy_engine,
         approval_reviewer=phase45_approval_reviewer,
-        approval_model_reviewer=ApprovalModelReviewer(
-            provider=service.provider,
-            get_profile=service.get_model_profile,
-        ),
+        approval_model_reviewer=model_reviewer,
         approval_reviewer_config=lambda: (
             config_service.get_scope("global", "default").patch.approval_reviewer
             or ReviewerConfig()
         ),
     )
+    from operant.api_model_connections import install_model_connection_routes
+    from operant.api_onboarding import install_onboarding_routes
+    from operant.api_setup_apps import install_setup_app_routes
+    from operant.api_skill_sources import install_skill_source_routes
+    from operant.persistence.onboarding import UXRepository
+
+    setup_repository = UXRepository(store)
+    app.state.setup_repository = setup_repository
+    service.provider.delegate = install_model_connection_routes(
+        app,
+        service,
+        setup_repository,
+        action_gateway=app.state.phase45_action_gateway,
+        local_authorizer=phase56_local_authorizer,
+    )
+    model_reviewer.provider = service.provider
+    install_skill_source_routes(
+        app, service, setup_repository, local_authorizer=phase56_local_authorizer
+    )
+    install_onboarding_routes(
+        app, service, setup_repository, local_authorizer=phase56_local_authorizer
+    )
+    install_setup_app_routes(app, local_authorizer=phase56_local_authorizer)
+    install_caller_pairing_routes(
+        app,
+        service,
+        local_authorizer=phase56_local_authorizer or (lambda request: False),
+        confirmation_authorizer=caller_confirmation_authorizer or (lambda request: False),
+    )
+
+    @app.get(
+        "/v1/protocol/caller-pairing",
+        response_model=None,
+        operation_id="negotiateCallerPairing",
+    )
+    def negotiate_caller_pairing() -> dict[str, Any]:
+        from operant.application.protocol_metadata import caller_pairing_protocol_metadata
+
+        return caller_pairing_protocol_metadata()
+
+    @app.get("/v1/protocol/onboarding", operation_id="negotiateOnboarding")
+    def negotiate_onboarding() -> dict[str, Any]:
+        path = protocol_schema_path("operant-onboarding.openapi.sha256")
+        if not path.is_file():
+            raise HTTPException(status_code=503, detail="setup protocol is not installed")
+        return {
+            "protocol_version": "onboarding.v1",
+            "min_client_version": "onboarding.v1",
+            "schema_digest": path.read_text().split()[0],
+            "capabilities": [
+                "conversation_metadata",
+                "default_assistant",
+                "model_connections",
+                "model_oauth",
+                "skill_sources",
+                "local_applications",
+                "team_templates",
+            ],
+        }
+
     install_workbench_terminal_routes(app, service, app.state.phase45_action_gateway)
     from operant.api_b2_4 import install_b2_4_routes
 
@@ -3756,6 +3926,8 @@ def create_app(
         _ArtifactRequestBodyLimitMiddleware,
         max_body_bytes=MAX_ARTIFACT_REQUEST_BODY_BYTES,
     )
+    app.add_middleware(SkillSourceCallerMiddleware, authorizer=phase56_local_authorizer)
+    app.add_middleware(CallerPairingCorsMiddleware)
     configured_oauth = oauth_config if oauth_config is not None else oauth_config_from_env()
     if configured_oauth is not None:
         oauth_control = OAuthControl(configured_oauth, http_client=oauth_http_client)

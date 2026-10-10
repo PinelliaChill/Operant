@@ -7,7 +7,9 @@ replays an uncertain write, or treats a queued Job as completed.
 from __future__ import annotations
 
 import time
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -22,6 +24,17 @@ from sdk.python_client.phase56_generated import (
     Phase56Client,
 )
 
+_OBSERVATION_KEY: ContextVar[str | None] = ContextVar("operant_local_observation_key", default=None)
+
+
+@contextmanager
+def bound_observation_key(key: str | None) -> Iterator[None]:
+    token = _OBSERVATION_KEY.set(key)
+    try:
+        yield
+    finally:
+        _OBSERVATION_KEY.reset(token)
+
 
 class CapabilityOperationError(RuntimeError):
     def __init__(self, code: str, job_id: str, status: str) -> None:
@@ -29,6 +42,10 @@ class CapabilityOperationError(RuntimeError):
         self.code = code
         self.job_id = job_id
         self.status = status
+
+
+class CapabilityOutcomeUnknownError(CapabilityOperationError):
+    """A remote Job may have acted; its original receipt needs manual reconciliation."""
 
 
 @dataclass(frozen=True)
@@ -83,6 +100,8 @@ class _CapabilityOperator:
                     if isinstance(result, dict)
                     else "job_failed"
                 )
+                if status == "manual_reconcile_required":
+                    raise CapabilityOutcomeUnknownError(error_code, job_id, str(status))
                 raise CapabilityOperationError(error_code, job_id, str(status))
             if status not in {"queued", "leased", "running"}:
                 raise CapabilityOperationError("projection_invalid", job_id, str(status))
@@ -95,7 +114,7 @@ class _CapabilityOperator:
                         {"idempotency_key": f"operator-timeout:{job_id}"},
                         idempotency_key=f"operator-timeout:{job_id}",
                     )
-                raise CapabilityOperationError("outcome_unknown", job_id, "timeout")
+                raise CapabilityOutcomeUnknownError("outcome_unknown", job_id, "timeout")
             time.sleep(0.1)
 
 
@@ -112,7 +131,7 @@ class BrowserCapabilityOperator(_CapabilityOperator):
         self.policy = policy
 
     def observe(self) -> dict[str, Any]:
-        operation_id = f"browser-observe:{uuid4().hex}"
+        operation_id = _OBSERVATION_KEY.get() or f"browser-observe:{uuid4().hex}"
         response = self.client.observe_browser(
             self.binding.target_id,
             cast(
@@ -271,7 +290,7 @@ class ComputerCapabilityOperator(_CapabilityOperator):
         self.allowed_bundle_ids = allowed_bundle_ids
 
     def observe(self) -> dict[str, Any]:
-        operation_id = f"computer-observe:{uuid4().hex}"
+        operation_id = _OBSERVATION_KEY.get() or f"computer-observe:{uuid4().hex}"
         response = self.client.observe_computer(
             self.binding.target_id,
             cast(

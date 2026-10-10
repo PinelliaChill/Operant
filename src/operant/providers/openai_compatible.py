@@ -23,6 +23,96 @@ from operant.domain.models import RoleSnapshot
 class ProviderError(RuntimeError):
     """Sanitized provider error that never contains request credentials."""
 
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        failure_stage: str | None = None,
+        failure_category: str | None = None,
+        failure_http_status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_stage = failure_stage
+        self.failure_category = failure_category
+        self.failure_http_status = failure_http_status
+
+
+_PROVIDER_FAILURE_MESSAGES = {
+    "timeout": "模型请求超时，请检查网络连接后再试。",
+    "connect_timeout": "连接模型服务超时，请检查网络连接。",
+    "read_timeout": "等待模型响应超时，请稍后再试。",
+    "write_timeout": "发送模型请求超时，请检查网络连接。",
+    "pool_timeout": "模型连接等待超时，请稍后再试。",
+    "proxy_error": "代理连接失败，请检查代理设置。",
+    "connection_error": "无法连接模型服务，请检查网络连接。",
+    "protocol_error": "模型连接协议异常，请检查网络或代理设置。",
+    "network_error": "模型连接中断，请检查网络连接。",
+    "invalid_response": "模型响应格式异常，请稍后再试。",
+    "bad_request": "模型请求格式不受支持，请检查模型或工具配置。",
+    "authentication_required": "模型连接需要重新授权，请重新连接后再试。",
+    "permission_denied": "模型项目或 API 权限不足，请检查项目和 API 权限。",
+    "rate_limited": "模型请求受到限流，请检查免费额度或稍后再试。",
+    "provider_unavailable": "模型服务暂时不可用，请稍后再试。",
+    "http_error": "模型请求失败，请检查连接配置后再试。",
+    "unsupported_api_version": "当前模型配置不支持这些工具。请重新选择模型后新建对话。",
+}
+_PROVIDER_FAILURE_STAGES = frozenset({"inference_transport", "inference_response"})
+_HTTP_FAILURE_CATEGORIES = frozenset(
+    {
+        "bad_request",
+        "authentication_required",
+        "permission_denied",
+        "rate_limited",
+        "provider_unavailable",
+        "http_error",
+    }
+)
+
+
+def http_failure_category(status: int | None) -> str | None:
+    if type(status) is not int or not 100 <= status <= 599:
+        return None
+    return {
+        400: "bad_request",
+        401: "authentication_required",
+        403: "permission_denied",
+        429: "rate_limited",
+    }.get(status, "provider_unavailable" if status >= 500 else "http_error")
+
+
+def provider_failure_payload(exc: Exception) -> dict[str, Any]:
+    """Return only fixed, reviewed diagnostic data for persisted failure events."""
+    payload: dict[str, Any] = {"error_type": type(exc).__name__}
+    if not isinstance(exc, ProviderError):
+        return payload
+    stage = exc.failure_stage
+    category = exc.failure_category
+    if (
+        not isinstance(stage, str)
+        or stage not in _PROVIDER_FAILURE_STAGES
+        or not isinstance(category, str)
+        or category not in _PROVIDER_FAILURE_MESSAGES
+    ):
+        return payload
+    status = exc.failure_http_status
+    if status is not None and (
+        stage != "inference_response" or http_failure_category(status) != category
+    ):
+        return payload
+    if category in _HTTP_FAILURE_CATEGORIES and stage != "inference_response":
+        return payload
+    if category in _HTTP_FAILURE_CATEGORIES - {"http_error"} and status is None:
+        return payload
+    if category == "unsupported_api_version" and (
+        stage != "inference_response" or status is not None
+    ):
+        return payload
+    payload["message"] = _PROVIDER_FAILURE_MESSAGES[category]
+    payload["provider_failure"] = {"stage": stage, "category": category}
+    if status is not None:
+        payload["provider_failure"]["http_status"] = status
+    return payload
+
 
 class OpenAICompatibleProvider:
     def __init__(

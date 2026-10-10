@@ -29,12 +29,170 @@ from operant.protocol import canonical_action_hash, redact_public_text
 from operant.remote.connector import ConnectorOutcome, RemoteOutcomeUnknown
 from operant.remote.sealed_input import open_browser_input
 
+_COMPUTER_REASON_CODES = frozenset(
+    {
+        "computer.target_rejected",
+        "computer.permission_required",
+        "computer.app_unavailable",
+        "computer.window_unavailable",
+        "computer.window_ambiguous",
+        "computer.target_changed",
+        "computer.observation_limit",
+        "computer.observation_invalid",
+        "computer.accessibility_unavailable",
+    }
+)
+
 
 class ComputerTargetError(RuntimeError):
     """The computer target is unavailable or no longer matches the observation."""
 
+    def __init__(self, message: str, *, reason_code: str = "computer.target_rejected") -> None:
+        super().__init__(message)
+        self.reason_code = (
+            reason_code if reason_code in _COMPUTER_REASON_CODES else "computer.target_rejected"
+        )
 
-_OBSERVE_SCRIPT = r"""
+
+# Only fixed errors emitted by our own scripts are classified. osascript stderr
+# may contain window text and must never be returned in a Job result or log.
+_SCRIPT_FAILURE_REASONS = (
+    ("target app is not running", "computer.app_unavailable"),
+    ("target app did not become foreground", "computer.app_unavailable"),
+    ("target app is not foreground", "computer.target_changed"),
+    ("approved App standard window is unavailable", "computer.window_unavailable"),
+    ("approved App standard window is ambiguous", "computer.window_ambiguous"),
+    ("App accessibility tree exceeds the bounded limit", "computer.observation_limit"),
+    ("target app changed", "computer.target_changed"),
+    ("target window changed", "computer.target_changed"),
+    ("target window focus changed", "computer.target_changed"),
+)
+
+
+_WINDOW_AX_HANDLERS = r"""
+property axNodesVisited : 0
+
+on noteAxNode()
+    set axNodesVisited to axNodesVisited + 1
+    if axNodesVisited > 1000 then error "App accessibility tree exceeds the bounded limit"
+end noteAxNode
+
+on accessibleLabel(elementRef)
+    tell application "System Events"
+        try
+            set candidate to name of elementRef
+            if candidate is not missing value and (candidate as text) is not "" then ¬
+                return candidate as text
+        end try
+        repeat with attributeName in {"AXTitle", "AXDescription"}
+            try
+                set candidate to value of attribute (attributeName as text) of elementRef
+                if candidate is not missing value and (candidate as text) is not "" then ¬
+                    return candidate as text
+            end try
+        end repeat
+    end tell
+    return ""
+end accessibleLabel
+
+on isSystemControl(elementRef)
+    tell application "System Events"
+        try
+            set elementRole to role of elementRef as text
+            if elementRole is "AXSheet" or elementRole is "AXDialog" then return true
+            set elementSubrole to subrole of elementRef as text
+            if elementSubrole is "AXSystemDialog" then return true
+        end try
+        try
+            set identifierValue to value of attribute "AXIdentifier" of elementRef
+            if identifierValue is not missing value then
+                set identifierText to identifierValue as text
+                if identifierText starts with "WindowSharing" or ¬
+                    identifierText starts with "AXSystem" then return true
+            end if
+        end try
+        set controlLabel to my accessibleLabel(elementRef)
+        if controlLabel starts with "WindowSharing" then return true
+    end tell
+    return false
+end isSystemControl
+
+on hasSystemControl(elementRef, depth)
+    if depth > 12 then return false
+    my noteAxNode()
+    if my isSystemControl(elementRef) then return true
+    tell application "System Events"
+        try
+            set children to UI elements of elementRef
+        on error
+            set children to {}
+        end try
+    end tell
+    repeat with child in children
+        if my hasSystemControl(child, depth + 1) then return true
+    end repeat
+    return false
+end hasSystemControl
+
+on selectedWindow(targetProcess, expectedTitle)
+    tell application "System Events"
+        set standardWindows to {}
+        set mainWindows to {}
+        repeat with candidate in (windows of targetProcess)
+            set isStandard to false
+            try
+                if (role of candidate as text) is "AXWindow" and ¬
+                    (subrole of candidate as text) is "AXStandardWindow" then ¬
+                    set isStandard to true
+            end try
+            if isStandard then
+                set candidateTitle to name of candidate as text
+                if candidateTitle is not "" and ¬
+                    (my hasSystemControl(candidate, 0)) is false then
+                    set end of standardWindows to candidate
+                    try
+                        if (value of attribute "AXMain" of candidate) is true then ¬
+                            set end of mainWindows to candidate
+                    end try
+                end if
+            end if
+        end repeat
+        if (count of mainWindows) is 1 then
+            set taskWindow to item 1 of mainWindows
+        else if (count of mainWindows) is 0 and (count of standardWindows) is 1 then
+            set taskWindow to item 1 of standardWindows
+        else if (count of standardWindows) is 0 then
+            error "approved App standard window is unavailable"
+        else
+            error "approved App standard window is ambiguous"
+        end if
+        if expectedTitle is not "" and (name of taskWindow as text) is not expectedTitle then ¬
+            error "target window changed"
+        return taskWindow
+    end tell
+end selectedWindow
+
+on buttonsWithin(elementRef, depth)
+    if depth > 12 then return {}
+    my noteAxNode()
+    if my isSystemControl(elementRef) then return {}
+    tell application "System Events"
+        try
+            if (role of elementRef as text) is "AXButton" then
+                return {elementRef}
+            end if
+            set children to UI elements of elementRef
+        on error
+            set children to {}
+        end try
+    end tell
+    set found to {}
+    repeat with child in children
+        set found to found & (my buttonsWithin(child, depth + 1))
+    end repeat
+    return found
+end buttonsWithin
+
 on isSafeTextElement(elementRef)
     tell application "System Events"
         try
@@ -48,6 +206,10 @@ on isSafeTextElement(elementRef)
             if elementSubrole contains "Secure" or ¬
                 elementSubrole contains "Password" then return false
             if elementRole contains "Secure" or elementRole contains "Password" then return false
+            try
+                if (value of attribute "AXProtectedContent" of elementRef) is true then ¬
+                    return false
+            end try
             return true
         on error
             return false
@@ -55,11 +217,14 @@ on isSafeTextElement(elementRef)
     end tell
 end isSafeTextElement
 
-on textAreasWithin(elementRef, depth)
-    if depth > 8 then return {}
+on textControlsWithin(elementRef, depth)
+    if depth > 12 then return {}
+    my noteAxNode()
+    if my isSystemControl(elementRef) then return {}
     tell application "System Events"
         try
-            if role of elementRef is "AXTextArea" then
+            set elementRole to role of elementRef as text
+            if elementRole is "AXTextField" or elementRole is "AXTextArea" then
                 if my isSafeTextElement(elementRef) then return {elementRef}
                 return {}
             end if
@@ -70,50 +235,81 @@ on textAreasWithin(elementRef, depth)
     end tell
     set found to {}
     repeat with child in children
-        set found to found & (my textAreasWithin(child, depth + 1))
+        set found to found & (my textControlsWithin(child, depth + 1))
     end repeat
     return found
-end textAreasWithin
+end textControlsWithin
 
-on run argv
+on textControlLabel(elementRef, textAreaNumber)
+    set elementLabel to my accessibleLabel(elementRef)
+    if elementLabel is not "" then return elementLabel
     tell application "System Events"
-        set targetProcess to first application process whose frontmost is true
+        if (role of elementRef as text) is "AXTextArea" then ¬
+            return "AXTextArea:" & textAreaNumber
+    end tell
+    return ""
+end textControlLabel
+"""
+
+_OBSERVE_SCRIPT = (
+    _WINDOW_AX_HANDLERS
+    + r"""
+on run argv
+    set expectedApp to item 1 of argv
+    set approvedApps to items 2 thru -1 of argv
+    tell application "System Events"
+        if expectedApp is "" then
+            set targetProcess to first application process whose frontmost is true
+        else
+            set matchingProcesses to application processes whose bundle identifier is expectedApp
+            if (count of matchingProcesses) is not 1 then error "target app is not running"
+            set targetProcess to first item of matchingProcesses
+            if frontmost of targetProcess is not true then error "target app is not foreground"
+        end if
         set appId to bundle identifier of targetProcess
-        set windowTitle to name of front window of targetProcess
-        set buttonNames to name of every button of front window of targetProcess
+        if appId is not in approvedApps then error "target app changed"
+        set taskWindow to my selectedWindow(targetProcess, "")
+        set windowTitle to name of taskWindow as text
+        set buttonNames to {}
+        repeat with buttonRef in (my buttonsWithin(taskWindow, 0))
+            set buttonLabel to my accessibleLabel(buttonRef)
+            if buttonLabel is not "" then set end of buttonNames to buttonLabel
+        end repeat
         set AppleScript's text item delimiters to character id 31
         set joinedButtons to buttonNames as text
         set AppleScript's text item delimiters to ""
         set fieldNames to {}
         set fieldValues to {}
-        repeat with textField in (every text field of front window of targetProcess)
-            try
-                if my isSafeTextElement(textField) then
-                    set end of fieldNames to (name of textField as text)
-                    set end of fieldValues to (value of textField as text)
-                end if
-            end try
-        end repeat
         set textAreaCount to 0
-        set textAreas to my textAreasWithin(front window of targetProcess, 0)
-        repeat with uiElement in textAreas
+        repeat with fieldRef in (my textControlsWithin(taskWindow, 0))
             try
-                set textAreaCount to textAreaCount + 1
-                set end of fieldNames to "AXTextArea:" & textAreaCount
-                set end of fieldValues to (value of uiElement as text)
+                if (role of fieldRef as text) is "AXTextArea" then ¬
+                    set textAreaCount to textAreaCount + 1
+                set fieldLabel to my textControlLabel(fieldRef, textAreaCount)
+                if fieldLabel is not "" then
+                    set fieldValue to value of fieldRef
+                    if fieldValue is missing value then set fieldValue to ""
+                    set end of fieldNames to fieldLabel
+                    set end of fieldValues to fieldValue as text
+                end if
             end try
         end repeat
         set AppleScript's text item delimiters to character id 31
         set joinedFields to fieldNames as text
         set joinedValues to fieldValues as text
         set AppleScript's text item delimiters to ""
+        if expectedApp is not "" and frontmost of targetProcess is not true then ¬
+            error "target app is not foreground"
         return appId & (character id 30) & windowTitle & (character id 30) & ¬
             joinedButtons & (character id 30) & joinedFields & (character id 30) & joinedValues
     end tell
 end run
 """
+)
 
-_CLICK_BUTTON_SCRIPT = r"""
+_CLICK_BUTTON_SCRIPT = (
+    _WINDOW_AX_HANDLERS
+    + r"""
 on run argv
     set expectedApp to item 1 of argv
     set expectedWindow to item 2 of argv
@@ -121,55 +317,22 @@ on run argv
     tell application "System Events"
         set targetProcess to first application process whose frontmost is true
         if bundle identifier of targetProcess is not expectedApp then error "target app changed"
-        if name of front window of targetProcess is not expectedWindow then
-            error "target window changed"
-        end if
-        click (first button of front window of targetProcess whose name is buttonName)
+        set taskWindow to my selectedWindow(targetProcess, expectedWindow)
+        set matchingButtons to {}
+        repeat with buttonRef in (my buttonsWithin(taskWindow, 0))
+            if (my accessibleLabel(buttonRef)) is buttonName then ¬
+                set end of matchingButtons to buttonRef
+        end repeat
+        if (count of matchingButtons) is not 1 then error "button is ambiguous"
+        click (item 1 of matchingButtons)
     end tell
 end run
 """
+)
 
-_TYPE_TEXT_SCRIPT = r"""
-on isSafeTextElement(elementRef)
-    tell application "System Events"
-        try
-            set elementRole to role of elementRef as text
-            if elementRole is not "AXTextField" and ¬
-                elementRole is not "AXTextArea" then return false
-            set elementSubrole to ""
-            try
-                set elementSubrole to subrole of elementRef as text
-            end try
-            if elementSubrole contains "Secure" or ¬
-                elementSubrole contains "Password" then return false
-            if elementRole contains "Secure" or elementRole contains "Password" then return false
-            return true
-        on error
-            return false
-        end try
-    end tell
-end isSafeTextElement
-
-on textAreasWithin(elementRef, depth)
-    if depth > 8 then return {}
-    tell application "System Events"
-        try
-            if role of elementRef is "AXTextArea" then
-                if my isSafeTextElement(elementRef) then return {elementRef}
-                return {}
-            end if
-            set children to UI elements of elementRef
-        on error
-            set children to {}
-        end try
-    end tell
-    set found to {}
-    repeat with child in children
-        set found to found & (my textAreasWithin(child, depth + 1))
-    end repeat
-    return found
-end textAreasWithin
-
+_TYPE_TEXT_SCRIPT = (
+    _WINDOW_AX_HANDLERS
+    + r"""
 on run argv
     set expectedApp to item 1 of argv
     set expectedWindow to item 2 of argv
@@ -178,27 +341,27 @@ on run argv
     tell application "System Events"
         set targetProcess to first application process whose frontmost is true
         if bundle identifier of targetProcess is not expectedApp then error "target app changed"
-        if name of front window of targetProcess is not expectedWindow then ¬
-            error "target window changed"
-        if fieldName starts with "AXTextArea:" then
-            set textAreas to my textAreasWithin(front window of targetProcess, 0)
-            if (count of textAreas) is not 1 or fieldName is not "AXTextArea:1" then ¬
-                error "text area is ambiguous"
-            if not my isSafeTextElement(item 1 of textAreas) then error "secure text area"
-            set value of (item 1 of textAreas) to enteredText
-        else
-            set matchingFields to (text fields of front window of targetProcess ¬
-                whose name is fieldName)
-            if (count of matchingFields) is not 1 then error "text field is ambiguous"
-            set targetField to first item of matchingFields
-            if not my isSafeTextElement(targetField) then error "secure text field"
-            set value of targetField to enteredText
-        end if
+        set taskWindow to my selectedWindow(targetProcess, expectedWindow)
+        set matchingFields to {}
+        set textAreaCount to 0
+        repeat with fieldRef in (my textControlsWithin(taskWindow, 0))
+            if (role of fieldRef as text) is "AXTextArea" then ¬
+                set textAreaCount to textAreaCount + 1
+            if (my textControlLabel(fieldRef, textAreaCount)) is fieldName then ¬
+                set end of matchingFields to fieldRef
+        end repeat
+        if (count of matchingFields) is not 1 then error "text field is ambiguous"
+        set targetField to item 1 of matchingFields
+        if not my isSafeTextElement(targetField) then error "secure text field"
+        set value of targetField to enteredText
     end tell
 end run
 """
+)
 
-_PRESS_KEY_SCRIPT = r"""
+_PRESS_KEY_SCRIPT = (
+    _WINDOW_AX_HANDLERS
+    + r"""
 on run argv
     set expectedApp to item 1 of argv
     set expectedWindow to item 2 of argv
@@ -206,9 +369,10 @@ on run argv
     tell application "System Events"
         set targetProcess to first application process whose frontmost is true
         if bundle identifier of targetProcess is not expectedApp then error "target app changed"
-        if name of front window of targetProcess is not expectedWindow then ¬
-            error "target window changed"
+        set taskWindow to my selectedWindow(targetProcess, expectedWindow)
         try
+            set focusedWindow to value of attribute "AXFocusedWindow" of targetProcess
+            if focusedWindow is not taskWindow then error "target window focus changed"
             set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
             set focusedRole to role of focusedElement as text
             set focusedSubrole to ""
@@ -225,6 +389,7 @@ on run argv
     end tell
 end run
 """
+)
 
 _ACTIVATE_SCRIPT = r"""
 on run argv
@@ -243,7 +408,9 @@ on run argv
 end run
 """
 
-_WINDOW_PID_SCRIPT = r"""
+_WINDOW_PID_SCRIPT = (
+    _WINDOW_AX_HANDLERS
+    + r"""
 on run argv
     set expectedApp to item 1 of argv
     set expectedWindow to item 2 of argv
@@ -252,12 +419,13 @@ on run argv
         if (count of matchingProcesses) is not 1 then error "target app is not running"
         set targetProcess to first item of matchingProcesses
         if frontmost of targetProcess is not true then error "target app is not foreground"
-        if name of front window of targetProcess is not expectedWindow then ¬
-            error "target window changed"
+        set taskWindow to my selectedWindow(targetProcess, expectedWindow)
         return unix id of targetProcess as text
     end tell
 end run
 """
+)
+
 
 _KEY_CODES = {
     "Tab": 48,
@@ -319,7 +487,9 @@ class MacComputer:
             return
         self.policy.check(self.target_bundle_id)
         if self._script(_ACTIVATE_SCRIPT, self.target_bundle_id) != self.target_bundle_id:
-            raise ComputerTargetError("approved App did not become foreground")
+            raise ComputerTargetError(
+                "approved App did not become foreground", reason_code="computer.app_unavailable"
+            )
 
     @staticmethod
     def _script(source: str, *arguments: str) -> str:
@@ -340,20 +510,56 @@ class MacComputer:
             raise RemoteOutcomeUnknown("computer action timed out; outcome is unknown") from exc
         if result.returncode != 0:
             # System Events can include private UI text in stderr. Do not expose it.
-            if "-1719" in result.stderr:
-                raise ComputerTargetError("macOS Accessibility permission is required")
-            raise ComputerTargetError("macOS accessibility denied or target is unavailable")
+            # -1719 alone means an invalid Apple event index, not an AX
+            # permission failure. Require the fixed denial wording as well as
+            # the OS error number before giving permission advice.
+            permission_denied = (
+                "is not allowed assistive access" in result.stderr
+                and ("(-1719)" in result.stderr or "(-25211)" in result.stderr)
+            ) or (
+                "Assistive applications are not enabled" in result.stderr
+                and "(-25211)" in result.stderr
+            )
+            if permission_denied:
+                raise ComputerTargetError(
+                    "macOS Accessibility permission is required",
+                    reason_code="computer.permission_required",
+                )
+            for marker, reason_code in _SCRIPT_FAILURE_REASONS:
+                if marker in result.stderr:
+                    raise ComputerTargetError(
+                        "computer target unavailable", reason_code=reason_code
+                    )
+            raise ComputerTargetError(
+                "macOS accessibility or target is unavailable",
+                reason_code="computer.accessibility_unavailable",
+            )
         if len(result.stdout) > 20_000:
-            raise ComputerTargetError("macOS observation exceeds the bounded response size")
+            raise ComputerTargetError(
+                "macOS observation exceeds the bounded response size",
+                reason_code="computer.observation_limit",
+            )
         return result.stdout.rstrip("\r\n")
 
     def _raw_observation(self) -> tuple[str, str, list[str], list[str], str]:
         self.activate_app()
-        response = self._script(_OBSERVE_SCRIPT).split("\x1e", 4)
+        response = self._script(
+            _OBSERVE_SCRIPT,
+            self.target_bundle_id or "",
+            *sorted(self.policy.allowed_bundle_ids),
+        ).split("\x1e", 4)
         if len(response) != 5:
-            raise ComputerTargetError("macOS returned an incomplete window observation")
+            raise ComputerTargetError(
+                "macOS returned an incomplete window observation",
+                reason_code="computer.observation_invalid",
+            )
         bundle_id, window_title, buttons, fields, field_values = response
-        self.policy.check(bundle_id)
+        try:
+            self.policy.check(bundle_id)
+        except ComputerTargetError as exc:
+            raise ComputerTargetError(
+                "foreground App changed during observation", reason_code="computer.target_changed"
+            ) from exc
         return (
             bundle_id,
             window_title,
@@ -404,7 +610,9 @@ class MacComputer:
             )
             != expected
         ):
-            raise ComputerTargetError("computer window changed since observation")
+            raise ComputerTargetError(
+                "computer window changed since observation", reason_code="computer.target_changed"
+            )
         if (
             current_buttons.count(button_name) != 1
             or redact_public_text(button_name) != button_name
@@ -424,7 +632,9 @@ class MacComputer:
     def _checked_window(self, expected: dict[str, JsonValue]) -> tuple[str, str, list[str]]:
         bundle_id, title, buttons, fields, values = self._raw_observation()
         if self._public_observation(bundle_id, title, buttons, fields, values) != expected:
-            raise ComputerTargetError("computer window changed since observation")
+            raise ComputerTargetError(
+                "computer window changed since observation", reason_code="computer.target_changed"
+            )
         return bundle_id, title, fields
 
     def type_text(
@@ -668,7 +878,8 @@ class LocalComputerConnector:
                     != content_hash
                 ):
                     raise ComputerTargetError(
-                        "computer window changed since the approved observation"
+                        "computer window changed since the approved observation",
+                        reason_code="computer.target_changed",
                     )
                 arguments = job.arguments.get("arguments")
                 if not isinstance(arguments, dict):
@@ -762,13 +973,13 @@ class LocalComputerConnector:
                         }
                     ),
                 }
-        except ComputerTargetError:
+        except ComputerTargetError as exc:
             return ConnectorOutcome(
                 result=RemoteExecutionResult(
                     job_id=job.job_id,
                     result_idempotency_key=f"local-computer:{job.job_id}",
                     status=RemoteJobStatus.FAILED,
-                    error_code="computer.target_rejected",
+                    error_code=exc.reason_code,
                 )
             )
         return ConnectorOutcome(

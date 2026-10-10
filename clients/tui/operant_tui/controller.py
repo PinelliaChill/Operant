@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from sdk.python_client import Phase1EClient, Phase23Client, Phase45Client, Phase56Client
 from sdk.python_client.b2_6_generated import B26Client
 from sdk.python_client.beta_generated import BetaClient
+from sdk.python_client.caller_pairing import PairedSkillSourceClient
 from sdk.python_client.phase23_generated import ScopedCursorTracker
 from sdk.python_client.phase56_generated import PHASE56_PROTOCOL_VERSION
 from sdk.python_client.transport import Phase1EError
@@ -104,6 +105,7 @@ class ClientController:
         phase45: Any | None = None,
         phase56: Any | None = None,
         b26: Any | None = None,
+        paired_skill_sources: Any | None = None,
     ) -> None:
         base_url = validate_core_url(core_url)
         self.core_url = base_url
@@ -112,6 +114,7 @@ class ClientController:
         self.phase45 = phase45 or Phase45Client(base_url)
         self.phase56 = phase56 or Phase56Client(base_url)
         self.b26 = b26 or B26Client(base_url)
+        self.paired_skill_sources = paired_skill_sources or PairedSkillSourceClient()
         self._graph_cursors: dict[str, ScopedCursorTracker] = {}
 
     def negotiate(self) -> None:

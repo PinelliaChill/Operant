@@ -7,10 +7,11 @@ async function source(path: string): Promise<string> {
 }
 
 test('B2-3 Live entrypoints use the management view while Demo stays separate', async () => {
-  const [management, projects, settings, skills, context, extensions] = await Promise.all([
+  const [management, projects, settings, settingsHub, skills, context, extensions] = await Promise.all([
     source('../src/features/management/LiveManagementView.tsx'),
     source('../src/features/projects/ProjectsView.tsx'),
     source('../src/features/settings/SettingsView.tsx'),
+    source('../src/features/settings/SettingsHub.tsx'),
     source('../src/features/skills/SkillsView.tsx'),
     source('../src/context/ClientContext.tsx'),
     source('../src/features/extensions/ExtensionsView.tsx'),
@@ -19,8 +20,9 @@ test('B2-3 Live entrypoints use the management view while Demo stays separate', 
   assert.match(management, /b23Client/);
   assert.doesNotMatch(management, /useDemo|MockClient|DemoProvider/);
   assert.match(context, /new B23Client\(currentBrowserOrigin\(\)\)/);
-  assert.match(projects, /<LiveManagementView initialTab="projects" \/>/);
-  assert.match(settings, /<LiveManagementView initialTab=\{managementTab\} \/>/);
+  assert.match(projects, /<LiveManagementView initialTab=\{tab\} focused \/>/);
+  assert.match(settings, /<SettingsHub \/>/);
+  assert.match(settingsHub, /<LiveManagementView initialTab="skills" focused \/>/);
   assert.match(skills, /<LiveManagementView initialTab="skills" \/>/);
   assert.match(extensions, /searchParams\.get\('tab'\) === 'plugins'/);
 });
@@ -34,7 +36,10 @@ test('B2-3 management UI exposes the required command families and unknown-resul
     'dataset_export', 'dataset_delete', 'cleanup_resume', 'skill_discover', 'skill_install', 'skill_disable', 'skill_enable', 'skill_uninstall',
     'artifact_pin', 'artifact_archive', 'artifact_schedule', 'artifact_trash', 'artifact_restore', 'artifact_audit',
   ]) assert.match(management, new RegExp(action));
-  assert.match(management, /未知写结果/);
+  assert.match(management, /if \(isUnknown\) addNotification\('warn'/);
+  assert.match(management, /未自动重放|不会自动重放/);
+  assert.match(management, /error\.outcomeUnknown && <p>/);
+  assert.match(management, /onClick=\{\(\) => void refresh\(\)\}/);
   assert.match(management, /role="alert"/);
   assert.match(management, /aria-live="polite"/);
   assert.match(management, /requestEpoch/);

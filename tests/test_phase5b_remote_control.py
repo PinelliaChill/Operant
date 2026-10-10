@@ -33,9 +33,14 @@ from operant.remote_control.runtime import (
 )
 
 
-def _service(tmp_path: Path) -> tuple[RemoteControlService, SQLiteStore, bytes, bytes]:
+def _service(
+    tmp_path: Path, *, schema_version: int | None = None
+) -> tuple[RemoteControlService, SQLiteStore, bytes, bytes]:
     store = SQLiteStore(tmp_path / "operant.sqlite3")
-    store.initialize()
+    if schema_version is None:
+        store.initialize()
+    else:
+        store.migrate(schema_version)
     device_signing_public, device_signing_private = RemoteCrypto.create_signing_keypair()
     device_exchange_public, device_exchange_private = RemoteCrypto.create_exchange_keypair()
     service = RemoteControlService(
@@ -190,7 +195,7 @@ def test_status_cursor_sees_terminal_update_after_intermediate_sync(tmp_path: Pa
 
 
 def test_v22_cursor_migration_backfills_above_legacy_rowid(tmp_path: Path) -> None:
-    service, store, signing_private, session_key = _service(tmp_path)
+    service, store, signing_private, session_key = _service(tmp_path, schema_version=22)
     command = _signed_command(service, signing_private, session_key, suffix="upgrade")
     service.submit_command(command)
     with store._connect() as connection:
@@ -198,11 +203,8 @@ def test_v22_cursor_migration_backfills_above_legacy_rowid(tmp_path: Path) -> No
             "SELECT rowid FROM remote_command_receipts WHERE command_id=?",
             (command.command_id,),
         ).fetchone()[0]
-        connection.execute("DROP TRIGGER remote_command_event_status")
-        connection.execute("DROP TRIGGER remote_command_event_insert")
-        connection.execute("DROP TABLE remote_command_events")
-        connection.execute("DELETE FROM schema_migrations WHERE version=23")
-    assert store.migrate() == 23
+    assert store.schema_version() == 22
+    assert store.migrate() == 26
     recovered = service.repository.list_command_events(command.host_id, after_cursor=legacy_cursor)
     assert recovered[0]["status"] == "completed"
     assert recovered[0]["cursor"] > legacy_cursor
