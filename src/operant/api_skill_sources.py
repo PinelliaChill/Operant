@@ -11,6 +11,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from operant.api_model_connections import _trusted_local
+from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.service import ApplicationService
 from operant.application.skill_sources import (
     SkillSourceEffects,
@@ -88,7 +89,10 @@ def install_skill_source_routes(
     phase_repository = SQLitePhase45Repository(service.store)
 
     def refresh_skill_sources(
-        workspace_ref: str | Path | None = None, *, discover: bool = False
+        workspace_ref: str | Path | None = None,
+        *,
+        discover: bool = False,
+        gateway_override: Phase45ActionGateway | None = None,
     ) -> list[SkillSourceView]:
         nonlocal workspace
         if workspace_ref is not None:
@@ -163,7 +167,7 @@ def install_skill_source_routes(
                     scan_issues.pop(root_ref, None)
                 ordered_refs = tuple(active)
                 try:
-                    gateway = app.state.phase45_action_gateway
+                    gateway = gateway_override or app.state.phase45_action_gateway
                     arguments = {
                         "root_refs": list(ordered_refs),
                         "path_hashes": [
@@ -226,7 +230,7 @@ def install_skill_source_routes(
     refresh_skill_sources(discover=True)
 
     def require_local(request: Request) -> None:
-        if not _trusted_local(request, local_authorizer):
+        if local_authorizer is None or not _trusted_local(request, local_authorizer):
             raise HTTPException(status_code=403, detail="Skill sources require a local client")
 
     def command_key(supplied: str | None, response: Response) -> str:

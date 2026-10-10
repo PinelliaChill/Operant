@@ -27,6 +27,7 @@ pub(crate) enum SignError {
     InvalidPath,
     InvalidQuery,
     InvalidTimestamp,
+    InvalidNonce,
     InvalidIdempotencyKey,
     InvalidBody,
     BootstrapWriteFailed,
@@ -82,6 +83,29 @@ impl LocalCallerKey {
         mac.update(b"local-caller.core.v1\n");
         mac.update(nonce.as_bytes());
         mac.verify_slice(&proof_bytes).is_ok()
+    }
+
+    /// Extra proof for the native-only, user-confirmed caller challenge route.
+    /// Its domain, method and path are fixed here; the caller cannot turn it
+    /// into a generic signing service.
+    pub(crate) fn sign_native_confirmation(
+        &self,
+        request_nonce: &str,
+        body: &[u8],
+    ) -> Result<String, SignError> {
+        if decode_lower_hex::<16>(request_nonce).is_none() {
+            return Err(SignError::InvalidNonce);
+        }
+        if body.len() > MAX_BODY_BYTES || std::str::from_utf8(body).is_err() {
+            return Err(SignError::InvalidBody);
+        }
+        let digest = hex_lower(&Sha256::digest(body));
+        let canonical = format!(
+            "local-caller.confirm.v1\nPOST\n/v1/local-callers/challenges\n{request_nonce}\n{digest}"
+        );
+        let mut mac = HmacSha256::new_from_slice(&self.0).expect("32-byte HMAC key is valid");
+        mac.update(canonical.as_bytes());
+        Ok(hex_lower(&mac.finalize().into_bytes()))
     }
 
     fn sign_with_nonce(
@@ -266,6 +290,28 @@ mod tests {
             "ff52b0460d03e2d3186a9d0773e465657ee161846f6656b12c5c3822932737b7"
         ));
         assert!(!LocalCallerKey([0x42; 32]).verify_core_identity(nonce, proof));
+    }
+
+    #[test]
+    fn native_confirmation_matches_fixed_python_vector_and_rejects_bad_nonce() {
+        // Python: hmac.new(bytes(range(32)), b"local-caller.confirm.v1\nPOST\n"
+        // b"/v1/local-callers/challenges\n" + bytes(range(16)).hex().encode()
+        // + b"\n" + sha256(b'{"ttl_seconds":120}').hexdigest().encode(), sha256).
+        let key = LocalCallerKey(std::array::from_fn(|index| index as u8));
+        let nonce = "000102030405060708090a0b0c0d0e0f";
+        assert_eq!(
+            key.sign_native_confirmation(nonce, b"{\"ttl_seconds\":120}")
+                .unwrap(),
+            "120fe367fd4535afacade7ea709c5399b8be43b31834286b82433f752899b375"
+        );
+        assert_eq!(
+            key.sign_native_confirmation("000102030405060708090a0b0c0d0e0F", b"{}"),
+            Err(SignError::InvalidNonce)
+        );
+        assert_eq!(
+            key.sign_native_confirmation(nonce, b"\xff"),
+            Err(SignError::InvalidBody)
+        );
     }
 
     #[test]

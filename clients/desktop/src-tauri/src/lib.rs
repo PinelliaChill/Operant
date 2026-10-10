@@ -6,6 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 
 mod local_caller;
 mod local_core_bridge;
@@ -259,6 +260,48 @@ fn valid_secret_ref(value: &str) -> bool {
         && chars.all(|character| matches!(character, 'A'..='Z' | '0'..='9' | '_'))
 }
 
+#[tauri::command]
+async fn create_caller_pairing_ticket(
+    app: AppHandle,
+    state: State<'_, CoreProcess>,
+) -> Result<serde_json::Value, String> {
+    let parent = app
+        .get_webview_window("main")
+        .ok_or("无法打开配对确认窗口。")?;
+    let bridge = {
+        let mut guard = state.0.lock().map_err(|_| "无法读取 Core 状态。")?;
+        let owned = guard.as_mut().ok_or("尚未连接本机 Core。")?;
+        if !owned.running()? {
+            return Err("本机 Core 已停止。".into());
+        }
+        Arc::clone(&owned.bridge)
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let (send_choice, receive_choice) = std::sync::mpsc::sync_channel(1);
+        app
+            .dialog()
+            .message("允许配对的客户端查看、添加和删除技能目录吗？文件操作仍需按现有规则审批。配对码 2 分钟后失效，可随时撤销客户端。")
+            .title("连接其他客户端")
+            .parent(&parent)
+            .buttons(MessageDialogButtons::OkCancel)
+            .show_with_result(move |choice| { let _ = send_choice.send(choice); });
+        let choice = receive_choice.recv().map_err(|_| "配对确认未完成。".to_string())?;
+        if !matches!(choice, MessageDialogResult::Ok) {
+            return Err("已取消配对。".to_string());
+        }
+        let response = bridge
+            .request_approved_pairing()
+            .map_err(|error| error.message().to_string())?;
+        if response.status != 200 {
+            return Err("无法生成配对码，请核对本机 Core 状态。".into());
+        }
+        serde_json::from_str(&response.text)
+            .map_err(|_| "配对码响应无效，请核对本机 Core 状态。".into())
+    })
+    .await
+    .map_err(|_| "无法完成配对确认。".to_string())?
+}
+
 fn validate_model_oauth_url(value: &str, core_port: u16) -> Result<tauri::Url, String> {
     if value.len() > 16_384 || value.chars().any(char::is_control) {
         return Err("Invalid model sign-in URL".into());
@@ -342,6 +385,7 @@ pub fn run() {
             start_local_core,
             stop_managed_core,
             local_core_request,
+            create_caller_pairing_ticket,
             persist_secret_reference,
             open_model_oauth
         ])

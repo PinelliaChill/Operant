@@ -9,6 +9,7 @@ from fastapi import Request
 
 from operant.local_caller import (
     IDEMPOTENCY_HEADER,
+    NATIVE_CONFIRMATION_HEADER,
     NONCE_HEADER,
     PROTOCOL,
     PROTOCOL_HEADER,
@@ -17,6 +18,52 @@ from operant.local_caller import (
     LocalCallerAuthority,
     canonical_proof,
 )
+
+
+@pytest.mark.asyncio
+async def test_native_confirmation_is_bound_to_the_authenticated_challenge() -> None:
+    body = b'{"ttl_seconds":120}'
+    target = b"/v1/local-callers/challenges"
+    confirmation = (
+        hmac.new(
+            SECRET,
+            b"\n".join(
+                (
+                    b"local-caller.confirm.v1",
+                    b"POST",
+                    target,
+                    NONCE,
+                    hashlib.sha256(body).hexdigest().encode(),
+                )
+            ),
+            hashlib.sha256,
+        )
+        .hexdigest()
+        .encode()
+    )
+    authority = LocalCallerAuthority(SECRET, clock=lambda: TIME)
+    request = _request(
+        body=body,
+        path=target,
+        query=b"",
+        extra_headers=[(NATIVE_CONFIRMATION_HEADER.encode(), confirmation)],
+    )
+    assert not authority.is_native_confirmed(request)
+    assert await authority.authenticate(request)
+    assert authority.is_native_confirmed(request)
+    ordinary = _request(body=body, path=target, query=b"", nonce=b"b" * 32)
+    assert await authority.authenticate(ordinary)
+    assert not authority.is_native_confirmed(ordinary)
+    copied = _request(
+        body=body,
+        path=target,
+        query=b"",
+        nonce=b"c" * 32,
+        extra_headers=[(NATIVE_CONFIRMATION_HEADER.encode(), confirmation)],
+    )
+    assert await authority.authenticate(copied)
+    assert not authority.is_native_confirmed(copied)
+
 
 SECRET = b"s" * 32
 TIME = 1_800_000_000.0

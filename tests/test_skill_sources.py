@@ -64,7 +64,8 @@ def _client(root: Path, settings: _Settings) -> tuple[TestClient, FastAPI]:
         PolicyEngine(balanced_policy_bundle()),
     )
     app.state.skill_source_test_service = service
-    install_skill_source_routes(app, service, settings)  # type: ignore[arg-type]
+    # Unit scenarios start after native caller authentication.
+    install_skill_source_routes(app, service, settings, local_authorizer=lambda _request: True)  # type: ignore[arg-type]
     return TestClient(app), app
 
 
@@ -429,7 +430,8 @@ def test_default_source_can_point_to_shared_skill_directory(
     )
     install_skill_source_routes(app, service, _Settings())  # type: ignore[arg-type]
 
-    source = TestClient(app).get("/v1/setup/skill-sources").json()["items"][0]
+    # The source scanner above is exercised separately from request identity.
+    source = app.state.refresh_skill_sources()[0].model_dump()
     assert source["enabled"] is True
     assert source["path"] == str(shared)
     assert {

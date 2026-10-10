@@ -124,6 +124,15 @@ from operant.persistence.automation_schema import (
 from operant.persistence.automation_schema import (
     upgrade as upgrade_automation,
 )
+from operant.persistence.caller_pairing_schema import (
+    downgrade as downgrade_caller_pairing,
+)
+from operant.persistence.caller_pairing_schema import (
+    schema_contracts as caller_pairing_schema_contracts,
+)
+from operant.persistence.caller_pairing_schema import (
+    upgrade as upgrade_caller_pairing,
+)
 from operant.persistence.graph_boundary_schema import (
     downgrade as downgrade_graph_boundaries,
 )
@@ -305,6 +314,7 @@ class WorkflowExecutionLease:
 
 class SQLiteStore:
     _FROZEN_MANIFEST_SHA256 = {
+        26: "3606773ea72ff0bb4ffba4ce0cac28687b0853fb1e361624bd27e6da6f494d0c",
         25: "ca66a9f2c8e6b8d1f558fe1598954e2c0cad89f282e31dcd463a2fc75cd27690",
         24: "140dd547a8788ad49a71d205d79a1c2eedac0902f775695aee730f9e1b54fb26",
         23: "cf7675e2379064df54df1f7205e3595aab42ee4d2cec93f82182b916ef72bf02",
@@ -332,6 +342,7 @@ class SQLiteStore:
         14: "c2f898364eb2605bd88e62e8ffc1345b20bdc5dcc17acffb2d8c2ed2a284f454",
     }
     _FROZEN_MIGRATION_CHECKSUMS = {
+        26: "793bf5f954093065e02aae418b57d8eaa3aa4c3156ca52a961f3edc8b5f1add3",
         25: "89eeced68e76aa0a0d13e846cf93dab99a830186834a94c0c929fc1f0cf3c31e",
         24: "1ce29207256d06907415c136e1056488f6c3130ef0e7593698995ceafc9aa738",
         23: "cb2e87a2f13e8e0daed579ad0dc520cbb8684e2c99b5d57beb5592751768dff5",
@@ -719,6 +730,9 @@ class SQLiteStore:
                 "local_observation_sources",
                 upgrade_observation_sources,
                 downgrade_observation_sources,
+            ),
+            build(
+                26, "independent_caller_pairing", upgrade_caller_pairing, downgrade_caller_pairing
             ),
         )
 
@@ -2264,6 +2278,8 @@ class SQLiteStore:
             tables.update(onboarding_schema_contracts()[0])
         if version >= 25:
             tables.update(observation_source_schema_contracts()[0])
+        if version >= 26:
+            tables.update(caller_pairing_schema_contracts()[0])
         return tables
 
     @staticmethod
@@ -2550,6 +2566,8 @@ class SQLiteStore:
             contract.update(onboarding_schema_contracts()[1])
         if version >= 25:
             contract.update(observation_source_schema_contracts()[1])
+        if version >= 26:
+            contract.update(caller_pairing_schema_contracts()[1])
         return contract
 
     @classmethod
@@ -2833,6 +2851,8 @@ class SQLiteStore:
                 upgrade_onboarding(connection)
             if version >= 25:
                 upgrade_observation_sources(connection)
+            if version >= 26:
+                upgrade_caller_pairing(connection)
             rows = connection.execute(
                 "SELECT type, name, sql FROM sqlite_master "
                 "WHERE type IN ('table', 'index', 'view', 'trigger') ORDER BY type, name"
@@ -3052,6 +3072,8 @@ class SQLiteStore:
             contract.update(onboarding_schema_contracts()[2])
         if version >= 25:
             contract.update(observation_source_schema_contracts()[2])
+        if version >= 26:
+            contract.update(caller_pairing_schema_contracts()[2])
         return contract
 
     @staticmethod
@@ -3280,6 +3302,8 @@ class SQLiteStore:
             contract.update(onboarding_schema_contracts()[3])
         if version >= 25:
             contract.update(observation_source_schema_contracts()[3])
+        if version >= 26:
+            contract.update(caller_pairing_schema_contracts()[3])
         return contract
 
     @staticmethod
@@ -3722,6 +3746,8 @@ class SQLiteStore:
             contract.update(onboarding_schema_contracts()[5])
         if version >= 25:
             contract.update(observation_source_schema_contracts()[5])
+        if version >= 26:
+            contract.update(caller_pairing_schema_contracts()[5])
         return contract
 
     @staticmethod
@@ -3993,6 +4019,8 @@ class SQLiteStore:
             indexes.update(onboarding_schema_contracts()[4])
         if version >= 25:
             indexes.update(observation_source_schema_contracts()[4])
+        if version >= 26:
+            indexes.update(caller_pairing_schema_contracts()[4])
         return indexes
 
     def _validate_legacy_schema_shape(self, connection: sqlite3.Connection) -> None:

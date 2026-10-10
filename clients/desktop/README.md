@@ -81,6 +81,6 @@ node scripts/check-bundle.mjs ../../.operant/gui-verification-dist
 - 桌面壳只接受固定的本机 Core 地址，不从网页输入执行路径、命令或工作目录。
 - 默认启动器已接入私有管道与固定操作桥接，密钥和签名接口不交给网页。Core 的
   `--desktop-auth-stdio` 需要原生父进程，不应手动给普通终端启动命令添加该参数。
-  已验证实际 Tauri 的管理查询、选择器与退出回收；独立 PWA/TUI 首次配对尚未实现，不能据此认为其他 HTTP 入口已认证。
+  已验证实际 Tauri 的管理查询、选择器与退出回收；独立客户端的技能目录配对增量已接入，仍待真实验收。其他 HTTP 入口不能据此视为已认证。
 - 模型登录通过受限的 `open_model_oauth` 命令打开官方 OpenAI/Google 页面，回调须匹配当前 Core；不提供任意链接打开权限。真实账号授权结果见 [本轮验收](../../docs/design/onboarding-ux/acceptance.md)。
 - 本机构建、安装验证和正式分发是不同阶段。版本范围见 [根 README](../../README.md)，安全边界见 [SECURITY](../../SECURITY.md)。

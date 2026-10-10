@@ -1,4 +1,4 @@
-// Generated from the three frozen OpenAPI schemas by scripts/generate-native-core-routes.mjs.
+// Generated from the four OpenAPI schemas by scripts/generate-native-core-routes.mjs.
 // Do not hand-edit this route table.
 export const nativeCoreRoutes = [
   {
@@ -140,6 +140,12 @@ export const nativeCoreRoutes = [
     "deviceAuth": false
   },
   {
+    "operationId": "getCallerRequest",
+    "method": "GET",
+    "pathTemplate": "/v1/local-callers/requests/result",
+    "deviceAuth": false
+  },
+  {
     "operationId": "getContainerWriter",
     "method": "GET",
     "pathTemplate": "/v1/writer-workspaces/{workspace_id}/container",
@@ -215,6 +221,12 @@ export const nativeCoreRoutes = [
     "operationId": "installLocalCapabilityPlugin",
     "method": "POST",
     "pathTemplate": "/v1/local-control/plugins",
+    "deviceAuth": false
+  },
+  {
+    "operationId": "listCallerDevices",
+    "method": "GET",
+    "pathTemplate": "/v1/local-callers/devices",
     "deviceAuth": false
   },
   {
@@ -449,6 +461,12 @@ export const nativeCoreRoutes = [
     "operationId": "resumeLocalControlSession",
     "method": "POST",
     "pathTemplate": "/v1/local-control/sessions/{session_id}/resume",
+    "deviceAuth": false
+  },
+  {
+    "operationId": "revokeCallerDevice",
+    "method": "POST",
+    "pathTemplate": "/v1/local-callers/devices/{device_id}/revoke",
     "deviceAuth": false
   },
   {

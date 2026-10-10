@@ -16,11 +16,15 @@ const MAX_TEXT_BYTES: u64 = 1024 * 1024;
 const MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const MAX_QUERY_BYTES: usize = 4096;
 const IDENTITY_PATH: &str = "/internal/local-caller/identity";
+const PAIRING_CHALLENGE_PATH: &str = "/v1/local-callers/challenges";
+const PAIRING_CHALLENGE_BODY: &str = "{\"ttl_seconds\":120}";
 const ONBOARDING_SCHEMA: &str =
     include_str!("../../../../sdk/protocol/schema/operant-onboarding.openapi.json");
 const PHASE56_SCHEMA: &str =
     include_str!("../../../../sdk/protocol/schema/operant-phase56.openapi.json");
 const BETA_SCHEMA: &str = include_str!("../../../../sdk/protocol/schema/operant-beta.openapi.json");
+const CALLER_PAIRING_SCHEMA: &str =
+    include_str!("../../../../sdk/protocol/schema/operant-caller-pairing.openapi.json");
 const ONBOARDING_OPERATIONS: &[&str] = &[
     "bootstrapSetup",
     "listModelConnections",
@@ -109,6 +113,11 @@ const BETA_OPERATIONS: &[&str] = &[
     "removeContainerWriter",
     "startContainerWriter",
     "stopContainerWriter",
+];
+const CALLER_PAIRING_OPERATIONS: &[&str] = &[
+    "listCallerDevices",
+    "revokeCallerDevice",
+    "getCallerRequest",
 ];
 const REQUEST_HEADERS: &[&str] = &[
     "content-type",
@@ -219,6 +228,43 @@ impl LocalCoreBridge {
             &headers,
             body,
             deadline,
+            false,
+        )?;
+        read_response(&mut stream, deadline)
+    }
+
+    /// Called only after native UI confirmation. Never expose this method as
+    /// an operation ID or accept scope, TTL, body, or path from the WebView.
+    pub(crate) fn request_approved_pairing(&self) -> Result<BridgeResponse, BridgeError> {
+        let operation = caller_pairing_spec("createCallerChallenge")?;
+        if operation.method != "POST" || operation.path_template != PAIRING_CHALLENGE_PATH {
+            return Err(BridgeError::SchemaUnavailable);
+        }
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).map_err(|_| BridgeError::TransportFailed)?;
+        let idempotency = format!(
+            "caller-pairing-{}",
+            random
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        let headers = vec![
+            ("content-type".to_owned(), "application/json".to_owned()),
+            ("idempotency-key".to_owned(), idempotency),
+        ];
+        let mut stream = self.connect()?;
+        self.verify_identity_on(&mut stream)?;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        self.send_signed(
+            &mut stream,
+            operation.method,
+            PAIRING_CHALLENGE_PATH,
+            "",
+            &headers,
+            PAIRING_CHALLENGE_BODY,
+            deadline,
+            true,
         )?;
         read_response(&mut stream, deadline)
     }
@@ -242,7 +288,7 @@ impl LocalCoreBridge {
 
     fn verify_identity_on(&self, stream: &mut TcpStream) -> Result<(), BridgeError> {
         let deadline = Instant::now() + Duration::from_secs(8);
-        let nonce = self.send_signed(stream, "GET", IDENTITY_PATH, "", &[], "", deadline)?;
+        let nonce = self.send_signed(stream, "GET", IDENTITY_PATH, "", &[], "", deadline, false)?;
         let body = read_response(stream, deadline).map_err(|error| {
             if error == BridgeError::RedirectRejected {
                 error
@@ -275,6 +321,7 @@ impl LocalCoreBridge {
         headers: &[(String, String)],
         body: &str,
         deadline: Instant,
+        native_confirmation: bool,
     ) -> Result<String, BridgeError> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -308,6 +355,18 @@ impl LocalCoreBridge {
             signed.nonce,
             signed.signature,
         );
+        if native_confirmation {
+            if method != "POST" || path != PAIRING_CHALLENGE_PATH || !query.is_empty() {
+                return Err(BridgeError::InvalidParameter);
+            }
+            let confirmation = self
+                .key
+                .sign_native_confirmation(&signed.nonce, body.as_bytes())
+                .map_err(|_| BridgeError::InvalidBody)?;
+            request.push_str(&format!(
+                "X-Operant-Native-Confirmation: {confirmation}\r\n"
+            ));
+        }
         for (name, value) in headers {
             request.push_str(&format!("{name}: {value}\r\n"));
         }
@@ -325,9 +384,40 @@ fn operation_spec(id: &str) -> Result<OperationSpec, BridgeError> {
         PHASE56_SCHEMA
     } else if BETA_OPERATIONS.contains(&id) {
         BETA_SCHEMA
+    } else if CALLER_PAIRING_OPERATIONS.contains(&id) {
+        CALLER_PAIRING_SCHEMA
     } else {
         return Err(BridgeError::UnknownOperation);
     };
+    let operation = lookup_schema_operation(schema, id)?;
+    let path = operation.path_template.as_str();
+    if !path.starts_with("/v1/setup/")
+        && !path.starts_with("/v1/local-control/")
+        && !path.starts_with("/v1/remote-control/")
+        && path != "/v1/extensions"
+        && !path.starts_with("/v1/extensions/")
+        && path != "/v1/workbench/extensions/commands"
+        && !path.starts_with("/v1/workbench/threads/")
+        && !path.starts_with("/v1/graph/runs/")
+        && !path.starts_with("/v1/writer-workspaces/")
+        && !path.starts_with("/v1/writer-conflicts/")
+        && path != "/v1/merge-runs"
+        && !path.starts_with("/v1/merge-runs/")
+        && !path.starts_with("/v1/local-callers/")
+    {
+        return Err(BridgeError::SchemaUnavailable);
+    }
+    Ok(operation)
+}
+
+fn caller_pairing_spec(id: &str) -> Result<OperationSpec, BridgeError> {
+    if id != "createCallerChallenge" {
+        return Err(BridgeError::UnknownOperation);
+    }
+    lookup_schema_operation(CALLER_PAIRING_SCHEMA, id)
+}
+
+fn lookup_schema_operation(schema: &str, id: &str) -> Result<OperationSpec, BridgeError> {
     let root: Value = serde_json::from_str(schema).map_err(|_| BridgeError::SchemaUnavailable)?;
     for (path, methods) in root
         .get("paths")
@@ -344,21 +434,6 @@ fn operation_spec(id: &str) -> Result<OperationSpec, BridgeError> {
                     "delete" => "DELETE",
                     _ => return Err(BridgeError::SchemaUnavailable),
                 };
-                if !path.starts_with("/v1/setup/")
-                    && !path.starts_with("/v1/local-control/")
-                    && !path.starts_with("/v1/remote-control/")
-                    && path != "/v1/extensions"
-                    && !path.starts_with("/v1/extensions/")
-                    && path != "/v1/workbench/extensions/commands"
-                    && !path.starts_with("/v1/workbench/threads/")
-                    && !path.starts_with("/v1/graph/runs/")
-                    && !path.starts_with("/v1/writer-workspaces/")
-                    && !path.starts_with("/v1/writer-conflicts/")
-                    && path != "/v1/merge-runs"
-                    && !path.starts_with("/v1/merge-runs/")
-                {
-                    return Err(BridgeError::SchemaUnavailable);
-                }
                 return Ok(OperationSpec {
                     method,
                     path_template: path.clone(),
@@ -670,6 +745,7 @@ mod tests {
         let onboarding: Value = serde_json::from_str(ONBOARDING_SCHEMA).unwrap();
         let phase56: Value = serde_json::from_str(PHASE56_SCHEMA).unwrap();
         let beta: Value = serde_json::from_str(BETA_SCHEMA).unwrap();
+        let caller_pairing: Value = serde_json::from_str(CALLER_PAIRING_SCHEMA).unwrap();
         let collect = |schema: &Value, prefix: &str| -> HashSet<String> {
             schema["paths"]
                 .as_object()
@@ -736,10 +812,16 @@ mod tests {
             expected_beta,
             BETA_OPERATIONS.iter().map(|id| (*id).to_owned()).collect()
         );
+        let caller_ops = collect(&caller_pairing, "/v1/local-callers/");
+        assert!(caller_ops.contains("createCallerChallenge"));
+        for id in CALLER_PAIRING_OPERATIONS {
+            assert!(caller_ops.contains(*id), "{id}");
+        }
         for id in ONBOARDING_OPERATIONS
             .iter()
             .chain(PHASE56_OPERATIONS)
             .chain(BETA_OPERATIONS)
+            .chain(CALLER_PAIRING_OPERATIONS)
         {
             assert!(operation_spec(id).is_ok(), "{id}");
         }
@@ -747,6 +829,10 @@ mod tests {
             "pairRemoteDevice",
             "submitRemoteCommand",
             "queryRemoteSessionResult",
+            "createCallerChallenge",
+            "pairLocalCaller",
+            "executeCallerCommand",
+            "readCallerRequest",
             "/internal/local-caller/identity",
         ] {
             assert!(matches!(
@@ -851,6 +937,18 @@ mod tests {
             .all(|error| *error == BridgeError::InvalidHeader));
         assert_eq!(bad[8], BridgeError::InvalidHeader);
         assert_eq!(bad[9], BridgeError::InvalidBody);
+        assert_eq!(
+            bridge
+                .request(
+                    "getSetupState",
+                    &[],
+                    "",
+                    &[("X-Operant-Native-Confirmation", "forged")],
+                    "",
+                )
+                .err(),
+            Some(BridgeError::InvalidHeader)
+        );
         assert_eq!(
             bridge
                 .request(
@@ -984,6 +1082,48 @@ mod tests {
             )
             .unwrap();
         assert_eq!(response.status, 200);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn approved_pairing_uses_fixed_body_private_confirmation_and_same_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let (bridge, key) = test_bridge(&listener);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let identity = read_request(&mut stream);
+            let proof = core_proof(&key, header(&identity, "x-operant-caller-nonce"));
+            reply(
+                &mut stream,
+                "200 OK",
+                &format!("{{\"protocol\":\"local-caller.core.v1\",\"proof\":\"{proof}\"}}"),
+                "",
+            );
+            let challenge = read_request(&mut stream);
+            assert!(challenge.starts_with("POST /v1/local-callers/challenges HTTP/1.1"));
+            assert!(challenge.ends_with(PAIRING_CHALLENGE_BODY));
+            assert!(header(&challenge, "idempotency-key").starts_with("caller-pairing-"));
+            let canonical = format!(
+                "local-caller.confirm.v1\nPOST\n/v1/local-callers/challenges\n{}\n{:x}",
+                header(&challenge, "x-operant-caller-nonce"),
+                Sha256::digest(PAIRING_CHALLENGE_BODY.as_bytes())
+            );
+            let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+            mac.update(canonical.as_bytes());
+            let expected: String = mac
+                .finalize()
+                .into_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(
+                header(&challenge, "x-operant-native-confirmation"),
+                expected
+            );
+            reply(&mut stream, "200 OK", "{\"ticket_id\":\"ticket_1\"}", "");
+        });
+        let result = bridge.request_approved_pairing().unwrap();
+        assert_eq!(result.status, 200);
         server.join().unwrap();
     }
 

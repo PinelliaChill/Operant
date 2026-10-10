@@ -10,4 +10,7 @@
 .skill-sources-card li span { margin: 3px 0; color: var(--accent-on-subtle); }
 .skill-sources-card li small { color: var(--text-secondary); overflow-wrap: anywhere; }
 .skill-sources-card form, .skill-sources-card .path-input { margin-bottom: 14px; }
+.skill-sources-card form label { display: block; margin: 12px 0 6px; color: var(--text-primary); font-size: var(--font-size-body); }
+.skill-sources-card form textarea { min-height: 82px; resize: vertical; }
+.skill-sources-ticket textarea { display: block; width: 100%; min-height: 96px; resize: vertical; overflow-wrap: anywhere; margin: 12px 0; }
 @media (max-width: 680px) { .skill-sources { padding: 20px 16px 100px; } }

@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import posixpath
 import re
-from urllib.parse import unquote
+from collections.abc import Callable
+from urllib.parse import unquote, urlsplit
 
 from fastapi import Request
 from starlette.responses import JSONResponse
@@ -161,3 +162,131 @@ class LocalCallerProofMiddleware:
     async def _deny(scope: Scope, receive: Receive, send: Send) -> None:
         response = JSONResponse(_DENIED, status_code=403, headers={"Cache-Control": "no-store"})
         await response(scope, receive, send)
+
+
+class SkillSourceCallerMiddleware:
+    """Reject direct source management before the generic receipt or path lookup."""
+
+    def __init__(self, app: ASGIApp, authorizer: Callable[[Request], bool] | None) -> None:
+        self.app = app
+        self.authorizer = authorizer
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if isinstance(path, str) and _may_be_protected(path, ("/v1/setup/skill-sources",), ()):
+                try:
+                    allowed = (
+                        _route(scope) is not None
+                        and self.authorizer is not None
+                        and self.authorizer(Request(scope))
+                    )
+                except Exception:
+                    allowed = False
+                if not allowed:
+                    response = JSONResponse(
+                        {"error": {"code": "caller_pairing_required", "message": "请先与桌面配对"}},
+                        status_code=403,
+                        headers={"Cache-Control": "no-store"},
+                    )
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
+class CallerPairingCorsMiddleware:
+    """Allow only local browser origins on the independent encrypted surface."""
+
+    _routes = {
+        "/v1/protocol/caller-pairing": "GET",
+        "/v1/protocol/onboarding": "GET",
+        "/v1/local-callers/pair": "POST",
+        "/v1/local-callers/commands": "POST",
+        "/v1/local-callers/requests/readback": "POST",
+    }
+    _headers = frozenset({"accept", "content-type", "idempotency-key", "x-operant-client-version"})
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    @staticmethod
+    def _origin(value: str) -> bool:
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+            host = parsed.hostname
+            expected = f"http://{'[::1]' if host == '::1' else host}:{port}"
+            return (
+                host in {"127.0.0.1", "::1"}
+                and parsed.scheme == "http"
+                and port is not None
+                and 1 <= port <= 65535
+                and value == expected
+            )
+        except (ValueError, UnicodeError):
+            return False
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") not in self._routes:
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
+        origins = request.headers.getlist("origin")
+        if not origins:
+            await self.app(scope, receive, send)
+            return
+        if len(origins) == 1 and origins[0] in {
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+        }:
+            # These origins use the separate fixed native CORS/proof boundary.
+            await self.app(scope, receive, send)
+            return
+        if len(origins) != 1 or not self._origin(origins[0]):
+            await LocalCallerProofMiddleware._deny(scope, receive, send)
+            return
+        origin = origins[0]
+        method = self._routes[scope["path"]]
+        raw_path = scope.get("raw_path", b"")
+        if raw_path != scope["path"].encode("ascii") or scope.get("query_string"):
+            await LocalCallerProofMiddleware._deny(scope, receive, send)
+            return
+        if request.method == "OPTIONS":
+            wanted = request.headers.get("access-control-request-method")
+            names = {
+                value.strip().lower()
+                for value in request.headers.get("access-control-request-headers", "").split(",")
+                if value.strip()
+            }
+            if wanted != method or not names.issubset(self._headers):
+                await LocalCallerProofMiddleware._deny(scope, receive, send)
+                return
+            response = JSONResponse(
+                {},
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Methods": method,
+                    "Access-Control-Allow-Headers": ", ".join(sorted(self._headers)),
+                    "Access-Control-Max-Age": "600",
+                    "Cache-Control": "no-store",
+                    "Vary": "Origin",
+                },
+            )
+            await response(scope, receive, send)
+            return
+
+        async def cors_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = [
+                    (key, value)
+                    for key, value in message.get("headers", ())
+                    if key.lower() != b"access-control-allow-origin"
+                ]
+                headers.extend(
+                    [(b"access-control-allow-origin", origin.encode("ascii")), (b"vary", b"Origin")]
+                )
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, cors_send)

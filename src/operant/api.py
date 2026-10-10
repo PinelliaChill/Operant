@@ -78,6 +78,7 @@ from operant.artifacts import (
     ArtifactValidationError,
 )
 from operant.auth import OAuthConfig, OAuthControl, install_oauth_control, oauth_config_from_env
+from operant.caller_pairing.api import install_caller_pairing_routes
 from operant.domain.actions import CommandExecution, CommandExecutionStatus
 from operant.domain.commands import ContextBaselineOperation, SlashCommandKind
 from operant.domain.context import ContextRevision, ReferenceRequest
@@ -104,7 +105,8 @@ from operant.domain.threads import (
     ThreadStatus,
     Turn,
 )
-from operant.local_caller import DEVICE_AUTHENTICATED_ROUTES
+from operant.local_caller import SELF_AUTHENTICATED_ROUTES
+from operant.local_caller_middleware import CallerPairingCorsMiddleware, SkillSourceCallerMiddleware
 from operant.multiwriter import TrustedGitMultiWriterAdapter
 from operant.multiwriter.container import ContainerWriterLifecycle
 from operant.package_resources import protocol_schema_path
@@ -793,7 +795,9 @@ def _command_scope(method: str, path: str) -> str | None:
         return None
     # Pairing and encrypted device messages authenticate and journal within
     # their own services. Never reserve a generic receipt before that check.
-    if (method, path) in DEVICE_AUTHENTICATED_ROUTES:
+    if (method, path) in SELF_AUTHENTICATED_ROUTES or (
+        method == "POST" and path == "/v1/local-callers/challenges"
+    ):
         return None
     if path in {"/v1/models/discover"} or (
         path.startswith("/v1/models/") and path.endswith("/health")
@@ -1369,6 +1373,7 @@ def create_app(
     phase45_policy_engine: Any | None = None,
     phase45_approval_reviewer: Any | None = None,
     phase56_local_authorizer: Authorizer | None = None,
+    caller_confirmation_authorizer: Authorizer | None = None,
     phase56_relay_authorizer: Authorizer | None = None,
     phase56_remote_executor: Any | None = None,
     phase56_memory_connectors: Mapping[str, Any] | None = None,
@@ -3781,6 +3786,22 @@ def create_app(
         app, service, setup_repository, local_authorizer=phase56_local_authorizer
     )
     install_setup_app_routes(app, local_authorizer=phase56_local_authorizer)
+    install_caller_pairing_routes(
+        app,
+        service,
+        local_authorizer=phase56_local_authorizer or (lambda request: False),
+        confirmation_authorizer=caller_confirmation_authorizer or (lambda request: False),
+    )
+
+    @app.get(
+        "/v1/protocol/caller-pairing",
+        response_model=None,
+        operation_id="negotiateCallerPairing",
+    )
+    def negotiate_caller_pairing() -> dict[str, Any]:
+        from operant.application.protocol_metadata import caller_pairing_protocol_metadata
+
+        return caller_pairing_protocol_metadata()
 
     @app.get("/v1/protocol/onboarding", operation_id="negotiateOnboarding")
     def negotiate_onboarding() -> dict[str, Any]:
@@ -3905,6 +3926,8 @@ def create_app(
         _ArtifactRequestBodyLimitMiddleware,
         max_body_bytes=MAX_ARTIFACT_REQUEST_BODY_BYTES,
     )
+    app.add_middleware(SkillSourceCallerMiddleware, authorizer=phase56_local_authorizer)
+    app.add_middleware(CallerPairingCorsMiddleware)
     configured_oauth = oauth_config if oauth_config is not None else oauth_config_from_env()
     if configured_oauth is not None:
         oauth_control = OAuthControl(configured_oauth, http_client=oauth_http_client)

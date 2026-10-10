@@ -12,6 +12,8 @@ test('request errors give recovery action without raw HTTP or English codes', ()
   assert.match(requestErrorCopy({ code: 'command_outcome_unknown', message: 'unknown' }), /勿再次提交/);
   assert.doesNotMatch(requestErrorCopy({ code: 'http_502', message: 'model discovery failed' }), /http_|model discovery/);
   assert.match(requestErrorCopy({ code: 'unmapped_error', message: 'internal failure' }), /刷新并核对结果/);
+  assert.match(requestErrorCopy(new Error('Load failed')), /刷新并核对结果/);
+  assert.doesNotMatch(requestErrorCopy(new Error('Load failed')), /Load failed/);
 });
 
 test('specific Chinese service guidance remains visible', () => {

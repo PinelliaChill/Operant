@@ -47,6 +47,7 @@ class OperantTui(App[None]):
         Binding("alt+4", "experience", "经验与授权"),
         Binding("alt+5", "conversation", "会话工作台"),
         Binding("alt+6", "remote", "远程设备"),
+        Binding("alt+7", "caller_skills", "技能目录"),
         Binding("/", "command", "命令"),
         Binding("ctrl+q", "close_terminal_or_quit", "关闭终端 / 退出", priority=True),
         Binding("escape", "dismiss_layer", "关闭"),
@@ -427,10 +428,15 @@ class OperantTui(App[None]):
 
         self.push_screen(RemoteScreen(self.controller))
 
+    def action_caller_skills(self) -> None:
+        from .caller_pairing_screen import CallerPairingScreen
+
+        self.push_screen(CallerPairingScreen(self.controller))
+
     def action_help(self) -> None:
         self.query_one("#error", Static).update(
             "Tab/Shift+Tab 移动焦点；Alt+1/2/3 切换窗格；/ 聚焦命令输入；"
-            "Esc 关闭；取消需要二次确认。"
+            "Alt+7 技能目录；Esc 关闭；取消需要二次确认。"
         )
 
     def action_command(self) -> None:

@@ -40,7 +40,11 @@ def saved_sources(settings: SkillSourceSettings) -> dict[str, str]:
 
 class SkillSourceRefresh(Protocol):
     def __call__(
-        self, workspace_ref: str | Path | None = None, *, discover: bool = False
+        self,
+        workspace_ref: str | Path | None = None,
+        *,
+        discover: bool = False,
+        gateway_override: Phase45ActionGateway | None = None,
     ) -> list[SkillSourceView]: ...
 
 

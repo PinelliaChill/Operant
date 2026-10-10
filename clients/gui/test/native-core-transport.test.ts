@@ -47,6 +47,9 @@ test('native transport uses only exact schema operations across protected client
     ['GET', '/v1/graph/runs/run_1/writer-workspaces', 'listWriterWorkspaces', { run_id: 'run_1' }],
     ['POST', '/v1/merge-runs/run_1/finalize', 'finalizeMergeRun', { merge_run_id: 'run_1' }],
     ['POST', '/v1/writer-workspaces/workspace_1/container/start', 'startContainerWriter', { workspace_id: 'workspace_1' }],
+    ['GET', '/v1/local-callers/devices', 'listCallerDevices', {}],
+    ['GET', '/v1/local-callers/requests/result', 'getCallerRequest', {}],
+    ['POST', '/v1/local-callers/devices/caller_0123456789abcdef0123456789abcdef/revoke', 'revokeCallerDevice', { device_id: 'caller_0123456789abcdef0123456789abcdef' }],
   ];
   const seen: unknown[] = [];
   const transport = createNativeCoreTransport(async (value) => {
@@ -98,6 +101,8 @@ test('unknown or malformed protected requests never fall back to unsigned fetch'
     request('POST', '/v1/writer-workspaces/workspace_1/container/unknown'),
     request('POST', '/v1/workbench/threads/thread_1/skill-commands/retry'),
     request('GET', '/v1/graph/runs/run_1/writer-conflicts/unknown'),
+    request('POST', '/v1/local-callers/pair'),
+    request('POST', '/v1/local-callers/challenges'),
     { ...request('GET', '/v1/setup/state'), url: 'https://example.com/v1/setup/state' },
     { ...request('GET', '/v1/setup/state'), path: '/v1/setup/other' },
     { ...request('GET', '/v1/setup/state'), url: `${base}/v1/protocol/onboarding` },

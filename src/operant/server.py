@@ -17,8 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from operant.api import create_app
 from operant.auth import oauth_config_from_env
-from operant.local_caller import DEVICE_AUTHENTICATED_ROUTES, LocalCallerAuthority
-from operant.local_caller_middleware import LocalCallerProofMiddleware
+from operant.local_caller import SELF_AUTHENTICATED_ROUTES, LocalCallerAuthority
+from operant.local_caller_middleware import CallerPairingCorsMiddleware, LocalCallerProofMiddleware
 from operant.remote_control.gateway import RemoteGatewayConfig
 from operant.settings import load_local_env
 
@@ -27,6 +27,7 @@ _DEFAULT_WS_MAX_SIZE = 512 * 1024
 _DESKTOP_MANAGEMENT_PREFIXES = (
     "/v1/setup",
     "/v1/remote-control",
+    "/v1/local-callers",
     "/v1/local-control",
     "/v1/extensions",
     "/v1/writer-workspaces",
@@ -196,6 +197,7 @@ def build_server_config(
         oauth_config=oauth_config,
         setup_allowed_origins=_setup_origins_from_env(values),
         phase56_local_authorizer=None if authority is None else authority.is_trusted,
+        caller_confirmation_authorizer=None if authority is None else authority.is_native_confirmed,
     )
     if authority is not None:
         caller_authority = authority
@@ -216,7 +218,7 @@ def build_server_config(
             authority=authority,
             protected_prefixes=_DESKTOP_MANAGEMENT_PREFIXES,
             protected_path_patterns=_DESKTOP_MANAGEMENT_PATH_PATTERNS,
-            public_exact_routes=DEVICE_AUTHENTICATED_ROUTES,
+            public_exact_routes=SELF_AUTHENTICATED_ROUTES,
         )
     if desktop:
         # CORS handles only fixed-origin preflights before proof verification;
@@ -240,6 +242,9 @@ def build_server_config(
             allow_credentials=False,
             max_age=600,
         )
+    # Local browser preflights on the encrypted caller domain must be handled
+    # before the native-only CORS/proof guards. Other management stays protected.
+    application.add_middleware(CallerPairingCorsMiddleware)
     return uvicorn.Config(
         application,
         host=host,

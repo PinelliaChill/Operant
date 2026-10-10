@@ -204,7 +204,7 @@ def test_v22_cursor_migration_backfills_above_legacy_rowid(tmp_path: Path) -> No
             (command.command_id,),
         ).fetchone()[0]
     assert store.schema_version() == 22
-    assert store.migrate() == 25
+    assert store.migrate() == 26
     recovered = service.repository.list_command_events(command.host_id, after_cursor=legacy_cursor)
     assert recovered[0]["status"] == "completed"
     assert recovered[0]["cursor"] > legacy_cursor

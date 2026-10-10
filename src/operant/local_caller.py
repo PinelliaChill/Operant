@@ -37,6 +37,7 @@ PROTOCOL_HEADER = "x-operant-caller-protocol"
 TIMESTAMP_HEADER = "x-operant-caller-timestamp"
 NONCE_HEADER = "x-operant-caller-nonce"
 SIGNATURE_HEADER = "x-operant-caller-signature"
+NATIVE_CONFIRMATION_HEADER = "x-operant-native-confirmation"
 IDEMPOTENCY_HEADER = "idempotency-key"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_CLOCK_SKEW_SECONDS = 30
@@ -48,6 +49,14 @@ DEVICE_AUTHENTICATED_ROUTES = frozenset(
         ("POST", "/v1/remote-control/session-query"),
     }
 )
+PAIRED_CALLER_ROUTES = frozenset(
+    {
+        ("POST", "/v1/local-callers/pair"),
+        ("POST", "/v1/local-callers/commands"),
+        ("POST", "/v1/local-callers/requests/readback"),
+    }
+)
+SELF_AUTHENTICATED_ROUTES = DEVICE_AUTHENTICATED_ROUTES | PAIRED_CALLER_ROUTES
 
 _METHOD = re.compile(rb"(?:GET|POST|PUT|PATCH|DELETE)")
 _PATH = re.compile(rb"/[A-Za-z0-9._~/-]*")
@@ -192,6 +201,34 @@ class LocalCallerAuthority:
             return None
         return hmac.new(self._secret, b"local-caller.core.v1\n" + nonce, hashlib.sha256).hexdigest()
 
+    def is_native_confirmed(self, request: Request) -> bool:
+        """Only the dedicated native confirmation path can set this marker."""
+        return self.is_trusted(request) and (
+            getattr(request.state, "_operant_native_confirmation_marker", None) is self._marker
+        )
+
+    def _mark_native_confirmation(
+        self, request: Request, method: bytes, target: bytes, nonce: bytes, body: bytes
+    ) -> None:
+        request.state._operant_native_confirmation_marker = None
+        if method != b"POST" or target != b"/v1/local-callers/challenges":
+            return
+        supplied = _single_header(request, NATIVE_CONFIRMATION_HEADER)
+        if supplied is None or not _SIGNATURE.fullmatch(supplied):
+            return
+        message = b"\n".join(
+            (
+                b"local-caller.confirm.v1",
+                method,
+                target,
+                nonce,
+                hashlib.sha256(body).hexdigest().encode("ascii"),
+            )
+        )
+        expected = hmac.new(self._secret, message, hashlib.sha256).hexdigest().encode("ascii")
+        if hmac.compare_digest(supplied, expected):
+            request.state._operant_native_confirmation_marker = self._marker
+
     async def authenticate(self, request: Request) -> bool:
         """Return only a boolean; never disclose proof material or diagnostics."""
         if not _loopback_request(request):
@@ -261,6 +298,7 @@ class LocalCallerAuthority:
                 self._nonces[nonce] = int(timestamp) + MAX_CLOCK_SKEW_SECONDS
             request.state._operant_local_caller_marker = self._marker
             request.state.local_caller_trusted = True
+            self._mark_native_confirmation(request, method, raw_target, nonce, body)
             return True
         except Exception:
             return False

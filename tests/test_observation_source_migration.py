@@ -54,7 +54,7 @@ def test_v25_preserves_v24_data_and_frozen_history(tmp_path: Path) -> None:
     )
     repository.record_observation(observation)
     history = store.list_applied_migrations()
-    assert store.migrate() == 25
+    assert store.migrate(25) == 25
     assert store.list_applied_migrations()[:24] == history
     assert repository.get_observation(target.target_id, observation.observation_hash) == observation
     assert repository.get_observation_source(observation.observation_id) is None
@@ -71,9 +71,9 @@ def test_v25_preserves_v24_data_and_frozen_history(tmp_path: Path) -> None:
 
 def test_v25_empty_rollback_and_missing_table_fail_closed(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "empty.sqlite3")
-    store.initialize()
+    store.migrate(25)
     assert store.rollback(24, isolated=True) == 24
-    assert store.migrate() == 25
+    assert store.migrate(25) == 25
     with store._connect() as connection:
         connection.execute("DROP TABLE capability_observation_sources")
     with pytest.raises(MigrationError, match="capability_observation_sources"):
@@ -82,7 +82,7 @@ def test_v25_empty_rollback_and_missing_table_fail_closed(tmp_path: Path) -> Non
 
 def test_v25_provenance_foreign_keys_checks_and_nonempty_rollback(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "sources.sqlite3")
-    store.initialize()
+    store.migrate(25)
     repository = SQLiteRemoteExecutionRepository(store)
     now = datetime.now(timezone.utc)
     target = repository.register_target(

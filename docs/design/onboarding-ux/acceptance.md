@@ -6,8 +6,9 @@
 当前 S3：Gemini 在不绑定结算的新免费项目完成真实授权，正式 CLI 的 v1beta 目录发现45个模型。
 冻结 `91034fa` 的原生对话使用 `gemini-3.5-flash-lite` 完成实际文件读取、流式回复、自动续期、
 运行取消和撤销；临时 Token 已删除，原 API 连接保留。此前 2.5 模型的网络失败和404保留，
-不重放。`55f974a` 的双 Python 完整门禁与 GUI 已通过；91034fa 的新完整 CI 仍在运行。
-ChatGPT 的 Mountain 组织策略尚无变更，不重复登录。CodeQL #45 当前 PR 实例仍开放。
+不重放。`91034fa` 与 `f2f75dd` 的双 Python 完整门禁、TUI 定向和 GUI 均已通过。
+ChatGPT 的 Mountain 组织策略尚无变更，不重复登录。CodeQL #45 的 PR 实例现报告 fixed；
+最新已提交 f2f75dd 的三类扫描结果均为0，不能据此替代当前增量的安全与真实验收。
 用户已明确本轮只用免费额度，不充值、启用付费结算或自动充值；调用前核对项目的免费层状态。
 
 | 需求 | 实现状态 | 验收状态 | 场景与结果 |
@@ -649,3 +650,60 @@ Gemini表单原标签“项目编号”与实际请求的project_id不一致，�
 
 当前PR的CodeQL #45实例在精确c3提交仍open（全局state字段未返回值，以实例state为准）；
 未关闭、抑制或dismiss，不能把分析作业成功当作无安全问题。
+
+### 独立客户端技能目录配对（2026-10-10，实施中）
+
+本增量沿用 UX-08～10 的来源管理与权限边界，不替代原18项或两家OAuth验收。新增独立
+`caller-pairing.v1` Schema、TS/Python Client 和 SQLite v26；冻结的 Phase56 协议及旧迁移
+校验和保持。默认来源接口在通用收据和目录查询前拒绝未认证请求。桌面经操作系统确认
+生成短时单次码，浏览器/PWA/TUI 只获得 `skill_source.manage`，不获得其他设置或工具权限。
+
+| 要求 | 实现状态 | 验收状态 | 当前证据 |
+| --- | --- | --- | --- |
+| 默认拒绝未配对来源请求 | 已实现 | 自动检查通过，真实入口未测 | 隔离正式 Core TestClient 的 GET/POST/DELETE 403，通用账本0；签名但未原生确认不能发码 |
+| 独立身份、加密及审批续行 | 已实现 | 自动检查通过，真实入口未测 | P-256/HKDF/AES-GCM，真实Gateway ASK→批准→显式continue，原请求回执；nonce、撤销和设备锁负例 |
+| 新迁移与旧协议兼容 | 已实现 | 自动检查通过 | v25→26历史保持、空回滚、非空回滚拒绝；新生成器两次重生成一致，旧协议不变 |
+| 桌面系统确认、发码与撤销 | 已实现 | 真实入口未测 | Rust signer/bridge测试与类型检查通过；真实OS弹窗和窗口流程待验收 |
+| 浏览器/PWA与TUI | 部分 | 定向检查中，真实入口未测 | 正式SDK接线、配对码、公钥pin、原请求回读和未知结果屏障；完整构建及实际配对待验证 |
+| 完整门禁及隔离候选 | 部分 | 未测 | 本轮增量未冻结；不能复用上一提交全CI冒称通过 |
+
+`f2f75dd` 的CI38057595042已全部成功：Python3.10/3.12各 **1664通过、16跳过、1警告**，
+GUI213、TUI定向成功，见 ci-f2f75dd-latest.json 与 ci-f2f75dd-all-jobs.log。新增量仍有修改，
+这些结果仅属于旧提交。初轮完整本机pytest在收集阶段遇到缺Textual依赖，未执行测试；
+修复为根环境明确跳过，并在独立TUI环境运行实际挂载测试。失败日志保留
+pairing-full-pytest-initial.log，不能计为完整门禁。此前v26索引契约映射错误已修正，正式
+全新临时库初始化通过；原v1～25没有改写。
+
+后续实际原生回读发现新窄CORS误拦 tauri://localhost 的公开协议查询，界面显示连接失败；
+已修复为保留独立原生CORS边界，并覆盖三种固定原生Origin的协议GET回归。修复后真实
+候选查询恢复，8个来源正确显示；自动来源没有无效“移除”按钮，错误统一使用中文提示。
+
+原生确认的初版未绑定父窗口，自定义按钮下按Esc后生成了一个票据；未拿该票据配对，
+设备登记仍为0。这属于失败，不算取消验收。修正为绑定主窗口的系统sheet和标准
+OK/Cancel，仅精确 `MessageDialogResult::Ok` 才发码。真实sheet已显示正确权限内容，
+Esc取消后票据总数仍为1、设备0，没有新增票据，见 caller-pairing-cancel-native-result.json。
+当前最终sheet等待User当次授权；浏览器3031验收页已就绪，尚未建立浏览器或TUI设备。
+
+最新GUI222/222、类型、隔离构建与包体检查通过，见 gui-caller-pairing-report.json；
+TUI普通页改为名称选择和绑定回执续行，内部编号/JSON默认折叠，独立Textual挂载2/2通过。
+Core修正wheel `5e8a193c5f3ded5e330632a7db734ceccd45636060eb1a8f79f81385136200f8`
+的297项包文件与安装副本一致；候选二进制及GUI摘要见同一原生取消证据。运行数据仅为
+本轮verify-caller-pairing-state，无凭据注入、模型调用或用户库迁移。早期完整测试句柄
+失效后只读核对确认进程不再存在，保留不完整日志；随后启动有PID和终态文件的持续runner，
+当前仍运行，未算完整通过。最终Rust确认与CoreCORS修复晚于该runner输入，需精确提交CI
+及定向复验覆盖，不能把旧输入检查当作最终门禁。
+
+CodeQL状态已直接读取alert实例与analyses：#45 在 refs/pull/45/head 的实例为 fixed
+（关联91034fa），f2f75dd 的 Python/JavaScript-TypeScript/Actions 三类analysis结果均为0。
+顶层alert.state为null，没有自行dismiss或造sanitizer。见 codeql45-pr-instances-current.json
+和 codeql-pr-analyses-current.json；这一扫描状态不替代未配对来源、受控写入和实际配对验证。
+
+完整本机runner已结束，exit1（2301.57秒）：旧v22游标迁移测试把最新版本固定断言为25，
+当前返回26。已更新断言，仍验证旧收据保留及游标高于legacy rowid；该失败与最终配对、
+SDK、协议及CORS共26项定向复验通过，见 pairing-final-targeted.log。完整旧输入失败
+保留在 pairing-full-pytest.log / pairing-full-gate-status.json，不将其改写成整体通过；
+最终提交由新的双Python CI覆盖。最终Rust25通过/1 opt-in忽略，未将忽略当真实Core验收。
+
+User已允许本次浏览器与TUI临时配对。浏览器专用操作通道仍报告header-policy读取失败，
+原生复制/粘贴未把短时码送入浏览器输入框；没有据此重复执行技能写入。当前请求User仅在
+两个本机窗口间复制配对并连接，勿在聊天发送配对码；待回读具体结果再继续，许可不重问。
