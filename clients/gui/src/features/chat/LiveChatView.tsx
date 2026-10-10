@@ -92,21 +92,16 @@ function eventSummary(event: LiveEvent): string {
   }
   if (event.event_type.startsWith('tool.')) return '操作状态已更新';
   if (event.event_type === 'agent.failed') {
-    const message = event.payload.message;
-    return typeof message === 'string' && message.trim() ? `Agent 失败：${message}` : 'Agent 运行失败';
+    return requestErrorCopy({ code: 'agent_failed', detail: event.payload });
   }
   if (event.event_type === 'agent.cancelled') {
-    const reason = event.payload.reason;
-    return typeof reason === 'string' && reason.trim() ? `Agent 已取消：${reason}` : 'Agent 已取消';
+    return '任务已取消';
   }
-  if (event.event_type === 'agent.timed_out') return 'Agent 运行超时';
-  if (event.event_type === 'budget.exhausted') {
-    const reason = event.payload.reason;
-    return typeof reason === 'string' && reason.trim() ? `运行预算已耗尽：${reason}` : '运行预算已耗尽';
-  }
-  if (event.event_type === 'agent.no_progress') return 'Agent 因连续无进展而停止';
-  if (event.event_type === 'agent.max_turns') return 'Agent 已达到最大轮次';
-  if (event.event_type === 'session.run_failed') return 'Session 运行失败';
+  if (event.event_type === 'agent.timed_out') return '任务运行超时';
+  if (event.event_type === 'budget.exhausted') return '任务预算已用完';
+  if (event.event_type === 'agent.no_progress') return '任务连续没有进展，已停止';
+  if (event.event_type === 'agent.max_turns') return '任务已达到最大轮次';
+  if (event.event_type === 'session.run_failed') return requestErrorCopy({ code: 'session_run_failed', detail: event.payload });
   if (event.event_type.startsWith('agent.')) return '成员状态已更新';
   return '收到已提交事件';
 }
@@ -115,13 +110,14 @@ const LiveErrorBanner: React.FC<{
   code: string;
   message: string;
   recovery?: string;
+  detail?: unknown;
   onRetry?: () => void;
   onClear?: () => void;
-}> = ({ code, message, recovery, onRetry, onClear }) => (
+}> = ({ code, message, recovery, detail, onRetry, onClear }) => (
   <div className="live-alert live-alert-error" role="alert">
     <AlertTriangle size={17} aria-hidden="true" />
     <div className="live-alert-content">
-      <strong>{requestErrorCopy({ code, message, recovery })}</strong>
+      <strong>{requestErrorCopy({ code, message, recovery, detail })}</strong>
       <details><summary>查看错误详情</summary><code>{code}</code><p>{message}</p>{recovery && <code>{recovery}</code>}</details>
     </div>
     <div className="live-alert-actions">
@@ -768,6 +764,7 @@ export const LiveChatView: React.FC = () => {
           code={topError.code}
           message={topError.message}
           recovery={topError.recovery}
+          detail={topError.detail}
           onRetry={topError.retryable ? () => void reconnect() : undefined}
           onClear={clearError}
         />

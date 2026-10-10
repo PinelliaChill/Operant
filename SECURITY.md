@@ -115,7 +115,7 @@ Docker Runner。
 - stdout、stderr 和 Git diff 会截断并标记是否截断；
 - 测试失败被压缩为结构化反馈，最多保留 12,000 个字符的关键信息；
 - 连续两次相同测试失败签名会产生 `agent.no_progress` 并停止，避免无界修复循环；
-- Provider 异常只持久化经过清洗的错误类型，不保存可能含上游响应或请求信息的原始异常文本；
+- Provider 异常保留错误类型；仅已登记的固定阶段与分类可附加固定中文提示，不保存可能含上游响应、URL 或凭据的原始异常文本。未知分类不透传；
 - Session Event 会记录角色、角色版本、模型、Provider、effort、工具、审批、纠错、usage 和耗时事件；
 - Workflow Run/Event 会记录任务阶段、角色、Session、模型输出摘要和工具结果，因此本地 SQLite 本身
   属于敏感运行数据，不应上传到公共位置；

@@ -9,6 +9,7 @@ import stat
 import threading
 import time
 import uuid
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from operant.api_model_connections import install_model_connection_routes
-from operant.domain.messages import Message, MessageRole, ToolDefinition
+from operant.domain.messages import Message, MessageRole, ProviderEvent, ToolDefinition
 from operant.domain.models import ModelProfile, RoleSnapshot
 from operant.model_connections.credentials import CredentialError, CredentialStore
 from operant.model_connections.oauth import OAuthConnections, OAuthError, secret_ref
@@ -31,7 +32,7 @@ from operant.persistence.onboarding import UXRepository
 from operant.persistence.sqlite import SQLiteStore
 from operant.providers.chatgpt_responses import ChatGPTResponsesProvider
 from operant.providers.gemini_native import GeminiNativeProvider
-from operant.providers.openai_compatible import ProviderError
+from operant.providers.openai_compatible import ProviderError, provider_failure_payload
 from operant.providers.router import ConnectionProviderRouter
 
 
@@ -116,6 +117,101 @@ def _snapshot(provider: str, model_id: str, secret: str = "TOKEN") -> RoleSnapsh
             temperature=0.8,
         ),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "category"),
+    [
+        (httpx.ConnectTimeout, "connect_timeout"),
+        (httpx.ReadTimeout, "read_timeout"),
+        (httpx.WriteTimeout, "write_timeout"),
+        (httpx.PoolTimeout, "pool_timeout"),
+        (httpx.ProxyError, "proxy_error"),
+        (httpx.ConnectError, "connection_error"),
+        (httpx.RemoteProtocolError, "protocol_error"),
+        (httpx.ReadError, "network_error"),
+    ],
+)
+async def test_gemini_inference_transport_diagnostic_is_fixed_and_private(
+    exception_type: type[httpx.HTTPError], category: str
+) -> None:
+    sentinel = "SENTINEL_PRIVATE_TOKEN"
+    reports: list[tuple[int | None, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise exception_type(sentinel, request=request)
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {sentinel}"}
+
+    provider = GeminiNativeProvider(
+        auth,
+        transport=httpx.MockTransport(handler),
+        report_status=lambda _ref, status, reason: reports.append((status, reason)),
+    )
+    with pytest.raises(ProviderError) as failed:
+        _ = [
+            event
+            async for event in provider.stream(
+                snapshot=_snapshot("gemini", "gemini-2.5-flash-lite"),
+                messages=[Message(role=MessageRole.USER, content="hello")],
+                tools=[],
+            )
+        ]
+    payload = provider_failure_payload(failed.value)
+    assert payload["provider_failure"] == {
+        "stage": "inference_transport",
+        "category": category,
+    }
+    assert payload["message"]
+    assert sentinel not in json.dumps(payload, ensure_ascii=False)
+    assert sentinel not in str(failed.value)
+    assert reports == [(None, "network_error")]
+
+
+@pytest.mark.asyncio
+async def test_gemini_inference_invalid_json_and_interrupted_stream_are_distinct() -> None:
+    sentinel = "SENTINEL_STREAM_SECRET"
+
+    class InterruptedStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'data: {"candidates": []}\n\n'
+            raise httpx.ReadError(sentinel)
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {sentinel}"}
+
+    for response, stage, category in (
+        (
+            httpx.Response(200, text="data: {not-json}\n\n"),
+            "inference_response",
+            "invalid_response",
+        ),
+        (
+            httpx.Response(200, text="data: []\n\n"),
+            "inference_response",
+            "invalid_response",
+        ),
+        (httpx.Response(200, stream=InterruptedStream()), "inference_transport", "network_error"),
+    ):
+
+        def handler(_request: httpx.Request, result: httpx.Response = response) -> httpx.Response:
+            return result
+
+        provider = GeminiNativeProvider(auth, transport=httpx.MockTransport(handler))
+        events: list[ProviderEvent] = []
+        with pytest.raises(ProviderError) as failed:
+            async for event in provider.stream(
+                snapshot=_snapshot("gemini", "gemini-2.5-flash-lite"),
+                messages=[Message(role=MessageRole.USER, content="hello")],
+                tools=[],
+            ):
+                events.append(event)
+        payload = provider_failure_payload(failed.value)
+        assert payload["provider_failure"] == {"stage": stage, "category": category}
+        assert events == []
+        assert sentinel not in json.dumps(payload, ensure_ascii=False)
 
 
 def _b64(data: bytes) -> str:

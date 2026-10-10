@@ -167,6 +167,7 @@ from operant.plugins.local_extensions import (
 )
 from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
 from operant.providers.base import ModelProvider
+from operant.providers.openai_compatible import provider_failure_payload
 from operant.runtime.loop import AgentLoop, RuntimeEvent, ToolActionClaim
 from operant.tools.extensions import ToolExtension
 from operant.tools.workspace import ApprovalCallback, ToolError, WorkspaceTools
@@ -3678,7 +3679,7 @@ class ApplicationService:
                         RuntimeEvent(
                             event_type="agent.failed",
                             turn=0,
-                            payload={"error_type": type(exc).__name__},
+                            payload=provider_failure_payload(exc),
                         ),
                         history_turn=history_turn,
                     )
@@ -3694,7 +3695,7 @@ class ApplicationService:
                         RuntimeEvent(
                             event_type="session.run_failed",
                             turn=0,
-                            payload={"error_type": type(exc).__name__},
+                            payload=provider_failure_payload(exc),
                         ),
                         history_turn=history_turn,
                     )
@@ -3940,7 +3941,7 @@ class ApplicationService:
             failure_event = RuntimeEvent(
                 event_type="agent.failed",
                 turn=0,
-                payload={"error_type": type(exc).__name__},
+                payload=provider_failure_payload(exc),
             )
             failure_event = self._persist_runtime_event(
                 session.id, agent.id, failure_event, history_turn=history_turn

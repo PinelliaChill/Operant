@@ -14,6 +14,11 @@ const copy: Record<string, string> = {
   observation_unavailable: '页面或窗口信息不可用，请重新查看后再操作。',
   invalid_error_envelope: '服务返回了无法识别的结果。请刷新并核对状态，勿重复写入。',
   request_validation_failed: '填写内容不符合要求。请检查所选目标和输入后重试。',
+  agent_cancelled: '任务已取消。需要继续时，请重新开始任务。',
+  agent_timed_out: '任务运行超时。请检查任务设置后重新开始。',
+  budget_exhausted: '任务预算已用完。请调整预算后重新开始。',
+  agent_no_progress: '任务连续没有进展，已停止。请调整任务后重新开始。',
+  agent_max_turns: '任务已达到最大轮次。请调整任务后重新开始。',
 };
 
 const modelSetupCopy: Record<string, string> = {
@@ -24,12 +29,42 @@ const modelSetupCopy: Record<string, string> = {
   'Google OAuth client does not match this connection': 'OAuth 客户端与当前连接不一致。请使用原客户端；要更换，请先断开再连接。',
 };
 
+const providerFailureCopy: Record<string, string> = {
+  timeout: '模型请求超时，请检查网络连接后再试。',
+  connect_timeout: '连接模型服务超时，请检查网络连接。',
+  read_timeout: '等待模型响应超时，请稍后再试。',
+  write_timeout: '发送模型请求超时，请检查网络连接。',
+  pool_timeout: '模型连接等待超时，请稍后再试。',
+  proxy_error: '代理连接失败，请检查代理设置。',
+  connection_error: '无法连接模型服务，请检查网络连接。',
+  protocol_error: '模型连接协议异常，请检查网络或代理设置。',
+  network_error: '模型连接中断，请检查网络连接。',
+  invalid_response: '模型响应格式异常，请稍后再试。',
+};
+
+function terminalFailureCopy(detail: unknown, code: string): string {
+  if (detail && typeof detail === 'object') {
+    const failure = (detail as { provider_failure?: unknown }).provider_failure;
+    if (failure && typeof failure === 'object') {
+      const { stage, category } = failure as { stage?: unknown; category?: unknown };
+      if ((stage === 'inference_transport' || stage === 'inference_response')
+        && typeof category === 'string' && Object.hasOwn(providerFailureCopy, category)) {
+        return providerFailureCopy[category];
+      }
+    }
+  }
+  return code === 'session_run_failed'
+    ? '任务启动失败。请检查模型连接和助手设置后重新开始。'
+    : '任务运行失败。请检查模型连接或任务设置后重新开始。';
+}
+
 export function requestErrorCopy(error: unknown): string {
   if (!error || typeof error !== 'object') return '请求未完成。请刷新状态后重试。';
-  const source = error as { code?: unknown; message?: unknown; recovery?: unknown };
+  const source = error as { code?: unknown; message?: unknown; recovery?: unknown; detail?: unknown };
   const code = typeof source.code === 'string' ? source.code : '';
   if (copy[code]) return copy[code];
   if (source.recovery === 'manual_reconcile' || source.recovery === 'retry_same_idempotency_key') return copy.outcome_unknown;
+  if (code === 'agent_failed' || code === 'session_run_failed') return terminalFailureCopy(source.detail, code);
   const message = typeof source.message === 'string' ? source.message.trim() : '';
   const withoutHttp = message.replace(/^http_\d{3}:\s*/, '');
   if (code === 'http_400' && source.recovery === 'none' && modelSetupCopy[withoutHttp]) return modelSetupCopy[withoutHttp];

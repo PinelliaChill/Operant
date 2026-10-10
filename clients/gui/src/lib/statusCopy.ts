@@ -1,5 +1,5 @@
 export function oauthStatusLabel(status: string): string {
-  return ({ pending: '等待登录', connected: '账号已连接，正在准备模型', ready: '账号已就绪', cancelled: '登录已取消', expired: '登录已过期，请重新连接', error: '登录未完成，请查看原因' } as Record<string, string>)[status] || '登录状态待确认，请刷新';
+  return ({ pending: '等待登录', connected: '账号已连接，可查找或选择模型', ready: '账号已就绪', cancelled: '登录已取消', expired: '登录已过期，请重新连接', error: '登录未完成，请查看原因' } as Record<string, string>)[status] || '登录状态待确认，请刷新';
 }
 
 const MODEL_CONNECTION_ERRORS: Record<string, string> = {

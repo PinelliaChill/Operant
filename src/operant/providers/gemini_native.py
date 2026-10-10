@@ -28,6 +28,30 @@ class ProviderMetadataRepository(Protocol):
     def save_connection(self, connection_id: str, record: dict[str, Any]) -> None: ...
 
 
+def _inference_failure_diagnostic(exc: httpx.HTTPError | ValueError) -> tuple[str, str]:
+    if isinstance(exc, httpx.ConnectTimeout):
+        category = "connect_timeout"
+    elif isinstance(exc, httpx.ReadTimeout):
+        category = "read_timeout"
+    elif isinstance(exc, httpx.WriteTimeout):
+        category = "write_timeout"
+    elif isinstance(exc, httpx.PoolTimeout):
+        category = "pool_timeout"
+    elif isinstance(exc, httpx.TimeoutException):
+        category = "timeout"
+    elif isinstance(exc, httpx.ProxyError):
+        category = "proxy_error"
+    elif isinstance(exc, httpx.ConnectError):
+        category = "connection_error"
+    elif isinstance(exc, httpx.ProtocolError):
+        category = "protocol_error"
+    elif isinstance(exc, (httpx.DecodingError, ValueError)):
+        return "inference_response", "invalid_response"
+    else:
+        category = "network_error"
+    return "inference_transport", category
+
+
 def _display_name(value: Any, model_id: str) -> str:
     if not isinstance(value, str):
         return model_id
@@ -366,7 +390,7 @@ class GeminiNativeProvider:
                         continue
                     chunk = json.loads(line[5:].strip())
                     if not isinstance(chunk, dict):
-                        continue
+                        raise ValueError("Gemini inference chunk must be an object")
                     if "error" in chunk:
                         error_body = chunk.get("error")
                         code = error_body.get("code") if isinstance(error_body, dict) else None
@@ -466,9 +490,14 @@ class GeminiNativeProvider:
                             completion_tokens=self._counter(raw_usage.get("candidatesTokenCount")),
                             total_tokens=self._counter(raw_usage.get("totalTokenCount")),
                         )
-        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        except (httpx.HTTPError, ValueError) as exc:
             self._report(snapshot.secret_ref, None, "network_error")
-            raise ProviderError("Gemini inference stream failed") from exc
+            stage, category = _inference_failure_diagnostic(exc)
+            raise ProviderError(
+                "Gemini inference stream failed",
+                failure_stage=stage,
+                failure_category=category,
+            ) from exc
         if not seen_chunk or finish_reason is None:
             self._report(snapshot.secret_ref, None, "stream_incomplete")
             raise ProviderError("Gemini inference ended without a terminal candidate")

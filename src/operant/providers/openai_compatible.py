@@ -23,6 +23,51 @@ from operant.domain.models import RoleSnapshot
 class ProviderError(RuntimeError):
     """Sanitized provider error that never contains request credentials."""
 
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        failure_stage: str | None = None,
+        failure_category: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_stage = failure_stage
+        self.failure_category = failure_category
+
+
+_PROVIDER_FAILURE_MESSAGES = {
+    "timeout": "模型请求超时，请检查网络连接后再试。",
+    "connect_timeout": "连接模型服务超时，请检查网络连接。",
+    "read_timeout": "等待模型响应超时，请稍后再试。",
+    "write_timeout": "发送模型请求超时，请检查网络连接。",
+    "pool_timeout": "模型连接等待超时，请稍后再试。",
+    "proxy_error": "代理连接失败，请检查代理设置。",
+    "connection_error": "无法连接模型服务，请检查网络连接。",
+    "protocol_error": "模型连接协议异常，请检查网络或代理设置。",
+    "network_error": "模型连接中断，请检查网络连接。",
+    "invalid_response": "模型响应格式异常，请稍后再试。",
+}
+_PROVIDER_FAILURE_STAGES = frozenset({"inference_transport", "inference_response"})
+
+
+def provider_failure_payload(exc: Exception) -> dict[str, Any]:
+    """Return only fixed, reviewed diagnostic data for persisted failure events."""
+    payload: dict[str, Any] = {"error_type": type(exc).__name__}
+    if not isinstance(exc, ProviderError):
+        return payload
+    stage = exc.failure_stage
+    category = exc.failure_category
+    if (
+        not isinstance(stage, str)
+        or stage not in _PROVIDER_FAILURE_STAGES
+        or not isinstance(category, str)
+        or category not in _PROVIDER_FAILURE_MESSAGES
+    ):
+        return payload
+    payload["message"] = _PROVIDER_FAILURE_MESSAGES[category]
+    payload["provider_failure"] = {"stage": stage, "category": category}
+    return payload
+
 
 class OpenAICompatibleProvider:
     def __init__(

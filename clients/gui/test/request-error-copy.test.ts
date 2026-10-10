@@ -34,3 +34,24 @@ test('unknown model setup writes retain reconciliation guidance instead of a con
   assert.match(requestErrorCopy({ code: 'http_400', recovery: 'retry_same_idempotency_key', message }), /核对.*勿再次提交/);
   assert.doesNotMatch(requestErrorCopy({ code: 'http_502', recovery: 'none', message }), /高级选项|客户端密钥/);
 });
+
+test('terminal model diagnostics show a concrete next step while unsafe or old payloads stay generic', () => {
+  const diagnostic = {
+    code: 'agent_failed',
+    message: '模型连接中断，请检查网络连接。',
+    detail: { provider_failure: { stage: 'inference_transport', category: 'network_error' } },
+  };
+  assert.equal(requestErrorCopy(diagnostic), '模型连接中断，请检查网络连接。');
+  assert.equal(requestErrorCopy({ ...diagnostic, code: 'session_run_failed', detail: { provider_failure: { stage: 'inference_response', category: 'invalid_response' } } }), '模型响应格式异常，请稍后再试。');
+  assert.match(requestErrorCopy({ code: 'agent_failed', message: 'ProviderError: raw token abc', detail: { provider_failure: { stage: 'inference_transport', category: 'unknown' } } }), /任务运行失败.*检查模型连接/);
+  assert.doesNotMatch(requestErrorCopy({ code: 'agent_failed', message: 'ProviderError: raw token abc' }), /ProviderError|abc|Core|Agent|Session/);
+  assert.match(requestErrorCopy({ ...diagnostic, recovery: 'manual_reconcile' }), /核对.*勿再次提交/);
+});
+
+test('terminal status copy cannot leak raw cancellation, timeout, or budget reasons', () => {
+  for (const code of ['agent_cancelled', 'agent_timed_out', 'budget_exhausted', 'agent_no_progress', 'agent_max_turns']) {
+    const copy = requestErrorCopy({ code, message: 'Core Agent raw reason secret_ref', detail: { reason: 'private' } });
+    assert.match(copy, /^任务/);
+    assert.doesNotMatch(copy, /Core|Agent|Session|raw|private|secret_ref/);
+  }
+});

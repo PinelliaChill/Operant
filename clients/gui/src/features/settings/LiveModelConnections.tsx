@@ -39,13 +39,14 @@ export const LiveModelConnections: React.FC = () => {
   useEffect(() => { void refresh(); }, [refresh]);
 
   useEffect(() => {
-    if (!attempt || !['pending', 'connected'].includes(attempt.status)) return;
+    if (!attempt || attempt.status !== 'pending') return;
     let active = true;
     const timer = window.setTimeout(() => {
       void client.getModelOAuthStatus(attempt.attempt_id).then((next) => {
         if (!active) return;
         setAttempt(next);
-        if (next.status === 'connected' || next.status === 'ready') { void refresh(); void refreshSetup(); }
+        if (next.status !== 'pending') void refresh();
+        if (next.status === 'connected' || next.status === 'ready') void refreshSetup();
       }).catch((cause: unknown) => { if (active) { setError('登录状态读取失败，请刷新连接列表核对。'); setErrorDetail(errorText(cause)); } });
     }, 2500);
     return () => { active = false; window.clearTimeout(timer); };
@@ -96,7 +97,10 @@ export const LiveModelConnections: React.FC = () => {
     })();
   };
   const cancelOAuth = (attemptId: string) => {
-    void (async () => { const next = await write('取消账号登录', () => client.cancelModelOAuth(attemptId, { idempotencyKey: crypto.randomUUID() })); if (next) setAttempt(next); })();
+    void (async () => {
+      const next = await write('取消账号登录', () => client.cancelModelOAuth(attemptId, { idempotencyKey: crypto.randomUUID() }));
+      if (next) { setAttempt(next); await refresh(); }
+    })();
   };
   const discover = (connectionId: string) => {
     void (async () => { const result = await write('查找模型', () => client.discoverConnectionModels(connectionId, { idempotencyKey: crypto.randomUUID() })); if (result) await refresh(); })();
@@ -141,5 +145,5 @@ export const LiveModelConnections: React.FC = () => {
     })();
   };
 
-  return <ModelConnectionsView connections={connections} loading={loading} busy={busy || selectionBusy} error={error} errorDetail={errorDetail} writeUncertain={writeUncertain} reconcileMessage={reconcileMessage} confirmedRequestId={confirmedRequestId} pendingRequestId={pendingRequest && pendingRequest !== 'invalid' ? pendingRequest.requestId : undefined} attempt={attempt} onRefresh={() => { void refresh(); }} onCreateKeyConnection={createKeyConnection} onStartOAuth={startOAuth} onCancelOAuth={cancelOAuth} onDiscover={discover} onSelectModel={selectModel} onDisconnect={disconnect} onAcknowledge={acknowledge} />;
+  return <ModelConnectionsView connections={connections} loading={loading} busy={busy || selectionBusy || loading} error={error} errorDetail={errorDetail} writeUncertain={writeUncertain} reconcileMessage={reconcileMessage} confirmedRequestId={confirmedRequestId} pendingRequestId={pendingRequest && pendingRequest !== 'invalid' ? pendingRequest.requestId : undefined} attempt={attempt} onRefresh={() => { void refresh(); }} onCreateKeyConnection={createKeyConnection} onStartOAuth={startOAuth} onCancelOAuth={cancelOAuth} onDiscover={discover} onSelectModel={selectModel} onDisconnect={disconnect} onAcknowledge={acknowledge} />;
 };
