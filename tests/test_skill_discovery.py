@@ -179,6 +179,98 @@ def test_standard_multiline_description_and_metadata_do_not_block_other_skills(
     ]
 
 
+def test_lark_style_frontmatter_is_discovered_as_inert_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    # Mirrors the installed lark-approval header; the body is deliberately inert.
+    _write_skill(
+        root / "lark-approval",
+        frontmatter=(
+            "name: lark-approval\n"
+            "version: 1.0.0\n"
+            'description: "飞书审批 API：审批实例、审批任务管理。"\n'
+            "metadata:\n"
+            "  requires:\n"
+            '    bins: ["lark-cli"]\n'
+            '  cliHelp: "lark-cli approval --help"'
+        ),
+        body="Placeholder body.",
+    )
+    result = SkillDiscovery([root]).discover()
+
+    assert result.issues == ()
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate.trust == "untrusted_candidate"
+    assert candidate.frontmatter["version"] == "1.0.0"
+    assert candidate.frontmatter["metadata"] == {
+        "requires": '{"bins":["lark-cli"]}',
+        "cliHelp": "lark-cli approval --help",
+    }
+    assert candidate.body == "Placeholder body."
+
+
+def test_shallow_metadata_primitives_remain_bounded_opaque_text(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    _write_skill(
+        root / "opaque",
+        frontmatter=(
+            "name: opaque\ndescription: Safe metadata\nversion: 1.2\n"
+            "metadata:\n"
+            "  requires:\n"
+            "    bins: [lark-cli]\n"
+            "    optional: null\n"
+            "    active: true\n"
+            "  tags: [review, 2, false, null]\n"
+            "  cliHelp: |\n"
+            "    lark-cli approval --help\n"
+            "    lark-cli approval instance --help"
+        ),
+    )
+    result = SkillDiscovery([root]).discover()
+
+    assert result.issues == ()
+    metadata = result.candidates[0].frontmatter["metadata"]
+    assert metadata == {
+        "requires": '{"active":true,"bins":["lark-cli"],"optional":null}',
+        "tags": '["review",2,false,null]',
+        "cliHelp": "lark-cli approval --help\nlark-cli approval instance --help",
+    }
+    assert result.candidates[0].frontmatter["version"] == "1.2"
+
+
+@pytest.mark.parametrize(
+    "bad_fields",
+    [
+        "version: .nan",
+        "metadata:\n  bad: .inf",
+        "metadata:\n  requires:\n    bins: [.nan]",
+        "metadata:\n  requires:\n    bins: &tools [lark-cli]",
+        "metadata:\n  requires:\n    bins: !!python/object:os.system payload",
+        "metadata:\n  requires:\n    bins: [lark-cli]\n    bins: [other]",
+        "metadata:\n  requires:\n    nested:\n      bins: [lark-cli]",
+        "metadata:\n  requires:\n    bins: [{name: lark-cli}]",
+        "metadata:\n  requires:\n    bins: [" + ", ".join("item" for _ in range(130)) + "]",
+        "metadata:\n  cliHelp: " + "x" * 1_001,
+    ],
+)
+def test_lark_style_metadata_does_not_relax_yaml_or_complexity_limits(
+    tmp_path: Path, bad_fields: str
+) -> None:
+    root = tmp_path / "skills"
+    _write_skill(root / "safe", frontmatter="name: safe\ndescription: Still available")
+    _write_skill(
+        root / "rejected",
+        frontmatter="name: rejected\ndescription: Invalid metadata\n" + bad_fields,
+    )
+
+    result = SkillDiscovery([root]).discover()
+
+    assert [candidate.name for candidate in result.candidates] == ["safe"]
+    assert [(issue.relative_directory, issue.code) for issue in result.issues] == [
+        ("rejected", "candidate_rejected")
+    ]
+
+
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink is unavailable")
 def test_candidate_link_is_read_only_within_registered_real_roots(tmp_path: Path) -> None:
     first = tmp_path / "first"

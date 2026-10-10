@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import os
 import re
 import stat
@@ -18,14 +20,72 @@ _SAFE_FRONTMATTER_KEYS = frozenset(
         "license",
         "compatibility",
         "metadata",
+        "version",
         "allowed-tools",
         "disable-model-invocation",
     }
 )
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_FRONTMATTER_MAX_DEPTH = 3
+_FRONTMATTER_MAX_DEPTH = 5
 _FRONTMATTER_MAX_ENTRIES = 128
+
+
+def _metadata_key_valid(key: object) -> bool:
+    return (
+        isinstance(key, str)
+        and bool(key)
+        and len(key) <= 128
+        and all(ord(character) >= 32 for character in key)
+    )
+
+
+def _metadata_scalar(value: object) -> str | bool | int | float | None:
+    if isinstance(value, str):
+        if len(value) > 1_000 or "\x00" in value:
+            raise ValueError("metadata frontmatter contains an invalid entry")
+        return value
+    if value is None or isinstance(value, bool | int):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise ValueError("metadata frontmatter contains an invalid entry")
+
+
+def _metadata_value(value: object) -> str:
+    """Keep optional nested metadata as bounded, inert JSON text."""
+    if isinstance(value, dict):
+        if len(value) > 64 or any(not _metadata_key_valid(key) for key in value):
+            raise ValueError("metadata frontmatter contains an invalid entry")
+        normalized = {
+            key: (
+                [_metadata_scalar(item) for item in child]
+                if isinstance(child, list)
+                else _metadata_scalar(child)
+            )
+            for key, child in value.items()
+        }
+        result = json.dumps(
+            normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+    elif isinstance(value, list):
+        result = json.dumps(
+            [_metadata_scalar(item) for item in value],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    else:
+        scalar = _metadata_scalar(value)
+        if isinstance(scalar, bool):
+            result = "true" if scalar else "false"
+        elif scalar is None:
+            result = "null"
+        else:
+            result = str(scalar)
+    if len(result) > 1_000:
+        raise ValueError("metadata frontmatter contains an invalid entry")
+    return result
 
 
 class _SkillFrontmatterLoader(yaml.SafeLoader):
@@ -399,20 +459,19 @@ class SkillDiscovery:
                     raise ValueError("metadata frontmatter must be a bounded mapping")
                 metadata: dict[str, str] = {}
                 for metadata_key, metadata_value in value.items():
-                    if isinstance(metadata_value, bool):
-                        metadata_value = "true" if metadata_value else "false"
-                    elif isinstance(metadata_value, int | float):
-                        metadata_value = str(metadata_value)
-                    if (
-                        not metadata_key
-                        or len(metadata_key) > 128
-                        or any(ord(character) < 32 for character in metadata_key)
-                        or not isinstance(metadata_value, str)
-                        or len(metadata_value) > 1_000
-                    ):
+                    if not _metadata_key_valid(metadata_key):
                         raise ValueError("metadata frontmatter contains an invalid entry")
-                    metadata[metadata_key] = metadata_value
+                    metadata[metadata_key] = _metadata_value(metadata_value)
                 result[key] = metadata
+            elif key == "version":
+                if isinstance(value, bool) or not isinstance(value, str | int | float):
+                    raise ValueError("frontmatter version must be a bounded scalar")
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ValueError("frontmatter version must be a bounded scalar")
+                version = str(value)
+                if not version or len(version) > 128 or any(ord(char) < 32 for char in version):
+                    raise ValueError("frontmatter version must be a bounded scalar")
+                result[key] = version
             elif key == "disable-model-invocation" and isinstance(value, bool):
                 result[key] = "true" if value else "false"
             elif isinstance(value, str):

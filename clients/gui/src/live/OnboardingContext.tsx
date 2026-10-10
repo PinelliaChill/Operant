@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { OnboardingClient, type ConversationInitialization, type ConversationMetadata, type ConversationStart, type SetupState } from '../../../../sdk/typescript-client/onboarding';
 import { useOperant } from '../context/ClientContext';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
+import { nativeCoreTransport } from '../lib/nativeCoreTransport';
 import { useLive } from './LiveContext';
 import { metadataRefreshKey } from './metadataRefreshKey';
 import { readConversationMetadata, type MetadataReadResult } from './metadataRead';
@@ -43,7 +44,7 @@ const message = requestErrorCopy;
 export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { clientMode, connectionStatus } = useOperant();
   const live = useLive();
-  const client = useMemo(() => new OnboardingClient(currentBrowserOrigin()), []);
+  const client = useMemo(() => new OnboardingClient(currentBrowserOrigin(), nativeCoreTransport), []);
   const createStorageKey = useMemo(() => createRequestStorageKey(currentBrowserOrigin()), []);
   const [setup, setSetup] = useState<SetupState | null>(null);
   const [setupLoading, setSetupLoading] = useState(false);

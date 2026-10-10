@@ -5,6 +5,7 @@ import { B23Client } from '../../../../sdk/typescript-client/b2_3.generated';
 import { B24Client } from '../../../../sdk/typescript-client/b2_4.generated';
 import { formatTime } from '../lib/format';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
+import { nativeCoreTransport } from '../lib/nativeCoreTransport';
 
 export type ClientMode = 'mock' | 'live';
 export type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected' | 'mock_active';
@@ -102,7 +103,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const phase1eClient = useMemo(() => new Phase1EClient(currentBrowserOrigin()), []);
   const phase23Client = useMemo(() => new Phase23Client(currentBrowserOrigin()), []);
   const phase45Client = useMemo(() => new Phase45Client(currentBrowserOrigin()), []);
-  const phase56Client = useMemo(() => new Phase56Client(currentBrowserOrigin()), []);
+  const phase56Client = useMemo(() => new Phase56Client(currentBrowserOrigin(), nativeCoreTransport), []);
   const b2Client = useMemo(() => new B2Client(currentBrowserOrigin()), []);
   const b23Client = useMemo(() => new B23Client(currentBrowserOrigin()), []);
   const b24Client = useMemo(() => new B24Client(currentBrowserOrigin()), []);

@@ -104,6 +104,7 @@ from operant.domain.threads import (
     ThreadStatus,
     Turn,
 )
+from operant.local_caller import DEVICE_AUTHENTICATED_ROUTES
 from operant.multiwriter import TrustedGitMultiWriterAdapter
 from operant.multiwriter.container import ContainerWriterLifecycle
 from operant.package_resources import protocol_schema_path
@@ -789,6 +790,10 @@ def _command_scope(method: str, path: str) -> str | None:
     """Return a stable, versioned Command type without persisting path values."""
 
     if method not in {"POST", "PATCH", "DELETE", "PUT"}:
+        return None
+    # Pairing and encrypted device messages authenticate and journal within
+    # their own services. Never reserve a generic receipt before that check.
+    if (method, path) in DEVICE_AUTHENTICATED_ROUTES:
         return None
     if path in {"/v1/models/discover"} or (
         path.startswith("/v1/models/") and path.endswith("/health")

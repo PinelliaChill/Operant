@@ -3,11 +3,10 @@
 > 2026-10-10；记录身份：Codex 主线程；适用对象：本轮实现与验收 Agent。
 > 分支 `codex/onboarding-ux`；基线 `939e3cc`；完整范围见[批准方案](plan.md)。实施中，整轮未完成。
 
-当前 S3：Gemini 真实账号授权和原生模型发现已通过，发现 21 个模型并选择 `gemini-2.5-flash-lite`。
-原项目首条任务以 `ProviderError/network_error` 失败；新免费项目已通过 OAuth 和发现，旧 `v1`
-首条任务进入服务端拒绝分支，仍没有模型增量、完成事件或工具调用。旧记录未保留 HTTP 状态，
-不足以确认实际根因。推断诊断和工具 Schema 补修与后续真实调用分别验收，不将登录
-成功算作模型可用。`047f0e1` 的双 Python 完整门禁与 GUI 已通过；之后的增量另行记录。
+当前 S3：Gemini 在不绑定结算的新免费项目完成真实授权，正式 CLI 的 v1beta 目录发现45个模型。
+冻结 `91034fa` 的原生对话使用 `gemini-3.5-flash-lite` 完成实际文件读取、流式回复、自动续期、
+运行取消和撤销；临时 Token 已删除，原 API 连接保留。此前 2.5 模型的网络失败和404保留，
+不重放。`55f974a` 的双 Python 完整门禁与 GUI 已通过；91034fa 的新完整 CI 仍在运行。
 ChatGPT 的 Mountain 组织策略尚无变更，不重复登录。CodeQL #45 当前 PR 实例仍开放。
 用户已明确本轮只用免费额度，不充值、启用付费结算或自动充值；调用前核对项目的免费层状态。
 
@@ -19,7 +18,7 @@ ChatGPT 的 Mountain 组织策略尚无变更，不重复登录。CodeQL #45 当
 | UX-04 自动初始化运行 | 已实现 | 通过 | S1 原生自动准备运行并完成文件任务；S2 丢创建响应后保留原请求，退出重开再只读核对，只新增一个 Thread/Session，没有自动运行或发送草稿 |
 | UX-05 简化模型连接 | 已实现 | 通过 | S1 用户在独立原生窗口保存密钥，发现并选择模型后返回原草稿，直接发送任务；无需角色、系统提示词、环境变量名或绑定运行 |
 | UX-06 高级参数与默认值 | 已实现 | 通过 | S1/S6 温度不发送、未知上下文不指定；原生表单默认收起高级参数，服务商切换通过 |
-| UX-07 ChatGPT/Gemini OAuth | 部分 | 受阻 | ChatGPT 个人套餐权限不可用，Mountain 被组织策略拒绝；不重复登录。Gemini 已通过真实授权、原生发现 21 个模型和选择模型，首条任务失败且没有输出或工具调用。流式回复、工具调用、真实续期和撤销仍未通过；安全与诊断回归不能替代真实验收。历史失败保留在 S3 |
+| UX-07 ChatGPT/Gemini OAuth | 部分 | 受阻 | ChatGPT 个人套餐权限不可用，Mountain 被组织策略拒绝；不重复登录。Gemini 新免费项目的真实 OAuth、45个模型发现、3.5 Flash-Lite 流式回复/文件工具、自动续期、流中取消与撤销通过；此前失败保留在 S3。ChatGPT 真实调用、续期与撤销仍受阻，整项未完成 |
 | UX-08 自动技能目录 | 已实现 | 通过 | S4 默认来源、缺目录、坏项隔离通过；最新隔离 Core 重启后仍扫描已登记的个人工作区，发现标准格式验收技能，21项候选；用户来源根目录变化会停用并要求重新添加 |
 | UX-09 标准技能格式 | 已实现 | 通过 | S4 普通 metadata、多行 description、资源、损坏 YAML、大小和解析安全边界通过 |
 | UX-10 技能链接与去重 | 已实现 | 通过 | S4 登记根内顶层链接、真实路径去重、目录外拒绝与添加来源通过；资源内链接仍按安装完整性边界拒绝 |
@@ -391,6 +390,115 @@ api_version_review。这些检查不能替代补修后真实调用和新的完�
 
 技能来源效果已提取为共用服务，调用方签名底座已加入；当前没有接入桌面私有通道或独立
 客户端配对，CodeQL #45 继续开放，不把定向测试算作产品身份认证通过。
+
+### 免费项目真实模型链路通过（2026-10-10）
+
+冻结 `91034fa`，安装候选 wheel SHA256 为
+`5d21493a32c1952e5eba1f04492f4504d9a9b8493eaeb5344ffa78e45f90a59e`：285项源码资源与安装一致，
+35项依赖未变；GUI278项输入、61项输出匹配。只替换自有18778/3028服务，原用户Core保留。
+见 gemini-api-version-wheel-readback.json、verify-gemini-api-version-processes.json。
+
+v1beta 正式 CLI 发现 **45个模型**。原生重新选择2.5模型、新建快照后，任务得到明确
+HTTP404，仍无工具和回答。Google [模型访问说明](https://ai.google.dev/gemini-api/docs/deprecations)
+表示2.5系列仅保留给曾活跃使用的用户，新项目应使用新模型；与这次404相符，但旧响应正文
+未保留，不能完全确认根因。改选已发现的 `gemini-3.5-flash-lite`，其
+[免费层输入输出价格](https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash-lite)已核对；
+不改源码、授权、项目计费或旧快照，不重放失败请求。
+
+新原生对话实际执行一次 `read_file(welcome.txt)`，工具结果无错误；随后收到2条模型增量和
+完成事件，最终回复 `OPERANT_GEMINI_35_FREE_OK`，总运行约6秒。温度和上下文仍未指定。
+见 gemini-free-35-native-session-snapshot.json、gemini-free-35-native-success.json；原生成功
+截图为 `/tmp/operant-gemini-free-success.png`。旧运行快照已逐字段对照切换前备份，保持原值；
+旧模型端点和参数不变，撤销授权后只有 enabled 按断开流程改为 false。
+
+正常时钟下，原Token到期后正式CLI/Provider自动续期，记录的有效期增加；账号、客户端、项目
+和权限集合不变，仅权限顺序变化。未手改到期时间、强制模拟或保存Token/Token摘要。
+另一条原生任务在已收到120条增量时取消，终态为 cancelled，没有模型完成、工具调用或晚到
+完成事件。见 gemini-free-native-cancel-refresh.json。
+
+按用户原约定从原生入口断开 Gemini。正式查询与仓库已无该连接，受保护凭据文件中的本轮
+access/refresh/ID Token 均已删除；服务只在Google撤销成功后执行删除，原API连接与项目保留。
+见 gemini-free-native-revocation.json。没有充值、绑定结算、自动充值或切换付费层。
+
+### 本机调用认证接线续行（2026-10-10，部分实现）
+
+原生 HMAC 模块与 Python proof 使用同一公开向量；密钥不实现 Debug/Serialize，不暴露给JS。
+ASGI 中间件验证后原样重放多段body，私有标记由同步路由读取；无proof或篡改在目录解析和
+命令收据之前拒绝。非保护且无proof的HEAD/OPTIONS/编码文件路径保持原语义；受保护或带proof
+的请求严格匹配原始路径，公开例外不能通过编码或方法变体绕过。底座 **50项**定向通过。
+
+新增显式 `--desktop-auth-stdio` 候选模式，只接受桌面loopback与继承stdin FIFO的32字节随机
+消息，拒绝文件输入。同一认证器接入现有管理授权钩子，外层验证优先于命令中间件；内部
+Core身份查询使用独立域的HMAC响应，普通healthz结果不能证明Core身份。最初接线测试发现
+模型回调被管理认证拦住，已改为保留loopback/Host/Origin和既有state/PKCE校验，管理路由仍
+要求proof。身份/Bootstrap/模型连接合并 **182项**通过、1条测试工具弃用警告。
+见 local-caller-bootstrap-identity-pytest.log。Rust底座8项及locked check、fmt通过；后续身份
+响应与pipe写入增量单独复验。普通启动、原生父进程、HTTP桥接及PWA/TUI首次配对尚未完成，
+不得据此标身份安全或CodeQL #45通过；后续完整门禁与真实原生接线仍需执行。
+
+独立复核发现CORS预检被proof拦截，已将固定Tauri CORS放在外层处理预检，实际业务仍经过
+proof验证；没有把密钥或签名能力给JS。相关Bootstrap与server **17项**复验通过。
+Rust身份响应与管道写入底座 **9项**、locked check、fmt通过，部分写入失败只返回固定类别。
+
+随后从空临时目录启动真实CLI子进程，通过匿名stdin传随机密钥。未签来源和配对管理请求
+被拒绝；签名Core身份响应通过校验，重复nonce拒绝；正式OnboardingClient经签名transport
+查询来源和首次配置成功。临时子进程已停止，未使用模型凭据、环境变量密钥或用户库。
+见 local-caller-bootstrap-live-result.json，输入源码摘要已固定。该场景验证真实Core和私有
+管道，父进程仍为测试脚本，不能替代原生Rust启动器、HTTP桥接或独立客户端配对验收。
+
+### 原生私有调用闭环（2026-10-10）
+
+前述未接线底座现已接入实际 Tauri 父进程、Core 和正式 GUI Client。原生壳只创建自己的
+子进程，经匿名 stdin 管道传入随机密钥；既有端口监听者会阻止启动。每次固定管理请求在
+同一 TCP 连接完成身份握手和业务请求，连接关闭即失败，不重连或自动重放。已覆盖83个
+Schema管理操作，另3个设备密码操作保留原认证通道；密钥和签名接口不交给JS。
+
+Rust **23项通过、1项需真实Core的测试默认跳过**；随后显式运行该真实场景通过，实际Rust
+父进程从已安装wheel启动CLI，来源和首次配置查询返回200，匿名来源请求403，缺少密钥的
+正式创建请求400，退出后回收子进程。首轮夹具错误使用未登记provider，得到422；改为
+正式 `openai-compatible` 后复验通过，原日志保留。见 native-parent-live-result.json、
+native-parent-live.log、native-parent-live-fixed.log、native-owned-core-cargo-final.log。
+
+GUI **213项**、类型、独立构建、包体预算和生成路由表核对通过。原生失败、未知操作、编码
+别名和跨来源不回退到未签名fetch；开发Tauri窗口也走原生桥接。见
+gui-native-core-transport-report.json。Python本机认证/启动/模型连接合并回归通过，格式600
+文件、ruff、mypy207、离线锁和diff通过；这组定向检查不能替代新增Core的完整门禁。
+
+实际 `Operant Identity Verification` / `dev.operant.onboarding.identity-verify` 使用空隔离库，
+Tauri打包首屏显示已连接，从提示进入唯一模型设置页；技能来源、本机能力、扩展和应用列表
+正式查询成功。应用选择器可搜索，Esc关闭后焦点回到选择器。普通HTTP访问 setup/state、
+skill-sources、extensions 均403，healthz200；退出候选后8000端口关闭，原18768用户Core与
+18778/3028旧验收服务保留。无模型调用、OAuth重试、凭据注入或复制、用户库迁移。
+见 native-auth-tauri-live-result.json。首个后台启动未留下运行进程，界面读取超时；核对终止
+后改用受控前台进程启动成功，没有在未知状态重启或重放任务。
+
+冻结 `91034fa` 的完整CI38051151677已全部成功：Python3.10/3.12各 **1631通过、16跳过、
+1警告**，GUI207。见 ci-91034fa-final-summary.json；不以此证明当前未提交增量完整门禁。
+独立PWA/TUI首次配对及排他的技能来源权限仍未实现，普通serve的来源接口仍无进程身份，
+CodeQL #45仍未关闭；原18项和两家OAuth验收范围不缩减。
+
+后续独立检查确认83/83管理路径全部在通用收据与路由解析前命中proof；普通Graph与对话
+查询未被误保护。设备配对、加密命令和Session查询三个POST此前会在设备认证前写通用收据，
+现精确跳过通用账本，保留自身配对/签名与设备收据；无效请求422且通用收据保持0。
+Bootstrap、设备运行时及Phase56/Onboarding/Phase1E协议回归通过，见
+device-journal-and-protocol-corrected.log。首个测试命令引用不存在的文件，在收集前终止，
+修正为现有测试路径后执行通过，失败日志保留。这处修复晚于安装候选，没有冒称已在该
+原生窗口验收；待完整门禁核对。
+
+### 常见嵌套技能元数据补缺（2026-10-10）
+
+真实来源页发现飞书技能头部的顶层 `version` 和 `metadata.requires.bins` 先后被深度与类型
+限制拒绝。现有界支持这些常见扩展，值保持为资料，不授工具或执行命令；标准字符串映射
+不变，嵌套值保存为稳定JSON字符串。Frontmatter16KB、Manifest128KB、128节点、64键、
+单值1000字符限制保留；最大结构深度5，别名、锚点、重复键、危险tag和非有限数字继续拒绝。
+发现测试35项、安装与技能命令定向2项通过，格式、ruff、mypy及diff通过。
+
+新wheel `81ec4c8935895108afabc36d9d1a22f6a178c69ba0b818ffae85ea7c26e189d1` 的286项
+源码与资源、安装副本一致，36个分发包与此前运行依赖相同。复用隔离Tauri库、正式菜单
+重启后 `lark-approval`、`lark-task`、`lark-sheets` 均自动出现在可安装目录；home-agents来源
+不再误报复杂元数据，损坏文件与目录外链接仍各自报告。未自动安装、启用或运行外部技能。
+见 native-auth-final-wheel-readback.json、native-auth-metadata-tauri-result.json。该候选进程
+及8000监听已核对停止；第二次退出快捷键因工具绑定丢失未执行，不把它算第二次退出验收。
 
 ### 授权码交换失败的诊断补修
 

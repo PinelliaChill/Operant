@@ -534,6 +534,9 @@ def serve(
     ssl_certfile: Path | None = typer.Option(None, help="TLS 证书绝对路径。"),
     ssl_keyfile: Path | None = typer.Option(None, help="TLS 私钥绝对路径。"),
     desktop: bool = typer.Option(False, help="仅在回环地址允许固定 Tauri Origin。"),
+    desktop_auth_stdio: bool = typer.Option(
+        False, "--desktop-auth-stdio", help="通过桌面父进程的私有管道初始化本机请求认证。"
+    ),
 ) -> None:
     from operant.server import ServerConfigurationError, run_server
 
@@ -544,6 +547,7 @@ def serve(
             ssl_certfile=ssl_certfile,
             ssl_keyfile=ssl_keyfile,
             desktop=desktop,
+            desktop_auth_stdio=desktop_auth_stdio,
         )
     except ServerConfigurationError as exc:
         raise typer.BadParameter(str(exc)) from exc

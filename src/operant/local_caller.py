@@ -41,6 +41,13 @@ IDEMPOTENCY_HEADER = "idempotency-key"
 MAX_BODY_BYTES = 1024 * 1024
 MAX_CLOCK_SKEW_SECONDS = 30
 MAX_NONCES = 4096
+DEVICE_AUTHENTICATED_ROUTES = frozenset(
+    {
+        ("POST", "/v1/remote-control/devices/pair"),
+        ("POST", "/v1/remote-control/commands"),
+        ("POST", "/v1/remote-control/session-query"),
+    }
+)
 
 _METHOD = re.compile(rb"(?:GET|POST|PUT|PATCH|DELETE)")
 _PATH = re.compile(rb"/[A-Za-z0-9._~/-]*")
@@ -169,12 +176,28 @@ class LocalCallerAuthority:
         self._lock = threading.Lock()
         self._marker = object()
 
+    def is_trusted(self, request: Request) -> bool:
+        """Read this authority's proof marker from the shared ASGI request state."""
+        return (
+            getattr(request.state, "_operant_local_caller_marker", None) is self._marker
+            and getattr(request.state, "local_caller_trusted", None) is True
+        )
+
+    def core_identity_proof(self, request: Request) -> str | None:
+        """Answer a fresh signed identity request without returning key material."""
+        if not self.is_trusted(request):
+            return None
+        nonce = _single_header(request, NONCE_HEADER)
+        if nonce is None or not _NONCE.fullmatch(nonce):
+            return None
+        return hmac.new(self._secret, b"local-caller.core.v1\n" + nonce, hashlib.sha256).hexdigest()
+
     async def authenticate(self, request: Request) -> bool:
         """Return only a boolean; never disclose proof material or diagnostics."""
         if not _loopback_request(request):
             request.state.local_caller_trusted = False
             return False
-        if getattr(request.state, "_operant_local_caller_marker", None) is self._marker:
+        if self.is_trusted(request):
             return True
         request.state.local_caller_trusted = False
         try:

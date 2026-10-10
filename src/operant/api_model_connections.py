@@ -736,7 +736,11 @@ def install_model_connection_routes(
         params = request.query_params
         # The ASGI access log must never receive an OAuth code through the scope.
         request.scope["query_string"] = b""
-        require_local(request)
+        # The browser returning from the provider cannot possess the native
+        # caller key. Its one-use state/PKCE attempt authenticates the callback;
+        # retain the loopback/Host/Origin checks without applying management auth.
+        if not _trusted_local(request, None):
+            raise HTTPException(status_code=403, detail="model callback requires loopback")
         if provider not in {"chatgpt", "gemini"}:
             raise HTTPException(status_code=404, detail="OAuth provider not found")
         attempt = next(

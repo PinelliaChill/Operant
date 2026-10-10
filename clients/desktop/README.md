@@ -9,26 +9,29 @@
 ## 从源码启动（macOS）
 
 准备 uv、Node.js/npm、Rust/Cargo 和 macOS 构建工具。以下命令从仓库根目录执行。
-先在一个终端启动 Core：
+先安装锁定依赖：
 
 ```bash
 uv sync --frozen --extra dev
-OPERANT_SETUP_ALLOWED_ORIGINS_JSON='["http://127.0.0.1:3000"]' uv run operant serve --host 127.0.0.1 --port 8000 --desktop
-```
-
-在第二个终端、同一仓库根目录启动桌面开发窗口：
-
-```bash
 npm ci --prefix clients/gui
 npm ci --prefix clients/desktop
-npm run tauri --prefix clients/desktop -- dev
 ```
 
-Tauri 配置会启动前端开发服务。`--desktop` 让 Core 接受固定的 Tauri 来源；已有 8000 端口服务若未带该参数，
-即使网页可访问，桌面窗口也可能连接失败。请先核对服务归属，再决定是否停止旧服务，不要直接覆盖或强杀。
+在同一仓库根目录启动桌面开发窗口：
 
-开发窗口通过 Vite 同源代理访问 Core，模型连接页只接受显式登记的本机来源；更换开发端口时同步修改
-`OPERANT_SETUP_ALLOWED_ORIGINS_JSON`。发布壳仍使用固定 Tauri 来源，不需要登记开发端口。
+```bash
+PATH="$PWD/.venv/bin:$PATH" npm run tauri --prefix clients/desktop -- dev
+```
+
+Tauri 启动前端服务，并自行创建匹配版本的 Core 子进程。随机连接密钥只经匿名 stdin 管道传给
+该子进程；管理操作经原生桥接验证 Core 身份。默认端口 8000 必须空闲；已有服务会阻止启动，
+不会被接管或停止。请先核对归属，勿直接覆盖或强杀。
+
+管理操作在开发窗口和发布壳中都走原生桥接；其他查询和事件流在开发窗口中使用 Vite 同源代理。
+仅调试构建支持 `OPERANT_CORE_URL=http://127.0.0.1:<port>`、绝对路径的
+`OPERANT_CORE_EXECUTABLE` 和 `OPERANT_CORE_DATA_DIR`；它们由启动环境提供，网页不能指定。
+默认 Core 数据位于应用数据目录的 `core/`，调试验收可另选空目录。安装启动环境显式提供的
+绝对 `OPERANT_DB_PATH` 仍会复用；调试隔离目录优先于该值。升级前先备份数据库，本批未迁移真实用户库。
 
 ## 构建候选
 
@@ -40,7 +43,7 @@ npm run tauri --prefix clients/desktop -- build
 ```
 
 配置中的构建钩子会先编译 GUI，产物位于 `clients/desktop/src-tauri/target/release/bundle/macos/`。
-双击候选 App 前仍需启动匹配的 Core；若让桌面壳自行启动 Core，启动环境的 `PATH` 必须能找到 `operant`。
+候选 App 会自行启动 Core，启动环境的 `PATH` 必须能找到匹配的 `operant`。
 从终端能运行 `uv run operant`，不代表 Finder 启动的 App 也拥有同样的环境。
 
 已有窗口使用 `clients/gui/dist` 时，隔离验收须直接给 Vite 指定另一输出目录，避免覆盖该窗口的文件。
@@ -76,5 +79,8 @@ node scripts/check-bundle.mjs ../../.operant/gui-verification-dist
 - 明确批准后点“继续原请求”直接进入新对话；实际工具审批在对话中处理，批准只适用于对应目标和操作。接管、撤销或未知结果不会自动重试。
 - 使用稳定的运行目录并备份旧数据库；升级 App 不代表已迁移用户数据。
 - 桌面壳只接受固定的本机 Core 地址，不从网页输入执行路径、命令或工作目录。
+- 默认启动器已接入私有管道与固定操作桥接，密钥和签名接口不交给网页。Core 的
+  `--desktop-auth-stdio` 需要原生父进程，不应手动给普通终端启动命令添加该参数。
+  已验证实际 Tauri 的管理查询、选择器与退出回收；独立 PWA/TUI 首次配对尚未实现，不能据此认为其他 HTTP 入口已认证。
 - 模型登录通过受限的 `open_model_oauth` 命令打开官方 OpenAI/Google 页面，回调须匹配当前 Core；不提供任意链接打开权限。真实账号授权结果见 [本轮验收](../../docs/design/onboarding-ux/acceptance.md)。
 - 本机构建、安装验证和正式分发是不同阶段。版本范围见 [根 README](../../README.md)，安全边界见 [SECURITY](../../SECURITY.md)。
