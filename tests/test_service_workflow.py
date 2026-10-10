@@ -575,6 +575,20 @@ def test_legacy_and_unrecognized_provider_failures_keep_only_error_type() -> Non
         ProviderError("private", failure_stage="private", failure_category="proxy_error")
     ) == {"error_type": "ProviderError"}
     assert provider_failure_payload(RuntimeError("private")) == {"error_type": "RuntimeError"}
+    for status, category in (
+        (True, "http_error"),
+        (600, "http_error"),
+        ("400", "bad_request"),
+        (400, "permission_denied"),
+    ):
+        assert provider_failure_payload(
+            ProviderError(
+                "private",
+                failure_stage="inference_response",
+                failure_category=category,
+                failure_http_status=status,  # type: ignore[arg-type]
+            )
+        ) == {"error_type": "ProviderError"}
 
 
 @pytest.mark.asyncio

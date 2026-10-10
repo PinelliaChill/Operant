@@ -4,8 +4,9 @@
 > 分支 `codex/onboarding-ux`；基线 `939e3cc`；完整范围见[批准方案](plan.md)。实施中，整轮未完成。
 
 当前 S3：Gemini 真实账号授权和原生模型发现已通过，发现 21 个模型并选择 `gemini-2.5-flash-lite`。
-首条正式任务以 `ProviderError/network_error` 失败，没有模型增量、完成事件或工具调用；旧记录
-不足以确定是超时、代理、连接还是解析错误。推断诊断补修和后续真实调用分别验收，不将登录
+原项目首条任务以 `ProviderError/network_error` 失败；新免费项目已通过 OAuth 和发现，旧 `v1`
+首条任务进入服务端拒绝分支，仍没有模型增量、完成事件或工具调用。旧记录未保留 HTTP 状态，
+不足以确认实际根因。推断诊断和工具 Schema 补修与后续真实调用分别验收，不将登录
 成功算作模型可用。`047f0e1` 的双 Python 完整门禁与 GUI 已通过；之后的增量另行记录。
 ChatGPT 的 Mountain 组织策略尚无变更，不重复登录。CodeQL #45 当前 PR 实例仍开放。
 用户已明确本轮只用免费额度，不充值、启用付费结算或自动充值；调用前核对项目的免费层状态。
@@ -361,7 +362,35 @@ inference-integration-gates.json、gui-inference-diagnostics-report.json 的 rev
 用户限定只用免费额度，并选择另建不绑定结算的验收项目，保留原项目。官方 AI Studio 已创建
 Operant Free Verification，显示“免费层级”，未创建 API 密钥或启用结算。原项目的停用确认
 已取消，没有充值、自动充值或付费切换。见 gemini-free-project-created.json；新项目的
-OAuth 连接与真实流式工具调用仍待完成。
+OAuth 连接与真实流式工具调用在下方续记。
+
+### 免费项目 OAuth 与工具请求补修（2026-10-10）
+
+旧项目连接已通过正式断开入口撤销；服务只在 Google 撤销成功后删除连接，原 API 连接保留。
+新免费项目完成同一账号 OAuth，原生和正式 CLI 均发现 **21个模型**，选择精确模型
+`gemini-2.5-flash-lite`。首次任务只读取 `welcome.txt`，但只有启动和失败事件；未执行工具、
+未得到回复。连接显示 provider_unavailable，旧失败事件没有 HTTP 状态，不能推断额度或权限
+是原因。见 gemini-free-cli-discovery.json、gemini-free-native-session-snapshot.json、
+gemini-free-native-attempt1.json。没有重放旧请求、充值、关联结算或切换付费层。
+
+官方 v1 Discovery 不支持 `parametersJsonSchema`，它的 Schema 也没有 `additionalProperties`；
+Operant 的工具包含这些约束，不能直接填入 v1 的 `parameters`。新连接和重新选出的模型配置
+改用官方 v1beta 的 `parametersJsonSchema`；旧模型与运行快照保持原值。旧 v1 工具不兼容时
+在请求前明确失败，不丢弃约束或自动更换端点。这是已核对的兼容问题，仍不能证明此前真实
+失败就是由它造成。补齐安全 HTTP/SSE 状态分类后再进行真实调用。
+
+`55f974a` 的 CI 38046889144 四作业全部成功：Python 3.10/3.12 各 **1565通过、16跳过、1警告**，
+GUI **205项**，类型、构建、格式、ruff、mypy、锁检查均通过。两个 Python 原始日志已保存，
+CodeQL 分析成功但汇总仍因 #45 失败。后续 Schema/HTTP 补修的 GUI **207项**、类型、隔离
+构建和预算通过，完整278项输入与61项输出摘要见 gui-inference-diagnostics-report.json 的
+api_version_review。这些检查不能替代补修后真实调用和新的完整门禁。
+
+本轮合并检查 **220项通过、1条测试工具弃用警告**，覆盖模型连接、运行失败、端点选择及旧
+快照不变、技能发现/来源效果、调用者签名底座和首次配置协议。格式597文件、ruff、mypy206
+源文件、离线锁及 diff 通过；公共 Schema、digest、生成 Client 和迁移未改。
+
+技能来源效果已提取为共用服务，调用方签名底座已加入；当前没有接入桌面私有通道或独立
+客户端配对，CodeQL #45 继续开放，不把定向测试算作产品身份认证通过。
 
 ### 授权码交换失败的诊断补修
 

@@ -413,14 +413,14 @@ def install_model_connection_routes(
                     save_command(key, fingerprint, result, fingerprint_version=fingerprint_version)
                     return result
                 base_url = body.base_url or (
-                    "https://generativelanguage.googleapis.com/v1"
+                    "https://generativelanguage.googleapis.com/v1beta"
                     if body.provider == "gemini"
                     else "https://api.openai.com/v1"
                 )
-                if (
-                    body.provider == "gemini"
-                    and base_url.rstrip("/") != "https://generativelanguage.googleapis.com/v1"
-                ):
+                if body.provider == "gemini" and base_url.rstrip("/") not in {
+                    "https://generativelanguage.googleapis.com/v1",
+                    "https://generativelanguage.googleapis.com/v1beta",
+                }:
                     raise HTTPException(
                         status_code=400, detail="Gemini uses its official API endpoint"
                     )
@@ -540,7 +540,11 @@ def install_model_connection_routes(
             name=body.name or f"{record['name']} · {model_name}"[:100],
             provider=str(record["provider"]),
             model_id=body.model_id,
-            base_url=str(record["base_url"]),
+            base_url=(
+                "https://generativelanguage.googleapis.com/v1beta"
+                if record["provider"] == "gemini"
+                else str(record["base_url"])
+            ),
             secret_ref=str(record["secret_ref"]),
             supports_temperature=False,
             effort_parameter=None,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,16 +12,20 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from operant.api_model_connections import _trusted_local
 from operant.application.service import ApplicationService
+from operant.application.skill_sources import (
+    SkillSourceEffects,
+    SkillSourceOperationError,
+)
+from operant.application.skill_sources import (
+    saved_sources as _saved_sources,
+)
 from operant.contracts.onboarding import SkillSourceInput, SkillSourceList, SkillSourceView
-from operant.domain.actions import CommandExecution, CommandExecutionStatus
 from operant.domain.security import Capability
 from operant.persistence.phase45 import SQLitePhase45Repository
-from operant.persistence.sqlite import ConflictError, NotFoundError
-from operant.protocol import canonical_action_hash
+from operant.persistence.sqlite import NotFoundError
 from operant.skills.discovery import SkillDiscovery, SkillDiscoveryLimits
 from operant.skills.sources import default_skill_roots
 
-_SETTING_KEY = "skill_sources.v1"
 _DEFAULT_LABELS = {
     "operant-default": "Operant 内置技能",
     "home-agents": "本机 Agents 技能",
@@ -52,20 +55,6 @@ def _source_path(raw: str | Path) -> Path:
         return _requested_source_path(raw).expanduser().resolve(strict=False)
     except RuntimeError as exc:
         raise ValueError("Skill source home directory is unavailable") from exc
-
-
-def _saved_sources(repo: Any) -> dict[str, str]:
-    saved = repo.get_setting(_SETTING_KEY, {})
-    if not isinstance(saved, dict):
-        return {}
-    return {
-        key: value
-        for key, value in saved.items()
-        if isinstance(key, str)
-        and key.startswith("user-")
-        and len(key) == 17
-        and isinstance(value, str)
-    }
 
 
 def install_skill_source_routes(
@@ -245,77 +234,22 @@ def install_skill_source_routes(
         response.headers["Idempotency-Key"] = key
         return key
 
-    def guard(operation: str, target_id: str, fingerprint: str, key: str) -> None:
-        try:
-            action, decision, _ = app.state.phase45_action_gateway.guard(
-                tool="skill_source",
-                operation=operation,
-                target_id=target_id,
-                arguments={"request_hash": fingerprint},
-                capabilities=(Capability.WORKSPACE_WRITE,),
-                idempotency_key=key,
-            )
-        except ConflictError as exc:
-            raise HTTPException(status_code=409, detail="request identity changed") from exc
-        if decision.decision.value != "allow" or decision.lease is None:
-            if decision.decision.value == "ask":
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "approval_required",
-                        "approval_id": decision.approval_id,
-                        "reason_code": decision.reason_code,
-                    },
-                )
-            raise HTTPException(status_code=403, detail=decision.reason_code)
-        app.state.phase45_action_gateway.consume(decision.lease, action)
-
-    def prior_result(key: str, fingerprint: str) -> dict[str, Any] | None:
-        with service.store._connect() as connection:
-            row = connection.execute(
-                "SELECT id FROM command_executions WHERE command_type=? AND idempotency_key=?",
-                ("skill_source.change", key),
-            ).fetchone()
-        if row is None:
-            return None
-        command = service.store.get_command_execution(str(row["id"]))
-        if command.action_hash != fingerprint:
-            raise HTTPException(status_code=409, detail="request identity changed")
-        if command.status is CommandExecutionStatus.COMPLETED and command.response_json:
-            return dict(json.loads(command.response_json))
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "command_outcome_unknown", "message": "请刷新来源后核对结果"},
-        )
-
-    def reserve(key: str, fingerprint: str) -> tuple[CommandExecution, bool]:
-        try:
-            command, created = service.store.reserve_command_execution(
-                CommandExecution(
-                    command_type="skill_source.change",
-                    idempotency_key=key,
-                    action_hash=fingerprint,
-                )
-            )
-        except ConflictError as exc:
-            raise HTTPException(status_code=409, detail="request identity changed") from exc
-        return command, created
-
-    def finish(command: CommandExecution, result: SkillSourceView | SkillSourceList) -> None:
-        service.store.complete_command_execution(
-            command.id,
-            response_json=result.model_dump_json(),
-            http_status=200,
-            resource_type="skill_source",
-            resource_id=(result.root_ref if isinstance(result, SkillSourceView) else None),
-        )
+    effects = SkillSourceEffects(
+        store=service.store,
+        settings=repo,
+        gateway=lambda: app.state.phase45_action_gateway,
+        refresh=refresh_skill_sources,
+        requested_path=_requested_source_path,
+        source_path=_source_path,
+    )
+    app.state.skill_source_effects = effects
 
     @app.get(
         "/v1/setup/skill-sources", operation_id="listSkillSources", response_model=SkillSourceList
     )
     def list_skill_sources(request: Request) -> SkillSourceList:
         require_local(request)
-        return SkillSourceList(items=refresh_skill_sources())
+        return effects.list_sources()
 
     @app.post(
         "/v1/setup/skill-sources", operation_id="addSkillSource", response_model=SkillSourceView
@@ -328,58 +262,13 @@ def install_skill_source_routes(
     ) -> SkillSourceView:
         require_local(request)
         try:
+            # Preserve the original lexical failure before assigning a command
+            # key or looking up any part of the requested directory.
             requested = _requested_source_path(body.path)
             key = command_key(idempotency_key, response)
-            raw_guard_fingerprint = canonical_action_hash(
-                {"operation": "skill_source_add", "path": str(requested)}
-            )
-            # The security journal binds this lexical request before any path
-            # lookup. Its versioned key preserves older canonical-path actions;
-            # the UX command journal still uses the original key and canonical
-            # target, so a completed receipt can be returned without a new add.
-            guard_key = "skill-source-add-v2:" + hashlib.sha256(key.encode()).hexdigest()
-            guard(
-                "add",
-                hashlib.sha256(str(requested).encode()).hexdigest()[:32],
-                raw_guard_fingerprint,
-                guard_key,
-            )
-            path = _source_path(requested)
-            canonical_receipt_fingerprint = canonical_action_hash(
-                {"operation": "skill_source_add", "path": str(path)}
-            )
-            prior = prior_result(key, canonical_receipt_fingerprint)
-            if prior is not None:
-                return SkillSourceView.model_validate(prior)
-            if not path.is_dir() or path in {Path(path.anchor), Path.home().resolve()}:
-                raise ValueError("choose an existing Skill directory")
-            saved = _saved_sources(repo)
-            current = refresh_skill_sources()
-            duplicate = next(
-                (item for item in current if item.enabled and Path(item.path) == path), None
-            )
-            root_ref = "user-" + hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:12]
-            if duplicate is None and root_ref in saved and saved[root_ref] != str(path):
-                raise ValueError("Skill source reference collision")
-            if duplicate is None and len(saved) >= 8:
-                raise ValueError("too many additional Skill sources")
-            command, created = reserve(key, canonical_receipt_fingerprint)
-            if not created:
-                replay = prior_result(key, canonical_receipt_fingerprint)
-                assert replay is not None
-                return SkillSourceView.model_validate(replay)
-            if duplicate is None:
-                saved[root_ref] = str(path)
-                repo.set_setting(_SETTING_KEY, saved)
-                result = next(
-                    item
-                    for item in refresh_skill_sources(discover=True)
-                    if item.root_ref == root_ref
-                )
-            else:
-                result = duplicate
-            finish(command, result)
-            return result
+            return effects.add_source(requested, key)
+        except SkillSourceOperationError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -396,23 +285,7 @@ def install_skill_source_routes(
     ) -> SkillSourceList:
         require_local(request)
         key = command_key(idempotency_key, response)
-        fingerprint = canonical_action_hash(
-            {"operation": "skill_source_remove", "root_ref": root_ref}
-        )
-        guard("remove", root_ref, fingerprint, key)
-        prior = prior_result(key, fingerprint)
-        if prior is not None:
-            return SkillSourceList.model_validate(prior)
-        saved = _saved_sources(repo)
-        if root_ref not in saved:
-            raise HTTPException(status_code=404, detail="added Skill source not found")
-        command, created = reserve(key, fingerprint)
-        if not created:
-            replay = prior_result(key, fingerprint)
-            assert replay is not None
-            return SkillSourceList.model_validate(replay)
-        del saved[root_ref]
-        repo.set_setting(_SETTING_KEY, saved)
-        result = SkillSourceList(items=refresh_skill_sources(discover=True))
-        finish(command, result)
-        return result
+        try:
+            return effects.remove_source(root_ref, key)
+        except SkillSourceOperationError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

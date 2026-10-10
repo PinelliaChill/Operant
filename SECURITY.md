@@ -297,6 +297,11 @@ Tauri `--desktop` bridge 只允许 loopback，并只为固定 Tauri Origin 开�
 OAuth 回调；新增本机认证时必须保留回调自身的 state/PKCE 检查，不能将模型 Token 当作 Core
 调用凭据。仅有 `0600` 的 Token 文件也不能证明同一系统用户下的进程隔离。
 
+技能来源变更的 Gateway、幂等收据与扫描更新已提取到 `SkillSourceEffects`，适配器仍须先认证
+调用者。本机 `LocalCallerAuthority` 底座可校验请求签名、时间窗口及一次性 nonce；它要求
+上层通过私有匿名管道提供随机密钥，不读取凭据文件。当前尚未接入桌面管道、请求中间件或
+独立客户端配对，不能据此声称来源接口已具备进程身份认证或 #45 已解决。
+
 ## Phase 5B Remote Control 与 Relay 边界
 
 当前实现把“用户从远程设备操控本地 Core”和“Core 在远程主机执行”拆成两个独立领域。Remote

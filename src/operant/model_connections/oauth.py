@@ -361,7 +361,7 @@ class OAuthConnections:
                         "provider": provider,
                         "auth_method": "oauth",
                         "status": "needs_auth",
-                        "base_url": "https://generativelanguage.googleapis.com/v1",
+                        "base_url": "https://generativelanguage.googleapis.com/v1beta",
                         "model_ids": [],
                         "profile_ids": [],
                         "project_id": project_id,
@@ -494,7 +494,7 @@ class OAuthConnections:
                     "base_url": (
                         "https://api.openai.com/v1"
                         if provider == "chatgpt"
-                        else "https://generativelanguage.googleapis.com/v1"
+                        else "https://generativelanguage.googleapis.com/v1beta"
                     ),
                     "model_ids": (existing or {}).get("model_ids", []),
                     "profile_ids": (existing or {}).get("profile_ids", []),

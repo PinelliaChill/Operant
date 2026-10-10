@@ -19,7 +19,63 @@ from operant.domain.messages import (
     ToolDefinition,
 )
 from operant.domain.models import RoleSnapshot
-from operant.providers.openai_compatible import ProviderError
+from operant.providers.openai_compatible import ProviderError, http_failure_category
+
+GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_LEGACY_API_BASE_URL = "https://generativelanguage.googleapis.com/v1"
+
+
+def _official_api_base(base_url: str) -> str:
+    selected = (base_url or GEMINI_API_BASE_URL).removesuffix("/")
+    if selected not in {GEMINI_API_BASE_URL, GEMINI_LEGACY_API_BASE_URL}:
+        raise ProviderError("Gemini API endpoint is unsupported")
+    return selected
+
+
+def _v1_schema_compatible(schema: Any, *, depth: int = 0) -> bool:
+    """Accept only the small JSON Schema subset safely expressible by v1 Schema."""
+    if depth > 8 or not isinstance(schema, dict) or not schema:
+        return False
+    if not set(schema).issubset({"type", "description", "properties", "required", "items", "enum"}):
+        return False
+    kind = schema.get("type")
+    if not isinstance(kind, str) or kind.lower() not in {
+        "object",
+        "array",
+        "string",
+        "number",
+        "integer",
+        "boolean",
+    }:
+        return False
+    if "description" in schema and not isinstance(schema["description"], str):
+        return False
+    if "properties" in schema:
+        properties = schema["properties"]
+        if (
+            kind.lower() != "object"
+            or not isinstance(properties, dict)
+            or not all(
+                isinstance(name, str) and _v1_schema_compatible(value, depth=depth + 1)
+                for name, value in properties.items()
+            )
+        ):
+            return False
+    if "required" in schema and (
+        kind.lower() != "object"
+        or not isinstance(schema["required"], list)
+        or not all(isinstance(name, str) for name in schema["required"])
+    ):
+        return False
+    if "items" in schema and (
+        kind.lower() != "array" or not _v1_schema_compatible(schema["items"], depth=depth + 1)
+    ):
+        return False
+    return "enum" not in schema or (
+        kind.lower() == "string"
+        and isinstance(schema["enum"], list)
+        and all(isinstance(value, str) for value in schema["enum"])
+    )
 
 
 class ProviderMetadataRepository(Protocol):
@@ -206,6 +262,7 @@ class GeminiNativeProvider:
             self._thought_signatures[f"{profile_id}\0{call_id}"] = signature
 
     async def list_models(self, *, base_url: str, secret_ref: str) -> list[str]:
+        api_base = _official_api_base(base_url)
         headers = await self.auth_for_ref(secret_ref)
         try:
             names: dict[str, str] = {}
@@ -213,7 +270,7 @@ class GeminiNativeProvider:
             async with httpx.AsyncClient(transport=self.transport, timeout=30) as client:
                 for _ in range(20):
                     response = await client.get(
-                        "https://generativelanguage.googleapis.com/v1/models",
+                        f"{api_base}/models",
                         headers=headers,
                         params={"pageToken": page_token} if page_token else None,
                     )
@@ -276,6 +333,15 @@ class GeminiNativeProvider:
         messages: Sequence[Message],
         tools: Sequence[ToolDefinition],
     ) -> AsyncIterator[ProviderEvent]:
+        api_base = _official_api_base(snapshot.base_url)
+        if api_base == GEMINI_LEGACY_API_BASE_URL and any(
+            not _v1_schema_compatible(tool.parameters) for tool in tools
+        ):
+            raise ProviderError(
+                "Gemini v1 cannot represent the configured tool schema",
+                failure_stage="inference_response",
+                failure_category="unsupported_api_version",
+            )
         headers = await self.auth_for_ref(snapshot.secret_ref)
         system_text = "\n\n".join(
             message.content or "" for message in messages if message.role is MessageRole.SYSTEM
@@ -352,7 +418,11 @@ class GeminiNativeProvider:
                         {
                             "name": tool.name,
                             "description": tool.description,
-                            "parameters": tool.parameters,
+                            (
+                                "parametersJsonSchema"
+                                if api_base == GEMINI_API_BASE_URL
+                                else "parameters"
+                            ): tool.parameters,
                         }
                         for tool in tools
                     ]
@@ -366,10 +436,7 @@ class GeminiNativeProvider:
                 config["temperature"] = snapshot.temperature
             payload["generationConfig"] = config
         model_id = snapshot.model_id.removeprefix("models/")
-        url = (
-            "https://generativelanguage.googleapis.com/v1/models/"
-            f"{quote(model_id, safe='')}:streamGenerateContent?alt=sse"
-        )
+        url = f"{api_base}/models/{quote(model_id, safe='')}:streamGenerateContent?alt=sse"
         parts_seen: list[str] = []
         text_segments: list[dict[str, Any]] = []
         calls: list[ToolCall] = []
@@ -384,7 +451,13 @@ class GeminiNativeProvider:
             ):
                 if response.status_code != 200:
                     self._report(snapshot.secret_ref, response.status_code, "inference_failed")
-                    raise ProviderError(f"Gemini inference returned HTTP {response.status_code}")
+                    status = response.status_code
+                    raise ProviderError(
+                        f"Gemini inference returned HTTP {status}",
+                        failure_stage="inference_response",
+                        failure_category=http_failure_category(status) or "http_error",
+                        failure_http_status=status if http_failure_category(status) else None,
+                    )
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -394,11 +467,17 @@ class GeminiNativeProvider:
                     if "error" in chunk:
                         error_body = chunk.get("error")
                         code = error_body.get("code") if isinstance(error_body, dict) else None
-                        reason = "usage_limit" if code == 429 else "inference_failed"
-                        self._report(
-                            snapshot.secret_ref, code if isinstance(code, int) else None, reason
+                        error_status = (
+                            code if type(code) is int and http_failure_category(code) else None
                         )
-                        raise ProviderError("Gemini inference failed")
+                        reason = "usage_limit" if code == 429 else "inference_failed"
+                        self._report(snapshot.secret_ref, error_status, reason)
+                        raise ProviderError(
+                            "Gemini inference failed",
+                            failure_stage="inference_response",
+                            failure_category=http_failure_category(error_status) or "http_error",
+                            failure_http_status=error_status,
+                        )
                     seen_chunk = True
                     candidates = chunk.get("candidates")
                     if isinstance(candidates, list) and candidates:

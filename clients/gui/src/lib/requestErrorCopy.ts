@@ -40,15 +40,25 @@ const providerFailureCopy: Record<string, string> = {
   protocol_error: '模型连接协议异常，请检查网络或代理设置。',
   network_error: '模型连接中断，请检查网络连接。',
   invalid_response: '模型响应格式异常，请稍后再试。',
+  bad_request: '模型服务无法处理本次请求。请检查所选模型和高级参数。',
+  authentication_required: '模型服务未接受当前连接的凭据。请检查模型连接设置。',
+  permission_denied: '模型服务拒绝了本次请求。请检查账号、项目或模型的访问权限。',
+  rate_limited: '模型服务暂时限制请求。请稍后再试，并查看服务商的用量限制。',
+  provider_unavailable: '模型服务暂时不可用。请稍后再试。',
+  http_error: '模型服务返回错误。请查看服务状态，稍后再试。',
+  unsupported_api_version: '当前模型配置不支持这些工具。请重新选择模型后新建对话。',
 };
+const responseOnlyFailures = new Set(['bad_request', 'authentication_required', 'permission_denied', 'rate_limited', 'provider_unavailable', 'http_error', 'unsupported_api_version']);
 
 function terminalFailureCopy(detail: unknown, code: string): string {
   if (detail && typeof detail === 'object') {
     const failure = (detail as { provider_failure?: unknown }).provider_failure;
     if (failure && typeof failure === 'object') {
-      const { stage, category } = failure as { stage?: unknown; category?: unknown };
+      const { stage, category, http_status } = failure as { stage?: unknown; category?: unknown; http_status?: unknown };
       if ((stage === 'inference_transport' || stage === 'inference_response')
-        && typeof category === 'string' && Object.hasOwn(providerFailureCopy, category)) {
+        && typeof category === 'string' && Object.hasOwn(providerFailureCopy, category)
+        && (!responseOnlyFailures.has(category) || stage === 'inference_response')
+        && (category !== 'unsupported_api_version' || http_status === undefined)) {
         return providerFailureCopy[category];
       }
     }

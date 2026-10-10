@@ -25,15 +25,20 @@ from fastapi.testclient import TestClient
 
 from operant.api_model_connections import install_model_connection_routes
 from operant.domain.messages import Message, MessageRole, ProviderEvent, ToolDefinition
-from operant.domain.models import ModelProfile, RoleSnapshot
+from operant.domain.models import ModelProfile, RoleSnapshot, ToolPolicy
 from operant.model_connections.credentials import CredentialError, CredentialStore
 from operant.model_connections.oauth import OAuthConnections, OAuthError, secret_ref
 from operant.persistence.onboarding import UXRepository
 from operant.persistence.sqlite import SQLiteStore
 from operant.providers.chatgpt_responses import ChatGPTResponsesProvider
-from operant.providers.gemini_native import GeminiNativeProvider
+from operant.providers.gemini_native import (
+    GEMINI_API_BASE_URL,
+    GEMINI_LEGACY_API_BASE_URL,
+    GeminiNativeProvider,
+)
 from operant.providers.openai_compatible import ProviderError, provider_failure_payload
 from operant.providers.router import ConnectionProviderRouter
+from operant.tools.workspace import WorkspaceTools
 
 
 class _Repo:
@@ -105,13 +110,20 @@ class _Repo:
         self.commands[key] = (fingerprint, result)
 
 
-def _snapshot(provider: str, model_id: str, secret: str = "TOKEN") -> RoleSnapshot:
+def _snapshot(
+    provider: str,
+    model_id: str,
+    secret: str = "TOKEN",
+    *,
+    base_url: str = GEMINI_API_BASE_URL,
+) -> RoleSnapshot:
     return cast(
         RoleSnapshot,
         SimpleNamespace(
             provider=provider,
             model_id=model_id,
             model_profile_id=f"profile-{model_id}",
+            base_url=base_url,
             secret_ref=secret,
             budget=SimpleNamespace(max_output_tokens=100),
             temperature=0.8,
@@ -212,6 +224,283 @@ async def test_gemini_inference_invalid_json_and_interrupted_stream_are_distinct
         assert payload["provider_failure"] == {"stage": stage, "category": category}
         assert events == []
         assert sentinel not in json.dumps(payload, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "category"),
+    [
+        (400, "bad_request"),
+        (401, "authentication_required"),
+        (403, "permission_denied"),
+        (429, "rate_limited"),
+        (500, "provider_unavailable"),
+        (503, "provider_unavailable"),
+        (418, "http_error"),
+    ],
+)
+@pytest.mark.parametrize("source", ["http", "sse"])
+async def test_gemini_inference_response_status_has_only_fixed_diagnostic(
+    status: int, category: str, source: str
+) -> None:
+    secret = "SENTINEL_PRIVATE_GOOGLE_ERROR"
+    reports: list[tuple[int | None, str]] = []
+    if source == "http":
+        response = httpx.Response(status, json={"message": secret, "url": secret})
+    else:
+        response = httpx.Response(
+            200,
+            text=f"data: {json.dumps({'error': {'code': status, 'message': secret}})}\n\n",
+        )
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {secret}"}
+
+    provider = GeminiNativeProvider(
+        auth,
+        transport=httpx.MockTransport(lambda _: response),
+        report_status=lambda _ref, code, reason: reports.append((code, reason)),
+    )
+    with pytest.raises(ProviderError) as failed:
+        _ = [
+            event
+            async for event in provider.stream(
+                snapshot=_snapshot("gemini", "gemini-2.5-flash-lite"),
+                messages=[Message(role=MessageRole.USER, content="hello")],
+                tools=[],
+            )
+        ]
+    payload = provider_failure_payload(failed.value)
+    assert payload["provider_failure"] == {
+        "stage": "inference_response",
+        "category": category,
+        "http_status": status,
+    }
+    assert payload["message"]
+    assert secret not in json.dumps(payload, ensure_ascii=False)
+    assert secret not in str(failed.value)
+    assert reports == [
+        (status, "usage_limit" if source == "sse" and status == 429 else "inference_failed")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gemini_sse_error_without_numeric_status_keeps_generic_safe_diagnostic() -> None:
+    secret = "SENTINEL_PRIVATE_SSE_DETAIL"
+    response = httpx.Response(
+        200, text=f"data: {json.dumps({'error': {'code': True, 'message': secret}})}\n\n"
+    )
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": "Bearer fixture"}
+
+    provider = GeminiNativeProvider(auth, transport=httpx.MockTransport(lambda _: response))
+    with pytest.raises(ProviderError) as failed:
+        _ = [
+            event
+            async for event in provider.stream(
+                snapshot=_snapshot("gemini", "gemini-2.5-flash-lite"),
+                messages=[Message(role=MessageRole.USER, content="hello")],
+                tools=[],
+            )
+        ]
+    payload = provider_failure_payload(failed.value)
+    assert payload["provider_failure"] == {
+        "stage": "inference_response",
+        "category": "http_error",
+    }
+    assert secret not in json.dumps(payload, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_gemini_v1beta_preserves_default_tool_json_schema_in_request(tmp_path: Path) -> None:
+    tools = WorkspaceTools(
+        tmp_path,
+        policy=ToolPolicy(
+            allowed_tools=("read_file", "search_files", "apply_patch", "run_command", "git_diff")
+        ),
+    ).definitions()
+    assert tools and all(tool.parameters.get("additionalProperties") is False for tool in tools)
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith(
+            "/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent"
+        )
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, text='data: {"candidates":[{"finishReason":"STOP"}]}\n\n')
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": "Bearer fixture"}
+
+    provider = GeminiNativeProvider(auth, transport=httpx.MockTransport(handler))
+    events = [
+        event
+        async for event in provider.stream(
+            snapshot=_snapshot("gemini", "gemini-2.5-flash-lite"),
+            messages=[Message(role=MessageRole.USER, content="hello")],
+            tools=tools,
+        )
+    ]
+    assert events[-1].event_type == "model.completed"
+    declarations = captured[0]["tools"][0]["functionDeclarations"]
+    assert len(declarations) == len(tools)
+    for declaration, tool in zip(declarations, tools, strict=True):
+        assert declaration["name"] == tool.name
+        assert declaration["parametersJsonSchema"] == tool.parameters
+        assert "parameters" not in declaration
+
+
+@pytest.mark.asyncio
+async def test_gemini_legacy_v1_only_sends_safely_compatible_tool_schema() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/v1/models/gemini-2.5-flash-lite:streamGenerateContent")
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, text='data: {"candidates":[{"finishReason":"STOP"}]}\n\n')
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": "Bearer fixture"}
+
+    provider = GeminiNativeProvider(auth, transport=httpx.MockTransport(handler))
+    compatible = ToolDefinition(
+        name="read_file",
+        description="Read",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    )
+    for selected_tools in ([], [compatible]):
+        events = [
+            event
+            async for event in provider.stream(
+                snapshot=_snapshot(
+                    "gemini", "gemini-2.5-flash-lite", base_url=GEMINI_LEGACY_API_BASE_URL
+                ),
+                messages=[Message(role=MessageRole.USER, content="hello")],
+                tools=selected_tools,
+            )
+        ]
+        assert events[-1].event_type == "model.completed"
+    assert "tools" not in requests[0]
+    declaration = requests[1]["tools"][0]["functionDeclarations"][0]
+    assert declaration["parameters"] == compatible.parameters
+    assert "parametersJsonSchema" not in declaration
+
+
+@pytest.mark.asyncio
+async def test_gemini_legacy_v1_rejects_unrepresentable_tool_before_auth_or_request(
+    tmp_path: Path,
+) -> None:
+    called = False
+
+    async def auth(_: str) -> dict[str, str]:
+        nonlocal called
+        called = True
+        return {"Authorization": "Bearer fixture"}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("request must not be sent")
+
+    provider = GeminiNativeProvider(auth, transport=httpx.MockTransport(handler))
+    tool = WorkspaceTools(tmp_path, policy=ToolPolicy(allowed_tools=("read_file",))).definitions()[
+        0
+    ]
+    with pytest.raises(ProviderError) as failed:
+        _ = [
+            event
+            async for event in provider.stream(
+                snapshot=_snapshot(
+                    "gemini", "gemini-2.5-flash-lite", base_url=GEMINI_LEGACY_API_BASE_URL
+                ),
+                messages=[Message(role=MessageRole.USER, content="hello")],
+                tools=[tool],
+            )
+        ]
+    assert provider_failure_payload(failed.value) == {
+        "error_type": "ProviderError",
+        "message": "当前模型配置不支持这些工具。请重新选择模型后新建对话。",
+        "provider_failure": {
+            "stage": "inference_response",
+            "category": "unsupported_api_version",
+        },
+    }
+    assert not called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base", [GEMINI_LEGACY_API_BASE_URL, GEMINI_API_BASE_URL])
+async def test_gemini_official_api_base_trailing_slash_for_discovery_and_stream(
+    base: str,
+) -> None:
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"models": []})
+        return httpx.Response(200, text='data: {"candidates":[{"finishReason":"STOP"}]}\n\n')
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": "Bearer fixture"}
+
+    provider = GeminiNativeProvider(auth, transport=httpx.MockTransport(handler))
+    assert await provider.list_models(base_url=base + "/", secret_ref="TOKEN") == []
+    events = [
+        event
+        async for event in provider.stream(
+            snapshot=_snapshot("gemini", "gemini-2.5-flash-lite", base_url=base + "/"),
+            messages=[Message(role=MessageRole.USER, content="hello")],
+            tools=[],
+        )
+    ]
+    assert events[-1].event_type == "model.completed"
+    assert requested_paths == [
+        base.removeprefix("https://generativelanguage.googleapis.com") + "/models",
+        base.removeprefix("https://generativelanguage.googleapis.com")
+        + "/models/gemini-2.5-flash-lite:streamGenerateContent",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base",
+    [
+        "https://example.invalid/v1beta",
+        GEMINI_API_BASE_URL + "?mode=unsafe",
+        GEMINI_API_BASE_URL + "#fragment",
+        GEMINI_LEGACY_API_BASE_URL + "?mode=unsafe",
+        GEMINI_LEGACY_API_BASE_URL + "#fragment",
+        GEMINI_API_BASE_URL + "//",
+    ],
+)
+async def test_gemini_rejects_nonofficial_api_base_before_auth_or_request(base: str) -> None:
+    called = False
+
+    async def auth(_: str) -> dict[str, str]:
+        nonlocal called
+        called = True
+        return {"Authorization": "Bearer fixture"}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("request must not be sent")
+
+    provider = GeminiNativeProvider(auth, transport=httpx.MockTransport(handler))
+    with pytest.raises(ProviderError, match="endpoint is unsupported"):
+        await provider.list_models(base_url=base, secret_ref="TOKEN")
+    with pytest.raises(ProviderError, match="endpoint is unsupported"):
+        _ = [
+            event
+            async for event in provider.stream(
+                snapshot=_snapshot("gemini", "gemini-2.5-flash-lite", base_url=base),
+                messages=[Message(role=MessageRole.USER, content="hello")],
+                tools=[],
+            )
+        ]
+    assert not called
 
 
 def _b64(data: bytes) -> str:
@@ -1984,7 +2273,10 @@ async def test_gemini_text_signature_survives_restart_for_same_public_prefix() -
 
 @pytest.mark.asyncio
 async def test_gemini_discovery_reads_all_pages() -> None:
+    requested_paths: list[str] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
         if request.url.params.get("pageToken") == "next":
             return httpx.Response(
                 200,
@@ -2012,6 +2304,7 @@ async def test_gemini_discovery_reads_all_pages() -> None:
 
     provider = GeminiNativeProvider(auth, transport=httpx.MockTransport(handler))
     assert await provider.list_models(base_url="", secret_ref="TOKEN") == ["gemini-1", "gemini-2"]
+    assert requested_paths == ["/v1beta/models", "/v1beta/models"]
 
 
 @pytest.mark.asyncio

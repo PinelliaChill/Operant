@@ -176,6 +176,50 @@ def test_source_add_persists_and_delete_preserves_explicit_root(tmp_path: Path) 
     )
 
 
+def test_internal_effects_and_rest_share_one_command_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    added = tmp_path / "chosen"
+    added.mkdir()
+    settings = _Settings()
+    changes: list[dict[str, str]] = []
+    original_set = settings.set_setting
+
+    def record_setting(key: str, value: Any) -> None:
+        if key == "skill_sources.v1":
+            changes.append(dict(value))
+        original_set(key, value)
+
+    monkeypatch.setattr(settings, "set_setting", record_setting)
+    client, app = _client(configured, settings)
+    effects = app.state.skill_source_effects
+
+    added_response = client.post(
+        "/v1/setup/skill-sources",
+        json={"path": str(added)},
+        headers={"Idempotency-Key": "shared-add"},
+    )
+    assert added_response.status_code == 200
+    assert effects.add_source(added, "shared-add").model_dump(mode="json") == added_response.json()
+    assert effects.list_sources().items[-1].root_ref == added_response.json()["root_ref"]
+
+    removed = effects.remove_source(added_response.json()["root_ref"], "shared-remove")
+    removed_response = client.delete(
+        f"/v1/setup/skill-sources/{added_response.json()['root_ref']}",
+        headers={"Idempotency-Key": "shared-remove"},
+    )
+    assert removed_response.status_code == 200
+    assert removed_response.json() == removed.model_dump(mode="json")
+    assert changes == [{added_response.json()["root_ref"]: str(added)}, {}]
+    with app.state.skill_source_test_service.store._connect() as connection:
+        count = connection.execute(
+            "SELECT count(*) FROM command_executions WHERE command_type='skill_source.change'"
+        ).fetchone()[0]
+    assert count == 2
+
+
 @pytest.mark.parametrize("alias_kind", ["home", "symlink"])
 def test_legacy_canonical_source_receipt_replays_without_new_add(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias_kind: str

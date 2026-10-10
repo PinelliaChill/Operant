@@ -48,6 +48,42 @@ test('terminal model diagnostics show a concrete next step while unsafe or old p
   assert.match(requestErrorCopy({ ...diagnostic, recovery: 'manual_reconcile' }), /核对.*勿再次提交/);
 });
 
+test('safe model HTTP failures give distinct actions without revealing status or suggesting payment', () => {
+  const cases = [
+    ['bad_request', /检查所选模型和高级参数/],
+    ['authentication_required', /检查模型连接设置/],
+    ['permission_denied', /检查账号、项目或模型的访问权限/],
+    ['rate_limited', /稍后再试.*用量限制/],
+    ['provider_unavailable', /模型服务暂时不可用/],
+    ['http_error', /查看服务状态/],
+  ] as const;
+  for (const [category, guidance] of cases) {
+    const visible = requestErrorCopy({
+      code: 'agent_failed',
+      message: 'raw HTTP 429 billing token',
+      detail: { error_type: 'ProviderError', provider_failure: { stage: 'inference_response', category }, failure_http_status: 429 },
+    });
+    assert.match(visible, guidance);
+    assert.doesNotMatch(visible, /HTTP|429|ProviderError|token|充值|付费|重新登录/);
+  }
+  assert.match(requestErrorCopy({ code: 'session_run_failed', detail: { provider_failure: { stage: 'inference_transport', category: 'bad_request' } } }), /任务启动失败/);
+  assert.match(requestErrorCopy({ code: 'agent_failed', recovery: 'manual_reconcile', detail: { provider_failure: { stage: 'inference_response', category: 'rate_limited' } } }), /核对.*勿再次提交/);
+});
+
+test('unsupported Gemini API snapshot asks for a newly selected model without pretending an HTTP response', () => {
+  const detail = { error_type: 'ProviderError', provider_failure: { stage: 'inference_response', category: 'unsupported_api_version' } };
+  const visible = requestErrorCopy({ code: 'agent_failed', message: 'untrusted detail', detail });
+  assert.equal(visible, '当前模型配置不支持这些工具。请重新选择模型后新建对话。');
+  assert.doesNotMatch(visible, /HTTP|400|ProviderError|重新登录|充值|付费/);
+  for (const invalid of [
+    { stage: 'inference_transport', category: 'unsupported_api_version' },
+    { stage: 'inference_response', category: 'unsupported_api_version', http_status: 400 },
+  ]) {
+    assert.match(requestErrorCopy({ code: 'agent_failed', detail: { provider_failure: invalid } }), /任务运行失败/);
+  }
+  assert.match(requestErrorCopy({ code: 'agent_failed', recovery: 'manual_reconcile', detail }), /核对.*勿再次提交/);
+});
+
 test('terminal status copy cannot leak raw cancellation, timeout, or budget reasons', () => {
   for (const code of ['agent_cancelled', 'agent_timed_out', 'budget_exhausted', 'agent_no_progress', 'agent_max_turns']) {
     const copy = requestErrorCopy({ code, message: 'Core Agent raw reason secret_ref', detail: { reason: 'private' } });
