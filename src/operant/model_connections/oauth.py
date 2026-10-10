@@ -82,6 +82,29 @@ _GOOGLE_SCOPES = (
     "openid email profile https://www.googleapis.com/auth/cloud-platform "
     "https://www.googleapis.com/auth/generative-language.retriever"
 )
+_GOOGLE_REQUIRED_SCOPES = frozenset(
+    {
+        "https://www.googleapis.com/auth/cloud-platform",
+        "https://www.googleapis.com/auth/generative-language.retriever",
+    }
+)
+
+
+def _gemini_scopes_allowed(scopes: object) -> bool:
+    return isinstance(scopes, (list, tuple)) and _GOOGLE_REQUIRED_SCOPES.issubset(scopes)
+
+
+def _reauthorization_blocker(record: dict[str, Any]) -> str | None:
+    error = record.get("error")
+    if error in {"authentication_required", "revocation_unconfirmed"}:
+        return str(error)
+    if record.get("status") == "needs_auth":
+        if error in {"authentication_required", "permission_denied"}:
+            return str(error)
+        return "OAuth connection needs sign-in"
+    return None
+
+
 _LOG = logging.getLogger(__name__)
 _CODE_EXCHANGE_ERRORS = frozenset(
     {
@@ -423,10 +446,7 @@ class OAuthConnections:
                 token.get("id_token"), provider, actual_client_id, attempt.nonce
             )
             scopes = str(token.get("scope", "")).split()
-            if provider == "gemini" and (
-                "https://www.googleapis.com/auth/generative-language.retriever" not in scopes
-                or "https://www.googleapis.com/auth/cloud-platform" not in scopes
-            ):
+            if provider == "gemini" and not _gemini_scopes_allowed(scopes):
                 raise OAuthError("Gemini API permission was not granted")
             existing = self.repo.get_connection(attempt.connection_id)
             if existing and existing.get("subject") and existing["subject"] != claims["sub"]:
@@ -534,6 +554,11 @@ class OAuthConnections:
             fd = await self._acquire_connection_lock(connection_id)
             try:
                 current = self.repo.get_connection(connection_id) or record
+                blocked = _reauthorization_blocker(current)
+                if blocked is not None:
+                    # A prior 401, revoked grant or uncertain revocation cannot
+                    # become connected again merely because an old token remains.
+                    raise OAuthError(blocked)
                 try:
                     token = await self._access_token_unlocked(current)
                 except (OAuthError, CredentialError, httpx.HTTPError, ValueError) as exc:
@@ -541,9 +566,13 @@ class OAuthConnections:
                         str(exc) if isinstance(exc, OAuthError) else "OAuth credential unavailable"
                     )
                     latest = self.repo.get_connection(connection_id) or current
-                    self.repo.save_connection(
-                        connection_id, {**latest, "status": "error", "error": failure}
-                    )
+                    if not (
+                        latest.get("status") == "needs_auth"
+                        and latest.get("error") == "permission_denied"
+                    ):
+                        self.repo.save_connection(
+                            connection_id, {**latest, "status": "error", "error": failure}
+                        )
                     raise OAuthError(failure) from exc
                 latest = self.repo.get_connection(connection_id) or current
                 if latest.get("status") == "error" or latest.get("error"):
@@ -561,10 +590,18 @@ class OAuthConnections:
 
     async def _access_token_unlocked(self, record: dict[str, Any]) -> str:
         connection_id = str(record["connection_id"])
+        blocked = _reauthorization_blocker(record)
+        if blocked is not None:
+            raise OAuthError(blocked)
         if record.get("provider") == "chatgpt" and "chatgpt.tokens.use.direct" not in record.get(
             "scopes", []
         ):
             raise OAuthError("chatgpt_plan_usage_disabled")
+        if record.get("provider") == "gemini" and (
+            record.get("error") == "permission_denied"
+            or not _gemini_scopes_allowed(record.get("scopes"))
+        ):
+            raise OAuthError("permission_denied")
         ref = secret_ref(connection_id, "ACCESS_TOKEN")
         token = self.credentials.get(ref)
         if not token:
@@ -607,13 +644,24 @@ class OAuthConnections:
                 or not 1 <= expires_in <= 86400
             ):
                 raise OAuthError("OAuth refresh response is invalid")
+            scopes = str(body["scope"]).split() if "scope" in body else record.get("scopes", [])
+            if record["provider"] == "gemini" and not _gemini_scopes_allowed(scopes):
+                self.repo.save_connection(
+                    connection_id,
+                    {
+                        **record,
+                        "status": "needs_auth",
+                        "error": "permission_denied",
+                        "scopes": scopes,
+                    },
+                )
+                raise OAuthError("permission_denied")
             self.credentials.put_many(
                 {
                     ref: access,
                     secret_ref(connection_id, "REFRESH_TOKEN"): replacement,
                 }
             )
-            scopes = str(body["scope"]).split() if "scope" in body else record.get("scopes", [])
             plan_disabled = (
                 record["provider"] == "chatgpt" and "chatgpt.tokens.use.direct" not in scopes
             )

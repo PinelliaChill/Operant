@@ -860,6 +860,192 @@ async def test_google_desktop_oauth_requires_project_and_scopes(tmp_path: Path) 
     await oauth.disconnect(record)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refreshed_scope", ["openid email", None])
+async def test_gemini_refresh_rejects_explicit_scope_loss_without_replacing_credentials(
+    tmp_path: Path, refreshed_scope: str | None
+) -> None:
+    store = SQLiteStore(tmp_path / "operant.db")
+    store.initialize()
+    repo = UXRepository(store)
+    credentials = CredentialStore(tmp_path / ".env")
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = private.public_key().public_numbers()
+    token_id = [""]
+    refresh_requests = [0]
+    granted = (
+        "openid email https://www.googleapis.com/auth/cloud-platform "
+        "https://www.googleapis.com/auth/generative-language.retriever"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/certs"):
+            return httpx.Response(
+                200,
+                json={
+                    "keys": [
+                        {
+                            "kid": "key-1",
+                            "kty": "RSA",
+                            "alg": "RS256",
+                            "n": _b64(public.n.to_bytes(256, "big")),
+                            "e": _b64(public.e.to_bytes(3, "big")),
+                        }
+                    ]
+                },
+            )
+        form = parse_qs(request.content.decode())
+        if form.get("grant_type") == ["refresh_token"]:
+            refresh_requests[0] += 1
+            body: dict[str, Any] = {
+                "access_token": "new-access",
+                "refresh_token": "new-refresh",
+                "expires_in": 3600,
+            }
+            if refreshed_scope is not None:
+                body["scope"] = refreshed_scope
+            return httpx.Response(200, json=body)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+                "id_token": token_id[0],
+                "expires_in": 3600,
+                "scope": granted,
+            },
+        )
+
+    oauth = OAuthConnections(repo, credentials, transport=httpx.MockTransport(handler))
+    attempt, _ = oauth.start(
+        provider="gemini",
+        redirect_uri="http://127.0.0.1:4343/internal/model-auth/gemini/callback",
+        google_client_id="own-desktop-client",
+        google_client_secret="own-client-secret",
+        project_id="own-project",
+    )
+    token_id[0] = _jwt(
+        private,
+        attempt.nonce,
+        issuer="https://accounts.google.com",
+        audience="own-desktop-client",
+    )
+    connected = await oauth.complete(provider="gemini", state=attempt.state, code="code")
+    repo.save_connection(attempt.connection_id, {**connected, "expires_at": 0})
+    current = repo.get_connection(attempt.connection_id)
+    assert current is not None
+    if refreshed_scope is None:
+        assert await oauth.access_token(current) == "new-access"
+        refreshed = repo.get_connection(attempt.connection_id)
+        assert refreshed is not None
+        assert refreshed["scopes"] == granted.split()
+        assert refreshed["status"] == "connected" and refreshed["error"] is None
+        assert credentials.get(secret_ref(attempt.connection_id, "REFRESH_TOKEN")) == (
+            "new-refresh"
+        )
+    else:
+        with pytest.raises(OAuthError, match="permission_denied"):
+            await oauth.access_token(current)
+        denied = repo.get_connection(attempt.connection_id)
+        assert denied is not None
+        assert denied["status"] == "needs_auth" and denied["error"] == "permission_denied"
+        assert denied["subject"] == connected["subject"]
+        assert denied["project_id"] == "own-project"
+        assert credentials.get(secret_ref(attempt.connection_id, "ACCESS_TOKEN")) == ("old-access")
+        assert credentials.get(secret_ref(attempt.connection_id, "REFRESH_TOKEN")) == (
+            "old-refresh"
+        )
+        router = ConnectionProviderRouter(repo, credentials, oauth)
+        router.gemini.transport = httpx.MockTransport(
+            lambda _: pytest.fail("Gemini inference must not receive the narrowed token")
+        )
+        with pytest.raises(OAuthError, match="permission_denied"):
+            await router.list_models(base_url="", secret_ref=str(denied["secret_ref"]))
+        with pytest.raises(OAuthError, match="permission_denied"):
+            _ = [
+                event
+                async for event in router.stream(
+                    snapshot=_snapshot("gemini", "gemini-3-model", str(denied["secret_ref"])),
+                    messages=[Message(role=MessageRole.USER, content="question")],
+                    tools=[],
+                )
+            ]
+        assert refresh_requests == [1]
+        still_denied = repo.get_connection(attempt.connection_id)
+        assert still_denied is not None and still_denied["status"] == "needs_auth"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "status", "error", "expected"),
+    [
+        ("gemini", "needs_auth", "authentication_required", "authentication_required"),
+        ("gemini", "error", "authentication_required", "authentication_required"),
+        ("gemini", "needs_auth", "permission_denied", "permission_denied"),
+        ("gemini", "needs_auth", None, "needs sign-in"),
+        ("gemini", "needs_auth", "revocation_unconfirmed", "revocation_unconfirmed"),
+        ("gemini", "error", "revocation_unconfirmed", "revocation_unconfirmed"),
+        ("chatgpt", "needs_auth", "authentication_required", "authentication_required"),
+        ("chatgpt", "error", "authentication_required", "authentication_required"),
+        ("chatgpt", "error", "revocation_unconfirmed", "revocation_unconfirmed"),
+    ],
+)
+async def test_oauth_reauthorization_states_never_reuse_unexpired_token(
+    tmp_path: Path,
+    provider: str,
+    status: str,
+    error: str | None,
+    expected: str,
+) -> None:
+    store = SQLiteStore(tmp_path / "operant.db")
+    store.initialize()
+    repo = UXRepository(store)
+    credentials = CredentialStore(tmp_path / ".env")
+    connection_id = "reauthorization-blocked"
+    record = {
+        "connection_id": connection_id,
+        "provider": provider,
+        "auth_method": "oauth",
+        "status": status,
+        "error": error,
+        "subject": "synthetic-account",
+        "account_label": "synthetic@example.test",
+        "project_id": "synthetic-project" if provider == "gemini" else None,
+        "client_id": "synthetic-client",
+        "secret_ref": secret_ref(connection_id, "ACCESS_TOKEN"),
+        "expires_at": time.time() + 3600,
+        "scopes": (
+            [
+                "https://www.googleapis.com/auth/cloud-platform",
+                "https://www.googleapis.com/auth/generative-language.retriever",
+            ]
+            if provider == "gemini"
+            else ["chatgpt.tokens.use.direct"]
+        ),
+    }
+    repo.save_connection(connection_id, record)
+    access_ref = secret_ref(connection_id, "ACCESS_TOKEN")
+    refresh_ref = secret_ref(connection_id, "REFRESH_TOKEN")
+    credentials.put_many({access_ref: "old-access", refresh_ref: "old-refresh"})
+    network_calls = [0]
+
+    def forbidden_network(_: httpx.Request) -> httpx.Response:
+        network_calls[0] += 1
+        return httpx.Response(500)
+
+    oauth = OAuthConnections(repo, credentials, transport=httpx.MockTransport(forbidden_network))
+    try:
+        with pytest.raises(OAuthError, match=expected):
+            await oauth.access_token(record)
+        assert repo.get_connection(connection_id) == record
+        assert credentials.get(access_ref) == "old-access"
+        assert credentials.get(refresh_ref) == "old-refresh"
+        assert network_calls == [0]
+    finally:
+        os.environ.pop(access_ref, None)
+        os.environ.pop(refresh_ref, None)
+
+
 def test_oauth_cancel_and_expiry_clear_pending_google_attempt(tmp_path: Path) -> None:
     repo = _Repo()
     moment = [1000.0]
@@ -1017,6 +1203,9 @@ async def test_chatgpt_http_errors_and_streamed_quota_update_connection_without_
         assert failed is not None and failed["status"] == "needs_auth"
         assert failed["error"] == "authentication_required"
         assert "private-error-body" not in json.dumps(failed)
+        # The remaining HTTP classifications are independent authorized
+        # trials. A real 401 requires a new sign-in before another call.
+        repo.save_connection(connection_id, {**failed, "status": "ready", "error": None})
 
         original = [Message(role=MessageRole.USER, content="Keep this message")]
         cases = (
@@ -1386,15 +1575,15 @@ async def test_gemini_429_and_partial_stream_do_not_commit_tool_context(tmp_path
                     {
                         "content": {
                             "parts": [
+                                {"text": "partial", "thoughtSignature": "uncommitted-text"},
                                 {
-                                    "text": "partial",
                                     "functionCall": {
                                         "id": "incomplete-call",
                                         "name": "read_file",
                                         "args": {},
                                     },
                                     "thoughtSignature": "uncommitted-signature",
-                                }
+                                },
                             ]
                         }
                     }
@@ -1417,6 +1606,220 @@ async def test_gemini_429_and_partial_stream_do_not_commit_tool_context(tmp_path
         assert repo.metadata == {}
     finally:
         credentials.delete(key_ref)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visible_text", ["answer", None])
+async def test_gemini_filters_thought_text_and_replays_empty_text_signature(
+    visible_text: str | None,
+) -> None:
+    payloads: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        parts: list[dict[str, Any]] = [{"text": "private reasoning", "thought": True}]
+        if visible_text:
+            parts.append({"text": visible_text})
+        parts.append({"text": "", "thoughtSignature": "opaque-empty-signature"})
+        chunk = {"candidates": [{"finishReason": "STOP", "content": {"parts": parts}}]}
+        return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\n")
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": "Bearer fixture"}
+
+    repo = _Repo()
+    repo.save_connection("gemini-connection", {"connection_id": "gemini-connection"})
+
+    def resolve(_: str) -> dict[str, Any] | None:
+        return repo.get_connection("gemini-connection")
+
+    user = Message(role=MessageRole.USER, content="question")
+    first = GeminiNativeProvider(
+        auth,
+        transport=httpx.MockTransport(handler),
+        metadata_repo=repo,
+        connection_for_ref=resolve,
+    )
+    events = [
+        event
+        async for event in first.stream(
+            snapshot=_snapshot("gemini", "gemini-3-model"), messages=[user], tools=[]
+        )
+    ]
+    assert [event.delta for event in events if event.event_type == "model.delta"] == (
+        [visible_text] if visible_text else []
+    )
+    assert events[-1].response is not None and events[-1].response.content == visible_text
+    assert "private reasoning" not in json.dumps([event.model_dump() for event in events])
+    assert "private reasoning" not in json.dumps(repo.metadata)
+    assert any("opaque-empty-signature" in json.dumps(record) for record in repo.metadata.values())
+
+    restarted = GeminiNativeProvider(
+        auth,
+        transport=httpx.MockTransport(handler),
+        metadata_repo=repo,
+        connection_for_ref=resolve,
+    )
+    assistant = Message(role=MessageRole.ASSISTANT, content=events[-1].response.content)
+    _ = [
+        event
+        async for event in restarted.stream(
+            snapshot=_snapshot("gemini", "gemini-3-model"),
+            messages=[user, assistant, Message(role=MessageRole.USER, content="next")],
+            tools=[],
+        )
+    ]
+    replayed = payloads[1]["contents"][1]["parts"]
+    assert replayed[-1] == {"text": "", "thoughtSignature": "opaque-empty-signature"}
+    assert "private reasoning" not in json.dumps(payloads[1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("part", "reason"),
+    [
+        (
+            {"text": "private reasoning", "thought": True, "thoughtSignature": "opaque"},
+            "cannot be safely resumed",
+        ),
+        (
+            {"text": "", "thought": True, "thoughtSignature": "opaque"},
+            "cannot be safely resumed",
+        ),
+        (
+            {
+                "thought": True,
+                "functionCall": {"id": "call-1", "name": "read_file", "args": {}},
+            },
+            "contains an executable field",
+        ),
+        (
+            {
+                "text": "private reasoning",
+                "thought": True,
+                "functionCall": {"id": "call-1", "name": "read_file", "args": {}},
+            },
+            "contains an executable field",
+        ),
+        ({"thought": True, "functionResponse": {}}, "contains an executable field"),
+        ({"thought": True, "executableCode": {}}, "contains an executable field"),
+        ({"thought": True, "codeExecutionResult": {}}, "contains an executable field"),
+        ({"thought": True, "toolCall": {}}, "contains an executable field"),
+        ({"thought": True, "toolResponse": {}}, "contains an executable field"),
+        ({"text": "private reasoning", "thought": "true"}, "marker is invalid"),
+        ({"text": "", "thoughtSignature": "x" * 65537}, "signature is too large"),
+        (
+            {
+                "functionCall": {"id": "call-1", "name": "read_file", "args": {}},
+                "thoughtSignature": "x" * 65537,
+            },
+            "signature is too large",
+        ),
+    ],
+)
+async def test_gemini_rejects_unreplayable_thought_and_oversized_signatures(
+    part: dict[str, Any], reason: str
+) -> None:
+    chunk = {"candidates": [{"finishReason": "STOP", "content": {"parts": [part]}}]}
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": "Bearer fixture"}
+
+    repo = _Repo()
+    repo.save_connection("gemini-connection", {"connection_id": "gemini-connection"})
+    provider = GeminiNativeProvider(
+        auth,
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\n")
+        ),
+        metadata_repo=repo,
+        connection_for_ref=lambda _: repo.get_connection("gemini-connection"),
+    )
+    emitted = []
+    with pytest.raises(ProviderError, match=reason):
+        async for event in provider.stream(
+            snapshot=_snapshot("gemini", "gemini-3-model"),
+            messages=[Message(role=MessageRole.USER, content="question")],
+            tools=[],
+        ):
+            emitted.append(event)
+    assert emitted == []
+    assert repo.metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_gemini_rejects_aggregate_signature_metadata_before_any_commit() -> None:
+    parts = [{"text": "", "thoughtSignature": character * 50000} for character in ("a", "b", "c")]
+    parts.append(
+        {
+            "functionCall": {"id": "call-1", "name": "read_file", "args": {}},
+            "thoughtSignature": "tool-signature",
+        }
+    )
+    chunk = {"candidates": [{"finishReason": "STOP", "content": {"parts": parts}}]}
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": "Bearer fixture"}
+
+    repo = _Repo()
+    repo.save_connection("gemini-connection", {"connection_id": "gemini-connection"})
+    provider = GeminiNativeProvider(
+        auth,
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\n")
+        ),
+        metadata_repo=repo,
+        connection_for_ref=lambda _: repo.get_connection("gemini-connection"),
+    )
+    with pytest.raises(ProviderError, match="metadata exceeds"):
+        _ = [
+            event
+            async for event in provider.stream(
+                snapshot=_snapshot("gemini", "gemini-3-model"),
+                messages=[Message(role=MessageRole.USER, content="question")],
+                tools=[],
+            )
+        ]
+    assert repo.metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_gemini_stream_cancellation_does_not_commit_signature() -> None:
+    class SlowStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            chunk = {
+                "candidates": [
+                    {"content": {"parts": [{"text": "partial", "thoughtSignature": "opaque"}]}}
+                ]
+            }
+            yield f"data: {json.dumps(chunk)}\n\n".encode()
+            await asyncio.sleep(60)
+
+    async def auth(_: str) -> dict[str, str]:
+        return {"Authorization": "Bearer fixture"}
+
+    repo = _Repo()
+    repo.save_connection("gemini-connection", {"connection_id": "gemini-connection"})
+    provider = GeminiNativeProvider(
+        auth,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=SlowStream())),
+        metadata_repo=repo,
+        connection_for_ref=lambda _: repo.get_connection("gemini-connection"),
+    )
+    stream = provider.stream(
+        snapshot=_snapshot("gemini", "gemini-3-model"),
+        messages=[Message(role=MessageRole.USER, content="question")],
+        tools=[],
+    )
+    first = await anext(stream)
+    assert first.event_type == "model.delta" and first.delta == "partial"
+    task = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await stream.aclose()
+    assert repo.metadata == {}
 
 
 @pytest.mark.asyncio
@@ -1772,11 +2175,11 @@ async def test_real_ux_repository_oauth_and_provider_metadata(tmp_path: Path) ->
         payload = json.loads(request.content)
         if len(payload["contents"]) == 1:
             parts = [
+                {"text": "hidden thought body", "thought": True},
                 {
                     "functionCall": {"id": "tool-1", "name": "read_file", "args": {}},
                     "thoughtSignature": "opaque-signature",
-                    "thought": "hidden thought body",
-                }
+                },
             ]
         else:
             assert payload["contents"][1]["parts"][0]["thoughtSignature"] == ("opaque-signature")
@@ -1803,6 +2206,9 @@ async def test_real_ux_repository_oauth_and_provider_metadata(tmp_path: Path) ->
         )
     ]
     assert output[-1].response is not None
+    assert "hidden thought body" not in json.dumps(
+        [event.model_dump(mode="json") for event in output]
+    )
     call = output[-1].response.tool_calls[0]
     with store._connect() as connection:
         metadata = connection.execute(
@@ -1836,11 +2242,11 @@ async def test_real_ux_repository_oauth_and_provider_metadata(tmp_path: Path) ->
                     "finishReason": "STOP",
                     "content": {
                         "parts": [
+                            {"text": "private model thought", "thought": True},
                             {
                                 "text": "visible answer",
                                 "thoughtSignature": "opaque-text-signature",
-                                "thought": "private model thought",
-                            }
+                            },
                         ]
                     },
                 }

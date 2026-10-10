@@ -95,7 +95,7 @@ class GeminiNativeProvider:
         if not isinstance(segments, list) or sum(
             part.get("length", -1) for part in segments if isinstance(part, dict)
         ) != len(text):
-            return [{"text": text}]
+            return [{"text": text}] if text else []
         parts: list[dict[str, Any]] = []
         offset = 0
         for segment in segments:
@@ -107,6 +107,8 @@ class GeminiNativeProvider:
             part: dict[str, Any] = {"text": text[offset : offset + length]}
             signature = segment.get("thought_signature")
             if isinstance(signature, str) and signature:
+                if len(signature) > 65536:
+                    raise ProviderError("Gemini text signature metadata is too large")
                 part["thoughtSignature"] = signature
             parts.append(part)
             offset += length
@@ -281,19 +283,18 @@ class GeminiNativeProvider:
                 )
                 continue
             parts: list[dict[str, Any]] = []
-            if message.content:
-                if message.role is MessageRole.ASSISTANT:
-                    parts.extend(
-                        self._stored_text_parts(
-                            snapshot.secret_ref,
-                            snapshot.model_profile_id,
-                            snapshot.model_id,
-                            messages[: message_index + 1],
-                            message.content,
-                        )
+            if message.role is MessageRole.ASSISTANT:
+                parts.extend(
+                    self._stored_text_parts(
+                        snapshot.secret_ref,
+                        snapshot.model_profile_id,
+                        snapshot.model_id,
+                        messages[: message_index + 1],
+                        message.content or "",
                     )
-                else:
-                    parts.append({"text": message.content})
+                )
+            elif message.content:
+                parts.append({"text": message.content})
             for index, call in enumerate(message.tool_calls):
                 function_part: dict[str, Any] = {
                     "functionCall": {
@@ -388,26 +389,55 @@ class GeminiNativeProvider:
                                 if not isinstance(part, dict):
                                     continue
                                 value = part.get("text")
-                                if isinstance(value, str) and value:
-                                    parts_seen.append(value)
-                                    signature = part.get("thoughtSignature")
-                                    if isinstance(signature, str) and len(signature) > 65536:
-                                        raise ProviderError("Gemini text signature is too large")
+                                signature = part.get("thoughtSignature")
+                                if isinstance(signature, str) and len(signature) > 65536:
+                                    raise ProviderError("Gemini thought signature is too large")
+                                thought = part.get("thought", False)
+                                if type(thought) is not bool:
+                                    raise ProviderError("Gemini thought marker is invalid")
+                                if thought:
+                                    if any(
+                                        field in part
+                                        for field in (
+                                            "functionCall",
+                                            "functionResponse",
+                                            "executableCode",
+                                            "codeExecutionResult",
+                                            "toolCall",
+                                            "toolResponse",
+                                        )
+                                    ):
+                                        raise ProviderError(
+                                            "Gemini thought part contains an executable field"
+                                        )
+                                    # A thought body cannot enter public events or
+                                    # persisted history. A signed thought part needs
+                                    # its original body for exact replay, so fail
+                                    # rather than inventing replacement content.
+                                    if isinstance(signature, str) and signature:
+                                        raise ProviderError(
+                                            "Gemini signed thought part cannot be safely resumed"
+                                        )
+                                    continue
+                                if isinstance(value, str):
+                                    if value:
+                                        parts_seen.append(value)
                                     segment = {
                                         "length": len(value),
                                         "thought_signature": signature
-                                        if isinstance(signature, str)
+                                        if isinstance(signature, str) and signature
                                         else None,
                                     }
-                                    if (
+                                    if value and (
                                         text_segments
                                         and not text_segments[-1]["thought_signature"]
                                         and not segment["thought_signature"]
                                     ):
                                         text_segments[-1]["length"] += segment["length"]
-                                    else:
+                                    elif value or segment["thought_signature"]:
                                         text_segments.append(segment)
-                                    yield ProviderEvent(event_type="model.delta", delta=value)
+                                    if value:
+                                        yield ProviderEvent(event_type="model.delta", delta=value)
                                 function = part.get("functionCall")
                                 if isinstance(function, dict) and isinstance(
                                     function.get("name"), str
@@ -445,9 +475,14 @@ class GeminiNativeProvider:
         if finish_reason != "STOP":
             self._report(snapshot.secret_ref, None, "stream_incomplete")
             raise ProviderError("Gemini inference did not complete successfully")
+        if (
+            any(segment.get("thought_signature") for segment in text_segments)
+            and len(json.dumps(text_segments)) > 131072
+        ):
+            raise ProviderError("Gemini text signature metadata exceeds the accepted size")
         for call_id, signature in staged_signatures:
             self._save_signature(snapshot.secret_ref, snapshot.model_profile_id, call_id, signature)
-        if parts_seen:
+        if text_segments:
             self._save_text_parts(
                 snapshot.secret_ref,
                 snapshot.model_profile_id,
@@ -456,7 +491,7 @@ class GeminiNativeProvider:
                     *messages,
                     Message(
                         role=MessageRole.ASSISTANT,
-                        content="".join(parts_seen),
+                        content="".join(parts_seen) or None,
                         tool_calls=tuple(calls),
                     ),
                 ],
