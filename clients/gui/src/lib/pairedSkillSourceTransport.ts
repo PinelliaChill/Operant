@@ -143,6 +143,7 @@ function checkedReceipt(value: PairingJsonObject, identity: PairingIdentity): Pa
 }
 
 export interface PairingAttempt {
+  deviceId: string;
   requestId: string;
   requestHash: string;
   expiresAt: number;
@@ -190,6 +191,7 @@ export async function prepareSkillSourcePairing(
     envelope, key, pairingPaths.pair);
   envelope.signature = await signPairingEnvelope(envelope, identity.signingPrivateKey, pairingPaths.pair);
   return {
+    deviceId: identity.deviceId,
     requestId: String(envelope.pair_request_id),
     requestHash: await pairingRequestHash(envelope, pairingPaths.pair),
     expiresAt: issuedAt + 60,
@@ -261,7 +263,12 @@ export class PairedSkillSourceSession {
 
   async readback(pending: PendingPairedWrite): Promise<PairedReceipt> {
     if (pending.deviceId !== this.identity.deviceId) throw new Error('待核对请求属于其他设备。');
-    const receipt = await this.send('readback', { original_request_id: pending.requestId }, requestId(), pairingPaths.readback);
+    const receipt = await this.send('readback', {
+      original_request_id: pending.requestId,
+      original_operation: pending.operation,
+      original_payload_hash: pending.payloadHash,
+      original_core_epoch_id: pending.coreEpochId,
+    }, requestId(), pairingPaths.readback);
     await this.acceptReceipt(receipt, pending);
     return receipt;
   }

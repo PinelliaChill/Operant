@@ -658,6 +658,15 @@ def install_phase45_routes(
             action = repository.get_security_action(str(pending["action_hash"]))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="approval not found") from exc
+        if (
+            re.fullmatch(r"paired-skill-source:caller_[0-9a-f]{32}", action.principal)
+            and action.tool == "skill_source"
+            and action.operation in {"add", "remove"}
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="paired Skill source changes require a user decision",
+            )
         evaluation = engine.evaluate(action)
         try:
             reviewer_decision = await approval_reviewer.review(action, evaluation)

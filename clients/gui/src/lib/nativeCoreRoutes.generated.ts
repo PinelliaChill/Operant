@@ -1,4 +1,4 @@
-// Generated from the four OpenAPI schemas by scripts/generate-native-core-routes.mjs.
+// Generated from the five OpenAPI schemas by scripts/generate-native-core-routes.mjs.
 // Do not hand-edit this route table.
 export const nativeCoreRoutes = [
   {
@@ -77,6 +77,12 @@ export const nativeCoreRoutes = [
     "operationId": "createWriterWorkspace",
     "method": "POST",
     "pathTemplate": "/v1/graph/runs/{run_id}/writer-workspaces",
+    "deviceAuth": false
+  },
+  {
+    "operationId": "decidePhase45Approval",
+    "method": "POST",
+    "pathTemplate": "/v1/security/approvals/{approval_id}",
     "deviceAuth": false
   },
   {
@@ -179,6 +185,12 @@ export const nativeCoreRoutes = [
     "operationId": "getModelOAuthStatus",
     "method": "GET",
     "pathTemplate": "/v1/setup/oauth/{attempt_id}",
+    "deviceAuth": false
+  },
+  {
+    "operationId": "getPhase45Approval",
+    "method": "GET",
+    "pathTemplate": "/v1/security/approvals/{approval_id}",
     "deviceAuth": false
   },
   {
@@ -461,6 +473,12 @@ export const nativeCoreRoutes = [
     "operationId": "resumeLocalControlSession",
     "method": "POST",
     "pathTemplate": "/v1/local-control/sessions/{session_id}/resume",
+    "deviceAuth": false
+  },
+  {
+    "operationId": "reviewPhase45Approval",
+    "method": "POST",
+    "pathTemplate": "/v1/security/approvals/{approval_id}/review",
     "deviceAuth": false
   },
   {

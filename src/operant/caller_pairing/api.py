@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,9 +11,10 @@ from fastapi import FastAPI, HTTPException, Request, Response
 
 from operant.api_model_connections import _trusted_local
 from operant.application.phase45_gateway import Phase45ActionGateway
+from operant.application.security import PolicyEngine
 from operant.application.service import ApplicationService
 from operant.application.skill_sources import SkillSourceEffects
-from operant.caller_pairing.crypto import COMMAND_PATH, READBACK_PATH
+from operant.caller_pairing.crypto import COMMAND_PATH, READBACK_PATH, canonical_bytes
 from operant.caller_pairing.runtime import CallerPairingError, CallerPairingRuntime
 from operant.contracts.caller_pairing import (
     CallerChallengeInput,
@@ -24,6 +26,40 @@ from operant.contracts.caller_pairing import (
     CallerReceiptView,
 )
 from operant.contracts.onboarding import SkillSourceView
+from operant.domain.security import (
+    Capability,
+    PolicyBundle,
+    PolicyDecision,
+    PolicyLayer,
+    PolicyRule,
+    RiskLevel,
+)
+
+_PAIRED_WRITE_RULE_ID = "caller-pairing.skill-source-write-approval.v1"
+
+
+def _paired_source_policy(base_engine: PolicyEngine) -> PolicyEngine:
+    """Require a real Phase45 approval for paired writes without relaxing DENY."""
+    base = base_engine.bundle
+    fingerprint = hashlib.sha256(canonical_bytes(base.model_dump(mode="json"))).hexdigest()[:24]
+    rule = PolicyRule(
+        rule_id=_PAIRED_WRITE_RULE_ID,
+        layer=PolicyLayer.SYSTEM,
+        decision=PolicyDecision.ASK,
+        capabilities=(Capability.WORKSPACE_WRITE,),
+        tools=("skill_source",),
+        operations=("add", "remove"),
+        risk_level=RiskLevel.HIGH,
+        reason="Paired Skill source changes require a native approval",
+    )
+    return PolicyEngine(
+        PolicyBundle(
+            bundle_id=f"paired-skill-source-{fingerprint}",
+            version=f"paired-skill-source.v1.{fingerprint}",
+            default_decision=base.default_decision,
+            rules=(*base.rules, rule),
+        )
+    )
 
 
 def _base_url(request: Request) -> str:
@@ -68,9 +104,8 @@ def install_caller_pairing_routes(
         gateway = Phase45ActionGateway(
             root_gateway.repository,
             root_gateway.phase_repository,
-            root_gateway.engine,
+            _paired_source_policy(root_gateway.engine),
             principal=f"paired-skill-source:{device_id}",
-            on_approval_requested=root_gateway.on_approval_requested,
         )
 
         def refresh_for_device(
@@ -92,6 +127,7 @@ def install_caller_pairing_routes(
             refresh=refresh_for_device,
             requested_path=native_effects.requested_path,
             source_path=native_effects.source_path,
+            mutation_lock=native_effects.mutation_lock,
         )
 
     runtime = CallerPairingRuntime(service.store, effects_for_device=effects_for_device)

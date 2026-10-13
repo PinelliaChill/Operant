@@ -17,6 +17,9 @@ function receiptResult(receipt: PairedReceipt): Record<string, unknown> {
   if (receipt.state === 'unconfirmed' || receipt.state === 'in_progress') {
     throw new Phase1EError('outcome_unknown', '修改结果尚未确认，请核对原请求。', false, 'manual_reconcile', receipt);
   }
+  if (receipt.state === 'failed' && receipt.error_code === 'request_not_received') {
+    throw new Phase1EError('request_not_received', '原请求未执行，已停止接收。现在可以重新操作。', false, 'none', receipt);
+  }
   throw new Phase1EError(receipt.error_code ?? 'skill_source_rejected', '技能来源操作未完成，请核对目录与权限。', false, 'none', receipt);
 }
 

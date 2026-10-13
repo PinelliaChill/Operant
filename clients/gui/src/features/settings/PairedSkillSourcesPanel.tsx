@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SkillSourceView } from '../../../../../sdk/typescript-client/onboarding.generated.ts';
 import { PathInput } from '../../components/PathInput';
+import { SearchSelect } from '../../components/SearchSelect';
 import { pairedErrorCopy } from '../../lib/pairedErrorCopy';
 import {
   type CallerPairingClientLike, type PairedReceipt, type PairingAttempt, PairedSkillSourceSession,
@@ -8,7 +9,8 @@ import {
 } from '../../lib/pairedSkillSourceTransport';
 import { createPairedSkillSourceClient } from '../../lib/pairedSkillSourceOnboarding';
 import {
-  listPairingIdentities, readPendingPairedWrite,
+  hasPendingPairingIdentity, listPairingIdentities, readPendingPairedWrite,
+  readSelectedPairingDeviceId, saveSelectedPairingDeviceId, selectPairingIdentity,
   type PairingIdentity, type PendingPairedWrite,
 } from '../../lib/pairingIdentityStore';
 import { skillIssueCopy } from './skillIssueCopy';
@@ -31,7 +33,10 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
   const [storageReady, setStorageReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [freshIdentity, setFreshIdentity] = useState(false);
+  const [pendingForCore, setPendingForCore] = useState<boolean | null>(null);
   const dispatching = useRef(false);
+  const refreshRevision = useRef(0);
   const session = useMemo(() => identity?.paired && identity.expiresAt > Date.now() / 1000
     ? new PairedSkillSourceSession(createCallerClient(identity.baseUrl), identity) : null,
   [createCallerClient, identity]);
@@ -52,10 +57,10 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
 
   useEffect(() => {
     let active = true;
-    void listPairingIdentities().then(async (saved) => {
+    void Promise.all([listPairingIdentities(), readSelectedPairingDeviceId()]).then(async ([saved, selectedId]) => {
       if (!active) return;
       setIdentities(saved);
-      const selected = saved.find((entry) => entry.paired && entry.expiresAt > Date.now() / 1000) ?? saved[0] ?? null;
+      const selected = selectPairingIdentity(saved, selectedId);
       setIdentity(selected);
       if (selected) await syncPending(selected.deviceId);
       else setStorageReady(true);
@@ -64,20 +69,65 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
     return () => { active = false; };
   }, [syncPending]);
 
+  useEffect(() => {
+    let active = true;
+    if (!identity) { setPendingForCore(false); return; }
+    setPendingForCore(null);
+    void hasPendingPairingIdentity(identities, identity.baseUrl).then((found) => {
+      if (active) setPendingForCore(found);
+    }).catch(() => {
+      if (active) { setPendingForCore(null); setError('无法核对已保存请求，请检查浏览器存储后重试。'); }
+    });
+    return () => { active = false; };
+  }, [identities, identity, pending]);
+
+  const selectIdentity = async (deviceId: string) => {
+    if (dispatching.current || pairAttempt) return;
+    const selected = identities.find((entry) => entry.deviceId === deviceId);
+    if (!selected) return;
+    dispatching.current = true; setBusy(true); setError('');
+    try {
+      await saveSelectedPairingDeviceId(deviceId);
+      refreshRevision.current += 1;
+      setStorageReady(false); setVerified(false); setItems([]); setReceipt(null); setFreshIdentity(false);
+      setIdentity(selected);
+      await syncPending(deviceId);
+    } catch (cause: unknown) { setError(pairedErrorCopy(cause)); }
+    finally { dispatching.current = false; setBusy(false); }
+  };
+
+  const chooseFreshIdentity = async () => {
+    if (!identity || dispatching.current || pairAttempt || pendingForCore !== false) return;
+    dispatching.current = true; setBusy(true); setError('');
+    try {
+      const saved = await listPairingIdentities();
+      if (await hasPendingPairingIdentity(saved, identity.baseUrl)) {
+        setPendingForCore(true);
+        setError('此桌面连接仍有待核对的修改，请先用原浏览器身份核对。');
+        return;
+      }
+      setFreshIdentity(true); setVerified(false); setItems([]);
+    } catch (cause: unknown) { setError(pairedErrorCopy(cause)); }
+    finally { dispatching.current = false; setBusy(false); }
+  };
+
   const refresh = useCallback(async () => {
     if (!sourceClient) return false;
+    const revision = ++refreshRevision.current;
     setLoading(true);
     try {
       const page = await sourceClient.listSkillSources();
+      if (revision !== refreshRevision.current) return false;
       setItems(page.items);
       setVerified(true);
       setError('');
       return true;
     } catch (cause: unknown) {
+      if (revision !== refreshRevision.current) return false;
       setVerified(false);
       setError(pairedErrorCopy(cause));
       return false;
-    } finally { setLoading(false); }
+    } finally { if (revision === refreshRevision.current) setLoading(false); }
   }, [sourceClient]);
 
   useEffect(() => { if (sourceClient) void refresh(); }, [sourceClient, refresh]);
@@ -85,6 +135,7 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
   useEffect(() => {
     if (!identity?.paired || identity.expiresAt * 1000 <= Date.now()) return;
     const timer = window.setTimeout(() => {
+      refreshRevision.current += 1;
       setVerified(false);
       setIdentity((current) => current?.deviceId === identity.deviceId ? { ...current } : current);
     }, identity.expiresAt * 1000 - Date.now());
@@ -99,9 +150,23 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
     dispatching.current = true; setBusy(true); setError('');
     try {
       const ticket = parsePairingTicket(pasted);
-      const matching = identities.filter((entry) => entry.baseUrl === ticket.base_url);
-      const existing = matching.find((entry) => entry.paired) ?? matching[0] ?? null;
+      const saved = await listPairingIdentities();
+      const matching = saved.filter((entry) => entry.baseUrl === ticket.base_url);
+      if (freshIdentity && await hasPendingPairingIdentity(saved, ticket.base_url)) {
+        throw new Error('此桌面连接仍有待核对的修改，请先用原浏览器身份核对。');
+      }
+      const existing = freshIdentity ? null
+        : matching.find((entry) => entry.deviceId === identity?.deviceId)
+          ?? matching.find((entry) => entry.paired) ?? matching[0] ?? null;
       const attempt = await prepareSkillSourcePairing(createCallerClient(ticket.base_url), ticket, displayName, existing);
+      await saveSelectedPairingDeviceId(attempt.deviceId);
+      refreshRevision.current += 1;
+      const nextSaved = await listPairingIdentities();
+      setIdentities(nextSaved);
+      setIdentity(nextSaved.find((entry) => entry.deviceId === attempt.deviceId) ?? null);
+      setFreshIdentity(false);
+      setStorageReady(false);
+      await syncPending(attempt.deviceId);
       setPairAttempt(attempt);
       const paired = await attempt.confirm();
       setPairAttempt(null);
@@ -139,7 +204,7 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
   };
 
   const write = async (operation: 'add' | 'remove', value: string) => {
-    if (!sourceClient || !identity || !verified || !storageReady || dispatching.current || pending || pairAttempt) return;
+    if (!sourceClient || !identity || !verified || !storageReady || dispatching.current || pending || pairAttempt || freshIdentity) return;
     dispatching.current = true; setBusy(true); setError('');
     try {
       const key = crypto.randomUUID();
@@ -163,7 +228,9 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
       setContinueNeedsReadback(false);
       await syncPending(pending.deviceId);
       if (result.state === 'completed') await refresh();
-      else if (result.state === 'failed') setError('这次修改未完成，请检查目录和权限后再试。');
+      else if (result.state === 'failed') setError(result.error_code === 'request_not_received'
+        ? '原请求未执行，已停止接收。现在可以重新操作。'
+        : '这次修改未完成，请检查目录和权限后再试。');
     } catch (cause: unknown) { setError(pairedErrorCopy(cause)); }
     finally { dispatching.current = false; setBusy(false); }
   };
@@ -186,10 +253,21 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
     {error && <div className="live-alert live-alert-error" role="alert">{error}</div>}
     <section className="skill-sources-card">
       <h2>连接桌面 Core</h2>
+      {identities.length > 1 && <SearchSelect label="已保存的浏览器身份" value={identity?.deviceId ?? ''}
+        onChange={(deviceId) => { void selectIdentity(deviceId); }} disabled={busy || Boolean(pairAttempt)}
+        options={identities.map((entry, index) => ({ value: entry.deviceId,
+          label: `浏览器身份 ${index + 1}${entry.paired ? '' : '（待连接）'}`,
+          detail: `${entry.baseUrl} · ${entry.deviceId.slice(-6)}` }))} />}
       {identity?.paired && <p>{verified ? '已连接' : '已保存配对'} {identity.baseUrl}，权限仅限技能来源。{identity.expiresAt <= Date.now() / 1000 ? '连接已过期，请重新配对。' : ''}</p>}
       {!identity?.paired && !loading && <p>{identity
         ? '上次配对结果尚未确认。请在桌面版重新生成配对码，并沿用此浏览器身份连接。'
         : '在这台电脑的桌面版“技能来源”生成短时配对码，再粘贴到这里。配对需要桌面确认。'}</p>}
+      {identity && <div>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={busy || freshIdentity || Boolean(pairAttempt) || Boolean(pending) || pendingForCore !== false}
+          onClick={() => { void chooseFreshIdentity(); }}>重新建立浏览器身份</button>
+        {freshIdentity && <><span role="status">将使用新配对码建立独立身份；旧身份和待核对记录会保留。</span>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setFreshIdentity(false); void refresh(); }}>取消</button></>}
+      </div>}
       {pairAttempt && <div className="live-alert live-alert-warn" role="alert">
         配对结果尚未确认。当前页面可以按原请求核对；刷新页面后需在桌面版重新生成配对码。
         <button type="button" className="btn btn-secondary btn-sm" disabled={busy || pairAttempt.expiresAt <= Date.now() / 1000}
@@ -224,15 +302,15 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
             <small>{item.path}</small>
             {item.issue && <small>{skillIssueCopy(item.issue).guidance}</small>}
           </div>
-          {item.root_ref.startsWith('user-') && <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !verified || !storageReady || Boolean(pending) || Boolean(pairAttempt)}
+          {item.root_ref.startsWith('user-') && <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !verified || !storageReady || Boolean(pending) || Boolean(pairAttempt) || freshIdentity}
             onClick={() => { if (window.confirm(`移除技能来源“${item.label}”？`)) void write('remove', item.root_ref); }}>移除</button>}
         </li>)}</ul> : <p>尚未找到技能目录。</p>}
         <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { void refresh(); }}>刷新目录</button>
       </section>
       <form className="skill-sources-card" onSubmit={(event) => { event.preventDefault(); if (path.trim()) void write('add', path.trim()); }}>
         <h2>添加目录</h2>
-        <PathInput label="技能文件夹" value={path} onChange={setPath} placeholder="填写桌面 Core 上的完整路径" disabled={busy || !verified || !storageReady || Boolean(pending) || Boolean(pairAttempt)} />
-        <button type="submit" className="btn btn-primary" disabled={busy || !verified || !storageReady || Boolean(pending) || Boolean(pairAttempt) || !path.trim()}>添加来源</button>
+        <PathInput label="技能文件夹" value={path} onChange={setPath} placeholder="填写桌面 Core 上的完整路径" disabled={busy || !verified || !storageReady || Boolean(pending) || Boolean(pairAttempt) || freshIdentity} />
+        <button type="submit" className="btn btn-primary" disabled={busy || !verified || !storageReady || Boolean(pending) || Boolean(pairAttempt) || freshIdentity || !path.trim()}>添加来源</button>
       </form>
     </>}
   </div>;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -16,9 +17,14 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from operant.application.security import PolicyEngine, balanced_policy_bundle
+from operant.application.phase45_gateway import Phase45ActionGateway
+from operant.application.security import (
+    ApprovalReviewerAdapter,
+    PolicyEngine,
+    balanced_policy_bundle,
+)
 from operant.application.skill_sources import SkillSourceOperationError
-from operant.caller_pairing.api import install_caller_pairing_routes
+from operant.caller_pairing.api import _paired_source_policy, install_caller_pairing_routes
 from operant.caller_pairing.crypto import (
     COMMAND_PATH,
     PAIR_PATH,
@@ -44,7 +50,6 @@ from operant.contracts.caller_pairing import (
 )
 from operant.domain.security import (
     Capability,
-    PolicyBundle,
     PolicyDecision,
     PolicyLayer,
     PolicyRule,
@@ -249,6 +254,149 @@ def test_command_idempotency_nonce_and_readback(tmp_path: Path) -> None:
     assert client.read_reply(runtime, reply, path=READBACK_PATH)["receipt"] == first
 
 
+def test_bound_readback_tombstone_fences_late_write(tmp_path: Path) -> None:
+    runtime, effects = _runtime(tmp_path)
+    client = Client()
+    client.pair(runtime)
+    args = {"path": "/tmp/skills"}
+    payload_hash = hashlib.sha256(canonical_bytes({"operation": "add", "args": args})).hexdigest()
+    delayed_write = client.command(
+        runtime,
+        "add",
+        args,
+        request_id="delayed-write",
+        nonce=b"delayednonce",
+    )
+    binding = {
+        "original_request_id": "delayed-write",
+        "original_operation": "add",
+        "original_payload_hash": payload_hash,
+        "original_core_epoch_id": runtime.keys.epoch_id,
+    }
+    lookup = client.command(
+        runtime,
+        "readback",
+        binding,
+        request_id="read-absent",
+        nonce=b"readabsent12",
+        path=READBACK_PATH,
+    )
+    reply = runtime.command(lookup, path=READBACK_PATH)
+    tombstone = client.read_reply(runtime, reply, path=READBACK_PATH)["receipt"]
+    assert tombstone["state"] == "failed"
+    assert tombstone["http_status"] == 404
+    assert tombstone["error_code"] == "request_not_received"
+    assert tombstone["payload_hash"] == payload_hash
+    assert effects.add_calls == 0
+    assert runtime.repo.get_receipt(client.device_id, "delayed-write")["original_args_json"] == "{}"
+
+    # The old signed write can arrive later, but the receipt PK prevents effect.
+    late = client.read_reply(runtime, runtime.command(delayed_write))["receipt"]
+    assert late == tombstone
+    assert effects.add_calls == 0
+    with pytest.raises(CallerPairingError) as mismatch:
+        wrong = client.command(
+            runtime,
+            "readback",
+            {**binding, "original_payload_hash": "b" * 64},
+            request_id="read-wrong",
+            nonce=b"wrongnonce12",
+            path=READBACK_PATH,
+        )
+        runtime.command(wrong, path=READBACK_PATH)
+    assert mismatch.value.code == "request_identity_changed"
+    with pytest.raises(CallerPairingError) as same_mismatch:
+        runtime.command(wrong, path=READBACK_PATH)
+    assert same_mismatch.value.code == "request_identity_changed"
+    assert (
+        runtime.repo.get_receipt(client.device_id, "delayed-write")["payload_hash"] == payload_hash
+    )
+    different_operation = client.command(
+        runtime,
+        "remove",
+        {"root_ref": "user-000000000001"},
+        request_id="delayed-write",
+        nonce=b"removenonce1",
+    )
+    with pytest.raises(CallerPairingError) as changed_operation:
+        runtime.command(different_operation)
+    assert changed_operation.value.code == "request_identity_changed"
+    assert effects.remove_calls == 0
+
+    # Old request-ID-only clients retain their previous read-only behavior.
+    legacy = client.command(
+        runtime,
+        "readback",
+        {"original_request_id": "legacy-absent"},
+        request_id="read-legacy",
+        nonce=b"legacynonce1",
+        path=READBACK_PATH,
+    )
+    with pytest.raises(CallerPairingError) as absent:
+        runtime.command(legacy, path=READBACK_PATH)
+    assert absent.value.code == "receipt_unavailable"
+    assert runtime.repo.get_receipt(client.device_id, "legacy-absent") is None
+
+
+def test_bound_readback_after_repair_returns_old_completed_receipt(tmp_path: Path) -> None:
+    old, effects = _runtime(tmp_path)
+    client = Client()
+    client.pair(old)
+    args = {"path": "/tmp/skills"}
+    write = client.command(
+        old, "add", args, request_id="completed-before-repair", nonce=b"oldwritenonc"
+    )
+    completed = client.read_reply(old, old.command(write))["receipt"]
+    assert completed["state"] == "completed"
+    assert effects.add_calls == 1
+    fresh = CallerPairingRuntime(
+        old.repo.store, effects_for_device=lambda _id: effects, clock=lambda: NOW
+    )
+    client.pair(fresh, request_id="new-pair")
+    bound = {
+        "original_request_id": "completed-before-repair",
+        "original_operation": "add",
+        "original_payload_hash": completed["payload_hash"],
+        "original_core_epoch_id": old.keys.epoch_id,
+    }
+    lookup = client.command(
+        fresh,
+        "readback",
+        bound,
+        request_id="after-repair-read",
+        nonce=b"newreadnonce",
+        path=READBACK_PATH,
+    )
+    assert (
+        client.read_reply(fresh, fresh.command(lookup, path=READBACK_PATH), path=READBACK_PATH)[
+            "receipt"
+        ]
+        == completed
+    )
+    wrong_epoch = client.command(
+        fresh,
+        "readback",
+        {**bound, "original_core_epoch_id": fresh.keys.epoch_id},
+        request_id="wrong-old-epoch",
+        nonce=b"wrongepoch12",
+        path=READBACK_PATH,
+    )
+    with pytest.raises(CallerPairingError) as mismatch:
+        fresh.command(wrong_epoch, path=READBACK_PATH)
+    assert mismatch.value.code == "request_identity_changed"
+    reused_id = client.command(
+        fresh,
+        "add",
+        args,
+        request_id="completed-before-repair",
+        nonce=b"reusednonce1",
+    )
+    with pytest.raises(CallerPairingError) as changed:
+        fresh.command(reused_id)
+    assert changed.value.code == "request_identity_changed"
+    assert effects.add_calls == 1
+
+
 def test_scope_epoch_and_unknown_effect_do_not_replay(tmp_path: Path) -> None:
     runtime, effects = _runtime(tmp_path)
     client = Client()
@@ -448,7 +596,8 @@ def test_revoke_and_authentication_fail_before_effect(tmp_path: Path) -> None:
         request_id="authorized",
         nonce=b"validnonce12",
     )
-    tampered = valid.model_copy(update={"ciphertext": valid.ciphertext[:-1] + "A"})
+    changed_first = "A" if valid.ciphertext[0] != "A" else "B"
+    tampered = valid.model_copy(update={"ciphertext": changed_first + valid.ciphertext[1:]})
     with pytest.raises(CallerPairingError):
         runtime.command(tampered)
     assert effects.add_calls == 0
@@ -665,6 +814,10 @@ def test_desktop_outer_proof_precedes_source_journal_and_native_ticket(
         assert issued.json()["scope"] == "skill_source.manage"
         runtime = app.state.caller_pairing_runtime
         paired = Client(now=int(time.time()))
+        assert (
+            runtime.effects_for_device(paired.device_id).mutation_lock
+            is app.state.skill_source_effects.mutation_lock
+        )
         ticket = CallerPairingTicket.model_validate(issued.json())
         pair_body = paired.pair_request(ticket)
         paired_response = client.post(PAIR_PATH, json=pair_body.model_dump())
@@ -703,31 +856,16 @@ def test_desktop_outer_proof_precedes_source_journal_and_native_ticket(
         )["receipt"]
         assert list_receipt["state"] == "completed"
         assert list_receipt["operation"] == "list"
+        assert runtime.effects_for_device(paired.device_id).gateway().on_approval_requested is None
+        assert app.state.phase45_action_gateway.engine.bundle.version == "phase45.v1"
+        with app.state.skill_source_effects.store._connect() as db:
+            assert db.execute("SELECT COUNT(*) FROM phase45_approval_requests").fetchone()[0] == 0
 
         skill_root = tmp_path / "paired-skills"
         skill_root.mkdir()
         (skill_root / "SKILL.md").write_text(
             "---\nname: paired-fixture\ndescription: Paired test source\n---\nUse this skill.\n",
             encoding="utf-8",
-        )
-        base_policy = balanced_policy_bundle()
-        app.state.phase45_action_gateway.engine = PolicyEngine(
-            PolicyBundle(
-                bundle_id="paired-ask",
-                version="paired-ask.v1",
-                default_decision=base_policy.default_decision,
-                rules=base_policy.rules
-                + (
-                    PolicyRule(
-                        rule_id="paired-source-ask",
-                        layer=PolicyLayer.SYSTEM,
-                        decision=PolicyDecision.ASK,
-                        capabilities=(Capability.WORKSPACE_WRITE,),
-                        tools=("skill_source",),
-                        reason="paired source needs approval",
-                    ),
-                ),
-            )
         )
         add_body = paired.command(
             runtime,
@@ -744,6 +882,9 @@ def test_desktop_outer_proof_precedes_source_journal_and_native_ticket(
         assert asked["state"] == "awaiting_approval"
         assert isinstance(asked["approval_id"], str)
         assert isinstance(asked["action_hash"], str)
+        assert str(skill_root) not in str(
+            app.state.setup_repository.get_setting("skill_sources.v1", {})
+        )
         with app.state.skill_source_effects.store._connect() as db:
             assert (
                 db.execute(
@@ -752,6 +893,22 @@ def test_desktop_outer_proof_precedes_source_journal_and_native_ticket(
                 ).fetchone()[0]
                 == 0
             )
+            action = db.execute(
+                "SELECT policy_version,principal FROM security_action_requests WHERE action_hash=?",
+                (asked["action_hash"],),
+            ).fetchone()
+            assert action["principal"] == f"paired-skill-source:{paired.device_id}"
+            assert action["policy_version"].startswith("paired-skill-source.v1.")
+            audited_rules = {
+                rule
+                for row in db.execute(
+                    "SELECT rule_ids FROM security_audit_events "
+                    "WHERE action_hash=? AND event_type='policy.evaluated'",
+                    (asked["action_hash"],),
+                )
+                for rule in json.loads(row["rule_ids"])
+            }
+            assert "caller-pairing.skill-source-write-approval.v1" in audited_rules
         SQLitePhase45Repository(app.state.skill_source_effects.store).decide_phase45_approval(
             asked["approval_id"],
             approved=True,
@@ -796,6 +953,45 @@ def test_desktop_outer_proof_precedes_source_journal_and_native_ticket(
             }
             assert f"paired-skill-source:{paired.device_id}" in scan_principals
             assert "core:phase45" not in scan_principals
+
+        root_ref = completed["result"]["root_ref"]
+        remove_body = paired.command(
+            runtime,
+            "remove",
+            {"root_ref": root_ref},
+            request_id="paired-remove",
+            nonce=b"remove-nonce",
+        )
+        remove_response = client.post(COMMAND_PATH, json=remove_body.model_dump())
+        assert remove_response.status_code == 200
+        remove_asked = paired.read_reply(
+            runtime, CallerEncryptedReply.model_validate(remove_response.json())
+        )["receipt"]
+        assert remove_asked["state"] == "awaiting_approval"
+        assert remove_asked["approval_id"] != asked["approval_id"]
+        assert root_ref in app.state.setup_repository.get_setting("skill_sources.v1", {})
+        SQLitePhase45Repository(app.state.skill_source_effects.store).decide_phase45_approval(
+            remove_asked["approval_id"], approved=True, decided_by="user", reason_code=None
+        )
+        remove_continuation = paired.command(
+            runtime,
+            "continue",
+            {
+                "original_request_id": "paired-remove",
+                "payload_hash": remove_asked["payload_hash"],
+                "approval_id": remove_asked["approval_id"],
+                "action_hash": remove_asked["action_hash"],
+            },
+            request_id="paired-remove-continue",
+            nonce=b"rm-cont-nonc",
+        )
+        removed_response = client.post(COMMAND_PATH, json=remove_continuation.model_dump())
+        assert removed_response.status_code == 200
+        removed = paired.read_reply(
+            runtime, CallerEncryptedReply.model_validate(removed_response.json())
+        )["receipt"]
+        assert removed["state"] == "completed"
+        assert root_ref not in app.state.setup_repository.get_setting("skill_sources.v1", {})
 
         # A durable reservation with no terminal result simulates a crash in
         # the action window. Both authenticated readback paths must say unknown.
@@ -889,7 +1085,7 @@ def test_desktop_outer_proof_precedes_source_journal_and_native_ticket(
                     "SELECT COUNT(*) FROM command_executions "
                     "WHERE command_type='skill_source.change'"
                 ).fetchone()[0]
-                == 1
+                == 2
             )
 
         revoke_path = f"/v1/local-callers/devices/{paired.device_id}/revoke"
@@ -926,6 +1122,103 @@ def test_desktop_outer_proof_precedes_source_journal_and_native_ticket(
         assert blocked.status_code == 409
         assert blocked.json()["detail"]["code"] == "device_unavailable"
         assert runtime.repo.get_receipt(paired.device_id, "after-revoke") is None
+
+
+def test_paired_source_review_requires_user_and_system_deny_still_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    from operant.api import create_app
+
+    base = balanced_policy_bundle()
+    paired_engine = _paired_source_policy(PolicyEngine(base))
+    reviewer_calls: list[dict[str, Any]] = []
+
+    async def reviewer(payload: dict[str, Any]) -> dict[str, str]:
+        reviewer_calls.append(payload)
+        return {"decision": "allow", "reason_code": "reviewed", "summary": "allow"}
+
+    app = create_app(
+        tmp_path / "paired-review.sqlite3",
+        phase45_policy_engine=paired_engine,
+        phase45_approval_reviewer=ApprovalReviewerAdapter(reviewer),
+    )
+    root_gateway = app.state.phase45_action_gateway
+    gateway = Phase45ActionGateway(
+        root_gateway.repository,
+        root_gateway.phase_repository,
+        paired_engine,
+        principal="paired-skill-source:caller_" + "a" * 32,
+    )
+    action, decision, evaluation = gateway.guard(
+        tool="skill_source",
+        operation="add",
+        target_id="paired-test",
+        arguments={"request_hash": "a" * 64},
+        capabilities=(Capability.WORKSPACE_WRITE,),
+        idempotency_key="paired-review-only",
+    )
+    assert decision.decision.value == "ask"
+    assert evaluation.reviewer_eligible
+    assert decision.approval_id is not None
+    with TestClient(app) as client:
+        response = client.post(f"/v1/security/approvals/{decision.approval_id}/review")
+        assert response.status_code == 409
+        assert "user decision" in response.json()["detail"]
+    assert reviewer_calls == []
+    assert (
+        root_gateway.phase_repository.get_phase45_approval(decision.approval_id)["status"]
+        == "pending"
+    )
+
+    sibling_gateway = Phase45ActionGateway(
+        root_gateway.repository,
+        root_gateway.phase_repository,
+        paired_engine,
+        principal="paired-skill-source:caller_" + "b" * 32,
+    )
+    sibling_action, sibling_decision, _ = sibling_gateway.guard(
+        tool="skill_source",
+        operation="add",
+        target_id="paired-test",
+        arguments={"request_hash": "a" * 64},
+        capabilities=(Capability.WORKSPACE_WRITE,),
+        idempotency_key="paired-review-only",
+    )
+    assert sibling_decision.decision.value == "ask"
+    assert sibling_action.action_hash != action.action_hash
+    assert sibling_decision.approval_id != decision.approval_id
+
+    hard_deny = PolicyRule(
+        rule_id="system.hard.test-paired-source-deny",
+        layer=PolicyLayer.SYSTEM,
+        decision=PolicyDecision.DENY,
+        capabilities=(Capability.WORKSPACE_WRITE,),
+        tools=("skill_source",),
+        operations=("add", "remove"),
+        reason="test policy blocks paired source writes",
+        hard=True,
+    )
+    denied_engine = _paired_source_policy(
+        PolicyEngine(base.model_copy(update={"rules": (*base.rules, hard_deny)}))
+    )
+    denied_gateway = Phase45ActionGateway(
+        root_gateway.repository,
+        root_gateway.phase_repository,
+        denied_engine,
+        principal="paired-skill-source:caller_" + "b" * 32,
+    )
+    _blocked_action, blocked, blocked_evaluation = denied_gateway.guard(
+        tool="skill_source",
+        operation="remove",
+        target_id="paired-test",
+        arguments={"request_hash": "b" * 64},
+        capabilities=(Capability.WORKSPACE_WRITE,),
+        idempotency_key="paired-hard-deny",
+    )
+    assert blocked.decision.value == "deny"
+    assert blocked.approval_id is None
+    assert blocked_evaluation.hard_deny
 
 
 def test_v26_additive_migration_preserves_history_and_blocks_data_loss(tmp_path: Path) -> None:

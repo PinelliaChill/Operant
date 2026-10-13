@@ -63,3 +63,16 @@ test('paired source transport rejects unknown scope and retains approval as a re
     && (error as { recovery?: unknown }).recovery === 'manual_reconcile'));
   assert.equal(writes, 1);
 });
+
+test('a signed failed tombstone says the original write did not run without suggesting a blind replay', async () => {
+  const transport = createPairedSkillSourceTransport({
+    identity: { baseUrl },
+    async list() { return receipt('list'); },
+    async write() { return { ...receipt('add', 'failed'), error_code: 'request_not_received' }; },
+  });
+  await assert.rejects(transport({ method: 'POST', path: sourcePath, url: `${baseUrl}${sourcePath}`,
+    headers: { 'Idempotency-Key': 'original-add-key' }, body: '{"path":"/tmp/skills"}' }),
+  (error: unknown) => Boolean(error && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'request_not_received'
+    && /原请求未执行.*重新操作/.test(String((error as { message?: unknown }).message))));
+});

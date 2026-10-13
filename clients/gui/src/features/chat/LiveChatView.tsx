@@ -32,12 +32,13 @@ import { PathInput } from '../../components/PathInput';
 import { SearchSelect } from '../../components/SearchSelect';
 import type * as B2 from '../../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../../context/ClientContext';
-import { approvalId, outcomeNeedsReconciliation, requestCode, requestError, requiredText } from '../extensions/localProjection';
+import { approvalId, outcomeNeedsReconciliation, requestCode, requiredText } from '../extensions/localProjection';
 import { parseExtensionArguments } from './extensionCommandArguments';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
 import { useOnboarding } from '../../live/OnboardingContext';
 import { visibleOnboardingError } from '../../live/createRequestRecovery';
 import { requestErrorCopy } from '../../lib/requestErrorCopy';
+import { chatFailureCode, chatFailureCopy } from '../../lib/chatFailureCopy';
 import type { LiveApproval, LiveEvent } from '../../live/liveState';
 import { approvalsForSession, canDecideApproval, formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
@@ -108,17 +109,16 @@ function eventSummary(event: LiveEvent): string {
 
 const LiveErrorBanner: React.FC<{
   code: string;
-  message: string;
   recovery?: string;
   detail?: unknown;
   onRetry?: () => void;
   onClear?: () => void;
-}> = ({ code, message, recovery, detail, onRetry, onClear }) => (
+}> = ({ code, recovery, detail, onRetry, onClear }) => (
   <div className="live-alert live-alert-error" role="alert">
     <AlertTriangle size={17} aria-hidden="true" />
     <div className="live-alert-content">
-      <strong>{requestErrorCopy({ code, message, recovery, detail })}</strong>
-      <details><summary>查看错误详情</summary><code>{code}</code><p>{message}</p>{recovery && <code>{recovery}</code>}</details>
+      <strong>{chatFailureCopy({ code, recovery, detail }, 'status')}</strong>
+      {chatFailureCode({ code }) && <details><summary>查看错误详情</summary><code>{chatFailureCode({ code })}</code></details>}
     </div>
     <div className="live-alert-actions">
       {onRetry && (
@@ -283,7 +283,6 @@ export const LiveChatView: React.FC = () => {
     approvalAction,
     terminalSessionId,
     manualReconcileRequired,
-    manualReconcileReason,
     deepLinkNotFound,
     cancelCommandAvailable,
     selectProject,
@@ -414,7 +413,7 @@ export const LiveChatView: React.FC = () => {
       setArtifactCursor(page.next_cursor ?? null);
       setArtifactLoaded(true);
     }).catch((error: unknown) => {
-      if (request === artifactRequest.current) setArtifactError(error instanceof Error ? error.message : '可引用工件列表读取失败');
+      if (request === artifactRequest.current) setArtifactError(chatFailureCopy(error, 'artifact_list'));
     }).finally(() => { if (request === artifactRequest.current) setArtifactBusy(false); });
   }, [pickerVisible, referenceKind, selectedThreadId, workbenchConnected, artifactLoaded, artifactReload]);
 
@@ -428,7 +427,7 @@ export const LiveChatView: React.FC = () => {
         setArtifactChoices((current) => [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]);
         setArtifactCursor(page.next_cursor ?? null);
       }
-    } catch (error) { if (request === artifactRequest.current) setArtifactError(error instanceof Error ? error.message : '后续工件读取失败'); }
+    } catch (error) { if (request === artifactRequest.current) setArtifactError(chatFailureCopy(error, 'artifact_list')); }
     finally { if (request === artifactRequest.current) setArtifactBusy(false); }
   };
 
@@ -459,7 +458,7 @@ export const LiveChatView: React.FC = () => {
     let active = true;
     setExtensionCommands([]);
     void workbenchClient.listCommands().then((value) => { if (active) setRegistry(value); })
-      .catch((error: unknown) => { if (active) setWorkbenchError(error instanceof Error ? error.message : '命令列表读取失败'); });
+      .catch((error: unknown) => { if (active) setWorkbenchError(chatFailureCopy(error, 'command_list')); });
     void phase56Client.listExtensionCommands().then((value) => {
       if (!active) return;
       const page = value as Record<string, unknown>;
@@ -476,7 +475,7 @@ export const LiveChatView: React.FC = () => {
         };
       });
       setExtensionCommands((current) => [...current.filter((item) => item.kind !== 'extension'), ...commands]);
-    }).catch((error: unknown) => { if (active) setWorkbenchError(`扩展命令读取失败：${requestError(error)}`); });
+    }).catch((error: unknown) => { if (active) setWorkbenchError(chatFailureCopy(error, 'command_list')); });
     if (selectedThread?.sessionId) void phase56Client.listSkillCommands(selectedThreadId).then((value) => {
       if (!active) return;
       setExtensionCommands((current) => [
@@ -490,7 +489,7 @@ export const LiveChatView: React.FC = () => {
           parameters: item.parameters,
         })),
       ]);
-    }).catch((error: unknown) => { if (active) setWorkbenchError(`Skill 命令读取失败：${requestError(error)}`); });
+    }).catch((error: unknown) => { if (active) setWorkbenchError(chatFailureCopy(error, 'command_list')); });
     return () => { active = false; };
   }, [selectedThreadId, selectedThread?.sessionId, workbenchConnected, phase56Client]);
 
@@ -574,7 +573,7 @@ export const LiveChatView: React.FC = () => {
         if (message !== extensionName) { setWorkbenchError('命令参数请填写在下方 JSON 输入框，草稿已保留。'); return; }
         let args: Record<string, unknown>;
         try { args = parseExtensionArguments(extensionArguments, extension.parameters); }
-        catch (error: unknown) { setWorkbenchError(requestError(error)); return; }
+        catch (error: unknown) { setWorkbenchError(chatFailureCopy(error, 'arguments')); return; }
         const identity = `${extension.kind}:${selectedThread.id}:${extension.command}:${extensionArguments}`;
         const key = keyForWorkbenchAction(identity);
         const run = async () => {
@@ -586,7 +585,7 @@ export const LiveChatView: React.FC = () => {
           const skillFeedback = extension.kind === 'skill' && typeof result.result === 'string'
             ? `：${result.result.slice(0, 500)}（资源 ${'resource_id' in result ? result.resource_id : '未知'}）`
             : '；请查看会话记录确认结果';
-          if (result.status === 'failed') { setWorkbenchError(`${extension.command} 已失败${skillFeedback}`); return; }
+          if (result.status === 'failed') { setWorkbenchError('命令已失败。请查看会话记录确认原因，再决定是否重新提交。'); return; }
           setWorkbenchNotice(extension.kind === 'skill'
             ? `${extension.command} 已完成${skillFeedback}`
             : `${extension.command} 已完成，结果已写入会话记录。`);
@@ -599,7 +598,7 @@ export const LiveChatView: React.FC = () => {
           if (requestCode(error) === 'approval_required' && approval) { setExtensionApproval({ approvalId: approval, run }); setWorkbenchError('命令需要人工审批。'); }
           else {
             if (outcomeNeedsReconciliation(error)) setExtensionOutcomeUnknown(true);
-            setWorkbenchError(`命令失败：${requestError(error)} 若结果未知，请人工核对后处理。`);
+            setWorkbenchError(chatFailureCopy(error, 'command'));
           }
         } finally { setCommandBusy(false); }
         return;
@@ -628,7 +627,7 @@ export const LiveChatView: React.FC = () => {
         setWorkbenchNotice(`${result.command}：${result.message}`);
         setDraft('');
         await refreshHistory();
-      } catch (error) { setWorkbenchError(error instanceof Error ? error.message : '命令执行失败'); }
+      } catch (error) { setWorkbenchError(chatFailureCopy(error, 'command')); }
       finally { setCommandBusy(false); }
       return;
     }
@@ -658,7 +657,7 @@ export const LiveChatView: React.FC = () => {
       if (target === referenceTarget) setReferenceTarget('');
       setReferencePickerOpen(false);
       setWorkbenchNotice(`已附加 ${value.source} 的摘要快照，正文按需读取。`);
-    } catch (error) { if (isCurrent()) setWorkbenchError(error instanceof Error ? error.message : '引用创建失败'); }
+    } catch (error) { if (isCurrent()) setWorkbenchError(chatFailureCopy(error, 'reference')); }
     finally { if (isCurrent()) setReferenceBusy(false); }
   };
 
@@ -762,7 +761,6 @@ export const LiveChatView: React.FC = () => {
       {topError && (
         <LiveErrorBanner
           code={topError.code}
-          message={topError.message}
           recovery={topError.recovery}
           detail={topError.detail}
           onRetry={topError.retryable ? () => void reconnect() : undefined}
@@ -773,16 +771,14 @@ export const LiveChatView: React.FC = () => {
       {onboardingError && selectedThread && <div className="live-alert live-alert-error" role="alert">{onboardingError}{(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearCreateUncertainty()}>刷新并核对</button>}{recoveredConversationId && <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}</div>}
       {renaming && selectedThread && <div className="live-rename"><label>对话名称<input className="input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} maxLength={100} autoFocus onKeyDown={(event) => { if (event.key === 'Enter') void saveTitle(); if (event.key === 'Escape') setRenaming(false); }} /></label><button type="button" className="btn btn-primary btn-sm" disabled={renameBusy || !titleDraft.trim()} onClick={() => void saveTitle()}>保存名称</button><button type="button" className="btn btn-ghost btn-sm" onClick={() => setRenaming(false)}>取消</button></div>}
       {workbenchNotice && <div className="live-workbench-notice" role="status">{workbenchNotice}</div>}
-      {terminalCleanupId && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>终端 {terminalCleanupId} 的清理结果未确认；请人工核查。打开终端面板可刷新状态。本提示不改变审计记录。</span></div>}
+      {terminalCleanupId && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" /><span>终端清理结果未确认。请打开终端面板刷新并核对，暂时不要重复清理。</span><details><summary>查看终端编号</summary><code>{terminalCleanupId}</code></details></div>}
 
       {manualReconcileRequired && (
         <div className="live-alert live-alert-warn" role="alert">
           <AlertTriangle size={17} aria-hidden="true" />
           <div className="live-alert-content">
             <strong>需要人工核对</strong>
-            <span>{manualReconcileReason ? requestErrorCopy(new Error(manualReconcileReason)) : '结果未知，请刷新并核对运行状态。系统不会自动重试，也不会猜测运行结果。'}</span>
-            {manualReconcileReason && !manualReconcileReason.includes('不会自动重试') && <span>系统不会自动重试。</span>}
-            {manualReconcileReason && <details><summary>查看错误详情</summary>{manualReconcileReason}</details>}
+            <span>结果未知，请刷新并核对运行状态。系统不会自动重试，也不会猜测运行结果。</span>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refreshConversation()} disabled={phase !== 'ready'}>
             刷新并核对状态
@@ -872,7 +868,8 @@ export const LiveChatView: React.FC = () => {
                 {historyError && (
                   <div className="live-alert live-alert-error" role="alert">
                     <AlertTriangle size={15} aria-hidden="true" />
-                    <span>{historyError.code} · {historyError.message}</span>
+                    <span>{chatFailureCopy(historyError, 'history')}</span>
+                    {chatFailureCode(historyError) && <details><summary>查看错误详情</summary><code>{chatFailureCode(historyError)}</code></details>}
                   </div>
                 )}
                 {historyLoading ? (
@@ -898,7 +895,7 @@ export const LiveChatView: React.FC = () => {
                   {commandSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用命令">{commandSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.canonical_name} key={item.canonical_name} onClick={() => setDraft(item.canonical_name)}><span>{item.canonical_name}{item.aliases?.length ? ` · ${item.aliases.join('、')}` : ''}</span><small>{item.command_kind} · {item.execution_mode || 'json'} </small></button>)}</div>}
                   {extensionSuggestions.length > 0 && <div className="live-command-suggestions" role="listbox" aria-label="可用扩展与 Skill 命令">{extensionSuggestions.map((item) => <button type="button" role="option" aria-selected={draft.trim() === item.command} key={item.command} onClick={() => setDraft(item.command)}><span>{item.command} · {item.description}</span><small>{item.kind === 'skill' ? `${item.pluginId} · 已授权 Skill` : `${item.pluginId} v${item.version} · 已授权扩展`}</small></button>)}</div>}
                   {selectedExtensionCommand && <label className="live-extension-arguments">{selectedExtensionCommand.kind === 'skill' ? 'Skill 命令参数' : '扩展命令参数'}（JSON 对象）<textarea className="input" value={extensionArguments} onChange={(event) => setExtensionArguments(event.target.value)} rows={3} aria-describedby="extension-argument-hint" /><small id="extension-argument-hint">{selectedExtensionCommand.parameters ? `参数 Schema：${JSON.stringify(selectedExtensionCommand.parameters)}` : '无参数 Schema。'} 输入值仅用于执行当前命令。</small></label>}
-                  {extensionApproval && <div className="live-alert" role="group" aria-label="动态命令审批"><span>命令等待人工审批：<code>{extensionApproval.approvalId}</code></span><button type="button" className="btn btn-primary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: true }).then(() => { setExtensionApproval(undefined); return pending.run(); }).catch((error: unknown) => { if (outcomeNeedsReconciliation(error)) setExtensionOutcomeUnknown(true); setWorkbenchError(`审批或原命令失败：${requestError(error)}`); }).finally(() => setCommandBusy(false)); }}>允许并提交</button><button type="button" className="btn btn-secondary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: false }).then(() => { setExtensionApproval(undefined); setWorkbenchNotice('已拒绝命令。'); }).catch((error: unknown) => setWorkbenchError(`拒绝失败：${requestError(error)}`)).finally(() => setCommandBusy(false)); }}>拒绝</button></div>}
+                  {extensionApproval && <div className="live-alert" role="group" aria-label="动态命令审批"><span>命令等待人工审批。请确认后继续原命令。</span><details><summary>查看审批编号</summary><code>{extensionApproval.approvalId}</code></details><button type="button" className="btn btn-primary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: true }).then(() => { setExtensionApproval(undefined); return pending.run(); }).catch((error: unknown) => { if (outcomeNeedsReconciliation(error)) setExtensionOutcomeUnknown(true); setWorkbenchError(chatFailureCopy(error, 'approval')); }).finally(() => setCommandBusy(false)); }}>允许并提交</button><button type="button" className="btn btn-secondary btn-sm" disabled={commandBusy || !workbenchConnected} onClick={() => { const pending = extensionApproval; setCommandBusy(true); void phase45Client.decidePhase45Approval(pending.approvalId, { approved: false }).then(() => { setExtensionApproval(undefined); setWorkbenchNotice('已拒绝命令。'); }).catch((error: unknown) => setWorkbenchError(chatFailureCopy(error, 'approval'))).finally(() => setCommandBusy(false)); }}>拒绝</button></div>}
                   {extensionOutcomeUnknown && <div className="live-alert live-alert-error" role="alert">命令仍在进行或结果未知，请先查看会话记录和审计；不要重复提交。<button type="button" className="btn btn-secondary btn-sm" onClick={() => setExtensionOutcomeUnknown(false)}>已人工核对</button></div>}
                   {reviewCommand && <div className="live-reviewer-role"><SearchSelect label="审查角色" value={effectiveReviewerRoleId} onChange={setReviewerRoleId} placeholder="选择只读角色" disabled={commandBusy || reviewerRoles.length === 0} options={reviewerRoles.map((role) => ({ value: role.id!, label: role.name, detail: role.id }))} />{reviewerRoles.length === 0 && <span>需要先配置只读角色。</span>}</div>}
                 </div>

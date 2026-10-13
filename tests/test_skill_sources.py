@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +16,9 @@ from operant.api_skill_sources import install_skill_source_routes
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.security import PolicyEngine, balanced_policy_bundle
 from operant.application.service import ApplicationService
+from operant.application.skill_sources import SkillSourceEffects
 from operant.contracts.b2_3 import ManagementCommand
+from operant.contracts.onboarding import SkillSourceView
 from operant.domain.actions import CommandExecution
 from operant.domain.commands import WorkspaceInitialization
 from operant.domain.security import (
@@ -676,3 +680,93 @@ async def test_missing_configured_root_discovers_empty(tmp_path: Path) -> None:
     finally:
         await manager.close()
         service.close()
+
+
+def test_shared_source_mutation_lock_preserves_two_concurrent_adds(tmp_path: Path) -> None:
+    """Two authenticated adapters must not overwrite one saved-source snapshot."""
+    store = SQLiteStore(tmp_path / "isolated.sqlite3")
+    store.initialize()
+    first_read = threading.Event()
+    release_first = threading.Event()
+    second_read = threading.Event()
+    second_path_ready = threading.Event()
+
+    class InterleavedSettings:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+            self.reads = 0
+            self.lock = threading.Lock()
+
+        def get_setting(self, _key: str, _default: Any = None) -> dict[str, str]:
+            with self.lock:
+                self.reads += 1
+                ordinal = self.reads
+                snapshot = dict(self.values)
+            if ordinal == 1:
+                first_read.set()
+                assert release_first.wait(3)
+            elif ordinal == 2:
+                second_read.set()
+            return snapshot
+
+        def set_setting(self, _key: str, value: Any) -> None:
+            with self.lock:
+                self.values = dict(value)
+
+    settings = InterleavedSettings()
+    shared_lock = threading.RLock()
+    paths = (tmp_path / "one", tmp_path / "two")
+    for path in paths:
+        path.mkdir()
+
+    def effects_for(path: Path, *, second: bool) -> SkillSourceEffects:
+        ref = "user-" + hashlib.sha256(str(path).encode()).hexdigest()[:12]
+        view = SkillSourceView(
+            root_ref=ref, path=str(path), label="fixture", exists=True, enabled=True, issue=None
+        )
+
+        def source_path(raw: str | Path) -> Path:
+            if second:
+                second_path_ready.set()
+            return Path(raw)
+
+        def refresh(
+            _workspace: str | Path | None = None,
+            *,
+            discover: bool = False,
+            gateway_override: Phase45ActionGateway | None = None,
+        ) -> list[SkillSourceView]:
+            return [view] if discover else []
+
+        effects = SkillSourceEffects(
+            store=store,
+            settings=settings,
+            gateway=lambda: None,  # type: ignore[return-value]
+            refresh=refresh,
+            requested_path=lambda raw: Path(raw),
+            source_path=source_path,
+            mutation_lock=shared_lock,
+        )
+        # Authorization is tested separately; here both actions are already allowed.
+        effects._guard = lambda *_args: None  # type: ignore[method-assign]
+        return effects
+
+    first = effects_for(paths[0], second=False)
+    second = effects_for(paths[1], second=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(first.add_source, paths[0], "device-one")
+        assert first_read.wait(3)
+        two = pool.submit(second.add_source, paths[1], "device-two")
+        assert second_path_ready.wait(3)
+        assert not second_read.wait(0.1)
+        release_first.set()
+        assert one.result(timeout=3).root_ref != two.result(timeout=3).root_ref
+    assert settings.reads == 2
+    assert set(settings.values.values()) == {str(path) for path in paths}
+    with store._connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM command_executions WHERE command_type='skill_source.change'"
+            ).fetchone()[0]
+            == 2
+        )

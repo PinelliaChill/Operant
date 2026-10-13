@@ -26,6 +26,7 @@ _ENVIRONMENT_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 _DEFAULT_WS_MAX_SIZE = 512 * 1024
 _DESKTOP_MANAGEMENT_PREFIXES = (
     "/v1/setup",
+    "/v1/security/approvals",
     "/v1/remote-control",
     "/v1/local-callers",
     "/v1/local-control",

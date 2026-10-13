@@ -2,12 +2,11 @@
  * RailLayout：Shell v2 壳层（取代 ShellLayout）
  * 结构：IconRail 64px + ContextSidebar 280px（随分区切换内容）+ Main + StatusBar 32px。
  * 响应式：
- * - <960px：IconRail 隐藏改底部 TabBar（会话/任务/项目/设置）；ContextSidebar 变覆盖抽屉
+ * - <960px：IconRail 隐藏改底部 TabBar（对话/项目/协作/任务/设置）；ContextSidebar 变覆盖抽屉
  *   （复用 components/Drawer：遮罩 + Esc + 焦点管理 + 焦点还原）；StatusBar 隐藏。
  * - >=960px（所有桌面宽度）：ContextSidebar 内联且可收起为细竖把手（v6 §3），展开状态按
  *   模式持久化 localStorage（operant.panel.chatSidebar / operant.panel.collabSidebar），
- *   ChatSidebar 与 CollabSidebar 互不影响；rail 不再设"会话"项（v6 §2），
- *   顶部模式切换钮（v6 §1）为桌面端对话/协作唯一入口。
+ *   ChatSidebar 与 CollabSidebar 互不影响；rail 展示对话/项目/协作/任务四个入口。
  */
 
 import React, { useState } from 'react';
@@ -72,7 +71,7 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-/** 顶部分区 + 底部设置（v6 §2：移除"会话"项——对话/协作经顶部模式切换钮进入，底部 TabBar 保留会话） */
+/** 桌面四个分区入口加底部设置；窄屏 TabBar 展示五项。 */
 const RAIL_SECTIONS = [
   { to: '/chat', label: '对话', icon: MessageSquare },
   { to: '/projects', label: '项目', icon: FolderKanban },

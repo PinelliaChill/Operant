@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CALLER_PAIRING_PROTOCOL: Literal["caller-pairing.v1"] = "caller-pairing.v1"
 SKILL_SOURCE_SCOPE: Literal["skill_source.manage"] = "skill_source.manage"
@@ -131,6 +131,24 @@ class CallerRemovePayload(CallerModel):
 
 class CallerReadbackPayload(CallerModel):
     original_request_id: RequestId
+    original_operation: Literal["add", "remove"] | None = None
+    original_payload_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    original_core_epoch_id: Identity | None = None
+
+    @model_validator(mode="after")
+    def require_complete_original_binding(self) -> CallerReadbackPayload:
+        values = (
+            self.original_operation,
+            self.original_payload_hash,
+            self.original_core_epoch_id,
+        )
+        if any(value is None for value in values) and any(value is not None for value in values):
+            raise ValueError("original request binding must be complete")
+        if self.original_core_epoch_id is not None and not self.original_core_epoch_id.startswith(
+            "core_"
+        ):
+            raise ValueError("original Core epoch is invalid")
+        return self
 
 
 class CallerContinuePayload(CallerModel):

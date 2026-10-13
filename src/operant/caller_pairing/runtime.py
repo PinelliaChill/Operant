@@ -335,14 +335,27 @@ class CallerPairingRuntime:
             payload = CallerReadbackPayload.model_validate(plaintext)
         else:
             payload = CallerContinuePayload.model_validate(plaintext)
-        if body.operation in {"readback", "continue"}:
+        if body.operation == "readback":
+            assert isinstance(payload, CallerReadbackPayload)
+            receipt = self.repo.readback_or_tombstone(
+                device_id=body.device_id,
+                current_epoch_id=self.keys.epoch_id,
+                nonce=body.nonce,
+                envelope_hash=digest,
+                nonce_expires_at=body.expires_at,
+                request_id=payload.original_request_id,
+                original_operation=payload.original_operation,
+                original_payload_hash=payload.original_payload_hash,
+                original_core_epoch_id=payload.original_core_epoch_id,
+                now=now,
+            )
+        elif body.operation == "continue":
             self.repo.reserve_nonce(
                 body.device_id, self.keys.epoch_id, body.nonce, digest, body.expires_at, now
             )
             receipt = self._readback(body.device_id, payload.original_request_id)
-            if body.operation == "continue":
-                assert isinstance(payload, CallerContinuePayload)
-                receipt = self._continue(body.device_id, receipt, payload)
+            assert isinstance(payload, CallerContinuePayload)
+            receipt = self._continue(body.device_id, receipt, payload)
         else:
             args = payload.model_dump()
             payload_hash = hashlib.sha256(

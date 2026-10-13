@@ -18,6 +18,8 @@ const MAX_QUERY_BYTES: usize = 4096;
 const IDENTITY_PATH: &str = "/internal/local-caller/identity";
 const PAIRING_CHALLENGE_PATH: &str = "/v1/local-callers/challenges";
 const PAIRING_CHALLENGE_BODY: &str = "{\"ttl_seconds\":120}";
+const PHASE45_SCHEMA: &str =
+    include_str!("../../../../sdk/protocol/schema/operant-phase45.openapi.json");
 const ONBOARDING_SCHEMA: &str =
     include_str!("../../../../sdk/protocol/schema/operant-onboarding.openapi.json");
 const PHASE56_SCHEMA: &str =
@@ -25,6 +27,11 @@ const PHASE56_SCHEMA: &str =
 const BETA_SCHEMA: &str = include_str!("../../../../sdk/protocol/schema/operant-beta.openapi.json");
 const CALLER_PAIRING_SCHEMA: &str =
     include_str!("../../../../sdk/protocol/schema/operant-caller-pairing.openapi.json");
+const PHASE45_OPERATIONS: &[&str] = &[
+    "getPhase45Approval",
+    "decidePhase45Approval",
+    "reviewPhase45Approval",
+];
 const ONBOARDING_OPERATIONS: &[&str] = &[
     "bootstrapSetup",
     "listModelConnections",
@@ -378,7 +385,9 @@ impl LocalCoreBridge {
 }
 
 fn operation_spec(id: &str) -> Result<OperationSpec, BridgeError> {
-    let schema = if ONBOARDING_OPERATIONS.contains(&id) {
+    let schema = if PHASE45_OPERATIONS.contains(&id) {
+        PHASE45_SCHEMA
+    } else if ONBOARDING_OPERATIONS.contains(&id) {
         ONBOARDING_SCHEMA
     } else if PHASE56_OPERATIONS.contains(&id) {
         PHASE56_SCHEMA
@@ -391,7 +400,8 @@ fn operation_spec(id: &str) -> Result<OperationSpec, BridgeError> {
     };
     let operation = lookup_schema_operation(schema, id)?;
     let path = operation.path_template.as_str();
-    if !path.starts_with("/v1/setup/")
+    if !path.starts_with("/v1/security/approvals/")
+        && !path.starts_with("/v1/setup/")
         && !path.starts_with("/v1/local-control/")
         && !path.starts_with("/v1/remote-control/")
         && path != "/v1/extensions"
@@ -742,6 +752,7 @@ mod tests {
 
     #[test]
     fn schema_allowlist_is_complete_for_supported_management_operations() {
+        let phase45: Value = serde_json::from_str(PHASE45_SCHEMA).unwrap();
         let onboarding: Value = serde_json::from_str(ONBOARDING_SCHEMA).unwrap();
         let phase56: Value = serde_json::from_str(PHASE56_SCHEMA).unwrap();
         let beta: Value = serde_json::from_str(BETA_SCHEMA).unwrap();
@@ -757,6 +768,13 @@ mod tests {
                 .map(str::to_owned)
                 .collect()
         };
+        assert_eq!(
+            collect(&phase45, "/v1/security/approvals/"),
+            PHASE45_OPERATIONS
+                .iter()
+                .map(|id| (*id).to_owned())
+                .collect()
+        );
         assert_eq!(
             collect(&onboarding, "/v1/setup/"),
             ONBOARDING_OPERATIONS
@@ -819,6 +837,7 @@ mod tests {
         }
         for id in ONBOARDING_OPERATIONS
             .iter()
+            .chain(PHASE45_OPERATIONS)
             .chain(PHASE56_OPERATIONS)
             .chain(BETA_OPERATIONS)
             .chain(CALLER_PAIRING_OPERATIONS)

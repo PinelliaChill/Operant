@@ -68,6 +68,7 @@ class FakeTransport:
         self.runtime = runtime
         self.lose_pair_once = False
         self.lose_add_once = False
+        self.drop_add_before_dispatch_once = False
         self.tamper_reply = False
         self.stale_reply = False
         self.invalid_grant = False
@@ -94,6 +95,9 @@ class FakeTransport:
         elif path in {"/v1/local-callers/commands", "/v1/local-callers/requests/readback"}:
             assert request.body is not None
             command = CallerCommand.model_validate_json(request.body)
+            if command.operation == "add" and self.drop_add_before_dispatch_once:
+                self.drop_add_before_dispatch_once = False
+                raise OSError("SENTINEL_PRIVATE_TRANSPORT_DETAIL")
             result = self.runtime.command(command, path=path).model_dump()
             if command.operation == "add" and self.lose_add_once:
                 self.lose_add_once = False
@@ -169,6 +173,9 @@ def test_lost_pair_response_requires_explicit_same_envelope_retry(tmp_path: Path
     with pytest.raises(PairingClientError, match="结果未知") as error:
         client.pair_ticket(_ticket(runtime), "Local test")
     assert error.value.code == "outcome_unknown"
+    with pytest.raises(PairingClientError) as still_pending:
+        client.reset_identity()
+    assert still_pending.value.code == "outcome_unknown"
     assert client.retry_pair_same_envelope()["scope"] == "skill_source.manage"
     assert len(transport.pair_bodies) == 2
     assert transport.pair_bodies[0] == transport.pair_bodies[1]
@@ -185,14 +192,136 @@ def test_lost_write_persists_only_identity_and_readback_never_replays(tmp_path: 
         client.add_source("/tmp/skills")
     assert error.value.code == "outcome_unknown"
     pending = json.loads((directory / "pending.json").read_text())
-    assert set(pending) == {"device_id", "operation", "request_id", "payload_hash"}
+    assert set(pending) == {"device_id", "operation", "request_id", "payload_hash", "core_epoch_id"}
     assert "/tmp/skills" not in (directory / "pending.json").read_text()
     with pytest.raises(PairingClientError):
         client.add_source("/tmp/other")
+    # A saved pre-upgrade pending file still reads an existing receipt.
+    legacy_pending = {key: value for key, value in pending.items() if key != "core_epoch_id"}
+    (directory / "pending.json").write_bytes(canonical_bytes(legacy_pending))
+    (directory / "pending.json").chmod(0o600)
     reopened = PairedSkillSourceClient(directory, transport=transport)
     assert reopened.readback(pending["request_id"])["state"] == "completed"
     assert reopened.pending_request() is None
     assert effects.add_calls == 1
+
+
+def test_repaired_epoch_can_close_undispatched_pending_without_replay(tmp_path: Path) -> None:
+    runtime, effects = _runtime(tmp_path)
+    transport = FakeTransport(runtime)
+    directory = tmp_path / "client"
+    client = PairedSkillSourceClient(directory, transport=transport)
+    client.pair_ticket(_ticket(runtime), "Local test")
+    transport.drop_add_before_dispatch_once = True
+    with pytest.raises(PairingClientError) as unknown:
+        client.add_source("/tmp/skills")
+    assert unknown.value.code == "outcome_unknown"
+    pending = client.pending_request()
+    assert pending is not None and pending["core_epoch_id"] == runtime.keys.epoch_id
+    assert effects.add_calls == 0
+    restarted = CallerPairingRuntime(runtime.repo.store, effects_for_device=lambda _id: effects)
+    transport.runtime = restarted
+    client.pair_ticket(_ticket(restarted), "Local test")
+    closed = client.readback(pending["request_id"])
+    assert closed["state"] == "failed"
+    assert closed["error_code"] == "request_not_received"
+    assert closed["payload_hash"] == pending["payload_hash"]
+    assert client.pending_request() is None
+    assert effects.add_calls == 0
+
+
+@pytest.mark.parametrize("abandon_pairing", [False, True])
+def test_reset_identity_refuses_unresolved_write_and_preserves_files(
+    tmp_path: Path, abandon_pairing: bool
+) -> None:
+    runtime, effects = _runtime(tmp_path)
+    transport = FakeTransport(runtime)
+    directory = tmp_path / "client"
+    client = PairedSkillSourceClient(directory, transport=transport)
+    client.pair_ticket(_ticket(runtime), "Local test")
+    key_before = (directory / ".env").read_bytes()
+    state_before = (directory / "state.json").read_bytes()
+    transport.drop_add_before_dispatch_once = True
+    with pytest.raises(PairingClientError):
+        client.add_source("/tmp/skills")
+    pending_before = (directory / "pending.json").read_bytes()
+    with pytest.raises(PairingClientError) as blocked:
+        client.reset_identity(abandon_pairing=abandon_pairing)
+    assert blocked.value.code == "outcome_unknown"
+    assert (directory / ".env").read_bytes() == key_before
+    assert (directory / "state.json").read_bytes() == state_before
+    assert (directory / "pending.json").read_bytes() == pending_before
+    assert not (directory / "retired").exists()
+    assert client.readback()["error_code"] == "request_not_received"
+    assert effects.add_calls == 0
+
+
+def test_revoked_identity_can_be_explicitly_retired_and_repaired(tmp_path: Path) -> None:
+    runtime, _ = _runtime(tmp_path)
+    transport = FakeTransport(runtime)
+    directory = tmp_path / "client"
+    client = PairedSkillSourceClient(directory, transport=transport)
+    old = client.pair_ticket(_ticket(runtime), "Local test")
+    old_key_bytes = (directory / ".env").read_bytes()
+    old_state_bytes = (directory / "state.json").read_bytes()
+    assert runtime.revoke(old["device_id"])
+    with pytest.raises(PairingClientError):
+        client.list_sources()
+    assert client.pending_request() is None
+    client.reset_identity()
+    assert not (directory / ".env").exists()
+    assert not (directory / "state.json").exists()
+    archive = next((directory / "retired").iterdir())
+    assert archive.is_dir() and archive.stat().st_mode & 0o777 == 0o700
+    assert (archive / ".env").read_bytes() == old_key_bytes
+    assert (archive / "state.json").read_bytes() == old_state_bytes
+    assert (archive / ".env").stat().st_mode & 0o777 == 0o600
+    assert (archive / "state.json").stat().st_mode & 0o777 == 0o600
+    new = client.pair_ticket(_ticket(runtime), "Replacement device")
+    assert new["device_id"] != old["device_id"]
+    assert runtime.repo.get_device(old["device_id"])["revoked_at"] is not None
+
+
+def test_rejected_repair_can_be_explicitly_abandoned_before_new_identity(tmp_path: Path) -> None:
+    runtime, _ = _runtime(tmp_path)
+    directory = tmp_path / "client"
+    client = PairedSkillSourceClient(directory, transport=FakeTransport(runtime))
+    old = client.pair_ticket(_ticket(runtime), "Local test")
+    old_keys = (directory / ".env").read_bytes()
+    assert runtime.revoke(old["device_id"])
+    with pytest.raises(PairingClientError):
+        client.pair_ticket(_ticket(runtime), "Local test")
+    with pytest.raises(PairingClientError):
+        client.reset_identity()
+    assert client.pending_request() is None
+    client.reset_identity(abandon_pairing=True)
+    archive = next((directory / "retired").iterdir())
+    assert (archive / ".env").read_bytes() == old_keys
+    new = client.pair_ticket(_ticket(runtime), "Local test")
+    assert new["device_id"] != old["device_id"]
+    assert client.list_sources()["state"] == "completed"
+    assert runtime.repo.get_device(old["device_id"])["revoked_at"] is not None
+    assert runtime.repo.get_device(new["device_id"])["revoked_at"] is None
+
+
+def test_legacy_pending_keeps_read_only_lookup_behavior(tmp_path: Path) -> None:
+    runtime, _ = _runtime(tmp_path)
+    transport = FakeTransport(runtime)
+    directory = tmp_path / "client"
+    client = PairedSkillSourceClient(directory, transport=transport)
+    client.pair_ticket(_ticket(runtime), "Local test")
+    legacy = {
+        "device_id": client._state()["device_id"],
+        "operation": "add",
+        "request_id": "legacy-missing",
+        "payload_hash": "a" * 64,
+    }
+    (directory / "pending.json").write_bytes(canonical_bytes(legacy))
+    (directory / "pending.json").chmod(0o600)
+    with pytest.raises(PairingClientError):
+        client.readback()
+    assert client.pending_request() == legacy
+    assert runtime.repo.get_receipt(legacy["device_id"], legacy["request_id"]) is None
 
 
 def test_invalid_ticket_pin_reply_and_secret_permissions_fail_closed(tmp_path: Path) -> None:

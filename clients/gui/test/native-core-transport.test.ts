@@ -39,6 +39,9 @@ test('native transport preserves the generated client wire request and raw respo
 
 test('native transport uses only exact schema operations across protected clients', async () => {
   const operations: Array<[string, string, string, Record<string, string>]> = [
+    ['GET', '/v1/security/approvals/approval_1', 'getPhase45Approval', { approval_id: 'approval_1' }],
+    ['POST', '/v1/security/approvals/approval_1', 'decidePhase45Approval', { approval_id: 'approval_1' }],
+    ['POST', '/v1/security/approvals/approval_1/review', 'reviewPhase45Approval', { approval_id: 'approval_1' }],
     ['GET', '/v1/setup/conversations/thread_1/metadata', 'getConversationMetadata', { thread_id: 'thread_1' }],
     ['POST', '/v1/local-control/sessions/session_1/act', 'actLocalControlSession', { session_id: 'session_1' }],
     ['GET', '/v1/remote-control/gateway/connections', 'listRemoteGatewayConnections', {}],

@@ -17,7 +17,7 @@ type NativeResponse = { status: number; headers: Record<string, string>; text: s
 type NativeInvoke = (request: NativeRequest) => Promise<NativeResponse>;
 
 const protectedPaths = [
-  '/v1/setup', '/v1/local-control', '/v1/remote-control', '/v1/extensions',
+  '/v1/security/approvals', '/v1/setup', '/v1/local-control', '/v1/remote-control', '/v1/extensions',
   '/v1/writer-workspaces', '/v1/writer-conflicts', '/v1/merge-runs', '/v1/local-callers',
 ];
 const graphManagementPath = /^\/v1\/graph\/runs\/[^/]+\/(?:writer-workspaces|writer-artifacts|writer-conflicts|merge-runs)(?:\/|$)/;

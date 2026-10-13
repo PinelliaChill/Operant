@@ -40,7 +40,7 @@ class CallerPairingScreen(Screen[None]):
         with VerticalScroll(id="caller-body"):
             yield Label("独立客户端 · 技能目录")
             yield Static(
-                "仅能查看、添加、删除技能来源。先在本机桌面确认并生成配对码，然后粘贴到这里。",
+                "在桌面版生成配对码，再粘贴到这里。",
                 id="caller-status",
                 markup=False,
             )
@@ -53,12 +53,12 @@ class CallerPairingScreen(Screen[None]):
             yield Input(placeholder="要添加的绝对目录路径", id="caller-path")
             yield Button("添加来源", id="caller-add")
             yield Button("移除所选来源", id="caller-remove", variant="error")
-            yield Label("写入结果未知时回读原请求；不会自动重发添加或移除。")
             yield Static("无待核对请求。", id="caller-pending", markup=False)
             yield Button("回读原请求", id="caller-readback")
             yield Button("审批后继续", id="caller-continue", disabled=True)
             with Collapsible(title="高级信息", collapsed=True, id="caller-advanced"):
                 yield Button("用原封包核对刚才的配对", id="caller-pair-retry")
+                yield Button("放弃配对并新建身份", id="caller-reset-identity", variant="warning")
                 yield Static("", id="caller-detail", markup=False)
                 yield Static("", id="caller-result", markup=False)
         yield Footer()
@@ -125,11 +125,13 @@ class CallerPairingScreen(Screen[None]):
                     if isinstance(approval_id, str) and isinstance(action_hash, str):
                         self.bound_approval = (approval_id, action_hash)
                         self.query_one("#caller-continue", Button).disabled = False
-                    status = "等待本机 Action Gateway 审批；批准后点“审批后继续”。"
+                    status = "等待桌面审批；批准后点“审批后继续”。"
                 elif state == "unconfirmed":
                     status = "结果未确认。请回读原请求并人工核对，勿重新添加或移除。"
                 elif state == "in_progress":
                     status = "Core 仍在处理。稍后回读原请求，勿重新提交。"
+                elif state == "failed" and result.get("error_code") == "request_not_received":
+                    status = "该请求未执行，已停止接收。可以发起新的添加或删除请求。"
                 else:
                     status = f"{label}未完成。请查看 Core 回执或回读原请求。"
                 if label == "读取来源" and state == "completed":
@@ -146,8 +148,10 @@ class CallerPairingScreen(Screen[None]):
         except Exception:
             self.query_one("#caller-status", Static).update("客户端暂时无法完成此操作。")
         finally:
-            self.busy = False
-            await self.action_refresh_pending()
+            try:
+                await self.action_refresh_pending()
+            finally:
+                self.busy = False
 
     @on(Button.Pressed, "#caller-pair")
     async def pair(self) -> None:
@@ -159,6 +163,27 @@ class CallerPairingScreen(Screen[None]):
     @on(Button.Pressed, "#caller-pair-retry")
     async def pair_retry(self) -> None:
         await self._run("配对核对", self.client.retry_pair_same_envelope)
+
+    @on(Button.Pressed, "#caller-reset-identity")
+    async def reset_identity(self) -> None:
+        if self.busy:
+            return
+        self.busy = True
+        try:
+            await asyncio.to_thread(self.client.reset_identity, abandon_pairing=True)
+            self.bound_approval = None
+            self.query_one("#caller-continue", Button).disabled = True
+            self.query_one("#caller-result", Static).update("")
+            self.query_one("#caller-status", Static).update(
+                "旧身份已归档；旧配对结果尚未核实时，可在桌面撤销。请用新配对码连接。"
+            )
+        except PairingClientError as exc:
+            self.query_one("#caller-status", Static).update(str(exc))
+        finally:
+            try:
+                await self.action_refresh_pending()
+            finally:
+                self.busy = False
 
     @on(Button.Pressed, "#caller-list")
     async def list_sources(self) -> None:

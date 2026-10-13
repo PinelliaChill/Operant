@@ -224,6 +224,14 @@ def _atomic_private_write(path: Path, data: bytes) -> None:
         temp.unlink(missing_ok=True)
 
 
+def _sync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 class PairedSkillSourceClient:
     """One-device client with explicit pairing, readback and approval continuation."""
 
@@ -270,6 +278,10 @@ class PairedSkillSourceClient:
                 _atomic_private_write(path, ("\n".join(lines) + "\n").encode("ascii"))
                 return signing, exchange
             raw = _private_read(path)
+        return self._decode_keys(raw)
+
+    @staticmethod
+    def _decode_keys(raw: bytes) -> tuple[ec.EllipticCurvePrivateKey, ec.EllipticCurvePrivateKey]:
         try:
             lines = raw.decode("ascii").splitlines()
             entries = dict(line.split("=", 1) for line in lines)
@@ -288,6 +300,39 @@ class PairedSkillSourceClient:
             )
         except (TypeError, ValueError, CallerCryptoError, UnicodeError) as exc:
             raise PairingClientError("unsafe_storage", "配对密钥文件无效。") from exc
+
+    def reset_identity(self, *, abandon_pairing: bool = False) -> None:
+        """Explicitly retire a device identity only after all writes are resolved."""
+        if self._pair_pending is not None and not abandon_pairing:
+            raise PairingClientError("outcome_unknown", "配对请求仍待核对，不能更换设备身份。")
+        with self._locked():
+            if (self.state_dir / "pending.json").exists() or (
+                self.state_dir / "pending.json"
+            ).is_symlink():
+                raise PairingClientError("outcome_unknown", "写入请求仍待核对，不能更换设备身份。")
+            paths = (self.state_dir / ".env", self.state_dir / "state.json")
+            present = tuple(path for path in paths if path.exists() or path.is_symlink())
+            if not present:
+                raise PairingClientError("pairing_required", "当前没有可归档的设备身份。")
+            # Read every original first; no destructive step follows an unsafe file.
+            originals = {path.name: _private_read(path) for path in present}
+            try:
+                retired = self.state_dir / "retired"
+                retired.mkdir(mode=0o700, exist_ok=True)
+                _safe_state_directory(retired)
+                archive = retired / new_id("retired")
+                archive.mkdir(mode=0o700)
+                _safe_state_directory(archive)
+                for name, raw in originals.items():
+                    _atomic_private_write(archive / name, raw)
+                _sync_directory(archive)
+                _sync_directory(retired)
+                for path in present:
+                    path.unlink()
+                _sync_directory(self.state_dir)
+                self._pair_pending = None
+            except OSError as exc:
+                raise PairingClientError("unsafe_storage", "无法安全归档旧设备身份。") from exc
 
     def _state(self) -> dict[str, Any]:
         path = self.state_dir / "state.json"
@@ -465,6 +510,17 @@ class PairedSkillSourceClient:
             "exchange_key_ref": _EXCHANGE_REF,
         }
         with self._locked():
+            key_path = self.state_dir / ".env"
+            if not key_path.exists() or key_path.is_symlink():
+                raise PairingClientError("identity_changed", "设备身份已改变，请重新粘贴配对码。")
+            current_signing, current_exchange = self._decode_keys(_private_read(key_path))
+            if (
+                public_key_text(current_signing.public_key())
+                != envelope["device_signing_public_key"]
+                or public_key_text(current_exchange.public_key())
+                != envelope["device_exchange_public_key"]
+            ):
+                raise PairingClientError("identity_changed", "设备身份已改变，请重新粘贴配对码。")
             _atomic_private_write(self.state_dir / "state.json", canonical_bytes(state))
         self._pair_pending = None
         return {
@@ -479,12 +535,11 @@ class PairedSkillSourceClient:
             if not path.exists() and not path.is_symlink():
                 return None
             value = json.loads(_private_read(path))
-        if not isinstance(value, dict) or set(value) != {
-            "device_id",
-            "operation",
-            "request_id",
-            "payload_hash",
-        }:
+        legacy_fields = {"device_id", "operation", "request_id", "payload_hash"}
+        if not isinstance(value, dict) or set(value) not in (
+            legacy_fields,
+            legacy_fields | {"core_epoch_id"},
+        ):
             raise PairingClientError("unsafe_storage", "待核对请求状态无效。")
         if (
             not isinstance(value["device_id"], str)
@@ -495,6 +550,13 @@ class PairedSkillSourceClient:
             or re.fullmatch(r"[\x21-\x7e]{1,300}", value["request_id"]) is None
             or not isinstance(value["payload_hash"], str)
             or re.fullmatch(r"[0-9a-f]{64}", value["payload_hash"]) is None
+            or (
+                "core_epoch_id" in value
+                and (
+                    not isinstance(value["core_epoch_id"], str)
+                    or re.fullmatch(r"core_[0-9a-f]{32}", value["core_epoch_id"]) is None
+                )
+            )
         ):
             raise PairingClientError("unsafe_storage", "待核对请求状态无效。")
         return cast(dict[str, str], value)
@@ -551,6 +613,7 @@ class PairedSkillSourceClient:
                 "payload_hash": hashlib.sha256(
                     canonical_bytes({"operation": operation, "args": payload})
                 ).hexdigest(),
+                "core_epoch_id": state["core_epoch_id"],
             }
             self._reserve_pending(pending)
         try:
@@ -620,9 +683,16 @@ class PairedSkillSourceClient:
             original_request_id and original_request_id != pending["request_id"]
         ):
             raise PairingClientError("outcome_unknown", "找不到该设备待核对的原请求。")
-        return self._command(
-            "readback", {"original_request_id": pending["request_id"]}, original=pending
-        )
+        payload = {"original_request_id": pending["request_id"]}
+        if "core_epoch_id" in pending:
+            payload.update(
+                {
+                    "original_operation": pending["operation"],
+                    "original_payload_hash": pending["payload_hash"],
+                    "original_core_epoch_id": pending["core_epoch_id"],
+                }
+            )
+        return self._command("readback", payload, original=pending)
 
     def continue_approved(self, approval_id: str, action_hash: str) -> dict[str, Any]:
         pending = self._pending()

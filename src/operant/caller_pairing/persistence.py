@@ -209,7 +209,11 @@ class CallerPairingRepository:
                 (device_id, request_id),
             ).fetchone()
             if prior is not None:
-                if prior["operation"] != operation or prior["payload_hash"] != payload_hash:
+                if (
+                    prior["operation"] != operation
+                    or prior["payload_hash"] != payload_hash
+                    or prior["core_epoch_id"] != epoch_id
+                ):
                     raise CallerStateError("request_identity_changed")
                 return dict(prior), False
             db.execute(
@@ -265,6 +269,90 @@ class CallerPairingRepository:
                 )
             except sqlite3.IntegrityError as exc:
                 raise CallerStateError("nonce_replayed") from exc
+
+    def readback_or_tombstone(
+        self,
+        *,
+        device_id: str,
+        current_epoch_id: str,
+        nonce: str,
+        envelope_hash: str,
+        nonce_expires_at: int,
+        request_id: str,
+        original_operation: str | None,
+        original_payload_hash: str | None,
+        original_core_epoch_id: str | None,
+        now: int,
+    ) -> dict[str, Any]:
+        """Authenticate freshness and resolve one old write in a single CAS.
+
+        Absence is conclusive only for a fully bound original write. The failed
+        tombstone fences a delayed command bearing the same device/request ID.
+        """
+        binding = (original_operation, original_payload_hash, original_core_epoch_id)
+        if any(value is not None for value in binding) and (
+            not all(value is not None for value in binding)
+            or original_operation not in {"add", "remove"}
+        ):
+            raise CallerStateError("request_identity_changed")
+        with self.store._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            device = db.execute(
+                "SELECT * FROM caller_pairing_devices WHERE device_id=?", (device_id,)
+            ).fetchone()
+            if (
+                device is None
+                or device["revoked_at"] is not None
+                or device["core_epoch_id"] != current_epoch_id
+                or int(device["expires_at"]) <= now
+            ):
+                raise CallerStateError("device_unavailable")
+            try:
+                db.execute(
+                    "INSERT INTO caller_pairing_nonces"
+                    "(device_id,core_epoch_id,nonce,request_hash,expires_at) VALUES (?,?,?,?,?)",
+                    (device_id, current_epoch_id, nonce, envelope_hash, nonce_expires_at),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise CallerStateError("nonce_replayed") from exc
+            row = db.execute(
+                "SELECT * FROM caller_pairing_receipts WHERE device_id=? AND request_id=?",
+                (device_id, request_id),
+            ).fetchone()
+            bound = all(value is not None for value in binding)
+            if row is not None:
+                if bound and (
+                    row["operation"] != original_operation
+                    or row["payload_hash"] != original_payload_hash
+                    or row["core_epoch_id"] != original_core_epoch_id
+                ):
+                    raise CallerStateError("request_identity_changed")
+                return dict(row)
+            if not bound or original_operation not in {"add", "remove"}:
+                raise CallerStateError("receipt_unavailable")
+            db.execute(
+                """INSERT INTO caller_pairing_receipts(
+                device_id,request_id,operation,payload_hash,state,http_status,
+                result_json,approval_id,action_hash,original_args_json,error_code,
+                core_epoch_id,created_at,updated_at)
+                VALUES (?,?,?,?,'failed',404,NULL,NULL,NULL,'{}',?, ?,?,?)""",
+                (
+                    device_id,
+                    request_id,
+                    original_operation,
+                    original_payload_hash,
+                    "request_not_received",
+                    original_core_epoch_id,
+                    now,
+                    now,
+                ),
+            )
+            result = db.execute(
+                "SELECT * FROM caller_pairing_receipts WHERE device_id=? AND request_id=?",
+                (device_id, request_id),
+            ).fetchone()
+            assert result is not None
+            return dict(result)
 
     def get_receipt(self, device_id: str, request_id: str) -> dict[str, Any] | None:
         with self.store._connect() as db:

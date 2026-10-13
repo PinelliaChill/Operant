@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from types import SimpleNamespace
 from typing import Any
@@ -18,7 +19,7 @@ if TEXTUAL_AVAILABLE:
     from operant_tui.app import OperantTui
     from operant_tui.caller_pairing_screen import CallerPairingScreen
     from textual.app import App
-    from textual.widgets import Collapsible, Input, Select, Static
+    from textual.widgets import Button, Collapsible, Input, Select, Static
 
 
 class FakeCaller:
@@ -50,6 +51,8 @@ class FakeCaller:
 
     def readback(self) -> dict[str, str]:
         self.calls.append(("readback", ()))
+        if self.readback_state == "failed":
+            return {"state": "failed", "error_code": "request_not_received"}
         return {
             "state": self.readback_state,
             "approval_id": "approval_1",
@@ -63,6 +66,9 @@ class FakeCaller:
     def continue_approved(self, approval_id: str, action_hash: str) -> dict[str, str]:
         self.calls.append(("continue", (approval_id, action_hash)))
         return {"state": "completed"}
+
+    def reset_identity(self, *, abandon_pairing: bool = False) -> None:
+        self.calls.append(("reset_identity", (abandon_pairing,)))
 
 
 if TEXTUAL_AVAILABLE:
@@ -100,12 +106,24 @@ async def test_mounted_pairing_screen_routes_buttons_and_clears_ticket() -> None
     caller = FakeCaller()
     app = Host(caller)
     async with app.run_test() as pilot:
+
+        async def settled() -> None:
+            await pilot.pause()
+
+            async def wait_for_operation() -> None:
+                while app.screen.busy or any(
+                    button.has_class("-active") for button in app.screen.query(Button)
+                ):
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_operation(), timeout=5)
+
         await pilot.resize_terminal(100, 65)
-        await pilot.pause()
+        await settled()
         app.screen.query_one("#caller-ticket", Input).value = "ticket-secret"
         app.screen.query_one("#caller-name", Input).value = "My TUI"
         await pilot.click("#caller-pair")
-        await pilot.pause()
+        await settled()
         assert caller.calls[-1] == ("pair", ("ticket-secret", "My TUI"))
         assert app.screen.query_one("#caller-ticket", Input).value == ""
         assert app.screen.query_one("#caller-advanced", Collapsible).collapsed
@@ -117,26 +135,38 @@ async def test_mounted_pairing_screen_routes_buttons_and_clears_ticket() -> None
         ):
             assert not app.screen.query(old_id)
         await pilot.click("#caller-list")
-        await pilot.pause()
+        await settled()
         assert app.screen.query_one("#caller-source-select", Select).value is Select.NULL
         app.screen.query_one("#caller-source-select", Select).value = "user-000000000001"
         await pilot.click("#caller-remove")
-        await pilot.pause()
+        await settled()
         assert caller.calls[-1] == ("remove", ("user-000000000001",))
         app.screen.query_one("#caller-path", Input).value = "/tmp/skills"
         await pilot.click("#caller-add")
-        await pilot.pause()
+        await settled()
         assert caller.calls[-1] == ("add", ("/tmp/skills",))
         assert "等待" in str(app.screen.query_one("#caller-status", Static).render())
         assert "approval_1" not in str(app.screen.query_one("#caller-status", Static).render())
         await pilot.click("#caller-readback")
-        await pilot.pause()
+        await settled()
         assert caller.calls[-1] == ("readback", ())
         await pilot.click("#caller-continue")
-        await pilot.pause()
+        await settled()
         assert caller.calls[-1] == ("continue", ("approval_1", "a" * 64))
         assert caller.calls.count(("add", ("/tmp/skills",))) == 1
         caller.readback_state = "unconfirmed"
         await pilot.click("#caller-readback")
-        await pilot.pause()
+        await settled()
         assert "结果未确认" in str(app.screen.query_one("#caller-status", Static).render())
+        caller.readback_state = "failed"
+        await pilot.click("#caller-readback")
+        await settled()
+        assert "该请求未执行，已停止接收" in str(
+            app.screen.query_one("#caller-status", Static).render()
+        )
+        app.screen.query_one("#caller-advanced", Collapsible).collapsed = False
+        await settled()
+        await pilot.click("#caller-reset-identity")
+        await settled()
+        assert caller.calls[-1] == ("reset_identity", (True,))
+        assert "新配对码" in str(app.screen.query_one("#caller-status", Static).render())

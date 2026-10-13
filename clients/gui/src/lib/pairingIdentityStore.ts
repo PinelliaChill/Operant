@@ -16,6 +16,8 @@ export interface PairingIdentity {
 const databaseName = 'operant-caller-pairing-v1';
 const storeName = 'identities';
 const pendingStoreName = 'pendingWrites';
+const selectionStoreName = 'selection';
+const selectedKey = 'selected-device';
 const deviceIdPattern = /^caller_[0-9a-f]{32}$/;
 const coreIdPattern = /^core_[0-9a-f]{32}$/;
 const publicKeyPattern = /^[A-Za-z0-9_-]{87}$/;
@@ -55,13 +57,16 @@ function openDatabase(): Promise<IDBDatabase> {
       reject(new Error('此浏览器无法保存配对密钥，请使用支持 IndexedDB 的浏览器。'));
       return;
     }
-    const request = indexedDB.open(databaseName, 2);
+    const request = indexedDB.open(databaseName, 3);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(storeName)) {
         request.result.createObjectStore(storeName, { keyPath: 'deviceId' });
       }
       if (!request.result.objectStoreNames.contains(pendingStoreName)) {
         request.result.createObjectStore(pendingStoreName, { keyPath: 'deviceId' });
+      }
+      if (!request.result.objectStoreNames.contains(selectionStoreName)) {
+        request.result.createObjectStore(selectionStoreName, { keyPath: 'key' });
       }
     };
     request.onerror = () => reject(new Error('无法打开本机配对存储。'));
@@ -106,6 +111,50 @@ export async function listPairingIdentities(): Promise<PairingIdentity[]> {
       setResult(items);
     };
   });
+}
+
+/** Only the public device identifier is persisted; old keys and requests stay intact. */
+export async function readSelectedPairingDeviceId(): Promise<string | null> {
+  const database = await openDatabase();
+  return transaction<string | null>(database, selectionStoreName, 'readonly', (store, setResult, reject) => {
+    const request = store.get(selectedKey);
+    request.onerror = () => reject(new Error('无法读取已选择的浏览器身份。'));
+    request.onsuccess = () => {
+      const value: unknown = request.result;
+      if (value === undefined) { setResult(null); return; }
+      if (!value || typeof value !== 'object' || !deviceIdPattern.test(String((value as { deviceId?: unknown }).deviceId))) {
+        reject(new Error('已选择的浏览器身份无效，请检查浏览器存储。'));
+        return;
+      }
+      setResult((value as { deviceId: string }).deviceId);
+    };
+  });
+}
+
+export async function saveSelectedPairingDeviceId(deviceId: string): Promise<void> {
+  if (!deviceIdPattern.test(deviceId)) throw new Error('浏览器身份编号无效。');
+  const database = await openDatabase();
+  await transaction<void>(database, selectionStoreName, 'readwrite', (store, setResult, reject) => {
+    const request = store.put({ key: selectedKey, deviceId });
+    request.onerror = () => reject(new Error('无法保存已选择的浏览器身份。'));
+    request.onsuccess = () => setResult();
+  });
+}
+
+export function selectPairingIdentity(saved: PairingIdentity[], selectedDeviceId: string | null, atSeconds = Date.now() / 1000): PairingIdentity | null {
+  return saved.find((entry) => entry.deviceId === selectedDeviceId)
+    ?? saved.find((entry) => entry.paired && entry.expiresAt > atSeconds)
+    ?? saved[0] ?? null;
+}
+
+export async function hasPendingPairingIdentity(
+  saved: PairingIdentity[], baseUrl: string,
+  read: (deviceId: string) => Promise<PendingPairedWrite | null> = readPendingPairedWrite,
+): Promise<boolean> {
+  for (const entry of saved) {
+    if (entry.baseUrl === baseUrl && await read(entry.deviceId)) return true;
+  }
+  return false;
 }
 
 export async function deletePairingIdentity(deviceId: string): Promise<void> {

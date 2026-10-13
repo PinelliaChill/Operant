@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
@@ -74,6 +75,7 @@ class SkillSourceEffects:
         refresh: SkillSourceRefresh,
         requested_path: Callable[[str | Path], Path],
         source_path: Callable[[str | Path], Path],
+        mutation_lock: threading.RLock | None = None,
     ) -> None:
         self.store = store
         self.settings = settings
@@ -81,9 +83,11 @@ class SkillSourceEffects:
         self.refresh = refresh
         self.requested_path = requested_path
         self.source_path = source_path
+        self.mutation_lock = mutation_lock or threading.RLock()
 
     def list_sources(self) -> SkillSourceList:
-        return SkillSourceList(items=self.refresh())
+        with self.mutation_lock:
+            return SkillSourceList(items=self.refresh())
 
     def add_source(self, raw_path: str | Path, key: str) -> SkillSourceView:
         requested = self.requested_path(raw_path)
@@ -104,6 +108,12 @@ class SkillSourceEffects:
         canonical_fingerprint = canonical_action_hash(
             {"operation": "skill_source_add", "path": str(path)}
         )
+        with self.mutation_lock:
+            return self._add_source_locked(path, key, canonical_fingerprint)
+
+    def _add_source_locked(
+        self, path: Path, key: str, canonical_fingerprint: str
+    ) -> SkillSourceView:
         prior = self._prior_result(key, canonical_fingerprint)
         if prior is not None:
             return SkillSourceView.model_validate(prior)
@@ -138,6 +148,10 @@ class SkillSourceEffects:
             {"operation": "skill_source_remove", "root_ref": root_ref}
         )
         self._guard("remove", root_ref, fingerprint, key)
+        with self.mutation_lock:
+            return self._remove_source_locked(root_ref, key, fingerprint)
+
+    def _remove_source_locked(self, root_ref: str, key: str, fingerprint: str) -> SkillSourceList:
         prior = self._prior_result(key, fingerprint)
         if prior is not None:
             return SkillSourceList.model_validate(prior)
