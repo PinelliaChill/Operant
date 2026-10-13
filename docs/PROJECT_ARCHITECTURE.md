@@ -314,6 +314,8 @@ TUI 的 `--skill-sources` 可直接启动独立技能目录页，不先读取未
 `F7` 和 `Alt+7` 保留页内入口。添加或移除的已确认回执触发一次只读目录刷新，失败不会
 改写原操作结果或重放写入；移除选择器仅显示用户登记目录。普通错误使用固定中文提示，
 诊断和请求编号留在高级信息中。
+TUI页面挂载测试归属 `clients/tui/test/test_caller_pairing.py`，与其他TUI测试一起在独立锁定环境运行，
+不要求Core测试环境安装Textual或TUI包。
 
 Gemini OAuth 的 Operant 桌面客户端由受保护 `.env` 或进程环境配置
 `OPERANT_GEMINI_OAUTH_CLIENT_ID`、`OPERANT_GEMINI_OAUTH_CLIENT_SECRET`，首次用户连接提供 Cloud
