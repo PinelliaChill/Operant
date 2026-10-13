@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createPairedSkillSourceTransport, type PairedSourceOperations } from '../src/lib/pairedSkillSourceOnboardingTransport.ts';
+import { createPairedSkillSourceTransport, VerifiedPairedApprovalError, type PairedSourceOperations } from '../src/lib/pairedSkillSourceOnboardingTransport.ts';
 import type { PairedReceipt } from '../src/lib/pairedSkillSourceTransport.ts';
 
 const baseUrl = 'http://127.0.0.1:8000';
@@ -59,7 +59,7 @@ test('paired source transport rejects unknown scope and retains approval as a re
   assert.equal(fallback, 0);
   await assert.rejects(transport({ method: 'POST', path: sourcePath, url: `${baseUrl}${sourcePath}`,
     headers: { 'Idempotency-Key': 'original-key' }, body: '{"path":"/tmp/x"}' }),
-  (error: unknown) => Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === 'approval_required'
+  (error: unknown) => Boolean(error instanceof VerifiedPairedApprovalError && error.receipt.request_id === 'request-1' && (error as { code?: unknown }).code === 'approval_required'
     && (error as { recovery?: unknown }).recovery === 'manual_reconcile'));
   assert.equal(writes, 1);
 });

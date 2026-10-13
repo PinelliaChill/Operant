@@ -55,7 +55,6 @@ from operant.domain.security import (
     PolicyRule,
 )
 from operant.local_caller import canonical_proof
-from operant.persistence.caller_pairing_schema import upgrade
 from operant.persistence.phase45 import SQLitePhase45Repository
 from operant.persistence.sqlite import MigrationError, SQLiteStore
 
@@ -91,8 +90,7 @@ class FakeEffects:
 
 def _runtime(tmp_path: Path) -> tuple[CallerPairingRuntime, FakeEffects]:
     store = SQLiteStore(tmp_path / "isolated.sqlite3")
-    with store._connect() as db:
-        upgrade(db)
+    store.initialize()
     effects = FakeEffects()
     runtime = CallerPairingRuntime(
         store, effects_for_device=lambda _device: effects, clock=lambda: NOW
@@ -909,6 +907,14 @@ def test_desktop_outer_proof_precedes_source_journal_and_native_ticket(
                 for rule in json.loads(row["rule_ids"])
             }
             assert "caller-pairing.skill-source-write-approval.v1" in audited_rules
+        page = SQLitePhase45Repository(
+            app.state.skill_source_effects.store
+        ).list_pending_action_approvals()
+        assert page["items"][0]["approval_id"] == asked["approval_id"]
+        assert page["items"][0]["target_label"] == str(skill_root)
+        assert page["items"][0]["device_name"] == "Local test"
+        assert "original_args_json" not in page["items"][0]
+        assert client.get("/v1/setup/action-approvals").status_code == 403
         SQLitePhase45Repository(app.state.skill_source_effects.store).decide_phase45_approval(
             asked["approval_id"],
             approved=True,
@@ -1247,3 +1253,113 @@ def test_v26_additive_migration_preserves_history_and_blocks_data_loss(tmp_path:
     assert empty.migrate(26) == 26
     assert empty.rollback(25, isolated=True) == 25
     assert empty.migrate(26) == 26
+
+
+def test_bound_old_approval_readback_fences_continuation_but_keeps_unknown(tmp_path: Path) -> None:
+    runtime, effects = _runtime(tmp_path)
+    client = Client()
+    client.pair(runtime)
+    epoch = runtime.keys.epoch_id
+    args = {"path": "/tmp/old-approved-skills"}
+    payload_hash = hashlib.sha256(canonical_bytes({"operation": "add", "args": args})).hexdigest()
+    runtime.repo.reserve_command(
+        device_id=client.device_id,
+        epoch_id=epoch,
+        nonce="old-approval-reserve",
+        envelope_hash="e" * 64,
+        expires_at=NOW + 60,
+        request_id="old-approval",
+        operation="add",
+        payload_hash=payload_hash,
+        original_args=args,
+        now=NOW,
+    )
+    runtime.repo.set_receipt(
+        client.device_id,
+        "old-approval",
+        state="awaiting_approval",
+        http_status=409,
+        approval_id="approval_old",
+        action_hash="a" * 64,
+        now=NOW,
+    )
+    runtime.repo.reserve_command(
+        device_id=client.device_id,
+        epoch_id=epoch,
+        nonce="unknown-reserve",
+        envelope_hash="b" * 64,
+        expires_at=NOW + 60,
+        request_id="unknown-effect",
+        operation="add",
+        payload_hash=payload_hash,
+        original_args=args,
+        now=NOW,
+    )
+    restarted = CallerPairingRuntime(
+        runtime.repo.store, effects_for_device=lambda _id: effects, clock=lambda: NOW
+    )
+    client.pair(restarted, request_id="pair-after-restart")
+    binding = {
+        "original_request_id": "old-approval",
+        "original_operation": "add",
+        "original_payload_hash": payload_hash,
+        "original_core_epoch_id": epoch,
+    }
+    wrong = client.command(
+        restarted,
+        "readback",
+        {**binding, "original_payload_hash": "f" * 64},
+        request_id="wrong-old-approval",
+        nonce=b"wrongoldask1",
+        path=READBACK_PATH,
+    )
+    with pytest.raises(CallerPairingError):
+        restarted.command(wrong, path=READBACK_PATH)
+    assert (
+        restarted.repo.get_receipt(client.device_id, "old-approval")["state"] == "awaiting_approval"
+    )
+    lookup = client.command(
+        restarted,
+        "readback",
+        binding,
+        request_id="read-old-approval",
+        nonce=b"oldaskread12",
+        path=READBACK_PATH,
+    )
+    receipt = client.read_reply(
+        restarted, restarted.command(lookup, path=READBACK_PATH), path=READBACK_PATH
+    )["receipt"]
+    assert receipt["state"] == "failed"
+    assert receipt["error_code"] == "approval_no_longer_available"
+    continued = client.command(
+        restarted,
+        "continue",
+        {
+            "original_request_id": "old-approval",
+            "payload_hash": payload_hash,
+            "approval_id": "approval_old",
+            "action_hash": "a" * 64,
+        },
+        request_id="late-old-continue",
+        nonce=b"lateoldask12",
+    )
+    with pytest.raises(CallerPairingError):
+        restarted.command(continued)
+    assert effects.add_calls == 0
+    lookup = client.command(
+        restarted,
+        "readback",
+        {
+            **binding,
+            "original_request_id": "unknown-effect",
+            "original_core_epoch_id": epoch,
+        },
+        request_id="read-unknown-effect",
+        nonce=b"unknownread1",
+        path=READBACK_PATH,
+    )
+    unknown = client.read_reply(
+        restarted, restarted.command(lookup, path=READBACK_PATH), path=READBACK_PATH
+    )["receipt"]
+    assert unknown["state"] == "unconfirmed"
+    assert restarted.repo.get_receipt(client.device_id, "unknown-effect")["state"] == "in_progress"

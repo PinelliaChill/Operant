@@ -33,6 +33,7 @@ const PHASE45_OPERATIONS: &[&str] = &[
     "reviewPhase45Approval",
 ];
 const ONBOARDING_OPERATIONS: &[&str] = &[
+    "listActionApprovals",
     "bootstrapSetup",
     "listModelConnections",
     "createModelConnection",

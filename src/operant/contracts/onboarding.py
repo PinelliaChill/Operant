@@ -195,6 +195,23 @@ class SkillSourceList(OnboardingModel):
     items: list[SkillSourceView]
 
 
+class ActionApprovalView(OnboardingModel):
+    approval_id: str
+    action_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool: str
+    operation: str
+    target_label: str
+    principal: str
+    device_name: str | None = None
+    requested_at: datetime
+    expires_at: datetime
+
+
+class ActionApprovalList(OnboardingModel):
+    items: list[ActionApprovalView]
+    next_cursor: str | None = None
+
+
 class SkillSourceInput(OnboardingModel):
     path: str = Field(min_length=1, max_length=4096)
 

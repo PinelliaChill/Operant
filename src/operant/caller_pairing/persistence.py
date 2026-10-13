@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any
 
 from operant.persistence.sqlite import SQLiteStore
@@ -327,6 +328,34 @@ class CallerPairingRepository:
                     or row["core_epoch_id"] != original_core_epoch_id
                 ):
                     raise CallerStateError("request_identity_changed")
+                if bound and row["state"] == "awaiting_approval":
+                    unavailable = row["core_epoch_id"] != current_epoch_id
+                    approval = db.execute(
+                        "SELECT status,expires_at FROM phase45_approval_requests WHERE id=?",
+                        (row["approval_id"],),
+                    ).fetchone()
+                    if approval is not None:
+                        unavailable = unavailable or approval["status"] in {"denied", "expired"}
+                        unavailable = (
+                            unavailable
+                            or approval["expires_at"]
+                            <= datetime.fromtimestamp(now, timezone.utc).isoformat()
+                        )
+                    if unavailable:
+                        # This state precedes the effect CAS. Fence continuation before
+                        # acknowledging that the old approval can no longer execute.
+                        db.execute(
+                            """UPDATE caller_pairing_receipts SET state='failed',http_status=409,
+                            error_code='approval_no_longer_available',updated_at=?
+                            WHERE device_id=? AND request_id=? AND state='awaiting_approval'""",
+                            (now, device_id, request_id),
+                        )
+                        row = db.execute(
+                            "SELECT * FROM caller_pairing_receipts "
+                            "WHERE device_id=? AND request_id=?",
+                            (device_id, request_id),
+                        ).fetchone()
+                        assert row is not None
                 return dict(row)
             if not bound or original_operation not in {"add", "remove"}:
                 raise CallerStateError("receipt_unavailable")

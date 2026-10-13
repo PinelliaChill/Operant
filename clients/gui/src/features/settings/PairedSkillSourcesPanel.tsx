@@ -8,6 +8,7 @@ import {
   prepareSkillSourcePairing, parsePairingTicket,
 } from '../../lib/pairedSkillSourceTransport';
 import { createPairedSkillSourceClient } from '../../lib/pairedSkillSourceOnboarding';
+import { VerifiedPairedApprovalError } from '../../lib/pairedSkillSourceOnboardingTransport';
 import {
   hasPendingPairingIdentity, listPairingIdentities, readPendingPairedWrite,
   readSelectedPairingDeviceId, saveSelectedPairingDeviceId, selectPairingIdentity,
@@ -214,7 +215,19 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
       if (operation === 'add') setPath('');
       await refresh();
     } catch (cause: unknown) {
-      try { await syncPending(identity.deviceId); setError(pairedErrorCopy(cause)); }
+      try {
+        const original = await syncPending(identity.deviceId);
+        if (cause instanceof VerifiedPairedApprovalError && original
+          && cause.receipt.device_id === original.deviceId
+          && cause.receipt.request_id === original.requestId
+          && cause.receipt.operation === original.operation
+          && cause.receipt.payload_hash === original.payloadHash
+          && cause.receipt.state === 'awaiting_approval') {
+          setReceipt(cause.receipt);
+          setContinueNeedsReadback(false);
+        }
+        setError(pairedErrorCopy(cause));
+      }
       catch { setError('无法读取原请求状态。请保留当前页面，检查浏览器存储后再核对。'); }
     } finally { dispatching.current = false; setBusy(false); }
   };
@@ -230,7 +243,9 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
       if (result.state === 'completed') await refresh();
       else if (result.state === 'failed') setError(result.error_code === 'request_not_received'
         ? '原请求未执行，已停止接收。现在可以重新操作。'
-        : '这次修改未完成，请检查目录和权限后再试。');
+        : result.error_code === 'approval_no_longer_available'
+          ? '审批已失效，原请求未执行。可以重新发起操作。'
+          : '这次修改未完成，请检查目录和权限后再试。');
     } catch (cause: unknown) { setError(pairedErrorCopy(cause)); }
     finally { dispatching.current = false; setBusy(false); }
   };
@@ -285,10 +300,9 @@ export const PairedSkillSourcesPanel: React.FC<Props> = ({ createCallerClient })
       </form>
     </section>
     {pending && <div className="live-alert live-alert-warn" role="alert">
-      修改结果尚未确认。请核对原请求，暂时不要再次修改。
+      {receipt?.state === 'awaiting_approval' ? '等待桌面审批。批准后继续原请求。' : '修改结果尚未确认。请核对原请求，暂时不要再次修改。'}
       <button type="button" className="btn btn-secondary btn-sm" disabled={busy || !session} onClick={() => { void reconcile(); }}>刷新并核对</button>
       {receipt?.state === 'awaiting_approval' && <>
-        <span>请先到桌面版完成审批，再继续原请求。</span>
         {pending.coreEpochId !== identity?.coreEpochId && <span>桌面 Core 已重新启动，旧请求只能核对。</span>}
         <button type="button" className="btn btn-secondary btn-sm"
           disabled={busy || continueNeedsReadback || pending.coreEpochId !== identity?.coreEpochId}

@@ -28,7 +28,6 @@ from operant.caller_pairing.crypto import (
 )
 from operant.caller_pairing.runtime import CallerPairingRuntime
 from operant.contracts.caller_pairing import CallerCommand, CallerPairRequest
-from operant.persistence.caller_pairing_schema import upgrade
 from operant.persistence.sqlite import SQLiteStore
 from sdk.python_client.caller_pairing import (
     TICKET_PREFIX,
@@ -137,8 +136,7 @@ class FakeTransport:
 
 def _runtime(tmp_path: Path) -> tuple[CallerPairingRuntime, Effects]:
     store = SQLiteStore(tmp_path / "core.sqlite3")
-    with store._connect() as connection:
-        upgrade(connection)
+    store.initialize()
     effects = Effects()
     return CallerPairingRuntime(store, effects_for_device=lambda _device: effects), effects
 

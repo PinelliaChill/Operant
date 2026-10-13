@@ -126,6 +126,10 @@ class CallerPairingScreen(Screen[None]):
                         self.bound_approval = (approval_id, action_hash)
                         self.query_one("#caller-continue", Button).disabled = False
                     status = "等待桌面审批；批准后点“审批后继续”。"
+                elif (
+                    state == "failed" and result.get("error_code") == "approval_no_longer_available"
+                ):
+                    status = "审批已失效，原请求未执行。可以重新发起操作。"
                 elif state == "unconfirmed":
                     status = "结果未确认。请回读原请求并人工核对，勿重新添加或移除。"
                 elif state == "in_progress":

@@ -418,7 +418,8 @@ class CallerPairingRuntime:
         self, device_id: str, receipt: dict[str, Any], payload: CallerContinuePayload
     ) -> dict[str, Any]:
         if (
-            receipt["state"] != "awaiting_approval"
+            receipt["core_epoch_id"] != self.keys.epoch_id
+            or receipt["state"] != "awaiting_approval"
             or receipt["payload_hash"] != payload.payload_hash
             or receipt["approval_id"] != payload.approval_id
             or receipt["action_hash"] != payload.action_hash

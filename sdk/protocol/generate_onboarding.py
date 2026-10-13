@@ -29,6 +29,7 @@ PROTOCOL_VERSION = "onboarding.v1"
 EXPECTED_OPERATION_IDS = {
     "negotiateProtocol",
     "getSetupState",
+    "listActionApprovals",
     "bootstrapSetup",
     "initializeConversation",
     "listConversationMetadata",

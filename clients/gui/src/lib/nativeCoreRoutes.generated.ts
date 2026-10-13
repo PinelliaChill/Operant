@@ -236,6 +236,12 @@ export const nativeCoreRoutes = [
     "deviceAuth": false
   },
   {
+    "operationId": "listActionApprovals",
+    "method": "GET",
+    "pathTemplate": "/v1/setup/action-approvals",
+    "deviceAuth": false
+  },
+  {
     "operationId": "listCallerDevices",
     "method": "GET",
     "pathTemplate": "/v1/local-callers/devices",

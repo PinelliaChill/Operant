@@ -770,3 +770,69 @@ def test_shared_source_mutation_lock_preserves_two_concurrent_adds(tmp_path: Pat
             ).fetchone()[0]
             == 2
         )
+
+
+def test_native_pending_action_approval_query_pages_filters_and_redacts(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    root.mkdir()
+    client, app = _client(root, _Settings())
+    gateway = app.state.phase45_action_gateway
+    gateway.engine = PolicyEngine(
+        PolicyBundle(
+            bundle_id="test-ask",
+            version="test-ask.v1",
+            default_decision=PolicyDecision.ASK,
+            rules=(),
+        )
+    )
+    ids = []
+    for index in range(4):
+        action = gateway.normalizer.normalize(
+            principal=gateway.principal,
+            tool="skill_source",
+            operation="add",
+            arguments={"request_hash": "a" * 64},
+            requested_capabilities=(Capability.WORKSPACE_WRITE,),
+            idempotency_key=f"query-ask-{index}",
+            policy_version=gateway.engine.bundle.version,
+            workspace_id=f"directory-{index}",
+        )
+        gateway.repository.record_security_action(action)
+        approval, _ = gateway.phase_repository.ensure_phase45_approval(
+            approval_id=f"approval_page_{index}",
+            action_hash=action.action_hash,
+            target=action.normalized_target.model_dump(mode="json"),
+            policy_version=action.policy_version,
+            expires_at="2000-01-01T00:00:00+00:00" if index == 0 else "2099-01-01T00:00:00+00:00",
+        )
+        ids.append(approval["approval_id"])
+    gateway.phase_repository.decide_phase45_approval(
+        ids[1], approved=False, decided_by="user", reason_code="test-denied"
+    )
+    response = client.get("/v1/setup/action-approvals?limit=1")
+    assert response.status_code == 200
+    page = response.json()
+    assert len(page["items"]) == 1
+    assert page["next_cursor"] is not None
+    following = client.get(
+        "/v1/setup/action-approvals", params={"limit": 1, "after_cursor": page["next_cursor"]}
+    ).json()
+    assert following["next_cursor"] is None
+    assert {page["items"][0]["approval_id"], following["items"][0]["approval_id"]} == set(ids[2:])
+    assert set(page["items"][0]) == {
+        "approval_id",
+        "action_hash",
+        "tool",
+        "operation",
+        "target_label",
+        "principal",
+        "device_name",
+        "requested_at",
+        "expires_at",
+    }
+    assert "request_hash" not in response.text
+    assert client.get("/v1/setup/action-approvals?limit=101").status_code == 422
+    app2 = FastAPI()
+    app2.state.skill_source_defaults_enabled = False
+    install_skill_source_routes(app2, app.state.skill_source_test_service, _Settings())
+    assert TestClient(app2).get("/v1/setup/action-approvals").status_code == 403

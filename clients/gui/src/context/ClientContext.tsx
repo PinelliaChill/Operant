@@ -102,7 +102,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // browser CORS dependency, and Live never falls back to this MockClient.
   const phase1eClient = useMemo(() => new Phase1EClient(currentBrowserOrigin()), []);
   const phase23Client = useMemo(() => new Phase23Client(currentBrowserOrigin()), []);
-  const phase45Client = useMemo(() => new Phase45Client(currentBrowserOrigin()), []);
+  const phase45Client = useMemo(() => new Phase45Client(currentBrowserOrigin(), nativeCoreTransport), []);
   const phase56Client = useMemo(() => new Phase56Client(currentBrowserOrigin(), nativeCoreTransport), []);
   const b2Client = useMemo(() => new B2Client(currentBrowserOrigin()), []);
   const b23Client = useMemo(() => new B23Client(currentBrowserOrigin()), []);

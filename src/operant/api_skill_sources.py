@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 
 from operant.api_model_connections import _trusted_local
 from operant.application.phase45_gateway import Phase45ActionGateway
@@ -20,7 +20,12 @@ from operant.application.skill_sources import (
 from operant.application.skill_sources import (
     saved_sources as _saved_sources,
 )
-from operant.contracts.onboarding import SkillSourceInput, SkillSourceList, SkillSourceView
+from operant.contracts.onboarding import (
+    ActionApprovalList,
+    SkillSourceInput,
+    SkillSourceList,
+    SkillSourceView,
+)
 from operant.domain.security import Capability
 from operant.persistence.phase45 import SQLitePhase45Repository
 from operant.persistence.sqlite import NotFoundError
@@ -247,6 +252,21 @@ def install_skill_source_routes(
         source_path=_source_path,
     )
     app.state.skill_source_effects = effects
+
+    @app.get(
+        "/v1/setup/action-approvals",
+        operation_id="listActionApprovals",
+        response_model=ActionApprovalList,
+    )
+    def list_action_approvals(
+        request: Request,
+        limit: int = Query(default=50, ge=1, le=100),
+        after_cursor: str | None = Query(default=None, min_length=1, max_length=200),
+    ) -> ActionApprovalList:
+        require_local(request)
+        return ActionApprovalList.model_validate(
+            phase_repository.list_pending_action_approvals(limit=limit, after_cursor=after_cursor)
+        )
 
     @app.get(
         "/v1/setup/skill-sources", operation_id="listSkillSources", response_model=SkillSourceList

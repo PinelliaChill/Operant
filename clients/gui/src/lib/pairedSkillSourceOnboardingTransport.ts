@@ -9,10 +9,20 @@ export interface PairedSourceOperations {
   write(operation: 'add' | 'remove', args: PairingJsonObject, id: string): Promise<PairedReceipt>;
 }
 
+/** Only a receipt returned by the signed paired session may use this marker. */
+export class VerifiedPairedApprovalError extends Phase1EError {
+  readonly receipt: PairedReceipt;
+
+  constructor(receipt: PairedReceipt) {
+    super('approval_required', '请在桌面版批准这次技能来源修改，再回来继续原请求。', false, 'manual_reconcile', receipt);
+    this.receipt = receipt;
+  }
+}
+
 function receiptResult(receipt: PairedReceipt): Record<string, unknown> {
   if (receipt.state === 'completed' && receipt.result) return receipt.result;
   if (receipt.state === 'awaiting_approval') {
-    throw new Phase1EError('approval_required', '请在桌面版批准这次技能来源修改，再回来核对。', false, 'manual_reconcile', receipt);
+    throw new VerifiedPairedApprovalError(receipt);
   }
   if (receipt.state === 'unconfirmed' || receipt.state === 'in_progress') {
     throw new Phase1EError('outcome_unknown', '修改结果尚未确认，请核对原请求。', false, 'manual_reconcile', receipt);

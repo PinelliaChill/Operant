@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from typing import Any
 
 from operant.mcp import McpTool
 from operant.persistence.sqlite import ConflictError, SQLiteStore
+from operant.protocol import redact_public_text
 from operant.skills import DiscoveredSkill
 
 
@@ -555,6 +557,62 @@ class SQLitePhase45Repository:
             if row["target_json"] != target_json or row["policy_version"] != policy_version:
                 raise ConflictError("approval action binding changed")
             return self._approval(row), created
+
+    def list_pending_action_approvals(
+        self, *, limit: int = 50, after_cursor: str | None = None
+    ) -> dict[str, Any]:
+        """One durable snapshot; only bounded display labels leave this query."""
+        if not 1 <= limit <= 100:
+            raise ValueError("approval page limit is invalid")
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                """SELECT a.id,a.action_hash,a.requested_at,a.expires_at,
+                s.tool,s.operation,s.target_id,s.principal,
+                c.original_args_json,d.display_name
+                FROM phase45_approval_requests a
+                JOIN security_action_requests s ON s.action_hash=a.action_hash
+                LEFT JOIN caller_pairing_receipts c ON c.action_hash=a.action_hash
+                    AND s.principal='paired-skill-source:' || c.device_id
+                LEFT JOIN caller_pairing_devices d ON d.device_id=c.device_id
+                WHERE a.status='pending' AND a.expires_at>? AND a.id>?
+                ORDER BY a.id LIMIT ?""",
+                (_now(), after_cursor or "", limit + 1),
+            ).fetchall()
+            items = []
+            for row in rows[:limit]:
+                target = str(row["target_id"])
+                paired = re.fullmatch(r"paired-skill-source:caller_[0-9a-f]{32}", row["principal"])
+                if paired and row["tool"] == "skill_source" and row["original_args_json"]:
+                    args = json.loads(row["original_args_json"])
+                    if row["operation"] == "add" and isinstance(args.get("path"), str):
+                        target = args["path"]
+                    elif row["operation"] == "remove":
+                        settings = connection.execute(
+                            "SELECT body_json FROM ux_settings WHERE key='skill_sources.v1'"
+                        ).fetchone()
+                        if settings:
+                            saved = json.loads(settings["body_json"])
+                            candidate = (
+                                saved.get(args.get("root_ref")) if isinstance(saved, dict) else None
+                            )
+                            if isinstance(candidate, str):
+                                target = candidate
+                items.append(
+                    {
+                        "approval_id": row["id"],
+                        "action_hash": row["action_hash"],
+                        "tool": row["tool"],
+                        "operation": row["operation"],
+                        "target_label": redact_public_text(target[:500]),
+                        "principal": row["principal"],
+                        "device_name": redact_public_text(str(row["display_name"])[:100])
+                        if row["display_name"] is not None
+                        else None,
+                        "requested_at": row["requested_at"],
+                        "expires_at": row["expires_at"],
+                    }
+                )
+        return {"items": items, "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None}
 
     def get_phase45_approval(self, approval_id: str) -> dict[str, Any]:
         with self.store._connect() as connection:

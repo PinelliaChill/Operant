@@ -5,6 +5,7 @@ import { useOperant } from '../../context/ClientContext';
 import { AgentsView } from '../agents/AgentsView';
 import { LiveManagementView } from '../management/LiveManagementView';
 import { PolicySettings } from '../approvals/PolicySettings';
+import { LiveReviewerSettings } from '../approvals/LiveReviewerSettings';
 import { RemoteView } from '../remote/RemoteView';
 import { ExtensionsView } from '../extensions/ExtensionsView';
 import { LiveConfigSettings } from './LiveConfigSettings';
@@ -79,7 +80,7 @@ export const SettingsHub: React.FC = () => {
       {current === 'memory' && <>{subnav([['settings', '记忆设置'], ['retention', '保留与审计']])}{clientMode === 'live' ? <LiveManagementView initialTab={page === 'retention' ? 'retention' : 'settings'} focused /> : <SettingPanel title="记忆"><p>演示模式不保存真实记忆。</p></SettingPanel>}</>}
       {current === 'advanced' && <SettingPanel title="权限与高级">
         <section className="settings-hub-card"><h2><ShieldCheck size={18} aria-hidden="true" />操作权限</h2><PolicySettings /></section>
-        {clientMode === 'live' && <><details className="settings-hub-card"><summary><Settings2 size={16} aria-hidden="true" />运行配置</summary><LiveConfigSettings /></details><details ref={remotePanel} open={showRemote} className="settings-hub-card"><summary>远程与设备</summary><RemoteView /></details></>}
+        {clientMode === 'live' && <><details className="settings-hub-card"><summary>自动审核</summary><LiveReviewerSettings /></details><details className="settings-hub-card"><summary><Settings2 size={16} aria-hidden="true" />运行配置</summary><LiveConfigSettings /></details><details ref={remotePanel} open={showRemote} className="settings-hub-card"><summary>远程与设备</summary><RemoteView /></details></>}
       </SettingPanel>}
     </div>
   </div>;
