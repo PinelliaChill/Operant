@@ -17,11 +17,15 @@ def main() -> None:
         type=Path,
         help="独立配对客户端的受保护配置目录（绝对路径）",
     )
+    parser.add_argument("--skill-sources", action="store_true", help="直接打开技能目录配对页")
     args = parser.parse_args()
     if args.caller_state_dir is not None and not args.caller_state_dir.is_absolute():
         parser.error("--caller-state-dir 必须是绝对路径")
     caller = PairedSkillSourceClient(state_dir=args.caller_state_dir)
-    OperantTui(ClientController(args.core_url, paired_skill_sources=caller)).run()
+    OperantTui(
+        ClientController(args.core_url, paired_skill_sources=caller),
+        start_skill_sources=args.skill_sources,
+    ).run()
 
 
 if __name__ == "__main__":

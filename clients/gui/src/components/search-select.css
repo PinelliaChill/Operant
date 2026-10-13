@@ -10,6 +10,8 @@
 .search-select-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 40px; padding: 7px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; }
 .search-select-option:hover, .search-select-option[aria-selected="true"] { background: var(--accent-subtle); color: var(--accent-on-subtle); }
 .search-select-option:disabled { opacity: .55; cursor: not-allowed; }
+.search-select-option > span { min-width: 0; overflow-wrap: anywhere; }
+.search-select-option > svg { flex-shrink: 0; }
 .search-select-option strong, .search-select-option small { display: block; }
 .search-select-option strong { font-weight: 500; }
 .search-select-option small { margin-top: 2px; color: var(--text-secondary); font-size: var(--font-size-xs); }

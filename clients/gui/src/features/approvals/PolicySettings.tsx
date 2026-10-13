@@ -124,7 +124,7 @@ const LivePolicySettings: React.FC = () => {
         <h2 style={subsectionTitleStyle}>权限检查</h2>
         <p style={subsectionSubStyle}>检查操作是否允许，不会实际执行或修改权限。</p>
       </div>
-      <form className="card approval-rules" onSubmit={submit} aria-describedby="live-policy-help">
+      <form className="card approval-rules live-policy-form" onSubmit={submit} aria-describedby="live-policy-help">
         <p id="live-policy-help" className="section-footnote">被安全规则禁止的操作无法在此放行。</p>
         <label>主体<input className="input" value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
         <label>工具<input className="input" value={tool} onChange={(event) => setTool(event.target.value)} required /></label>

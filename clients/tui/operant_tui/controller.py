@@ -64,11 +64,13 @@ def error_view(error: Exception) -> ClientErrorView:
     if isinstance(error, Phase1EError):
         cursor_expired = error.code in {"cursor_expired", "cursor_out_of_range"}
         schema_error = "protocol" in error.code or "schema" in error.code
-        guidance = error.message
+        guidance = "连接读取失败，请恢复连接后刷新。"
         if cursor_expired:
-            guidance = f"{guidance}；Cursor 已过期，请重新读取完整投影，不会自动重复 Command。"
+            guidance = "显示已过期，请刷新读取最新状态。"
         elif schema_error:
-            guidance = f"{guidance}；协议不兼容，请更新客户端或 Core。"
+            guidance = "客户端与桌面服务版本不兼容，请更新后重新连接。"
+        elif error.recovery == "manual_reconcile":
+            guidance = "操作结果尚未确认。请核对原请求，暂时不要重试。"
         return ClientErrorView(
             code=error.code,
             message=guidance,
@@ -79,14 +81,14 @@ def error_view(error: Exception) -> ClientErrorView:
     if isinstance(error, ValueError):
         return ClientErrorView(
             code="invalid_input",
-            message=str(error),
+            message="输入无效，请检查填写内容。",
             recovery="edit_input",
             safe_to_retry=False,
             projection_trust="输入未发送到 Core；现有投影未改变。",
         )
     return ClientErrorView(
         code="client_error",
-        message=str(error) or "Core transport is unavailable",
+        message="连接暂不可用，请恢复连接后刷新。",
         recovery="retry_later",
         safe_to_retry=True,
         projection_trust="保留最近投影；未确认任何写操作已生效。",

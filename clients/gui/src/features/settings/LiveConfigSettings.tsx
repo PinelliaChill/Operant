@@ -108,7 +108,7 @@ export const LiveConfigSettings: React.FC = () => {
         <SearchSelect label="编辑范围" value={scope} onChange={(value) => setScope(value as ConfigScope)} options={[{ value: 'global', label: '全局' }, { value: 'project', label: '项目' }, { value: 'workspace', label: '工作区' }, { value: 'role', label: '角色' }]} />
         <label>项目（可选）<input className="input" value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="项目编号" /></label>
         <PathInput label="项目文件夹（可选）" value={workspaceRef} onChange={setWorkspaceRef} placeholder="选择文件夹或填写完整路径" disabled={busy} />
-        <SearchSelect label="角色" value={roleId} onChange={setRoleId} placeholder="选择角色" options={roles.map((role) => ({ value: role.id, label: role.name, detail: role.id }))} />
+        <SearchSelect label="角色" value={roleId} onChange={setRoleId} placeholder="选择角色" options={roles.map((role) => ({ value: role.id, label: role.name }))} />
       </div></section>
       {error && <div className="live-alert live-alert-error" role="alert">{error}</div>}
       {notice && <div className="live-alert" role="status">{notice}</div>}

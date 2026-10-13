@@ -48,14 +48,16 @@ class OperantTui(App[None]):
         Binding("alt+5", "conversation", "会话工作台"),
         Binding("alt+6", "remote", "远程设备"),
         Binding("alt+7", "caller_skills", "技能目录"),
+        Binding("f7", "caller_skills", "技能目录", priority=True),
         Binding("/", "command", "命令"),
         Binding("ctrl+q", "close_terminal_or_quit", "关闭终端 / 退出", priority=True),
         Binding("escape", "dismiss_layer", "关闭"),
         Binding("q", "quit", "退出", show=False),
     ]
 
-    def __init__(self, controller: ClientController) -> None:
+    def __init__(self, controller: ClientController, *, start_skill_sources: bool = False) -> None:
         super().__init__()
+        self.start_skill_sources = start_skill_sources
         self.controller = controller
         self.command_keys = CommandKeys()
         self.pending_cancel_run_id: str | None = None
@@ -101,6 +103,11 @@ class OperantTui(App[None]):
 
     async def on_mount(self) -> None:
         self._apply_layout(self.size.width)
+        if self.start_skill_sources:
+            self._set_mutations_enabled(False)
+            self.query_one("#connection", Static).update("技能目录配对")
+            self.action_caller_skills()
+            return
         try:
             await asyncio.to_thread(self.controller.negotiate)
         except Exception as exc:
@@ -120,11 +127,9 @@ class OperantTui(App[None]):
     def _show_error(self, exc: Exception) -> None:
         view = error_view(exc)
         if view.code != "invalid_input":
-            self.query_one("#connection", Static).update("[已断开] Core 状态不可用；当前视图只读")
+            self.query_one("#connection", Static).update("连接已断开，当前页面只读")
             self._set_mutations_enabled(False)
-        self.query_one("#error", Static).update(
-            f"{view.code}: {view.message}\n{view.projection_trust}"
-        )
+        self.query_one("#error", Static).update(view.message)
 
     def _set_mutations_enabled(self, enabled: bool) -> None:
         self.query_one("#resume", Button).disabled = not enabled

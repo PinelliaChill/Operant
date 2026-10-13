@@ -26,6 +26,8 @@ class FakeCaller:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.readback_state = "awaiting_approval"
+        self.has_source = True
+        self.fail_list = False
 
     def pending_request(self) -> dict[str, str] | None:
         return None
@@ -36,9 +38,18 @@ class FakeCaller:
 
     def list_sources(self) -> dict[str, str]:
         self.calls.append(("list", ()))
+        if self.fail_list:
+            raise ValueError("offline")
         return {
             "state": "completed",
-            "result": {"items": [{"root_ref": "user-000000000001", "label": "技能库"}]},
+            "result": {
+                "items": [{"root_ref": "operant-default", "label": "内置技能"}]
+                + (
+                    [{"root_ref": "user-000000000001", "label": "技能库"}]
+                    if self.has_source
+                    else []
+                ),
+            },
         }
 
     def add_source(self, path: str) -> dict[str, str]:
@@ -61,11 +72,13 @@ class FakeCaller:
 
     def remove_source(self, root_ref: str) -> dict[str, str]:
         self.calls.append(("remove", (root_ref,)))
-        return {"state": "completed"}
+        self.has_source = False
+        return {"state": "completed", "operation": "remove"}
 
     def continue_approved(self, approval_id: str, action_hash: str) -> dict[str, str]:
         self.calls.append(("continue", (approval_id, action_hash)))
-        return {"state": "completed"}
+        self.has_source = True
+        return {"state": "completed", "operation": "add"}
 
     def reset_identity(self, *, abandon_pairing: bool = False) -> None:
         self.calls.append(("reset_identity", (abandon_pairing,)))
@@ -88,6 +101,31 @@ class MainController:
 
     def negotiate(self) -> None:
         raise ValueError("offline")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not TEXTUAL_AVAILABLE, reason="Textual is installed in the TUI project")
+async def test_source_refresh_failure_keeps_confirmed_write_success() -> None:
+    caller = FakeCaller()
+    app = Host(caller)
+    async with app.run_test(size=(100, 65)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#caller-path", Input).value = "/tmp/skills"
+        await pilot.click("#caller-add")
+        await pilot.pause()
+        caller.fail_list = True
+        await pilot.click("#caller-continue")
+
+        async def settled() -> None:
+            while app.screen.busy:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(settled(), timeout=3)
+        status = str(app.screen.query_one("#caller-status", Static).render())
+        assert "已完成" in status and "列表未更新" in status
+        assert caller.calls.count(("add", ("/tmp/skills",))) == 1
+        assert caller.calls.count(("continue", ("approval_1", "a" * 64))) == 1
+        assert app.screen.query_one("#caller-source-select", Select).value is Select.NULL
 
 
 @pytest.mark.asyncio
@@ -140,7 +178,8 @@ async def test_mounted_pairing_screen_routes_buttons_and_clears_ticket() -> None
         app.screen.query_one("#caller-source-select", Select).value = "user-000000000001"
         await pilot.click("#caller-remove")
         await settled()
-        assert caller.calls[-1] == ("remove", ("user-000000000001",))
+        assert caller.calls[-2:] == [("remove", ("user-000000000001",)), ("list", ())]
+        assert app.screen.query_one("#caller-source-select", Select).value is Select.NULL
         app.screen.query_one("#caller-path", Input).value = "/tmp/skills"
         await pilot.click("#caller-add")
         await settled()
@@ -152,7 +191,8 @@ async def test_mounted_pairing_screen_routes_buttons_and_clears_ticket() -> None
         assert caller.calls[-1] == ("readback", ())
         await pilot.click("#caller-continue")
         await settled()
-        assert caller.calls[-1] == ("continue", ("approval_1", "a" * 64))
+        assert caller.calls[-2:] == [("continue", ("approval_1", "a" * 64)), ("list", ())]
+        app.screen.query_one("#caller-source-select", Select).value = "user-000000000001"
         assert caller.calls.count(("add", ("/tmp/skills",))) == 1
         caller.readback_state = "unconfirmed"
         await pilot.click("#caller-readback")
@@ -170,3 +210,30 @@ async def test_mounted_pairing_screen_routes_buttons_and_clears_ticket() -> None
         await settled()
         assert caller.calls[-1] == ("reset_identity", (True,))
         assert "新配对码" in str(app.screen.query_one("#caller-status", Static).render())
+
+
+@pytest.mark.asyncio
+async def test_cli_pairing_start_skips_unpaired_conversation_queries() -> None:
+    from types import SimpleNamespace
+
+    from operant_tui.app import OperantTui
+    from operant_tui.caller_pairing_screen import CallerPairingScreen
+
+    class PairOnly:
+        def pending_request(self):
+            return None
+
+    def unexpected_negotiate():
+        raise AssertionError("standalone pairing must not query ungranted conversation routes")
+
+    controller = SimpleNamespace(paired_skill_sources=PairOnly(), negotiate=unexpected_negotiate)
+    app = OperantTui(controller, start_skill_sources=True)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, CallerPairingScreen)
+        assert app.screen.query_one("#caller-ticket", Input).password
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("f7")
+        await pilot.pause()
+        assert isinstance(app.screen, CallerPairingScreen)

@@ -98,7 +98,7 @@ class CallerPairingScreen(Screen[None]):
             if not isinstance(item, dict):
                 continue
             root_ref = item.get("root_ref")
-            if not isinstance(root_ref, str) or not root_ref:
+            if not isinstance(root_ref, str) or not root_ref.startswith("user-"):
                 continue
             title = item.get("label") or item.get("path") or f"来源 {index}"
             options.append((str(title), root_ref))
@@ -138,8 +138,20 @@ class CallerPairingScreen(Screen[None]):
                     status = "该请求未执行，已停止接收。可以发起新的添加或删除请求。"
                 else:
                     status = f"{label}未完成。请查看 Core 回执或回读原请求。"
-                if label == "读取来源" and state == "completed":
-                    self._show_sources(result)
+                if state == "completed":
+                    if result.get("operation") in {"add", "remove"}:
+                        try:
+                            sources = await asyncio.to_thread(self.client.list_sources)
+                            if sources.get("state") != "completed":
+                                raise ValueError("source refresh did not complete")
+                            self._show_sources(sources)
+                        except Exception:
+                            selector = self.query_one("#caller-source-select", Select)
+                            selector.set_options([])
+                            selector.clear()
+                            status += "目录列表未更新，请点击“读取来源”。"
+                    elif label == "读取来源":
+                        self._show_sources(result)
             else:
                 status = f"{label}已验证。"
             self.query_one("#caller-status", Static).update(status)
@@ -147,7 +159,9 @@ class CallerPairingScreen(Screen[None]):
                 json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2)
             )
         except PairingClientError as exc:
-            self.query_one("#caller-status", Static).update(str(exc))
+            self.query_one("#caller-status", Static).update(
+                "无法读取技能目录。请检查桌面连接和配对状态。" if label == "读取来源" else str(exc)
+            )
             self.query_one("#caller-detail", Static).update(f"错误类别: {exc.code}")
         except Exception:
             self.query_one("#caller-status", Static).update("客户端暂时无法完成此操作。")
