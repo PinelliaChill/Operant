@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 _SAFE_FRONTMATTER_KEYS = frozenset(
@@ -18,13 +20,98 @@ _SAFE_FRONTMATTER_KEYS = frozenset(
         "license",
         "compatibility",
         "metadata",
+        "version",
         "allowed-tools",
         "disable-model-invocation",
     }
 )
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_DANGEROUS_YAML_RE = re.compile(r"(?:^|[\s\[{,:])(?:!!|![A-Za-z]|&[A-Za-z]|\*[A-Za-z])")
+_FRONTMATTER_MAX_DEPTH = 5
+_FRONTMATTER_MAX_ENTRIES = 128
+
+
+def _metadata_key_valid(key: object) -> bool:
+    return (
+        isinstance(key, str)
+        and bool(key)
+        and len(key) <= 128
+        and all(ord(character) >= 32 for character in key)
+    )
+
+
+def _metadata_scalar(value: object) -> str | bool | int | float | None:
+    if isinstance(value, str):
+        if len(value) > 1_000 or "\x00" in value:
+            raise ValueError("metadata frontmatter contains an invalid entry")
+        return value
+    if value is None or isinstance(value, bool | int):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise ValueError("metadata frontmatter contains an invalid entry")
+
+
+def _metadata_value(value: object) -> str:
+    """Keep optional nested metadata as bounded, inert JSON text."""
+    if isinstance(value, dict):
+        if len(value) > 64 or any(not _metadata_key_valid(key) for key in value):
+            raise ValueError("metadata frontmatter contains an invalid entry")
+        normalized = {
+            key: (
+                [_metadata_scalar(item) for item in child]
+                if isinstance(child, list)
+                else _metadata_scalar(child)
+            )
+            for key, child in value.items()
+        }
+        result = json.dumps(
+            normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+    elif isinstance(value, list):
+        result = json.dumps(
+            [_metadata_scalar(item) for item in value],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    else:
+        scalar = _metadata_scalar(value)
+        if isinstance(scalar, bool):
+            result = "true" if scalar else "false"
+        elif scalar is None:
+            result = "null"
+        else:
+            result = str(scalar)
+    if len(result) > 1_000:
+        raise ValueError("metadata frontmatter contains an invalid entry")
+    return result
+
+
+class _SkillFrontmatterLoader(yaml.SafeLoader):
+    """Safe YAML with duplicate keys and aliases rejected."""
+
+    def compose_node(self, parent: Any, index: Any) -> yaml.Node:
+        event = self.peek_event()  # type: ignore[no-untyped-call]
+        if isinstance(event, yaml.AliasEvent):
+            raise ValueError("frontmatter YAML aliases are rejected")
+        if (
+            isinstance(event, (yaml.ScalarEvent, yaml.SequenceStartEvent, yaml.MappingStartEvent))
+            and event.anchor is not None
+        ):
+            raise ValueError("frontmatter YAML anchors are rejected")
+        node = super().compose_node(parent, index)
+        assert node is not None
+        return node
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        result: dict[Any, Any] = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, str) or key in result:
+                raise ValueError("frontmatter keys must be unique strings")
+            result[key] = self.construct_object(value_node, deep=deep)
+        return result
 
 
 class SkillDiscoveryLimits(BaseModel):
@@ -63,7 +150,7 @@ class DiscoveredSkill(BaseModel):
     description: str
     body: str
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    frontmatter: dict[str, str | list[str]]
+    frontmatter: dict[str, str | list[str] | dict[str, str]]
     resources: tuple[SkillResource, ...] = ()
     trust: str = Field(default="untrusted_candidate", pattern="^untrusted_candidate$")
 
@@ -105,7 +192,7 @@ _FILE_FLAGS = (
 
 
 class SkillDiscovery:
-    """Scan only explicit roots for bounded, non-symlink Skill candidates."""
+    """Scan explicit roots and links to directories inside those roots."""
 
     def __init__(
         self,
@@ -145,10 +232,12 @@ class SkillDiscovery:
         candidates: list[DiscoveredSkill] = []
         issues: list[DiscoveryIssue] = []
         visited = 0
+        seen_candidate_paths: set[Path] = set()
         root_entry_budget = {"entries": 0}
         for root_index, root in enumerate(self._roots):
             root_candidates: list[DiscoveredSkill] = []
             root_issues: list[DiscoveryIssue] = []
+            root_seen_paths: set[Path] = set()
             try:
                 root_fd = self._open_registered_root(root)
             except (OSError, ValueError):
@@ -175,12 +264,45 @@ class SkillDiscovery:
                         root_issues.append(self._issue(root_index, child_name, "entry_unreadable"))
                         continue
                     if stat.S_ISLNK(child_stat.st_mode):
-                        root_issues.append(self._issue(root_index, child_name, "symlink_rejected"))
+                        try:
+                            linked = self._read_linked_candidate(root_index, root, child_name)
+                        except (OSError, UnicodeError, ValueError) as exc:
+                            root_issues.append(
+                                DiscoveryIssue(
+                                    root_index=root_index,
+                                    relative_directory=child_name,
+                                    code="symlink_rejected",
+                                    message=str(exc)[:300],
+                                )
+                            )
+                        else:
+                            if linked is not None:
+                                actual = (root.path / child_name).resolve(strict=True)
+                                if actual in seen_candidate_paths or actual in root_seen_paths:
+                                    continue
+                                visited += 1
+                                if visited > self.limits.max_skill_directories:
+                                    root_issues.append(
+                                        self._issue(
+                                            root_index,
+                                            child_name,
+                                            "skill_directory_limit_exceeded",
+                                        )
+                                    )
+                                    issues.extend(root_issues)
+                                    return SkillDiscoveryResult(
+                                        candidates=tuple(candidates), issues=tuple(issues)
+                                    )
+                                root_candidates.append(linked)
+                                root_seen_paths.add(actual)
                     elif stat.S_ISDIR(child_stat.st_mode) and self._directory_has_manifest(
                         root_fd, child_name, child_stat
                     ):
                         directories.append((child_name, child_stat, child_name))
                 for candidate_name, expected, relative in directories:
+                    actual = root.path if candidate_name is None else root.path / candidate_name
+                    if actual in seen_candidate_paths or actual in root_seen_paths:
+                        continue
                     visited += 1
                     if visited > self.limits.max_skill_directories:
                         issues.extend(root_issues)
@@ -196,6 +318,7 @@ class SkillDiscovery:
                                 root_index, root_fd, candidate_name, expected, relative
                             )
                         )
+                        root_seen_paths.add(actual)
                     except (OSError, UnicodeError, ValueError) as exc:
                         root_issues.append(
                             DiscoveryIssue(
@@ -218,9 +341,48 @@ class SkillDiscovery:
             else:
                 candidates.extend(root_candidates)
                 issues.extend(root_issues)
+                seen_candidate_paths.update(root_seen_paths)
             finally:
                 os.close(root_fd)
         return SkillDiscoveryResult(candidates=tuple(candidates), issues=tuple(issues))
+
+    def _read_linked_candidate(
+        self, root_index: int, root: _RegisteredRoot, name: str
+    ) -> DiscoveredSkill | None:
+        link = root.path / name
+        before = link.lstat()
+        target = link.resolve(strict=True)
+        if not target.is_dir():
+            raise ValueError("Skill link target is not a directory")
+        allowed_root = next(
+            (
+                allowed
+                for allowed in self._roots
+                if target == allowed.path or target.is_relative_to(allowed.path)
+            ),
+            None,
+        )
+        if allowed_root is None:
+            raise ValueError(
+                "Skill link target is outside registered roots; "
+                "add its real parent directory as a Skill source"
+            )
+        allowed_fd = self._open_registered_root(allowed_root)
+        os.close(allowed_fd)
+        descriptor = self._open_absolute_directory(target)
+        try:
+            opened = os.fstat(descriptor)
+            if not self._entry_exists(descriptor, "SKILL.md"):
+                return None
+            candidate = self._read_candidate(root_index, descriptor, None, opened, name)
+            after = link.lstat()
+            if not self._same_version(before, after) or link.resolve(strict=True) != target:
+                raise ValueError("Skill link changed during discovery")
+            allowed_fd = self._open_registered_root(allowed_root)
+            os.close(allowed_fd)
+            return candidate
+        finally:
+            os.close(descriptor)
 
     def _read_candidate(
         self,
@@ -261,7 +423,8 @@ class SkillDiscovery:
         finally:
             os.close(directory_fd)
 
-    def _parse_manifest(self, text: str) -> tuple[dict[str, str | list[str]], str]:
+    def _parse_manifest(self, text: str) -> tuple[dict[str, str | list[str] | dict[str, str]], str]:
+        text = text.removeprefix("\ufeff").replace("\r\n", "\n")
         if not text.startswith("---\n"):
             raise ValueError("SKILL.md must start with bounded frontmatter")
         boundary = text.find("\n---\n", 4)
@@ -270,75 +433,88 @@ class SkillDiscovery:
         encoded_frontmatter = text[4:boundary].encode("utf-8")
         if len(encoded_frontmatter) > self.limits.max_frontmatter_bytes:
             raise ValueError("SKILL.md frontmatter exceeds the configured byte limit")
-        parsed: dict[str, str | list[str]] = {}
-        metadata_open = False
-        for raw_line in text[4:boundary].splitlines():
-            if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-                continue
-            if metadata_open and raw_line.startswith("  ") and not raw_line.startswith("   "):
-                if "\t" in raw_line or ":" not in raw_line:
-                    raise ValueError("metadata frontmatter is malformed")
-                nested_key, nested_value = raw_line[2:].split(":", 1)
-                if nested_key != "short-description":
-                    raise ValueError("metadata frontmatter contains an unsupported key")
-                nested_value = nested_value.strip()
-                if (
-                    _DANGEROUS_YAML_RE.search(nested_value)
-                    or "${" in nested_value
-                    or "<(" in nested_value
-                ):
-                    raise ValueError("metadata frontmatter contains an unsafe YAML construct")
-                self._parse_scalar_or_list(nested_value)
-                metadata_open = False
-                continue
-            if "\t" in raw_line or raw_line[:1].isspace() or ":" not in raw_line:
-                raise ValueError("nested, tabbed, or malformed frontmatter is rejected")
-            key, raw_value = raw_line.split(":", 1)
-            key = key.strip()
-            value = raw_value.strip()
+        frontmatter_text = text[4:boundary]
+        if "\t" in frontmatter_text or "${" in frontmatter_text or "<(" in frontmatter_text:
+            raise ValueError("frontmatter contains an unsafe construct")
+        try:
+            loader = _SkillFrontmatterLoader(frontmatter_text)
+            try:
+                node = loader.get_single_node()
+                if node is None:
+                    raise ValueError("SKILL.md frontmatter is empty")
+                self._validate_yaml_node(node)
+                parsed = loader.construct_document(node)
+            finally:
+                loader.dispose()
+        except yaml.YAMLError as exc:
+            raise ValueError("SKILL.md frontmatter is malformed or unsafe YAML") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("SKILL.md frontmatter must be a mapping")
+        result: dict[str, str | list[str] | dict[str, str]] = {}
+        for key, value in parsed.items():
             if not _KEY_RE.fullmatch(key) or key not in _SAFE_FRONTMATTER_KEYS:
                 raise ValueError("frontmatter contains an unsupported key")
-            if key in parsed:
-                raise ValueError("frontmatter contains a duplicate key")
-            if _DANGEROUS_YAML_RE.search(value) or "${" in value or "<(" in value:
-                raise ValueError("frontmatter contains an unsafe YAML construct")
-            if key == "disable-model-invocation" and value not in {"true", "false"}:
-                raise ValueError("disable-model-invocation must be true or false")
-            parsed[key] = self._parse_scalar_or_list(value)
-            metadata_open = key == "metadata" and not value
-        return parsed, text[boundary + 5 :]
+            if key == "metadata":
+                if not isinstance(value, dict) or len(value) > 64:
+                    raise ValueError("metadata frontmatter must be a bounded mapping")
+                metadata: dict[str, str] = {}
+                for metadata_key, metadata_value in value.items():
+                    if not _metadata_key_valid(metadata_key):
+                        raise ValueError("metadata frontmatter contains an invalid entry")
+                    metadata[metadata_key] = _metadata_value(metadata_value)
+                result[key] = metadata
+            elif key == "version":
+                if isinstance(value, bool) or not isinstance(value, str | int | float):
+                    raise ValueError("frontmatter version must be a bounded scalar")
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ValueError("frontmatter version must be a bounded scalar")
+                version = str(value)
+                if not version or len(version) > 128 or any(ord(char) < 32 for char in version):
+                    raise ValueError("frontmatter version must be a bounded scalar")
+                result[key] = version
+            elif key == "disable-model-invocation" and isinstance(value, bool):
+                result[key] = "true" if value else "false"
+            elif isinstance(value, str):
+                if len(value) > 4_000 or "\x00" in value:
+                    raise ValueError("frontmatter scalar is invalid or too large")
+                if key == "disable-model-invocation" and value not in {"true", "false"}:
+                    raise ValueError("disable-model-invocation must be true or false")
+                result[key] = value
+            elif key == "allowed-tools" and isinstance(value, list):
+                if len(value) > 64 or any(
+                    not isinstance(item, str) or len(item) > 1_000 for item in value
+                ):
+                    raise ValueError("frontmatter list is invalid or too large")
+                result[key] = value
+            else:
+                raise ValueError("frontmatter value has an unsupported shape")
+        return result, text[boundary + 5 :]
 
     @staticmethod
-    def _parse_scalar_or_list(value: str) -> str | list[str]:
-        if not value:
-            return ""
-        if value.startswith("["):
-            try:
-                parsed: Any = json.loads(value)
-            except json.JSONDecodeError as exc:
-                raise ValueError("frontmatter lists must use a JSON string array") from exc
-            if (
-                not isinstance(parsed, list)
-                or len(parsed) > 64
-                or any(not isinstance(item, str) or len(item) > 1_000 for item in parsed)
-            ):
-                raise ValueError("frontmatter list is invalid or too large")
-            return parsed
-        if value.startswith('"'):
-            try:
-                parsed = json.loads(value)
-            except json.JSONDecodeError as exc:
-                raise ValueError("invalid quoted frontmatter scalar") from exc
-            if not isinstance(parsed, str):
-                raise ValueError("frontmatter scalar must be a string")
-            value = parsed
-        elif value.startswith("'"):
-            if not value.endswith("'") or len(value) < 2:
-                raise ValueError("invalid quoted frontmatter scalar")
-            value = value[1:-1].replace("''", "'")
-        if any(character in value for character in ("\x00", "\r", "\n")) or len(value) > 4_000:
-            raise ValueError("frontmatter scalar is invalid or too large")
-        return value
+    def _validate_yaml_node(node: yaml.Node) -> None:
+        pending: list[tuple[yaml.Node, int]] = [(node, 1)]
+        count = 0
+        while pending:
+            current, depth = pending.pop()
+            count += 1
+            if count > _FRONTMATTER_MAX_ENTRIES or depth > _FRONTMATTER_MAX_DEPTH:
+                raise ValueError("frontmatter structure exceeds the configured limit")
+            if isinstance(current, yaml.MappingNode):
+                pending.extend((child, depth + 1) for pair in current.value for child in pair)
+            elif isinstance(current, yaml.SequenceNode):
+                pending.extend((child, depth + 1) for child in current.value)
+            elif not isinstance(current, yaml.ScalarNode):
+                raise ValueError("frontmatter contains an unsupported YAML node")
+            if current.tag not in {
+                "tag:yaml.org,2002:str",
+                "tag:yaml.org,2002:bool",
+                "tag:yaml.org,2002:int",
+                "tag:yaml.org,2002:float",
+                "tag:yaml.org,2002:null",
+                "tag:yaml.org,2002:map",
+                "tag:yaml.org,2002:seq",
+            }:
+                raise ValueError("frontmatter contains an unsafe YAML tag")
 
     def _list_resources(self, directory_fd: int) -> tuple[SkillResource, ...]:
         resources: list[SkillResource] = []

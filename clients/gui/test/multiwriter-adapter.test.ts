@@ -3,14 +3,14 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { loadMultiWriterProjection } from '../src/live23/multiwriterAdapter.ts';
 
-test('live settings keeps the remote system route reachable', () => {
+test('settings keeps the remote advanced route reachable', () => {
   const source = readFileSync(
-    new URL('../src/features/settings/SettingsView.tsx', import.meta.url),
+    new URL('../src/features/settings/SettingsHub.tsx', import.meta.url),
     'utf8',
   );
-  assert.match(source, /searchParams\.get\('cat'\) === 'system'/);
+  assert.match(source, /remote: 'advanced'/);
   assert.match(source, /<RemoteView \/>/);
-  assert.match(source, /clientMode === 'live' \? <LiveSettingsView \/>/);
+  assert.match(source, /current === 'advanced'/);
 });
 
 test('maps writer state without requiring or exposing lease tokens', async () => {

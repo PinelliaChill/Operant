@@ -714,10 +714,14 @@ class IsolatedChromeBrowser:
     def navigate(self, url: str) -> dict[str, Any]:
         self.policy.check_url(url)
         parsed = urlsplit(url)
-        if parsed.query or parsed.fragment or redact_public_text(url) != url:
+        if "?" in url or "#" in url or redact_public_text(url) != url:
             raise BrowserTargetError(
                 "browser navigation URL cannot include query or credential data"
             )
+        # Chrome canonicalizes an origin-only navigation to a root path. Do
+        # not relax any other URL component, especially a redirect's query or
+        # fragment, when deciding whether the approved navigation completed.
+        expected_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", ""))
         self.start()
         assert self._cdp is not None
         navigation = self._cdp.call("Page.navigate", {"url": url})
@@ -728,9 +732,10 @@ class IsolatedChromeBrowser:
             try:
                 if self._cdp.evaluate("document.readyState") == "complete":
                     observation = self.observe()
-                    parsed = urlsplit(url)
-                    safe_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-                    if observation["url"] == self._hide_entered_text(safe_url):
+                    actual_url = self._cdp.evaluate("location.href")
+                    if actual_url == expected_url and observation["url"] == self._hide_entered_text(
+                        expected_url
+                    ):
                         return observation
             except BrowserTargetError:
                 pass

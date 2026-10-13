@@ -47,6 +47,7 @@ PHASE45_CAPABILITIES: tuple[str, ...] = (
     "dead_letter_replay",
 )
 PHASE56_PROTOCOL_VERSION = "phase56.v1"
+CALLER_PAIRING_PROTOCOL_VERSION = "caller-pairing.v1"
 PHASE56_MIN_CLIENT_VERSION = "phase56.v1"
 PHASE56_CAPABILITIES: tuple[str, ...] = (
     "remote_control",
@@ -119,6 +120,16 @@ def workbench_protocol_metadata() -> dict[str, Any]:
         min_client_version=WORKBENCH_PROTOCOL_VERSION,
         capabilities=WORKBENCH_CAPABILITIES,
         label="Workbench",
+    )
+
+
+def caller_pairing_protocol_metadata() -> dict[str, Any]:
+    return _protocol_metadata(
+        digest_path=protocol_schema_path("operant-caller-pairing.openapi.sha256"),
+        protocol_version=CALLER_PAIRING_PROTOCOL_VERSION,
+        min_client_version=CALLER_PAIRING_PROTOCOL_VERSION,
+        capabilities=("exclusive_skill_source_pairing", "encrypted_caller_readback"),
+        label="Caller pairing",
     )
 
 

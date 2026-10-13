@@ -12,7 +12,9 @@
 
 [本次发行说明](docs/releases/v0.1.0-beta.2.md) · [更新记录](CHANGELOG.md) · [安装、升级与回退](docs/guide/candidate-installation.md)
 
-
+开发中的[开箱即用与界面整理方案](docs/design/onboarding-ux/plan.md)增加首次连接、默认助手、对话名称、
+模型账号登录和四项导航。实现与[验收进度](docs/design/onboarding-ux/acceptance.md)单独记录；
+尚未发行，也没有替换已安装 App 或迁移用户数据。
 
 ## 项目定位
 
@@ -124,7 +126,7 @@ uv run operant init
 
 这套命令安装固定的 `v0.1.0-beta.2`。参与开发时可克隆 `main`；旧版本请按对应标签的说明安装。
 
-默认运行数据写入当前目录的 `.operant/`；本轮源码的数据库为 SQLite Schema v23；旧发布版按各自源码核对版本。
+默认运行数据写入当前目录的 `.operant/`；固定 Beta 2 使用 SQLite Schema v23，开箱即用开发分支使用 v24。
 第一次体验请使用新目录。已有用户升级前应停止旧 Core 并备份数据库及运行目录，
 不要让旧版 Core 接管升级后的库；安装新源码不代表已替你迁移旧数据。
 
@@ -200,9 +202,18 @@ npm ci --prefix clients/gui
 npm run dev --prefix clients/gui -- --host 127.0.0.1
 ```
 
-打开 [React 界面](http://127.0.0.1:3000)，将界面的连接模式切换为 **实时连接 / Live**。
-首次打开默认是演示模式，里面的示例数据不代表真实任务。实时模式通过前端开发服务连接本机 8000 端口；
-暂未接通的页面会提示不可用。
+固定 Beta 2 的 [React 界面](http://127.0.0.1:3000)需要切换到 **实时连接 / Live**；演示数据不代表真实任务。
+开箱即用开发分支默认实时连接，演示入口位于开发设置。开发该分支时，Core 启动需明确允许前端的
+本机地址，例如：
+
+```bash
+OPERANT_SETUP_ALLOWED_ORIGINS_JSON='["http://127.0.0.1:3000"]' \
+  uv run operant serve --host 127.0.0.1 --port 8000
+```
+
+首次进入选择“连接模型”，填写服务商和密钥、选择发现的模型，即可用通用助手开始对话；
+角色、工作区和运行绑定由系统准备。高级参数默认收起，连接后保留输入草稿。
+ChatGPT/Gemini 登录的实际验收条件和限制见[验收记录](docs/design/onboarding-ux/acceptance.md)。
 
 ### 5. 使用会话工作台
 

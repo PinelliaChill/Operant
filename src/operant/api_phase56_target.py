@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.remote_execution import (
+    ObservationExpiredError,
+    ObservationUnavailableError,
     RemoteAuthorization,
     RemoteExecutionController,
     observation_hash_for_job,
@@ -305,6 +307,22 @@ def install_phase56_target_routes(
             raise HTTPException(status_code=404, detail="remote target resource not found") from exc
         except IdempotencyConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ObservationExpiredError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "observation_expired",
+                    "message": "页面或窗口信息已过期，请重新查看后再操作。",
+                },
+            ) from exc
+        except ObservationUnavailableError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "observation_unavailable",
+                    "message": "页面或窗口信息不可用，请重新查看后再操作。",
+                },
+            ) from exc
         except ConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:

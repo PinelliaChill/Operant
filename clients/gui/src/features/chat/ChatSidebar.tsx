@@ -40,7 +40,6 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = (props) => {
 
 const DemoChatSidebar: React.FC<ChatSidebarProps> = ({ onNavigate, onCollapse }) => {
   const navigate = useNavigate();
-  const { clientMode, setClientMode } = useOperant();
   const { conversations, projects, agents, tempWorkflows, persistTempWorkflow, createConversation } =
     useDemo();
   const chatMatch = useMatch('/chat/:conversationId');
@@ -308,25 +307,6 @@ const DemoChatSidebar: React.FC<ChatSidebarProps> = ({ onNavigate, onCollapse })
             ))}
           </div>
         )}
-      </div>
-
-      {/* 5. 底部演示模式开关卡 */}
-      <div className="rail-sidebar-footer">
-        <div className="rail-sidebar-mode-card">
-          <div className="rail-sidebar-mode-text">
-            <span className="rail-sidebar-mode-title">演示模式</span>
-            <span className="rail-sidebar-mode-desc">
-              {clientMode === 'mock' ? '使用内置演示数据' : '已连接 Core 后端'}
-            </span>
-          </div>
-          <button
-            role="switch"
-            aria-checked={clientMode === 'mock'}
-            aria-label="演示模式开关"
-            className="switch"
-            onClick={() => setClientMode(clientMode === 'mock' ? 'live' : 'mock')}
-          />
-        </div>
       </div>
 
       {/* 临时工作流详情 Modal */}

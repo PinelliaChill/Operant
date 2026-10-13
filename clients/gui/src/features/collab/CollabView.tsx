@@ -35,6 +35,7 @@ import { WorkflowOverview } from './WorkflowOverview';
 import { MonitorPanel } from './MonitorPanel';
 import { GRAPH_DRAFTS_CHANGED_EVENT } from './CollabSidebar';
 import { LiveGraphTeamView } from './LiveGraphTeamView';
+import { BasicTeamStart } from './BasicTeamStart';
 
 type CollabTab = 'home' | 'canvas' | 'runs';
 
@@ -47,6 +48,7 @@ export const CollabView: React.FC = () => {
 const LiveCollabView: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get('view');
+  const advanced = viewParam === 'advanced' || viewParam === 'runs' || viewParam === 'canvas';
   const activeTab: CollabTab = viewParam === 'canvas' || viewParam === 'runs' ? viewParam : 'home';
 
   const setTab = (tab: CollabTab) => {
@@ -59,6 +61,8 @@ const LiveCollabView: React.FC = () => {
 
   return (
     <div className="section-view">
+      {!advanced && <BasicTeamStart onAdvanced={() => setSearchParams({ view: 'advanced' })} />}
+      {advanced && <>
       <header className="section-header">
         <div
           style={{
@@ -75,6 +79,7 @@ const LiveCollabView: React.FC = () => {
               <p className="section-sub">编排工作流，查看团队任务与运行进度</p>
             </div>
           </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSearchParams({})}>返回简易协作</button>
         </div>
 
         <div className="section-chips" role="group" aria-label="协作视图切换">
@@ -110,6 +115,7 @@ const LiveCollabView: React.FC = () => {
           <LiveGraphTeamView activeTab={activeTab} />
         </div>
       </div>
+      </>}
     </div>
   );
 };

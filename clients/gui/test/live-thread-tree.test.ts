@@ -31,3 +31,8 @@ test('orphan and cyclic Core threads remain navigable', () => {
   const threads = [thread('orphan', 'missing'), thread('a', 'b'), thread('b', 'a')];
   assert.deepEqual(visibleThreadTree(threads, '', []).map(({ thread: item }) => item.id), ['orphan', 'a', 'b']);
 });
+
+test('search uses the persisted conversation title', () => {
+  const threads = [thread('opaque-thread-id', null)];
+  assert.deepEqual(visibleThreadTree(threads, '文档技能', [], { 'opaque-thread-id': '文档技能验收' }).map(({ thread: item }) => item.id), ['opaque-thread-id']);
+});

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from operant.domain.models import AgentInstance, Session
+from operant.domain.threads import ConversationThread
 from operant.persistence.sqlite import SQLiteStore
 
 
@@ -21,6 +22,9 @@ class AgentFactory:
         budget_overrides: dict[str, Any] | None = None,
         thread_id: str | None = None,
         effective_config: dict[str, Any] | None = None,
+        _new_thread: ConversationThread | None = None,
+        _onboarding_command: tuple[str, str] | None = None,
+        _onboarding_title: str | None = None,
     ) -> Session:
         return self.store.create_session(
             role_id,
@@ -29,6 +33,9 @@ class AgentFactory:
             budget_overrides=budget_overrides,
             thread_id=thread_id,
             effective_config=effective_config,
+            _new_thread=_new_thread,
+            _onboarding_command=_onboarding_command,
+            _onboarding_title=_onboarding_title,
         )
 
     def create_agent(

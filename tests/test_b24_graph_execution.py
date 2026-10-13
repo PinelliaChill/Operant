@@ -49,6 +49,7 @@ from operant.domain.team import (
     TeamTask,
 )
 from operant.persistence.graph_team import SQLiteGraphRepository, SQLiteTeamRepository
+from operant.persistence.onboarding import UXRepository
 from operant.persistence.sqlite import SQLiteStore
 
 
@@ -709,6 +710,12 @@ async def test_mixed_graph_runs_read_tool_branch_join_timer_and_agent(tmp_path: 
     assert by_id["no"].status is NodeRunStatus.SKIPPED
     assert by_id["yes"].status is NodeRunStatus.SUCCEEDED
     assert by_id["read"].output_refs["result"]["content"] == "real data"
+    titles = UXRepository(service.store).list_metadata()
+    assert len(titles) == 3  # Two Team members and the non-Team TOOL node.
+    assert all(
+        item.title == "Graph Worker · Graph execution" and item.title_source == "auto"
+        for item in titles
+    )
     assert len(provider.calls) == 2
     assert result.run.consumed_tool_calls == 1
 

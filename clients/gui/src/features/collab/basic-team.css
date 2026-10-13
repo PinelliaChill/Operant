@@ -1,0 +1,9 @@
+.basic-team { width: min(100%, 860px); margin: 0 auto; padding: 32px 24px 80px; overflow: auto; }
+.basic-team header h1 { margin: 0 0 6px; font-size: var(--font-size-title); }
+.basic-team header p, .basic-team-card p { color: var(--text-secondary); }
+.basic-team-card { margin: 24px 0 18px; padding: 22px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-card); }
+.basic-team-card h2 { margin: 0 0 18px; font-size: var(--font-size-section); }
+.basic-team-card label { display: block; margin-bottom: 16px; }
+.basic-team-card textarea { display: block; margin-top: 6px; }
+.basic-team-card .search-select { margin-bottom: 12px; }
+@media (max-width: 680px) { .basic-team { padding: 20px 16px 100px; } }

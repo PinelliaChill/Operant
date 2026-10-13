@@ -41,6 +41,7 @@ Graph 监控与其他页面的快捷键：
 - `Tab` / `Shift+Tab`：移动焦点。
 - `Alt+1/2/3`：切换会话、运行和检查器区域。
 - `Alt+4`：打开经验与授权页面；`Alt+5`：返回会话工作台。
+- `F7` 或 `Alt+7`：打开技能目录配对页。macOS 终端的 Option 键不一定发送 Alt；可用 `--skill-sources` 直接启动此页。
 - `?`：查看帮助；`Esc`：关闭当前操作；`q`：退出。
 
 按页面输入对应 Session 或 Graph Run ID，读取审批、刷新状态或订阅事件。取消需要再次确认；
@@ -54,3 +55,15 @@ uv run --project clients/tui --no-sync python -m unittest discover -s clients/tu
 
 当前说明对应已合并会话工作台的主线；旧 Beta 标签不包含这些新增操作。
 安装、版本和安全说明见 [根 README](../../README.md) 与 [SECURITY](../../SECURITY.md)。
+
+
+只管理桌面技能目录时，使用独立配对入口：
+
+```bash
+operant-tui --skill-sources --caller-state-dir /absolute/private/client-directory
+```
+
+此入口不查询普通会话，先在桌面版生成配对码，再粘贴配对。添加、移除须桌面逐次批准；
+TUI 仅显式继续原请求。配对码不要发到聊天或日志中。
+操作完成后自动读取最新目录；移除菜单只显示额外添加的来源。若读取失败，保留已确认的
+操作结果并提示手动刷新，不会重新提交添加或移除。
