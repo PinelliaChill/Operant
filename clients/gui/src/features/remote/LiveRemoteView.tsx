@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ClipboardCopy, Radio, RefreshCw, Server, Smartphone, Trash2 } from 'lucide-react';
 import { BetaClient } from '../../../../../sdk/typescript-client/beta.generated';
+import { nativeCoreTransport } from '../../lib/nativeCoreTransport';
 import { PHASE56_PROTOCOL_VERSION, type RemoteCapability, type RemoteScope } from '../../../../../sdk/typescript-client/phase56.generated';
 import { EmptyState } from '../../components/EmptyState';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
@@ -127,7 +128,7 @@ function items(value: unknown, label: string): Record<string, unknown>[] {
 
 export const LiveRemoteView: React.FC = () => {
   const { phase56Client, connectionStatus, addNotification, activeWorkspace } = useOperant();
-  const betaClient = useMemo(() => new BetaClient(currentBrowserOrigin()), []);
+  const betaClient = useMemo(() => new BetaClient(currentBrowserOrigin(), nativeCoreTransport), []);
   const [hosts, setHosts] = useState<RemoteHostProjection[]>([]);
   const [selectedHostId, setSelectedHostId] = useState('');
   const [confirmDisableHost, setConfirmDisableHost] = useState<RemoteHostProjection | null>(null);

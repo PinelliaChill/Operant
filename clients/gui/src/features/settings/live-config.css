@@ -1,6 +1,7 @@
 .config-inner { max-width: 1000px; }
 .config-card { padding: 16px; border: 1px solid var(--border-default); border-radius: 12px; background: var(--bg-card); margin-bottom: 12px; }
-.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 12px; }
+.config-grid > * { min-width: 0; }
 .config-grid label { display: grid; gap: 6px; color: var(--text-secondary); font-size: 12px; }
 .config-hint { color: var(--text-muted); font-size: 12px; margin: 12px 0 0; }
 .config-field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }

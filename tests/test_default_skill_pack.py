@@ -35,14 +35,14 @@ def _write_skills(root: Path, names: tuple[str, ...]) -> None:
 async def test_default_skill_pack_installs_enables_and_loads_real_packages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        "operant.application.default_skill_pack.default_skill_root", lambda: tmp_path / "absent"
-    )
-    root = tmp_path / "source-skills"
+    root = tmp_path / "bundled-skills"
     _write_skills(root, tuple(entry.skill_name for entry in DEFAULT_SKILL_PACK))
+    monkeypatch.setattr("operant.application.default_skill_pack.default_skill_root", lambda: root)
+    external = tmp_path / "source-skills"
+    _write_skills(external, ("documents",))
     service = ApplicationService(SQLiteStore(tmp_path / "core.sqlite"), UnusedProvider())  # type: ignore[arg-type]
     service.initialize()
-    manager = MemoryManager(service, skill_roots={"trusted": root})
+    manager = MemoryManager(service, skill_roots={"trusted": external})
     try:
         project = await manager.execute(
             ManagementCommand(
@@ -53,6 +53,15 @@ async def test_default_skill_pack_installs_enables_and_loads_real_packages(
         ids = await install_default_skill_pack(manager, project_id=project_id)
         assert len(ids) == len(DEFAULT_SKILL_PACK)
         assert await install_default_skill_pack(manager, project_id=project_id) == ids
+        candidates = SQLitePhase45Repository(manager.store).list_skill_candidates()
+        assert any(item["root_ref"] == "trusted" for item in candidates)
+        assert all(
+            skill.package_ref
+            in {
+                item["candidate_id"] for item in candidates if item["root_ref"] == "operant-default"
+            }
+            for skill in manager.projection().skills
+        )
         loaded = manager.begin_skill_run(str(tmp_path.resolve()), "pack-run")
         try:
             for entry in DEFAULT_SKILL_PACK:
@@ -75,14 +84,55 @@ async def test_default_skill_pack_installs_enables_and_loads_real_packages(
 
 
 @pytest.mark.asyncio
-async def test_default_skill_pack_preflights_missing_package(
+async def test_default_skill_pack_rejects_absent_bundle_without_external_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         "operant.application.default_skill_pack.default_skill_root", lambda: tmp_path / "absent"
     )
+    external = tmp_path / "source-skills"
+    _write_skills(external, tuple(entry.skill_name for entry in DEFAULT_SKILL_PACK))
+    service = ApplicationService(SQLiteStore(tmp_path / "core.sqlite"), UnusedProvider())  # type: ignore[arg-type]
+    service.initialize()
+    manager = MemoryManager(service, skill_roots={"trusted": external})
+    try:
+        project = await manager.execute(
+            ManagementCommand(
+                action="project_create", name="pack-test", workspace_path=str(tmp_path)
+            )
+        )
+        with pytest.raises(ValueError, match="bundled default Skill root is unavailable"):
+            await install_default_skill_pack(
+                manager, project_id=project.state.projects[-1].project_id
+            )
+        assert manager.projection().skills == []
+    finally:
+        await manager.close()
+        service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken_manifest", [False, True])
+async def test_default_skill_pack_rejects_missing_or_broken_bundled_skill_without_external_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broken_manifest: bool
+) -> None:
+    bundled = tmp_path / "bundled-skills"
+    _write_skills(
+        bundled,
+        tuple(entry.skill_name for entry in DEFAULT_SKILL_PACK if entry.skill_name != "documents"),
+    )
+    if broken_manifest:
+        broken = bundled / "documents"
+        broken.mkdir()
+        (broken / "SKILL.md").write_text(
+            "---\nname: documents\ndescription: !!python/object:os.system unsafe\n---\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(
+        "operant.application.default_skill_pack.default_skill_root", lambda: bundled
+    )
     root = tmp_path / "source-skills"
-    _write_skills(root, (DEFAULT_SKILL_PACK[0].skill_name,))
+    _write_skills(root, ("documents",))
     service = ApplicationService(SQLiteStore(tmp_path / "core.sqlite"), UnusedProvider())  # type: ignore[arg-type]
     service.initialize()
     manager = MemoryManager(service, skill_roots={"trusted": root})

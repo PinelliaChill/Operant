@@ -400,10 +400,10 @@ const AgentFormFields: React.FC<{
   </div>
 );
 
-export const AgentsView: React.FC = () => {
+export const AgentsView: React.FC<{ roleOnly?: boolean }> = ({ roleOnly = false }) => {
   const { clientMode } = useOperant();
   if (clientMode === 'live') {
-    return <LiveAgentsView />;
+    return <LiveAgentsView roleOnly={roleOnly} />;
   }
   return <DemoAgentsView />;
 };

@@ -1,18 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router-dom';
 import { ChevronRight, FolderKanban, PanelLeftClose, Plus, Search } from 'lucide-react';
-import { Modal } from '../../components/Modal';
+import { useOnboarding } from '../../live/OnboardingContext';
 import { StatusBadge } from '../../components/StatusBadge';
-import { useOperant } from '../../context/ClientContext';
-import { useLive } from '../../live/LiveContext';
+import { liveThreadTitle, useLive } from '../../live/LiveContext';
 import type { LiveProjectProjection } from '../../live/liveState';
 import { formatRelativeDay } from '../../lib/format';
 import { visibleThreadTree } from './liveThreadTree';
+import { visibleOnboardingError } from '../../live/createRequestRecovery';
 
 interface LiveSidebarProps {
   onNavigate?: () => void;
   onCollapse?: () => void;
 }
+
+const threadStatusLabel = (status: string) => ({ active: '可用', running: '运行中', waiting_approval: '等待审批', completed: '已完成', failed: '已失败', cancelled: '已取消', paused: '已暂停', idle: '尚未开始' })[status] || status;
 
 function projectThreads(project: LiveProjectProjection, threads: ReturnType<typeof useLive>['threads']) {
   return threads
@@ -29,30 +31,24 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   const navigate = useNavigate();
   const chatMatch = useMatch('/chat/:conversationId');
   const activeThreadId = chatMatch?.params.conversationId;
-  const { setClientMode } = useOperant();
   const {
     phase,
     projects,
+    projectNames,
     threads,
     selectedProjectId,
     selectedThreadId,
     selectProject,
     selectThread,
-    createSession,
     lastError,
     projectionStale,
     command,
-    canCreateSession,
-    createSessionUnavailableReason,
   } = useLive();
+  const { setup, metadata, bootstrap, initializeConversation, getRouteRevision, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const onboardingError = visibleOnboardingError(createError, metadataWarning);
   const [query, setQuery] = useState('');
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
   const [collapsedThreads, setCollapsedThreads] = useState<string[]>([]);
-  const [newSessionOpen, setNewSessionOpen] = useState(false);
-  const [creatingSession, setCreatingSession] = useState(false);
-  const [newRoleName, setNewRoleName] = useState('');
-  const [newRolePrompt, setNewRolePrompt] = useState('');
-  const [newRoleModelId, setNewRoleModelId] = useState('');
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleProjects = useMemo(
@@ -62,11 +58,11 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   const filteredProjects = useMemo(
     () => visibleProjects.filter((project) => {
       if (!normalizedQuery) return true;
-      if (project.name.toLowerCase().includes(normalizedQuery)) return true;
+      if ((projectNames[project.id] || project.name).toLowerCase().includes(normalizedQuery)) return true;
       if (project.workspaceRef.toLowerCase().includes(normalizedQuery)) return true;
-      return projectThreads(project, threads).some((thread) => thread.title.toLowerCase().includes(normalizedQuery));
+      return projectThreads(project, threads).some((thread) => (metadata[thread.id]?.title || liveThreadTitle(thread)).toLowerCase().includes(normalizedQuery));
     }),
-    [normalizedQuery, threads, visibleProjects]
+    [metadata, normalizedQuery, projectNames, threads, visibleProjects]
   );
 
   const toggleProject = (projectId: string) => {
@@ -86,24 +82,18 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
     onNavigate?.();
   };
 
-  const handleCreateSession = async () => {
-    if (!canCreateSession || !newRoleName.trim() || !newRolePrompt.trim() || !newRoleModelId.trim()) return;
-    setCreatingSession(true);
-    const session = await createSession({
-      threadId: selectedThreadId || '',
-      newRole: {
-        name: newRoleName.trim(),
-        system_prompt: newRolePrompt.trim(),
-        model_profile_id: newRoleModelId.trim(),
-      },
-    });
-    setCreatingSession(false);
-    if (session) {
-      setNewSessionOpen(false);
-      setNewRoleName('');
-      setNewRolePrompt('');
-      setNewRoleModelId('');
+  const handleCreateConversation = async () => {
+    const routeRevision = getRouteRevision();
+    const locationHref = window.location.href;
+    const stillHere = () => getRouteRevision() === routeRevision && window.location.href === locationHref;
+    if (!setup?.ready) {
+      if (!setup?.default_model_profile_id) { navigate('/settings?section=models'); onNavigate?.(); return; }
+      const ready = await bootstrap(setup.default_model_profile_id);
+      if (!stillHere()) return;
+      if (!ready) { navigate(setup.missing_steps?.includes('skills') ? '/settings?section=tools' : '/settings?section=models'); onNavigate?.(); return; }
     }
+    const result = await initializeConversation(selectedProjectId ? { workspace_id: selectedProjectId } : {});
+    if (result && stillHere()) { navigate(`/chat/${encodeURIComponent(result.thread_id)}`); onNavigate?.(); }
   };
 
   const phaseLabel = phase === 'ready'
@@ -131,10 +121,10 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
         <button
           type="button"
           className="btn btn-ghost btn-icon"
-          onClick={() => setNewSessionOpen(true)}
-          aria-label="新建会话"
-          title="为当前会话创建运行"
-          disabled={!canCreateSession || creatingSession}
+          onClick={() => void handleCreateConversation()}
+          aria-label="新建对话"
+          title={setup?.ready ? '新建对话' : '先连接模型'}
+          disabled={createBusy || createOutcomeUnknown || phase !== 'ready'}
         >
           <Plus size={16} aria-hidden="true" />
         </button>
@@ -162,12 +152,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
       </div>}
 
       <div className="rail-sidebar-scroll">
-        {lastError && (
-          <div className="live-sidebar-error" role="alert">
-            <strong>{lastError.code}</strong>
-            <span>{lastError.message}</span>
-          </div>
-        )}
+        {onboardingError && <div className="live-sidebar-error" role="alert"><span>{onboardingError}</span>{(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => void clearCreateUncertainty()}>刷新并核对</button>}{recoveredConversationId && <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}</div>}
 
         {phase === 'ready' && filteredProjects.length === 0 && (
           <div className="rail-sidebar-empty live-sidebar-empty">
@@ -176,9 +161,10 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
         )}
 
         {filteredProjects.map((project) => {
+          const displayName = projectNames[project.id] || project.name;
           const isCollapsed = collapsedProjects.includes(project.id);
           const allProjectThreads = projectThreads(project, threads);
-          const projectThreadList = visibleThreadTree(allProjectThreads, normalizedQuery, collapsedThreads);
+          const projectThreadList = visibleThreadTree(allProjectThreads, normalizedQuery, collapsedThreads, Object.fromEntries(Object.entries(metadata).map(([id, item]) => [id, item.title])));
           const isSelectedProject = project.id === selectedProjectId;
           return (
             <section key={project.id} className="rail-sidebar-project-group">
@@ -190,12 +176,12 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                     if (selectProject(project.id)) toggleProject(project.id);
                   }}
                   aria-expanded={!isCollapsed}
-                  aria-label={`项目 ${project.name}，${projectThreadList.length} 个会话`}
+                  aria-label={`项目 ${displayName}，${projectThreadList.length} 个会话`}
                 >
                   <FolderKanban size={13} aria-hidden="true" />
                   <span className="rail-sidebar-project-info">
                     <span className="rail-sidebar-project-name-row">
-                      <span className="rail-sidebar-project-name">{project.name}</span>
+                      <span className="rail-sidebar-project-name">{displayName}</span>
                       {!project.writable && <span className="live-readonly-badge">只读</span>}
                     </span>
                     <span className="rail-sidebar-project-path" title={project.workspaceRef}>
@@ -217,7 +203,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                         className="live-thread-tree-toggle"
                         onClick={() => toggleThread(thread.id)}
                         aria-expanded={normalizedQuery ? true : !collapsedThreads.includes(thread.id)}
-                        aria-label={`${normalizedQuery || !collapsedThreads.includes(thread.id) ? '折叠' : '展开'} ${thread.title || thread.id} 的子会话`}
+                        aria-label={`${normalizedQuery || !collapsedThreads.includes(thread.id) ? '折叠' : '展开'} ${metadata[thread.id]?.title || liveThreadTitle(thread)} 的子对话`}
                       ><ChevronRight size={13} aria-hidden="true" className={normalizedQuery || !collapsedThreads.includes(thread.id) ? 'expanded' : ''} /></button>
                         : <span className="live-thread-tree-spacer" aria-hidden="true" />}
                       <button
@@ -225,11 +211,11 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
                         className={`rail-sidebar-row${thread.id === (selectedThreadId || activeThreadId) ? ' active' : ''}`}
                         onClick={() => goThread(thread.id)}
                         aria-current={thread.id === (selectedThreadId || activeThreadId) ? 'page' : undefined}
-                        aria-label={`${depth > 0 ? `第 ${depth} 层子会话，` : ''}${thread.title || thread.id}，${thread.status}`}
+                        aria-label={`${depth > 0 ? `第 ${depth} 层子对话，` : ''}${metadata[thread.id]?.title || liveThreadTitle(thread)}，${threadStatusLabel(thread.status)}`}
                       >
                         <span className="rail-sidebar-row-main">
-                          <span className="rail-sidebar-row-title">{thread.title || thread.id}</span>
-                          <span className="rail-sidebar-row-sub">{thread.status}</span>
+                          <span className="rail-sidebar-row-title">{metadata[thread.id]?.title || liveThreadTitle(thread)}</span>
+                          <span className="rail-sidebar-row-sub">{threadStatusLabel(thread.status)}</span>
                         </span>
                         <span className="rail-sidebar-time">{formatRelativeDay(thread.updatedAt)}</span>
                       </button>
@@ -245,7 +231,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
 
         {phase !== 'ready' && !lastError && (
           <div className="live-sidebar-empty" role="status">
-            {phase === 'connecting' ? '正在读取 Core Projection…' : '尚未建立 Core 连接'}
+            {phase === 'connecting' ? '正在读取对话…' : '尚未连接'}
           </div>
         )}
         {command.status === 'awaiting_projection' && (
@@ -255,44 +241,6 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
         )}
       </div>
 
-      <div className="rail-sidebar-footer">
-        <div className="rail-sidebar-mode-card live-mode-card">
-          <div className="rail-sidebar-mode-text">
-            <span className="rail-sidebar-mode-title">实时连接</span>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={false}
-            aria-label="切换到演示模式"
-            className="switch"
-            onClick={() => setClientMode('mock')}
-          />
-        </div>
-      </div>
-
-      <Modal
-        isOpen={newSessionOpen}
-        onClose={() => setNewSessionOpen(false)}
-        title="新建会话"
-        footer={(
-          <>
-            <button type="button" className="btn btn-secondary" onClick={() => setNewSessionOpen(false)}>
-              取消
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => void handleCreateSession()} disabled={!canCreateSession || !newRoleName.trim() || !newRolePrompt.trim() || !newRoleModelId.trim() || creatingSession} title={createSessionUnavailableReason || '请填写完整角色信息'}>
-              {creatingSession ? '提交中…' : '创建会话'}
-            </button>
-          </>
-        )}
-      >
-        <div className="live-modal-form">
-          <label className="live-select-label"><span>角色名称</span><input className="input" value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} placeholder="例如：编码助手" /></label>
-          <label className="live-select-label"><span>模型配置编号</span><input className="input" value={newRoleModelId} onChange={(event) => setNewRoleModelId(event.target.value)} placeholder="已配置的模型编号" /></label>
-          <label className="live-select-label"><span>系统提示词</span><textarea className="textarea" value={newRolePrompt} onChange={(event) => setNewRolePrompt(event.target.value)} rows={3} placeholder="描述这个角色的职责" /></label>
-        </div>
-        {createSessionUnavailableReason && <p className="live-modal-copy">{createSessionUnavailableReason}</p>}
-      </Modal>
     </div>
   );
 };

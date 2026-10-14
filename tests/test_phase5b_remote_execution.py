@@ -16,6 +16,8 @@ from operant.api_phase56_target import (
 )
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.remote_execution import (
+    ObservationExpiredError,
+    ObservationUnavailableError,
     RemoteAuthorization,
     RemoteExecutionController,
     observation_hash_for_job,
@@ -41,7 +43,7 @@ from operant.domain.security import (
     SecurityAuditEvent,
 )
 from operant.persistence.phase45 import SQLitePhase45Repository
-from operant.persistence.remote_execution import SQLiteRemoteExecutionRepository
+from operant.persistence.remote_execution import ObservationSource, SQLiteRemoteExecutionRepository
 from operant.persistence.security import SQLiteSecurityRepository
 from operant.persistence.sqlite import ConflictError, SQLiteStore
 from operant.protocol import canonical_action_hash
@@ -780,7 +782,8 @@ def test_local_same_content_reobserve_has_fresh_generation_and_old_expiry(
         idempotency_key="navigate-with-expired-generation",
         idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
     )
-    with pytest.raises(ConflictError, match="expired"):
+    jobs_before_expired = len(controller.repository.list_jobs(target_id=target.target_id))
+    with pytest.raises(ObservationExpiredError, match="expired"):
         controller.act(
             request,
             kind="browser",
@@ -789,6 +792,7 @@ def test_local_same_content_reobserve_has_fresh_generation_and_old_expiry(
             lease_fencing=lease.fencing,
             now=later,
         )
+    assert len(controller.repository.list_jobs(target_id=target.target_id)) == jobs_before_expired
     new_job, _ = controller.act(
         request.model_copy(
             update={
@@ -821,12 +825,576 @@ def test_local_same_content_reobserve_has_fresh_generation_and_old_expiry(
         },
         idempotency_key="direct-local-action-cannot-forge-content-hash",
         idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
-        now=later,
+        now=later + timedelta(milliseconds=1),
     )
     assert (
         direct_job.arguments["observation_content_hash"]
         == new_job.arguments["observation_content_hash"]
     )
+    [claimed] = controller.poll_jobs(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        limit=1,
+        now=later,
+        idempotency_key="invalid-post-hash-poll",
+    )
+    assert claimed.job_id == new_job.job_id
+    invalid_post = controller.complete_job(
+        RemoteExecutionResult(
+            job_id=new_job.job_id,
+            result_idempotency_key="invalid-post-hash-result",
+            status=RemoteJobStatus.SUCCEEDED,
+            postcondition={
+                "url": "https://example.test/next",
+                "title": "Synthetic",
+                "text": "Ready",
+                "form_state_sha256": "1" * 64,
+                "elements": [],
+                "fields": [],
+                "active_selector": None,
+                "pre_observation_hash": fresh_hash,
+                "post_observation_hash": "0" * 64,
+            },
+        ),
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        now=later,
+    )
+    assert invalid_post.status is RemoteJobStatus.MANUAL_RECONCILE_REQUIRED
+    assert invalid_post.error_code == "remote.post_observation_invalid"
+    with pytest.raises(KeyError):
+        controller.repository.get_observation(target.target_id, "0" * 64)
+
+
+def test_local_observation_provenance_rejects_missing_forged_and_changed_scope(
+    tmp_path: Path,
+) -> None:
+    controller, store = _controller(tmp_path)
+    target = controller.register_target(
+        _target().model_copy(update={"policy_ref": "local-control:test-digest"})
+    )
+    controller.heartbeat_target(
+        target.target_id, identity_public_key=target.identity_public_key, now=_now()
+    )
+    lease = controller.acquire_lease(
+        target.target_id,
+        owner="local-control:provenance",
+        workspace_ref="local-control",
+        ttl_seconds=120,
+        now=_now(),
+        idempotency_key="provenance-lease",
+    )
+    body = {"url": "https://example.test/form"}
+
+    def observed(key: str) -> tuple[str, CapabilityObservation, str]:
+        job = controller.observe(
+            kind="browser",
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            lease_token=lease.token,
+            lease_fencing=lease.fencing,
+            target_ref=target.target_id,
+            idempotency_key=key,
+            now=_now(),
+        )
+        [claimed] = controller.poll_jobs(
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            limit=1,
+            now=_now(),
+            idempotency_key=f"poll:{key}",
+        )
+        assert claimed.job_id == job.job_id
+        controller.complete_job(
+            RemoteExecutionResult(
+                job_id=job.job_id,
+                result_idempotency_key=f"result:{key}",
+                status=RemoteJobStatus.SUCCEEDED,
+                postcondition={"target_ref": target.target_id, "observation": body},
+            ),
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            now=_now(),
+        )
+        observed_hash = observation_hash_for_job(job, target_ref=target.target_id, body=body)
+        return (
+            observed_hash,
+            controller.repository.get_observation(target.target_id, observed_hash),
+            job.job_id,
+        )
+
+    first_hash, first, first_job = observed("provenance-first")
+    second_hash, _, second_job = observed("provenance-second")
+    assert first_hash != second_hash
+    source = controller.repository.get_observation_source(first.observation_id)
+    assert source is not None and source.source_job_id == first_job
+    request = CapabilityActionRequest(
+        target_id=target.target_id,
+        capability=RemoteCapability.BROWSER_NAVIGATE,
+        operation="navigate",
+        target_ref=target.target_id,
+        observation_hash=first_hash,
+        arguments={"url": "https://example.test/next"},
+        idempotency_key="provenance-check",
+        idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+    )
+
+    def must_reject(key: str) -> None:
+        with pytest.raises(ObservationUnavailableError):
+            controller.act(
+                request.model_copy(update={"idempotency_key": key}),
+                kind="browser",
+                lease_id=lease.lease_id,
+                lease_token=lease.token,
+                lease_fencing=lease.fencing,
+                now=_now(),
+            )
+        assert len(controller.repository.list_jobs(target_id=target.target_id)) == 2
+
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE capability_observation_sources SET scope_digest=? WHERE observation_id=?",
+            ("0" * 64, first.observation_id),
+        )
+    must_reject("forged-scope")
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE capability_observation_sources SET scope_digest=?,source_job_id=? "
+            "WHERE observation_id=?",
+            (source.scope_digest, second_job, first.observation_id),
+        )
+    must_reject("forged-source")
+    with store._connect() as connection:
+        connection.execute(
+            "DELETE FROM capability_observation_sources WHERE observation_id=?",
+            (first.observation_id,),
+        )
+    must_reject("missing-source")
+
+    forged_hash = "f" * 64
+    with pytest.raises(ConflictError, match="source Job"):
+        controller.repository.record_observation(
+            CapabilityObservation(
+                target_id=target.target_id,
+                capability=RemoteCapability.BROWSER_OBSERVE,
+                target_ref=target.target_id,
+                observation_hash=forged_hash,
+                body=body,
+                created_at=_now(),
+                expires_at=_now() + timedelta(seconds=60),
+            ),
+            source=ObservationSource(
+                source_job_id="remote_job_missing",
+                lease_id=lease.lease_id,
+                lease_fencing=lease.fencing,
+                scope_digest=source.scope_digest,
+            ),
+        )
+    with pytest.raises(KeyError):
+        controller.repository.get_observation(target.target_id, forged_hash)
+
+
+def test_local_job_result_and_observation_source_roll_back_and_retry_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller, _store = _controller(tmp_path)
+    target = controller.register_target(
+        _target().model_copy(update={"policy_ref": "local-control:test-digest"})
+    )
+    controller.heartbeat_target(
+        target.target_id, identity_public_key=target.identity_public_key, now=_now()
+    )
+    lease = controller.acquire_lease(
+        target.target_id,
+        owner="local-control:atomic-result",
+        workspace_ref="local-control",
+        ttl_seconds=120,
+        now=_now(),
+        idempotency_key="atomic-observation-lease",
+    )
+    job = controller.observe(
+        kind="browser",
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        target_ref=target.target_id,
+        idempotency_key="atomic-observation-job",
+        now=_now(),
+    )
+    [claimed] = controller.poll_jobs(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        limit=1,
+        now=_now(),
+        idempotency_key="atomic-observation-poll",
+    )
+    assert claimed.job_id == job.job_id
+    body = {"url": "https://example.test/ready"}
+    result = RemoteExecutionResult(
+        job_id=job.job_id,
+        result_idempotency_key="atomic-observation-result",
+        status=RemoteJobStatus.SUCCEEDED,
+        postcondition={"target_ref": target.target_id, "observation": body},
+    )
+    observed_hash = observation_hash_for_job(job, target_ref=target.target_id, body=body)
+    original = controller.repository._record_observation_in_connection
+
+    def interrupted(*_args: Any, **_kwargs: Any) -> CapabilityObservation:
+        raise ConflictError("synthetic observation transaction interruption")
+
+    monkeypatch.setattr(controller.repository, "_record_observation_in_connection", interrupted)
+    with pytest.raises(ConflictError, match="transaction interruption"):
+        controller.complete_job(
+            result,
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            now=_now(),
+        )
+    assert controller.repository.get_result(job.job_id) is None
+    assert controller.repository.get_job(job.job_id).status is RemoteJobStatus.RUNNING
+    with pytest.raises(KeyError):
+        controller.repository.get_observation(target.target_id, observed_hash)
+
+    monkeypatch.setattr(controller.repository, "_record_observation_in_connection", original)
+    completed = controller.complete_job(
+        result,
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        now=_now(),
+    )
+    observed = controller.repository.get_observation(target.target_id, observed_hash)
+    assert completed.status is RemoteJobStatus.SUCCEEDED
+    assert controller.repository.get_observation_source(observed.observation_id) is not None
+    replay = controller.complete_job(
+        result,
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        now=_now() + timedelta(seconds=1),
+    )
+    assert replay == completed
+    assert controller.repository.get_observation(target.target_id, observed_hash) == observed
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    (
+        RemoteJobStatus.FAILED,
+        RemoteJobStatus.CANCELLED,
+        RemoteJobStatus.MANUAL_RECONCILE_REQUIRED,
+    ),
+)
+def test_local_non_successful_action_never_creates_post_observation(
+    tmp_path: Path, terminal: RemoteJobStatus
+) -> None:
+    controller, store = _controller(tmp_path)
+    target = controller.register_target(
+        _target().model_copy(update={"policy_ref": "local-control:test-digest"})
+    )
+    controller.heartbeat_target(
+        target.target_id, identity_public_key=target.identity_public_key, now=_now()
+    )
+    lease = controller.acquire_lease(
+        target.target_id,
+        owner="local-control:non-success",
+        workspace_ref="local-control",
+        ttl_seconds=120,
+        now=_now(),
+        idempotency_key="non-success-lease",
+    )
+    before = {"url": "https://example.test/start"}
+    observed = controller.observe(
+        kind="browser",
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        target_ref=target.target_id,
+        idempotency_key="non-success-observe",
+        now=_now(),
+    )
+    controller.poll_jobs(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        limit=1,
+        now=_now(),
+        idempotency_key="non-success-observe-poll",
+    )
+    controller.complete_job(
+        RemoteExecutionResult(
+            job_id=observed.job_id,
+            result_idempotency_key="non-success-observe-result",
+            status=RemoteJobStatus.SUCCEEDED,
+            postcondition={"target_ref": target.target_id, "observation": before},
+        ),
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        now=_now(),
+    )
+    before_hash = observation_hash_for_job(observed, target_ref=target.target_id, body=before)
+    job, _receipt = controller.act(
+        CapabilityActionRequest(
+            target_id=target.target_id,
+            capability=RemoteCapability.BROWSER_NAVIGATE,
+            operation="navigate",
+            target_ref=target.target_id,
+            observation_hash=before_hash,
+            arguments={"url": "https://example.test/next"},
+            idempotency_key=f"non-success-{terminal.value}",
+            idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+        ),
+        kind="browser",
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        now=_now(),
+    )
+    [claimed] = controller.poll_jobs(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        limit=1,
+        now=_now(),
+        idempotency_key=f"non-success-poll-{terminal.value}",
+    )
+    assert claimed.job_id == job.job_id
+    after = {"url": "https://example.test/next"}
+    after_hash = canonical_action_hash(
+        {"target_id": target.target_id, "target_ref": target.target_id, "body": after}
+    )
+    controller.complete_job(
+        RemoteExecutionResult(
+            job_id=job.job_id,
+            result_idempotency_key=f"non-success-result-{terminal.value}",
+            status=terminal,
+            error_code="synthetic.non_success",
+            postcondition={
+                **after,
+                "pre_observation_hash": before_hash,
+                "post_observation_hash": after_hash,
+            },
+        ),
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        now=_now(),
+    )
+    with pytest.raises(KeyError):
+        controller.repository.get_observation(target.target_id, after_hash)
+    with store._connect() as connection:
+        row = connection.execute(
+            "SELECT status FROM capability_action_receipts WHERE action_hash=?",
+            (job.action_hash,),
+        ).fetchone()
+    assert row is not None and row[0] == terminal.value
+
+
+@pytest.mark.parametrize(
+    ("capability", "operation", "kind"),
+    (
+        (RemoteCapability.BROWSER_NAVIGATE, "navigate", "browser"),
+        (RemoteCapability.BROWSER_SUBMIT, "submit", "browser"),
+        (RemoteCapability.COMPUTER_INPUT, "input", "computer"),
+    ),
+)
+@pytest.mark.parametrize(
+    "idempotency",
+    (RemoteActionIdempotency.NON_IDEMPOTENT, RemoteActionIdempotency.IDEMPOTENT),
+)
+def test_local_success_with_mismatched_postcondition_preserves_unknown_write(
+    tmp_path: Path,
+    capability: RemoteCapability,
+    operation: str,
+    kind: str,
+    idempotency: RemoteActionIdempotency,
+) -> None:
+    controller, store = _controller(tmp_path)
+    target = controller.register_target(
+        _target().model_copy(update={"policy_ref": "local-control:test-digest"})
+    )
+    controller.heartbeat_target(
+        target.target_id, identity_public_key=target.identity_public_key, now=_now()
+    )
+    lease = controller.acquire_lease(
+        target.target_id,
+        owner="local-control:postcondition",
+        workspace_ref="local-control",
+        ttl_seconds=120,
+        now=_now(),
+        idempotency_key=f"postcondition-lease:{kind}:{idempotency.value}",
+    )
+    body = (
+        {"url": "https://example.test/start"}
+        if kind == "browser"
+        else {"bundle_id": "com.example.Test"}
+    )
+    observe_job = controller.observe(
+        kind=kind,
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        target_ref=target.target_id,
+        idempotency_key="postcondition-observe",
+        now=_now(),
+    )
+    [claimed_observe] = controller.poll_jobs(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        limit=1,
+        now=_now(),
+        idempotency_key="postcondition-observe-poll",
+    )
+    assert claimed_observe.job_id == observe_job.job_id
+    controller.complete_job(
+        RemoteExecutionResult(
+            job_id=observe_job.job_id,
+            result_idempotency_key="postcondition-observe-result",
+            status=RemoteJobStatus.SUCCEEDED,
+            postcondition={"target_ref": target.target_id, "observation": body},
+        ),
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        now=_now(),
+    )
+    observed_hash = observation_hash_for_job(observe_job, target_ref=target.target_id, body=body)
+    action_job, _ = controller.act(
+        CapabilityActionRequest(
+            target_id=target.target_id,
+            capability=capability,
+            operation=operation,
+            target_ref=target.target_id,
+            observation_hash=observed_hash,
+            arguments={"synthetic": True},
+            postcondition={"confirmation": True},
+            idempotency_key=f"postcondition-action:{operation}:{idempotency.value}",
+            idempotency=idempotency,
+        ),
+        kind=kind,
+        lease_id=lease.lease_id,
+        lease_token=lease.token,
+        lease_fencing=lease.fencing,
+        now=_now(),
+    )
+    [claimed_action] = controller.poll_jobs(
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        limit=1,
+        now=_now(),
+        idempotency_key="postcondition-action-poll",
+    )
+    assert claimed_action.job_id == action_job.job_id
+    completed = controller.complete_job(
+        RemoteExecutionResult(
+            job_id=action_job.job_id,
+            result_idempotency_key="postcondition-action-result",
+            status=RemoteJobStatus.SUCCEEDED,
+            postcondition={"confirmation": False},
+        ),
+        target_id=target.target_id,
+        lease_id=lease.lease_id,
+        token=lease.token,
+        fencing=lease.fencing,
+        now=_now(),
+    )
+    uncertain = idempotency is RemoteActionIdempotency.NON_IDEMPOTENT
+    expected_status = (
+        RemoteJobStatus.MANUAL_RECONCILE_REQUIRED if uncertain else RemoteJobStatus.FAILED
+    )
+    assert completed.status is expected_status
+    assert completed.error_code == (
+        "remote.outcome_unknown" if uncertain else "remote.postcondition_failed"
+    )
+    assert controller.repository.get_job(action_job.job_id).status is expected_status
+    assert controller.repository.get_result(action_job.job_id) == completed
+    with store._connect() as connection:
+        receipt = connection.execute(
+            "SELECT status,error_code FROM capability_action_receipts WHERE action_hash=?",
+            (action_job.action_hash,),
+        ).fetchone()
+        action_sources = connection.execute(
+            "SELECT COUNT(*) FROM capability_observation_sources WHERE source_job_id=?",
+            (action_job.job_id,),
+        ).fetchone()[0]
+    assert receipt is not None and tuple(receipt) == (expected_status.value, completed.error_code)
+    assert action_sources == 0
+    assert len(controller.repository.list_jobs(target_id=target.target_id)) == 2
+    if uncertain:
+        with pytest.raises(
+            ConflictError, match="unknown remote action requires a new fenced lease"
+        ):
+            controller.poll_jobs(
+                target_id=target.target_id,
+                lease_id=lease.lease_id,
+                token=lease.token,
+                fencing=lease.fencing,
+                limit=1,
+                now=_now(),
+                idempotency_key="never-replay-postcondition-unknown",
+            )
+
+
+def test_remote_job_commit_rechecks_lease_after_gateway_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller, _store = _controller(tmp_path)
+    target, lease = _online_lease(controller)
+    authorize = controller.authorization.authorize
+
+    def release_after_decision(**kwargs: Any) -> ActionRequest:
+        action = authorize(**kwargs)
+        controller.repository.release_lease(
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            token=lease.token,
+            fencing=lease.fencing,
+            now=_now(),
+        )
+        return action
+
+    monkeypatch.setattr(controller.authorization, "authorize", release_after_decision)
+    with pytest.raises(ConflictError, match="lease"):
+        controller.create_job(
+            target_id=target.target_id,
+            lease_id=lease.lease_id,
+            lease_token=lease.token,
+            lease_fencing=lease.fencing,
+            capability=RemoteCapability.TARGET_EXEC,
+            operation="run",
+            arguments={"step": "synthetic"},
+            idempotency_key="lease-changed-after-gateway",
+            idempotency=RemoteActionIdempotency.NON_IDEMPOTENT,
+            now=_now(),
+        )
+    assert controller.repository.list_jobs(target_id=target.target_id) == ()
 
 
 def test_dispatch_stops_after_unknown_without_claiming_later_job(

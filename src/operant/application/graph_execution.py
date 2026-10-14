@@ -60,6 +60,7 @@ from operant.domain.models import (
     AgentInstance,
     AgentStatus,
     Budget,
+    Effort,
     RolePreset,
     Session,
     ToolPolicy,
@@ -86,7 +87,8 @@ from operant.domain.team import (
 from operant.domain.threads import ArtifactSourceRef, ArtifactSourceType, ConversationThread
 from operant.persistence.graph_team import SQLiteGraphRepository
 from operant.persistence.multiwriter import SQLiteMultiWriterRepository
-from operant.persistence.sqlite import NotFoundError
+from operant.persistence.onboarding import UXRepository
+from operant.persistence.sqlite import ConflictError, NotFoundError
 from operant.protocol import redact_public_text
 from operant.runtime.loop import RuntimeEvent
 from operant.tools.extensions import ToolExtension
@@ -158,6 +160,8 @@ class _PreparedService(Protocol):
         self,
         role_id: str,
         *,
+        model_profile_id: str | None = None,
+        effort: str | None = None,
         budget_overrides: dict[str, Any] | None = None,
         thread_id: str | None = None,
         _configuration_workspace_ref: str | None = None,
@@ -308,6 +312,7 @@ class BoundedGraphExecutor:
             self._validate_node_workspace(node, workspace)
             self._workspace_for_node(run, definition, node)
             self._validate_role_head(role)
+            self._node_model_selection(definition, node, role, workspace)
             if (set(role.tool_policy.allowed_tools) - READ_ONLY_AGENT_TOOLS) and (
                 node.idempotency_class is IdempotencyClass.PURE or not node.writes_workspace
             ):
@@ -355,6 +360,7 @@ class BoundedGraphExecutor:
             thread = self.service.create_thread(
                 ConversationThread(workspace_ref=self._workspace_for_node(run, definition, node))
             )
+            self._name_graph_thread(thread.id, role, definition)
             budget = node.budget or role.budget
             overrides = budget.model_dump(mode="json")
             # Reserve a disjoint share before concurrent Provider calls. A
@@ -378,8 +384,11 @@ class BoundedGraphExecutor:
                 overrides[key] = share if local is None else min(local, share)
             if overrides.get("max_output_tokens") is None:
                 overrides.pop("max_output_tokens", None)
+            model_profile_id, effort = self._node_model_selection(definition, node, role, workspace)
             session = self.service.create_session(
                 role.id,
+                model_profile_id=model_profile_id,
+                effort=effort,
                 budget_overrides=overrides,
                 thread_id=thread.id,
                 _configuration_workspace_ref=workspace,
@@ -1307,8 +1316,12 @@ class BoundedGraphExecutor:
         arguments = cast(dict[str, Any], self._bind_inputs(arguments, node_run.input_refs))
         workspace = self._workspace_for_node(run, definition, node)
         thread = self.service.create_thread(ConversationThread(workspace_ref=workspace))
+        self._name_graph_thread(thread.id, role, definition)
+        model_profile_id, effort = self._node_model_selection(definition, node, role, workspace)
         session = self.service.create_session(
             role.id,
+            model_profile_id=model_profile_id,
+            effort=effort,
             thread_id=thread.id,
             _configuration_workspace_ref=self._workspace_for_run(run, definition),
         )
@@ -1754,10 +1767,73 @@ class BoundedGraphExecutor:
                         f"action {node.node_id} requires a non-pure writer contract"
                     )
 
+    def _node_model_selection(
+        self,
+        definition: WorkflowDefinition,
+        node: NodeSpec,
+        role: RolePreset,
+        workspace: str,
+    ) -> tuple[str | None, str | None]:
+        """Resolve a pinned node override through the ordinary Config/Session path."""
+        if node.model_override is None:
+            return None, None
+        from operant.application.configuration import ConfigPatch, ConfigService, workspace_scope_id
+
+        profile = self.service.store.get_model_profile(node.model_override)
+        digest = hashlib.sha256(
+            json.dumps(
+                profile.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if definition.locked_provider_versions.get(profile.id) != digest:
+            raise GraphExecutionError("Graph node model profile changed after publication")
+        project_id = None
+        with suppress(NotFoundError):
+            project_id = self.service.store.get_workspace_initialization(
+                workspace_scope_id(workspace)
+            ).id
+        config = ConfigService(self.service.store)
+        try:
+            effective = config.effective(
+                role,
+                project_id=project_id,
+                workspace_ref=workspace,
+                run_overrides=ConfigPatch(model_profile_id=profile.id),
+            )
+        except ValueError as exc:
+            if "effort is unsupported" not in str(exc):
+                raise
+            effective = config.effective(
+                role,
+                project_id=project_id,
+                workspace_ref=workspace,
+                run_overrides=ConfigPatch(
+                    model_profile_id=profile.id, effort=profile.default_effort
+                ),
+            )
+        return profile.id, str(effective.values["effort"])
+
+    def _name_graph_thread(
+        self, thread_id: str, role: RolePreset, definition: WorkflowDefinition
+    ) -> None:
+        raw = f"{role.name} · {definition.name}"
+        title = " ".join(
+            "".join(character if 32 <= ord(character) != 127 else " " for character in raw).split()
+        )[:100]
+        repo = UXRepository(self.service.store)
+        try:
+            repo.put_thread_metadata(thread_id, title, "auto")
+        except ConflictError:
+            if repo.get_metadata(thread_id).title_source != "manual":
+                raise
+
     def _freeze_or_validate_configuration(
         self, root: GraphWorkflowRun, definition: WorkflowDefinition
     ) -> None:
-        from operant.application.configuration import ConfigService, workspace_scope_id
+        from operant.application.configuration import ConfigPatch, ConfigService, workspace_scope_id
 
         workspace = self._workspace_for_run(root, definition)
         project_id = None
@@ -1770,19 +1846,39 @@ class BoundedGraphExecutor:
         for role_id, version in definition.locked_role_versions.items():
             role = self.service.get_role(role_id, version)
             self._validate_role_head(role)
-            effective = configuration.effective(
-                role, project_id=project_id, workspace_ref=workspace
+            nodes = tuple(
+                node for node in definition.nodes if node.metadata.get("role_id") == role_id
             )
-            profile = self.service.store.get_model_profile(
-                str(effective.values["model_profile_id"])
-            )
-            fingerprints[role_id] = hashlib.sha256(
-                json.dumps(
-                    {"values": effective.values, "profile": profile.model_dump(mode="json")},
-                    sort_keys=True,
-                    ensure_ascii=False,
-                ).encode()
-            ).hexdigest()
+            for node in nodes or (None,):
+                if node is None or node.model_override is None:
+                    effective = configuration.effective(
+                        role, project_id=project_id, workspace_ref=workspace
+                    )
+                    key = role_id
+                else:
+                    model_profile_id, effort = self._node_model_selection(
+                        definition, node, role, workspace
+                    )
+                    effective = configuration.effective(
+                        role,
+                        project_id=project_id,
+                        workspace_ref=workspace,
+                        run_overrides=ConfigPatch(
+                            model_profile_id=model_profile_id,
+                            effort=Effort(effort) if effort is not None else None,
+                        ),
+                    )
+                    key = f"{role_id}@{node.node_id}"
+                profile = self.service.store.get_model_profile(
+                    str(effective.values["model_profile_id"])
+                )
+                fingerprints[key] = hashlib.sha256(
+                    json.dumps(
+                        {"values": effective.values, "profile": profile.model_dump(mode="json")},
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
         key = "__operant_config_fingerprints"
         prior = root.policy_snapshot.get(key)
         if prior is not None:
@@ -2173,6 +2269,8 @@ class BoundedGraphExecutor:
         snapshot = session.role_snapshot
         if snapshot.role_id != role.id or snapshot.role_version != role.version:
             raise GraphExecutionError(f"node {node.node_id} Session RoleSnapshot drifted")
+        if node.model_override is not None and snapshot.model_profile_id != node.model_override:
+            raise GraphExecutionError(f"node {node.node_id} Session model override drifted")
 
     @staticmethod
     def _validate_team_binding(
@@ -2252,6 +2350,11 @@ class BoundedGraphExecutor:
                     "role_id"
                 ) or snapshot.role_version != node.metadata.get("role_version"):
                     raise GraphExecutionError("prepared Roster does not match frozen node role")
+                if (
+                    node.model_override is not None
+                    and snapshot.model_profile_id != node.model_override
+                ):
+                    raise GraphExecutionError("prepared Roster model does not match Graph override")
             for key in ("max_turns", "max_output_tokens", "max_tool_calls", "max_cost_usd"):
                 shared = getattr(run.budget_snapshot, key)
                 if shared is None:
@@ -2432,6 +2535,11 @@ class BoundedGraphExecutor:
             or session.role_snapshot.role_version != role_version
         ):
             raise GraphExecutionError("prepared Agent RoleSnapshot does not match Graph metadata")
+        if (
+            node.model_override is not None
+            and session.role_snapshot.model_profile_id != node.model_override
+        ):
+            raise GraphExecutionError("prepared Agent model does not match Graph override")
         if agent.status is not AgentStatus.CREATED:
             raise GraphExecutionError("Graph execution requires a prepared Agent in CREATED status")
         if (set(session.role_snapshot.tool_policy.allowed_tools) - READ_ONLY_AGENT_TOOLS) and (

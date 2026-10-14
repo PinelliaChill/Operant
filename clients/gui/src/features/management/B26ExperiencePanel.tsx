@@ -64,6 +64,6 @@ export const B26ExperiencePanel: React.FC<{
     readOnly={connectionStatus !== 'connected' || !!error || !view}
     error={error ?? (connectionStatus !== 'connected' ? '连接已断开；当前内容只读，重连后请刷新。' : null)}
     notice={notice} onRefresh={() => void refresh()} onAction={(id, values) => void submit(id, values)} />
-    <p className="section-footnote"><Link to="/remote">查看远程任务的派发与完成结果</Link>；Target 上传的候选仍需在管理中心“知识”页审阅。</p>
+    <p className="section-footnote"><Link to="/settings?section=advanced">查看远程任务设置</Link>；远程上传的知识仍需审阅后使用。</p>
   </section>;
 };

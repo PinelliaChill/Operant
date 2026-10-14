@@ -15,6 +15,7 @@ import { Modal } from '../../components/Modal';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { formatDateTime } from '../../lib/format';
+import { requestErrorCopy } from '../../lib/requestErrorCopy';
 import {
   mapRunRequest,
   mapRunRequests,
@@ -82,7 +83,7 @@ const RequestCard: React.FC<{
       </div>
       <dl className="scheduler-meta">
         <div><dt>请求</dt><dd>{request.id}</dd></div>
-        <div><dt>调度</dt><dd>{request.scheduleId} · v{request.scheduleVersion}</dd></div>
+        <div><dt>定时任务</dt><dd>{request.scheduleId} · v{request.scheduleVersion}</dd></div>
         <div><dt>尝试</dt><dd>{request.attemptCount}/{request.maxAttempts}</dd></div>
         <div><dt>可执行时间</dt><dd>{formatDateTime(request.availableAt)}</dd></div>
         {request.lastErrorCode && <div><dt>最后错误</dt><dd>{request.lastErrorCode}</dd></div>}
@@ -283,7 +284,7 @@ export const LiveSchedulesView: React.FC = () => {
       setSnapshot((current) => ({ ...current, schedules: replaceSchedule(current.schedules, created) }));
       setCreateOpen(false);
       setName('');
-      addNotification('success', `已创建调度「${created.name}」`);
+      addNotification('success', `已创建定时任务「${created.name}」`);
       await refresh(true);
     } catch (caught) {
       const nextError = schedulerError(caught);
@@ -329,7 +330,7 @@ export const LiveSchedulesView: React.FC = () => {
     return (
       <div className="live-route-state" role="status">
         <div className="live-route-state-icon"><Loader2 size={22} className="animate-spin" aria-hidden="true" /></div>
-        <h1>正在读取调度…</h1>
+        <h1>正在读取定时任务…</h1>
 
       </div>
     );
@@ -340,8 +341,8 @@ export const LiveSchedulesView: React.FC = () => {
       <header className="section-header scheduler-header">
         <div>
 
-          <h1 className="section-title">调度中心</h1>
-          <p className="section-sub">{snapshot.schedules.length} 个调度</p>
+          <h1 className="section-title">定时任务</h1>
+          <p className="section-sub">{snapshot.schedules.length} 个定时任务</p>
         </div>
         <div className="scheduler-header-actions">
           <StatusBadge
@@ -350,14 +351,14 @@ export const LiveSchedulesView: React.FC = () => {
             size="sm"
           />
           <span className="scheduler-connection-announcement" role="status" aria-live="polite">
-            {connectionStatus === 'connected' ? '已连接' : '连接已断开，暂时无法修改调度'}
+            {connectionStatus === 'connected' ? '已连接' : '连接已断开，暂时无法修改定时任务'}
           </span>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()} disabled={snapshot.phase === 'loading'}>
             <RefreshCw size={13} className={snapshot.phase === 'loading' ? 'animate-spin' : undefined} aria-hidden="true" />
             刷新
           </button>
           <button type="button" className="btn btn-primary btn-sm" onClick={() => setCreateOpen(true)} disabled={mutationsDisabled}>
-            新建调度
+            新建定时任务
           </button>
         </div>
       </header>
@@ -367,17 +368,17 @@ export const LiveSchedulesView: React.FC = () => {
           {error && (
             <div className="live-alert live-alert-error scheduler-alert" role="alert">
               <AlertTriangle size={16} aria-hidden="true" />
-              <span><strong>{error.code}</strong>：{error.message} {snapshot.stale && '当前内容可能已过期。'}</span>
+              <div>{requestErrorCopy(error)} {snapshot.stale && '当前内容可能已过期。'}<details><summary>错误详情</summary><pre>{error.code}：{error.message}</pre></details></div>
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()}>重试</button>
             </div>
           )}
 
           <section aria-labelledby="live-schedules-heading">
             <div className="scheduler-section-heading">
-              <div><h2 id="live-schedules-heading">调度列表</h2></div>
+              <div><h2 id="live-schedules-heading">定时任务列表</h2></div>
             </div>
             {snapshot.schedules.length === 0 ? (
-              <EmptyState icon={CalendarClock} title="暂无调度" />
+              <EmptyState icon={CalendarClock} title="暂无定时任务" />
             ) : (
               <div className="scheduler-card-list">
                 {snapshot.schedules.map((schedule) => {
@@ -397,7 +398,7 @@ export const LiveSchedulesView: React.FC = () => {
                           {schedule.triggerKind === 'cron' ? schedule.cronExpression : schedule.triggerKind === 'timer' ? `单次 ${formatDateTime(schedule.timerAt ?? '')}` : schedule.hookEventType === 'file.changed' ? `文件变化 · ${schedule.watchPath}` : schedule.hookEventType === 'git.head.changed' ? `Git 版本变化 · ${schedule.watchPath}` : '本地应用信号 · application.signal'}
                           <span> · {schedule.timezoneName}</span>
                         </p>
-                        <p className="scheduler-target">{schedule.workflowId} · 流程 v{schedule.workflowVersion} · 调度 v{schedule.version}</p>
+                        <p className="scheduler-target">{schedule.workflowId} · 流程 v{schedule.workflowVersion} · 定时任务 v{schedule.version}</p>
                         {watchStatuses[schedule.id] && <p className="scheduler-target" role="status">Watcher：{watchStatuses[schedule.id].errorCode ? `错误 ${watchStatuses[schedule.id].errorCode}` : watchStatuses[schedule.id].initialized ? `已初始化 · generation ${watchStatuses[schedule.id].generation}` : '等待初始化'}{watchStatuses[schedule.id].observedAt ? ` · 观察于 ${formatDateTime(watchStatuses[schedule.id].observedAt ?? '')}` : ''}</p>}
                       </div>
                       <div className="scheduler-card-actions">
@@ -460,23 +461,23 @@ export const LiveSchedulesView: React.FC = () => {
       <Modal
         isOpen={createOpen}
         onClose={() => { if (busyAction !== 'create') setCreateOpen(false); }}
-        title="新建服务端调度"
+        title="新建定时任务"
         footer={<>
           <button type="button" className="btn btn-ghost" onClick={() => setCreateOpen(false)} disabled={busyAction === 'create'}>取消</button>
-          <button type="button" className="btn btn-primary" onClick={() => void createSchedule()} disabled={busyAction !== null || !createInputValid}>{busyAction === 'create' ? '创建中…' : '创建调度'}</button>
+          <button type="button" className="btn btn-primary" onClick={() => void createSchedule()} disabled={busyAction !== null || !createInputValid}>{busyAction === 'create' ? '创建中…' : '创建定时任务'}</button>
         </>}
       >
         <div className="scheduler-form">
-          {error && <div className="scheduler-form-error" role="alert">{error.code}：{error.message}</div>}
-          <label>调度名称<input className="input" value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label>
+          {error && <div className="scheduler-form-error" role="alert">{requestErrorCopy(error)}<details><summary>错误详情</summary><pre>{error.code}：{error.message}</pre></details></div>}
+          <label>定时任务名称<input className="input" value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label>
           <fieldset><legend>触发类型</legend><div className="scheduler-segmented">
-            <button type="button" className={`btn btn-sm ${triggerKind === 'cron' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'cron'} onClick={() => setTriggerKind('cron')}>Cron</button>
-            <button type="button" className={`btn btn-sm ${triggerKind === 'timer' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'timer'} onClick={() => setTriggerKind('timer')}>单次 Timer</button>
-            <button type="button" className={`btn btn-sm ${triggerKind === 'hook' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'hook'} onClick={() => setTriggerKind('hook')}>事件 Hook</button>
+            <button type="button" className={`btn btn-sm ${triggerKind === 'cron' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'cron'} onClick={() => setTriggerKind('cron')}>重复执行</button>
+            <button type="button" className={`btn btn-sm ${triggerKind === 'timer' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'timer'} onClick={() => setTriggerKind('timer')}>执行一次</button>
+            <button type="button" className={`btn btn-sm ${triggerKind === 'hook' ? 'btn-primary' : 'btn-secondary'}`} aria-pressed={triggerKind === 'hook'} onClick={() => setTriggerKind('hook')}>事件触发</button>
           </div></fieldset>
-          {triggerKind === 'cron' ? <label>Cron 表达式<input className="input" value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label> : triggerKind === 'timer' ? <label>触发时间<input type="datetime-local" className="input" value={timerAt} onChange={(event) => setTimerAt(event.target.value)} /></label> : <><label>事件来源<select className="input" value={hookEventType} onChange={(event) => setHookEventType(event.target.value as typeof hookEventType)}><option value="application.signal">应用信号</option><option value="file.changed">文件变化</option><option value="git.head.changed">Git 版本变化</option></select></label>{hookEventType === 'application.signal' ? <p className="scheduler-form-note">相同事件不会重复触发任务。</p> : <div><PathInput key={hookEventType} label="监控文件或文件夹" kind={hookEventType === 'file.changed' ? 'file' : 'directory'} value={watchPath} onChange={setWatchPath} within={activeWorkspace} placeholder={hookEventType === 'file.changed' ? '选择项目内的文件' : '选择项目内的 Git 仓库文件夹'} disabled={Boolean(busyAction)} /><small className="scheduler-form-note">请选择当前项目内的文件或文件夹。</small></div>}</>}
-          <label>已发布流程编号<input className="input" value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} placeholder="例如 builtin.coding-review" /></label>
-          <label>流程版本<input type="number" min="1" step="1" className="input" value={workflowVersion} onChange={(event) => setWorkflowVersion(event.target.value)} /></label>
+          {triggerKind === 'cron' ? <details><summary>执行规则（高级） · {cronExpression === '0 3 * * *' ? '每天 03:00' : '自定义'}</summary><label>Cron 表达式<input className="input" value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} /></label></details> : triggerKind === 'timer' ? <label>触发时间<input type="datetime-local" className="input" value={timerAt} onChange={(event) => setTimerAt(event.target.value)} /></label> : <><label>事件来源<select className="input" value={hookEventType} onChange={(event) => setHookEventType(event.target.value as typeof hookEventType)}><option value="application.signal">应用信号</option><option value="file.changed">文件变化</option><option value="git.head.changed">Git 版本变化</option></select></label>{hookEventType === 'application.signal' ? <p className="scheduler-form-note">相同事件不会重复触发任务。</p> : <div><PathInput key={hookEventType} label="监控文件或文件夹" kind={hookEventType === 'file.changed' ? 'file' : 'directory'} value={watchPath} onChange={setWatchPath} within={activeWorkspace} placeholder={hookEventType === 'file.changed' ? '选择项目内的文件' : '选择项目内的 Git 仓库文件夹'} disabled={Boolean(busyAction)} /><small className="scheduler-form-note">请选择当前项目内的文件或文件夹。</small></div>}</>}
+          <label>已发布流程编号<input className="input" value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} placeholder="填写已发布的流程编号" /></label>
+          <details><summary>高级选项</summary><label>流程版本<input type="number" min="1" step="1" className="input" value={workflowVersion} onChange={(event) => setWorkflowVersion(event.target.value)} /></label></details>
           <p className="scheduler-form-note">项目文件夹：{activeWorkspace || '请先在会话页选择项目'}</p>
         </div>
       </Modal>
@@ -491,7 +492,7 @@ export const LiveSchedulesView: React.FC = () => {
         </>}
       >
         <div className="scheduler-replay-confirm">
-          {error && <div className="scheduler-form-error" role="alert">{error.code}：{error.message}</div>}
+          {error && <div className="scheduler-form-error" role="alert">{requestErrorCopy(error)}<details><summary>错误详情</summary><pre>{error.code}：{error.message}</pre></details></div>}
           <div className="scheduler-danger-copy" role="alert"><AlertTriangle size={18} aria-hidden="true" /><p>重新提交会创建新的运行请求，可能再次修改文件或执行外部操作。原失败记录会保留。</p></div>
           <dl className="scheduler-meta"><div><dt>请求</dt><dd>{replayRequest?.id}</dd></div><div><dt>流程</dt><dd>{replayRequest?.workflowId} · v{replayRequest?.workflowVersion}</dd></div><div><dt>最后错误</dt><dd>{replayRequest?.lastErrorCode ?? '未提供'}</dd></div></dl>
           <label className="scheduler-confirm-check"><input type="checkbox" checked={replayConfirmed} onChange={(event) => setReplayConfirmed(event.target.checked)} />我已核对该请求，并确认重新提交。</label>

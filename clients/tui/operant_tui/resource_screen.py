@@ -131,7 +131,7 @@ class ResourceScreen(Screen[None]):
 
     def failed(self, exc: Exception) -> None:
         view = error_view(exc)
-        self.status(f"{view.code}: {view.message} · 请刷新核对，不自动重放")
+        self.status(view.message)
         if (
             view.code in {"transport_unavailable", "invalid_error_envelope", "client_error"}
             or "protocol" in view.code

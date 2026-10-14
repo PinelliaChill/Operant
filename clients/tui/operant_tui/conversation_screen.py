@@ -273,7 +273,7 @@ class ConversationScreen(Screen[None]):
 
     def fail(self, exc: Exception) -> None:
         view = error_view(exc)
-        self.status(f"{view.code}: {view.message} · {view.projection_trust}")
+        self.status(view.message)
         if (
             view.code in {"transport_unavailable", "invalid_error_envelope", "client_error"}
             or "protocol" in view.code

@@ -85,7 +85,8 @@ class ControllerTests(unittest.TestCase):
                 recovery="refresh_and_retry",
             )
         )
-        self.assertIn("重新读取完整投影", view.message)
+        self.assertIn("刷新读取最新状态", view.message)
+        self.assertNotIn("Cursor unavailable", view.message)
         self.assertFalse(view.safe_to_retry)
 
     def test_graph_human_input_and_approval_use_authoritative_wait_token(self) -> None:
@@ -131,6 +132,13 @@ class ControllerTests(unittest.TestCase):
         )
         self.assertFalse(view.safe_to_retry)
         self.assertIn("人工核对", view.projection_trust)
+
+    def test_transport_error_does_not_expose_arbitrary_server_text(self) -> None:
+        marker = "private-server-payload"
+        view = error_view(Phase1EError("invalid_error_envelope", marker, retryable=False))
+        self.assertNotIn(marker, view.message)
+        self.assertIn("刷新", view.message)
+        self.assertNotIn(marker, error_view(RuntimeError(marker)).message)
 
     def test_invalid_input_is_not_reported_as_a_transport_retry(self) -> None:
         view = error_view(ValueError("Graph Run ID is required"))
