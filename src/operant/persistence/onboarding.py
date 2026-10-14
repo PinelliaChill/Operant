@@ -54,7 +54,7 @@ def _opaque_provider_record(record: Mapping[str, Any]) -> None:
     if not isinstance(record.get("connection_id"), str) or not record["connection_id"]:
         raise ValueError("provider metadata requires a connection")
     provider = record.get("provider")
-    if provider == "chatgpt":
+    if provider in {"chatgpt", "codex"}:
         items = record.get("items")
         if set(record) != common | {"items"} or not isinstance(items, list):
             raise ValueError("invalid encrypted provider metadata")

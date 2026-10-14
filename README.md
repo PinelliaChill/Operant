@@ -215,6 +215,11 @@ OPERANT_SETUP_ALLOWED_ORIGINS_JSON='["http://127.0.0.1:3000"]' \
 角色、工作区和运行绑定由系统准备。高级参数默认收起，连接后保留输入草稿。
 ChatGPT/Gemini 登录的实际验收条件和限制见[验收记录](docs/design/onboarding-ux/acceptance.md)。
 
+Codex 连接增量提供“ChatGPT（Codex）”入口：使用已安装的官方 Codex CLI，在独立目录完成登录，
+然后查找并选择账号可用的模型。任务、工具和审批由 Operant 处理；不会读取已有 Codex 登录。
+原第三方 ChatGPT 授权仍在模型连接的高级设置中，已有连接不自动转换。
+此增量的实际实现与验收状态见同一记录；不保证账号拥有特定模型或更多订阅额度。
+
 ### 5. 使用会话工作台
 
 在实时 GUI 或 TUI 中选择已注册工作区和角色，创建会话后可查看父子历史、子任务结果和定向消息。

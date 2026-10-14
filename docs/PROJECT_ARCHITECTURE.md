@@ -2,7 +2,7 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-10-13（开箱即用增量实施中；记录身份：Codex 主线程，保留原历史署名）
+> 最后更新：2026-10-14（Codex 连接增量实施中；记录身份：Codex 主线程，保留原历史署名）
 >
 > 对应源码：`codex/onboarding-ux`，基线 Beta 3 `939e3cc`，SQLite 新增 v24、v25、v26。当前代码与验收状态见[本轮记录](design/onboarding-ux/acceptance.md)，尚未整体交付。既有 H-01～H-18 与四项完成标准的历史结果见[任务 6 验收记录](design/beta-daily/acceptance.md)。本轮不更新已安装 App 或真实用户库。
 
@@ -16,6 +16,7 @@
 ## 当前版本速览
 
 - **开箱即用与界面整理（实施中，2026-10-07）**：User 已批准 [完整方案](design/onboarding-ux/plan.md)，基于 Beta 3 `939e3cc` 改进会话标题、默认助手、模型/API/OAuth、技能发现和唯一设置入口。逐项状态见 [验收记录](design/onboarding-ux/acceptance.md)。本条记录实施范围，不表示新能力已交付；实际模块说明随代码和验收更新。
+- **Codex 订阅连接（实施中，2026-10-14）**：User 批准从 `main@d4c9ece` 新增独立 `codex` Provider，作为默认 ChatGPT 入口；原 `chatgpt` 第三方 OAuth 与已有配置保留在高级设置。官方 CLI 只负责隔离登录，模型、工具和审批仍由 Operant 执行。本轮源码在 `codex/codex-subscription`，检查与真实验收沿用 [UX-07 / S3](design/onboarding-ux/acceptance.md)；新链路尚未完成真实验收，不改变旧 Mountain 拒绝记录或安装版。
 
 - **当前源码**：任务 1～5 已合入会话工作台、编排、配置与任务控制、本机扩展和私有跨设备能力。本轮补齐随 Core 分发的六项默认 Skill、文档依赖、记忆召回修复与桌面退出回收；整体结论以 Git 与[任务 6 验收记录](design/beta-daily/acceptance.md)核对。
 - **公开版本**：本次 `v0.1.0-beta.2` 源码和候选包发行范围与检查见[发行说明](releases/v0.1.0-beta.2.md)。`v0.1.0-beta.1` 保留为 2026-09-14 的 B2-3 快照；新能力不回填旧标签。
@@ -328,6 +329,28 @@ Gemini OAuth 的 Operant 桌面客户端由受保护 `.env` 或进程环境配�
 项目。缺少应用配置、账号授权或真实调用条件时明确报错，不使用其他应用的客户端身份。
 Gemini 的免费项目已完成真实登录、流式工具调用、续期和撤销；ChatGPT 仍受账号与组织条件限制，
 整项按[验收记录](design/onboarding-ux/acceptance.md)保留未完成，fixture 只证明边界与协议处理。
+
+Codex 增量由 `model_connections/codex.py` 管理独立登录，
+`codex_login_helper.py` 持有官方 CLI 子进程和父管道。临时 HOME/CODEX_HOME 使用 0700 目录，
+凭据使用文件存储；标准代理与证书环境可继承，账号密钥及 Codex 配置覆盖不继承。CLI 输出不落盘。
+正常完成、取消、超时或父管道关闭后，helper 回收自有进程与目录，并留下无凭据的私有结束标记，
+用于重启后的原请求核对。同一数据目录以文件锁防止并行登录；不同数据目录通过 1455 端口检测
+拒绝已占用端口，不声称全机原子排他。登录凭据导入同一受保护 `.env`，续期、登录写入和断连共用
+连接锁；重新登录不得把已有连接换成另一账号。
+
+`providers/codex_responses.py` 通过 Codex 后端目录发现精确模型、上下文与推理能力，适配普通
+Responses 和目录指定的 Responses Lite。`0.159.0` 是适配器使用的请求协议标识，不能据此声称
+本机 CLI 已升级。适配器保留 Operant 的工具往返与统一用量；仅不透明加密推理项进入私有 Provider
+状态，正文不进入消息、日志或公开投影。当前产品的普通推理档仍是低、中、高，Provider 参数映射
+在模型支持范围内生效。晚到的目录和流结果不能覆盖新的登录状态或撤销屏障。
+
+Codex 启动与取消各保存自己的安全收据。现有原请求查询可返回可选 `oauth_attempt`，不返回登录
+地址或凭据；旧 API 回执字段保持原样。GUI 待登录时仅持久化原请求编号，刷新后只读恢复；取消
+响应丢失时核对取消收据，不能用启动收据解锁。旧第三方 OAuth 的未知结果规则保持。新链路的真实
+登录、调用、续期与远端撤销均须单独验证；撤销端点的无凭据 HTTP 200 不是有效 Token 撤销证据。
+`onboarding.v1` 仍使用严格 Schema digest 握手，新增 DTO 改变其摘要；Core、GUI 与生成 SDK
+须成套升级，旧生成客户端不能透明连接新 Core。旧 Provider 请求、API 回执格式和其他既有协议
+Schema 保留，不绕过摘要检查。
 
 Gemini 流解析严格校验布尔 `thought` 标记，思维正文不进入公开增量、完成消息、历史或私有
 元数据。思维 Part 若混入工具/代码字段，或自身带签名而无法在不保存正文的前提下原样恢复，

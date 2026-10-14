@@ -12,7 +12,7 @@ class OnboardingModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-ProviderKind = Literal["openai-compatible", "chatgpt", "gemini"]
+ProviderKind = Literal["openai-compatible", "chatgpt", "gemini", "codex"]
 
 
 class ProviderConnection(OnboardingModel):
@@ -38,6 +38,7 @@ class ConnectionRequestResult(OnboardingModel):
     request_id: str
     status: Literal["completed", "unconfirmed", "unavailable"]
     connection: ProviderConnection | None = None
+    oauth_attempt: OAuthAttempt | None = Field(default=None, exclude_if=lambda value: value is None)
     message: str | None = None
 
 
@@ -69,7 +70,7 @@ class ConnectionProfile(OnboardingModel):
 
 
 class OAuthStart(OnboardingModel):
-    provider: Literal["chatgpt", "gemini"]
+    provider: Literal["chatgpt", "gemini", "codex"]
     connection_id: str | None = Field(default=None, max_length=200)
     project_id: str | None = Field(default=None, max_length=200)
     client_id: str | None = Field(default=None, max_length=500)
@@ -79,7 +80,7 @@ class OAuthStart(OnboardingModel):
 class OAuthAttempt(OnboardingModel):
     attempt_id: str
     connection_id: str
-    provider: Literal["chatgpt", "gemini"]
+    provider: Literal["chatgpt", "gemini", "codex"]
     status: Literal["pending", "connected", "ready", "cancelled", "expired", "error"]
     authorization_url: str | None = None
     message: str | None = None

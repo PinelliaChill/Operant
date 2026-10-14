@@ -7,10 +7,12 @@ from typing import Any
 
 from operant.domain.messages import Message, ProviderEvent, ToolDefinition
 from operant.domain.models import RoleSnapshot
+from operant.model_connections.codex import CodexConnections
 from operant.model_connections.credentials import CredentialStore
 from operant.model_connections.oauth import ConnectionRepository, OAuthConnections
 from operant.providers.base import ModelProvider
 from operant.providers.chatgpt_responses import ChatGPTResponsesProvider
+from operant.providers.codex_responses import CodexResponsesProvider
 from operant.providers.gemini_native import GeminiNativeProvider
 from operant.providers.openai_compatible import OpenAICompatibleProvider, ProviderError
 
@@ -24,6 +26,7 @@ class ConnectionProviderRouter:
         credentials: CredentialStore,
         oauth: OAuthConnections,
         *,
+        codex: CodexConnections | None = None,
         compatible_provider: ModelProvider | None = None,
     ) -> None:
         self.repo = repo
@@ -36,6 +39,12 @@ class ConnectionProviderRouter:
             connection_for_ref=self._connection,
             report_status=self._report_status,
         )
+        self.codex = CodexResponsesProvider(
+            codex or CodexConnections(repo, credentials),
+            repo,
+            self._connection,
+            self._report_status,
+        )
         self.gemini = GeminiNativeProvider(
             self._gemini_headers,
             metadata_repo=repo,
@@ -47,10 +56,16 @@ class ConnectionProviderRouter:
         record = self._connection(secret_ref)
         if record is None:
             return
+        if record.get("error") == "revocation_unconfirmed":
+            return
         if http_status == 200:
+            has_current_selection = bool(record.get("profile_ids")) and (
+                record.get("provider") != "codex"
+                or record.get("selection_generation") == record.get("auth_generation")
+            )
             updated = {
                 **record,
-                "status": "ready" if record.get("profile_ids") else "connected",
+                "status": "ready" if has_current_selection else "connected",
                 "error": None,
             }
         else:
@@ -64,12 +79,18 @@ class ConnectionProviderRouter:
                     else "permission_denied",
                 )
             elif http_status == 429:
-                status, error = (
-                    "error",
-                    "usage_limit"
-                    if reason == "subscription_sharing_usage_limit_exceeded"
-                    else "rate_limited",
-                )
+                if record.get("provider") == "codex":
+                    error = {
+                        "usage_limit": "usage_limit",
+                        "rate_limit": "rate_limited",
+                    }.get(reason, "limit_unconfirmed")
+                else:
+                    error = (
+                        "usage_limit"
+                        if reason == "subscription_sharing_usage_limit_exceeded"
+                        else "rate_limited"
+                    )
+                status = "error"
             elif http_status == 503 and reason in {
                 "subscription_sharing_usage_unavailable",
                 "subscription_sharing_user_unavailable",
@@ -139,6 +160,8 @@ class ConnectionProviderRouter:
         provider = record.get("provider") if record else None
         if provider == "chatgpt":
             return await self.chatgpt.list_models(base_url=base_url, secret_ref=secret_ref)
+        if provider == "codex":
+            return await self.codex.list_models(base_url=base_url, secret_ref=secret_ref)
         if provider == "gemini":
             return await self.gemini.list_models(base_url=base_url, secret_ref=secret_ref)
         if secret_ref.startswith("OPERANT_CONNECTION_"):
@@ -160,6 +183,8 @@ class ConnectionProviderRouter:
     ) -> AsyncIterator[ProviderEvent]:
         if snapshot.provider == "chatgpt":
             return self.chatgpt.stream(snapshot=snapshot, messages=messages, tools=tools)
+        if snapshot.provider == "codex":
+            return self.codex.stream(snapshot=snapshot, messages=messages, tools=tools)
         if snapshot.provider == "gemini":
             return self.gemini.stream(snapshot=snapshot, messages=messages, tools=tools)
         if snapshot.secret_ref.startswith("OPERANT_CONNECTION_"):

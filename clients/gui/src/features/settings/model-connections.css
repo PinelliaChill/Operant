@@ -18,6 +18,10 @@
 .model-connections-detail dl div { display: flex; flex-wrap: wrap; gap: 10px; padding: 4px 0; }
 .model-connections-detail dt { color: var(--text-secondary); }
 .model-connections-detail dd { margin: 0; overflow-wrap: anywhere; }
+.model-connections-advanced { margin-top: 20px; border-top: 1px solid var(--border-subtle); padding-top: 12px; }
+.model-connections-advanced > summary { cursor: pointer; color: var(--accent-action); padding: 8px 0; }
+.model-connections-advanced > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.model-connections-advanced > .model-connections-card { margin-top: 12px; }
 @media (max-width: 680px) { .model-connections { padding: 20px 16px 100px; } }
 .model-request-recovery { display: block; }
 .model-request-recovery > p { margin: 0 0 var(--space-3, 12px); }
