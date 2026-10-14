@@ -50,15 +50,10 @@ _SECRET_KEY_PATTERN = (
     rf"(?:{_SECRET_KEY_SUFFIX_PATTERN}|"
     rf"[A-Za-z_][A-Za-z0-9_-]+{_SECRET_KEY_SUFFIX_PATTERN})"
 )
-_PRIVATE_KEY_PATTERN = re.compile(
-    r"-----BEGIN [^\r\n]*?PRIVATE KEY-----.*?"
-    r"-----END [^\r\n]*?PRIVATE KEY-----",
-    re.IGNORECASE | re.DOTALL,
-)
-_PARTIAL_PRIVATE_KEY_PATTERN = re.compile(
-    r"-----BEGIN [^\r\n]*?PRIVATE KEY-----.*",
-    re.IGNORECASE | re.DOTALL,
-)
+_PEM_BEGIN = re.compile(r"-----BEGIN ", re.IGNORECASE)
+_PEM_END = re.compile(r"-----END ", re.IGNORECASE)
+_PEM_KEY_SUFFIX = re.compile(r"PRIVATE KEY-----", re.IGNORECASE)
+_PEM_LINE_END = re.compile("[\r\n]")
 _BEARER_PATTERN = re.compile(r"""(?i)\bbearer[ \t]+[^\s\\"']+""")
 _BASIC_PATTERN = re.compile(r"(?i)\bbasic\s+[A-Za-z0-9+/]{4,}={0,2}")
 _URL_USERINFO_PATTERN = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://)([^/@\s]+@)")
@@ -137,8 +132,7 @@ def canonical_action_hash(payload: dict[str, Any]) -> str:
 def redact_public_text(value: str, *, max_chars: int = MAX_PUBLIC_TEXT_CHARS) -> str:
     """Remove common credential shapes and bound public/persisted text."""
 
-    redacted = _PRIVATE_KEY_PATTERN.sub("[REDACTED PRIVATE KEY]", value)
-    redacted = _PARTIAL_PRIVATE_KEY_PATTERN.sub("[REDACTED PRIVATE KEY]", redacted)
+    redacted = _redact_private_keys(value)
     redacted = _BEARER_PATTERN.sub("Bearer [REDACTED]", redacted)
     redacted = _BASIC_PATTERN.sub("Basic [REDACTED]", redacted)
     redacted = _URL_USERINFO_PATTERN.sub(r"\1[REDACTED]@", redacted)
@@ -150,6 +144,43 @@ def redact_public_text(value: str, *, max_chars: int = MAX_PUBLIC_TEXT_CHARS) ->
     if len(redacted) <= max_chars:
         return redacted
     return f"{redacted[:max_chars]}...[truncated]"
+
+
+def _redact_private_keys(value: str) -> str:
+    """Scan PEM headers once, including incomplete blocks, without backtracking."""
+
+    chunks: list[str] = []
+    cursor = 0
+    copy_from = 0
+    while (begin := _PEM_BEGIN.search(value, cursor)) is not None:
+        line_end = _pem_line_end(value, begin.start())
+        header = _PEM_KEY_SUFFIX.search(value, begin.end(), line_end)
+        if header is None:
+            cursor = line_end
+            continue
+        chunks.append(value[copy_from : begin.start()])
+        end_cursor = header.end()
+        while (end := _PEM_END.search(value, end_cursor)) is not None:
+            line_end = _pem_line_end(value, end.start())
+            footer = _PEM_KEY_SUFFIX.search(value, end.end(), line_end)
+            if footer is not None:
+                end_cursor = footer.end()
+                break
+            end_cursor = line_end
+        else:
+            end_cursor = len(value)
+        chunks.append("[REDACTED PRIVATE KEY]")
+        cursor = end_cursor
+        copy_from = end_cursor
+    if not chunks:
+        return value
+    chunks.append(value[copy_from:])
+    return "".join(chunks)
+
+
+def _pem_line_end(value: str, start: int) -> int:
+    match = _PEM_LINE_END.search(value, start)
+    return match.start() if match is not None else len(value)
 
 
 def is_sensitive_key(key: str) -> bool:

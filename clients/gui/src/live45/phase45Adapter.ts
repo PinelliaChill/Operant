@@ -123,6 +123,8 @@ export interface LiveSecurityAuditFact {
   decision?: 'allow' | 'ask' | 'deny';
   ruleIds: string[];
   createdAt: string;
+  reasonCode?: string;
+  decidedBy?: string;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -301,6 +303,13 @@ export function mapSecurityAudit(value: unknown): LiveSecurityAuditFact[] {
     if (decision !== null && decision !== undefined && decision !== 'allow' && decision !== 'ask' && decision !== 'deny') {
       throw new Error('Security audit event.decision 无效。');
     }
+    const detail = event.detail && typeof event.detail === 'object' && !Array.isArray(event.detail)
+      ? event.detail as Record<string, unknown> : {};
+    // Only bounded control-plane facts are safe to retain from audit detail.
+    const reasonCode = typeof detail.reason_code === 'string' && /^[a-z0-9_.-]{1,120}$/.test(detail.reason_code)
+      ? detail.reason_code : undefined;
+    const decidedBy = detail.decided_by === 'user' || detail.decided_by === 'reviewer'
+      ? detail.decided_by : undefined;
     return {
       eventId: text(event.event_id, 'Security audit event.event_id'),
       cursor,
@@ -309,6 +318,8 @@ export function mapSecurityAudit(value: unknown): LiveSecurityAuditFact[] {
       decision: decision ?? undefined,
       ruleIds: Array.isArray(event.rule_ids) ? event.rule_ids.filter((item): item is string => typeof item === 'string') : [],
       createdAt: text(event.created_at, 'Security audit event.created_at'),
+      reasonCode,
+      decidedBy,
     };
   });
 }

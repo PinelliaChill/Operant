@@ -4,6 +4,37 @@
   max-width: 1080px;
 }
 
+.livegraph-page { min-width: 0; }
+.livegraph-page .b24-section { min-width: 0; }
+.livegraph-editor { display: grid; gap: 10px; min-width: 0; }
+.livegraph-palette { display: flex; flex-wrap: wrap; gap: 7px; }
+.livegraph-scroll { width: 100%; max-width: 100%; overflow: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-subtle); }
+.livegraph-surface { position: relative; background-image: radial-gradient(var(--border-subtle) 1px, transparent 1px); background-size: 20px 20px; }
+.livegraph-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.livegraph-edges path { fill: none; stroke: var(--text-muted); stroke-width: 2; }
+.livegraph-edges path.selected { stroke: var(--accent-action); stroke-width: 3; }
+.livegraph-edge-hit { position: absolute; z-index: 1; width: 24px; height: 24px; border: 2px solid var(--text-muted); border-radius: 50%; background: var(--bg-card); cursor: pointer; }
+.livegraph-edge-hit.selected { border-color: var(--accent-action); background: var(--accent-action); }
+.livegraph-node { position: absolute; z-index: 2; min-height: 106px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--shadow-sm); overflow: hidden; }
+.livegraph-node.selected { border: 2px solid var(--accent-action); }
+.livegraph-node.invalid { border-color: var(--status-error-text); }
+.livegraph-node-head { display: flex; align-items: center; justify-content: space-between; gap: 5px; min-height: 40px; padding: 5px 9px; border-bottom: 1px solid var(--border-subtle); cursor: grab; touch-action: none; }
+.livegraph-node-head:active { cursor: grabbing; }
+.livegraph-node-head button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: transparent; color: var(--text-primary); font-weight: 600; cursor: pointer; }
+.livegraph-node-head small { color: var(--text-muted); }
+.livegraph-node-ports { display: flex; justify-content: space-between; gap: 5px; padding: 7px; }
+.livegraph-node-ports > div { display: grid; align-content: start; gap: 3px; max-width: 50%; }
+.livegraph-port { max-width: 100%; border: 0; border-radius: var(--radius-sm); background: var(--bg-subtle); color: var(--text-secondary); font-size: 11px; cursor: crosshair; overflow: hidden; text-overflow: ellipsis; }
+.livegraph-port.active { color: var(--accent-action); outline: 2px solid var(--accent-action); }
+.livegraph-run-status { display: block; padding: 2px 8px 6px; color: var(--text-secondary); font-size: 11px; }
+.livegraph-inspector, .livegraph-diff, .livegraph-diagnostics { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-card); }
+.livegraph-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 9px; }
+.livegraph-fields label { display: grid; gap: 4px; min-width: 0; color: var(--text-secondary); font-size: 12px; }
+.livegraph-fields input:not([type='checkbox']), .livegraph-fields select, .livegraph-fields textarea { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text-primary); font: inherit; }
+.livegraph-diagnostics ul { margin: 0; padding-left: 20px; }
+.livegraph-diagnostics li { margin-top: 4px; overflow-wrap: anywhere; }
+.livegraph-editor :focus-visible, .livegraph-page :focus-visible { outline: 2px solid var(--accent-action); outline-offset: 2px; }
+
 .live23-status,
 .live23-error {
   display: flex;

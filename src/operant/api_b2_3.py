@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from operant.memory_plugins.manager import MemoryManager
 
 from fastapi import FastAPI, Header, HTTPException, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from operant.application.service import ApplicationService
 from operant.contracts.b2_3 import ManagementCommand, ManagementResult, ManagementState
@@ -22,6 +23,12 @@ from operant.memory_plugins.ledger import LedgerError
 from operant.persistence.sqlite import ConflictError
 from operant.plugins.protocol import PluginError
 from operant.protocol import is_sensitive_key, redact_public_text
+
+
+class DefaultSkillPackBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=300)
 
 
 def _public_projection(value: Any) -> Any:
@@ -114,6 +121,38 @@ def install_b2_3_routes(app: FastAPI, service: ApplicationService) -> None:
                 ManagementResult,
                 _bounded_projection(await manager().execute(body, idempotency_key=idempotency_key)),
             )
+        except (LedgerError, ConflictError) as exc:
+            raise HTTPException(409, {"code": "revision_conflict", "message": str(exc)}) from exc
+        except PluginError as exc:
+            raise HTTPException(409, {"code": exc.code, "message": str(exc)}) from exc
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+
+    @app.post("/v1/skills/default-pack/install", operation_id="installDefaultSkillPack")
+    async def install_default_pack(
+        body: DefaultSkillPackBody,
+        idempotency_key: str | None = Header(default=None, min_length=1, max_length=300),
+    ) -> dict[str, Any]:
+        from operant.application.default_skill_pack import install_default_skill_pack
+
+        key = idempotency_key or uuid4().hex
+        try:
+            gateway = app.state.phase45_action_gateway
+            action, result, _ = gateway.guard(
+                tool="skill_default_pack",
+                operation="install",
+                target_id=body.project_id,
+                arguments={"project_id": body.project_id},
+                capabilities=(Capability.WORKSPACE_WRITE,),
+                idempotency_key=key,
+            )
+            if result.decision.value != "allow" or result.lease is None:
+                raise HTTPException(403, {"code": "policy_denied", "message": result.reason_code})
+            gateway.consume(result.lease, action)
+            installed = await install_default_skill_pack(manager(), project_id=body.project_id)
+            return {"project_id": body.project_id, "skill_ids": list(installed)}
         except (LedgerError, ConflictError) as exc:
             raise HTTPException(409, {"code": "revision_conflict", "message": str(exc)}) from exc
         except PluginError as exc:

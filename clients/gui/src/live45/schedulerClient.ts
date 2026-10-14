@@ -7,11 +7,14 @@ export type ScheduleStatusInput = Phase45.ScheduleStatusBody;
 export type GeneratedSchedulerClient = Pick<Phase45Client,
   | 'negotiateProtocol'
   | 'listSchedules'
+  | 'getScheduleWatchStatus'
   | 'listSchedulerQueue'
   | 'listDeadLetter'
   | 'createSchedule'
   | 'setScheduleStatus'
   | 'triggerSchedule'
+  | 'signalScheduleHook'
+  | 'cancelRunRequest'
   | 'replayDeadLetter'
 >;
 
@@ -36,6 +39,10 @@ export class SchedulerClient {
     return this.generated.listSchedules();
   }
 
+  getWatchStatus(scheduleId: string): Promise<Record<string, unknown>> {
+    return this.generated.getScheduleWatchStatus(scheduleId);
+  }
+
   listQueue(): Promise<Record<string, unknown>> {
     return this.generated.listSchedulerQueue();
   }
@@ -58,6 +65,18 @@ export class SchedulerClient {
       { idempotency_key: idempotencyKey },
       { idempotencyKey },
     );
+  }
+
+  signalHook(scheduleId: string, eventId: string, idempotencyKey: string): Promise<Record<string, unknown>> {
+    return this.generated.signalScheduleHook(
+      scheduleId,
+      { event_type: 'application.signal', event_id: eventId },
+      { idempotencyKey },
+    );
+  }
+
+  cancelRunRequest(requestId: string, idempotencyKey: string): Promise<Record<string, unknown>> {
+    return this.generated.cancelRunRequest(requestId, { idempotencyKey });
   }
 
   replayDeadLetter(requestId: string, idempotencyKey: string): Promise<Record<string, unknown>> {

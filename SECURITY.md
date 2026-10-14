@@ -9,7 +9,7 @@
 
 以下是当前实现的详细安全边界。
 
-> 最后更新：2026-09-04
+> 最后更新：2026-09-26（同步主线记忆与会话工作台边界；原有其他边界保留）
 
 Operant 会把模型输出视为不可信输入。模型只能请求由当前 `RoleSnapshot` 的 Tool Policy
 允许的工具；Runtime 和工具层会再次校验，不把“模型遵守提示词”当作安全边界。
@@ -115,7 +115,7 @@ Docker Runner。
 - stdout、stderr 和 Git diff 会截断并标记是否截断；
 - 测试失败被压缩为结构化反馈，最多保留 12,000 个字符的关键信息；
 - 连续两次相同测试失败签名会产生 `agent.no_progress` 并停止，避免无界修复循环；
-- Provider 异常只持久化经过清洗的错误类型，不保存可能含上游响应或请求信息的原始异常文本；
+- Provider 异常保留错误类型；仅已登记的固定阶段与分类可附加固定中文提示和与分类匹配的 HTTP 状态，不保存可能含上游响应、URL 或凭据的原始异常文本。未知分类不透传；
 - Session Event 会记录角色、角色版本、模型、Provider、effort、工具、审批、纠错、usage 和耗时事件；
 - Workflow Run/Event 会记录任务阶段、角色、Session、模型输出摘要和工具结果，因此本地 SQLite 本身
   属于敏感运行数据，不应上传到公共位置；
@@ -131,11 +131,34 @@ Docker Runner。
 - 如果上次进程留下 Coder 已开始但没有确定结果，任务会进入 `manual_reconcile_required`，默认不重放
   写阶段。用户必须先核对 workspace，再显式允许 Coder 重放；
 - 待审批工具调用的进程内 `Future` 目前不能跨进程恢复，重启后应重新运行安全阶段或人工处置；
-- 自动召回只读取与绝对 workspace 精确匹配的 active Project Memory，不跨项目注入 Episodic 总结；
-- 只有可识别且成功的安全测试命令可自动成为 active Project Memory。模型生成的 Explorer 项目结构/
-  编码约定摘要与 Coder 总结分别默认是 candidate Project/Episodic Memory，需要人工确认；
+- 正式记忆由插件、数据集与 Memory Ledger 管理，召回逐版本核对项目、发布/撤销状态、来源、角色/Agent、条件和权限；跨项目使用必须有明确授权，不凭相似内容自动共享；
+- 旧的关键词/测试命令自动晋级与 Workflow 结束自动写回已移除，旧写入口返回 `schema_upgrade_required`。候选通过正式 Proposal 与版本校验审阅，不能因为模型自称成功就自动成为已验证知识；
+- 后台整理默认关闭，启用后仍遵守来源范围、模型与预算约束；语义提取标为推断候选，不可自行确认。失败或未知结果不推进已处理水位，也不自动重放；
+- 已有 Run 固定知识版本范围，每次发送仍复核当前撤销与权限。来源失效会阻断依赖；已发出的历史不会被悄悄改写，无法安全剥离污染时需要新上下文；
+- 经验 Skill 的正文不授予工具权限；共享和远程传递固定对象、用途与范围，可撤销。Writer 晋级中的 Git 证据不等于业务测试已经通过；
 - Memory 更新会新建不可变版本，不覆盖来源历史。SQLite Memory 内容可能包含项目事实，也应按本地
   项目数据保护。
+
+## 会话工作台边界
+
+子 Agent 仅接收任务包，默认继承当前模型、权限、预算和绝对工作区；角色覆盖只能收窄权限，
+不能移除审批或改变命令执行环境。协作工具需显式启用，不会因安装新版自动扩大已有会话权限。
+定向消息仅进入指定收件人的模型请求，投递、消费和唤醒分别记录；唤醒有界，未知写结果不自动重放。
+
+文件与同工作区会话引用生成有界快照，模型只能按现有读取权限获取本轮附加、属于当前 Thread 的引用。
+活动或未核对的中断运行不能清理上下文；压缩/清理保留原始历史，不等于删除数据库中的私人内容。
+
+## 记忆插件与版本升级
+
+认证的进程内插件是显式信任边界，不提供操作系统沙箱。未认证 stdio 插件使用隔离 Python 与
+macOS `sandbox-exec`，启动前验证隔离条件；条件不足会拒绝，不能把它当作已经验证的跨平台沙箱。
+
+卸载的 keep/delete 针对插件专属数据，并检查数据集所有权、资源登记与运行屏障。
+delete 不等于磁盘安全擦除，也不承诺撤回已导出的副本或已发送上下文。
+
+本任务 5 工作分支使用 SQLite v23。旧库升级应先停止旧 Core 并完整备份；降级只允许满足严格条件的隔离测试库，
+没有通用生产回滚承诺。源码升级、测试库迁移和真实用户库迁移是不同动作。
+详细实现与证据范围见 [当前实现说明](docs/PROJECT_ARCHITECTURE.md)。
 
 ## Evaluation Runner 边界
 
@@ -212,8 +235,9 @@ starting 并启动 transport；请求取消会关闭 transport 并 fenced 地收
 ## Scheduler 边界
 
 Phase 5A Scheduler 只调度本地 SQLite 中已发布的 Graph Workflow Revision。它不是 Shell、不是任意函数执行器，
-也不会给 Graph 中任意节点或 MCP 工具自动授权。Graph IR 里的 Timer 节点仍被 Compiler 拒绝；
-Schedule Timer 是独立的单次绝对 UTC 触发。
+也不会给 Graph 中任意节点或 MCP 工具自动授权。Graph Timer/Wait 是有界、持久的图内等待；
+Schedule Timer 是独立的单次绝对 UTC 触发。暂停调度停止新入队和领取尚未执行的队列请求，
+已有执行仍按其取消与租约边界收口；恢复保留原请求和监控基线。
 
 Cron 只支持受限五段表达式和 IANA 时区，用 UTC occurrence 遍历并映射到本地时间，使 DST gap 不伪造
 时刻、fold 中的两次真实发生保持可区分。停机后的 due occurrence 只按 `skip`、`fire_once` 或有界
@@ -235,6 +259,19 @@ Scheduler 派发本身还要经 Phase 4 Policy/Capability/Audit；后台调度�
 创建，只有冲突或无法确定的 create/start/完成异常才转人工核对。FastAPI 停机只释放当前
 Coordinator 精确持有的租约；崩溃接管仍以 SQLite 已提交事实和 fencing 为准。
 
+文件/Git Hook 只观察显式绝对工作区内的元数据或 Git HEAD，不读取文件正文，不接收公网 webhook。
+路径越界、根目录和符号链接失败会持久显示；观察基线和事件入队使用同一租约与状态版本检查。
+
+## Graph 编排边界
+
+Human Input 与流程 Approval 绑定具体 NodeRun、等待 token 和冻结定义；流程同意不会授予工具权限，
+所有实际副作用继续经过 Action Gateway。固定版本 Subworkflow 在执行前检查整棵图的角色、能力、
+插件、深度和子 Agent 上限；循环每轮有独立子 Run、等待 token 和预算份额。父子使用冻结配置指纹，
+预算不借用其他分支的额度，取消和重启沿持久父子绑定处理。
+
+Artifact 发布校验内容哈希、当前 Run/Session/Team 归属和不可变元数据；相同内容与冲突的类型、
+敏感度或来源不能覆盖既有工件。智能工作流建议保存脱敏对话和候选，仍需显式保存、校验与发布。
+
 ## Web 与 API 部署边界
 
 生产入口使用 `operant serve`。它拒绝公网、通配、多播和含糊 hostname，只允许显式 loopback 或私网
@@ -252,6 +289,49 @@ token 文件。该实现是单用户私网保护层，不是 SaaS、多租户身
 Tauri `--desktop` bridge 只允许 loopback，并只为固定 Tauri Origin 开启最小 CORS；普通浏览器 Origin
 不在白名单。Web 页面虽然不使用 CDN，并对模型输出做安全展示，这仍不能代替网络边界。当前不得把
 `/web`、普通 `/v1/*` 或 WSS Gateway 直接暴露到公网，也不得放在未验收的反向代理后面。
+
+本机技能来源管理允许用户登记自选目录；loopback、Host、Origin 与 Action Gateway 不认证同机
+进程或系统用户。直接来源管理现默认要求已验证的原生调用者，并在通用账本及路径查询前
+拒绝未配对请求；独立客户端只获单独的 `skill_source.manage` 配对权限。配对增量的真实
+桌面/PWA/TUI 验收尚未完成。CodeQL #45 的 PR 实例报告 fixed，最新已提交版本扫描
+结果为0；这不代替安全验收。目录根、链接变化和扫描范围检查与调用者身份
+是不同边界，前者通过不代表后者通过。直接启用现有 HTTPS OIDC 中间件会拦住 HTTP 回环模型
+OAuth 回调；新增本机认证时必须保留回调自身的 state/PKCE 检查，不能将模型 Token 当作 Core
+调用凭据。仅有 `0600` 的 Token 文件也不能证明同一系统用户下的进程隔离。
+
+技能来源变更的 Gateway、幂等收据与扫描更新已提取到 `SkillSourceEffects`，适配器仍须先认证
+调用者。本机 `LocalCallerAuthority` 底座可校验请求签名、时间窗口及一次性 nonce；它要求
+上层通过私有匿名管道提供随机密钥，不读取凭据文件。桌面启动器现创建自己的 Core 子进程，
+只经继承 stdin 的 FIFO 传入密钥，并在同一条 TCP 连接完成签名身份验证和固定管理请求；
+连接关闭即失败，不重连或重放写入。固定操作取自公开 Schema，网页不能指定可执行文件、
+Core 地址或签名接口；签名密钥不进入 JS、环境变量、命令行或文件。原生网络等待不阻塞窗口，
+退出只停止自己创建的子进程，已有端口服务不会被接管。已安装 Core 和操作系统账号本身仍是
+信任前提；此机制不防同账号的文件篡改、调试器或内存读取。模型回调另由 state/PKCE 保护。
+真实 Rust 父进程与 Tauri 窗口的模型设置、来源、本机能力查询及退出回收已验收；匿名请求被拒绝。
+普通终端 serve 不自动获得桌面密钥；其来源管理默认拒绝，其他历史接口不能由此推定已认证。
+
+`caller-pairing.v1` 与 Remote Control 分域，不扩大冻结的 Phase56 Scope。仅原生无参命令
+在系统确认后生成短时票据；普通桥接不能调用发码操作或提供确认签名头。票据单次消费
+与设备登记在同一事务完成。Core 私钥只在当前进程内，重启须重新配对；设备密钥被签名
+身份、公钥记录和 epoch 绑定，消息使用 P-256 签名及 AES-GCM 加密。配对码不进入URL、
+日志或通用命令收据。浏览器私钥不可导出，Python 私钥仅保存到受保护的未提交 `.env`。
+
+来源操作有独立设备 principal、nonce 和请求回执；配对设备的添加与移除始终追加系统 ASK，
+既有 DENY 优先，不触发自动或手动审批模型。桌面模式的审批查询、决定及 review 路由要求
+原生私有签名；技能目录配对不能自行批准。ASK 不产生效果，批准后显式继续仍须
+匹配原请求、参数摘要、审批 ID 和 Action Hash。撤销与设备操作串行化，撤销返回后后续
+写入被拒绝。断线或重启后未知结果保持未确认，不能凭无回执自动重试。此权限不授权
+模型连接、本机操作或其他设置。新增路径仍需端到端验收，扫描状态与上述运行时边界分别核对。
+
+原生审批列表只读返回未过期的待审动作与有界脱敏标签，不公开原参数。审批决定丢响应后
+GUI保留原审批编号，只读核对对应终态，不自动重复提交。
+
+完整绑定的来源回读核对原设备、请求编号、操作、参数摘要与Core轮次；确无收据时，
+Core先原子保存失败终态再返回签名结果，延迟到达的同一写请求不能再执行。普通HTTP错误
+与旧客户端的无收据结果均不能解除待核对屏障。完整绑定的awaiting_approval旧请求在
+Core轮次变化或审批失效时可事务终结，因为它还未进入效果CAS；已进入执行或结果未知的
+请求不能借重启推定未执行。撤销后的密钥不能重新授权；客户端只能
+在没有待核对写入时明确建立新身份，保留旧身份记录与密钥，不自动换身份重发请求。
 
 ## Phase 5B Remote Control 与 Relay 边界
 
@@ -274,6 +354,10 @@ Session/Scope/TTL 和本地 Action Gateway。Beta/RC 另提供 TLS-only WSS 直�
 HTTPS Origin、Bearer 和子协议，frame/pending queue 有界，并在建立和处理消息时重验
 Host/Device/Session/Cursor 绑定；连接 owner、lease、关闭和错误事实持久化到 SQLite v14。它仍不是
 经过公网部署审计的完整套件，因此 `/web`、普通 `/v1/*` 与 Gateway 均不得直接暴露到公网。
+
+任务 5 的正式设备 CLI 在独立设备生成并保存私有身份，按 Host 一次性票据配对；仅对已配对设备开放已批准 Scope。Session 创建和运行通过签名加密 WSS 命令、Host 持久收据与本地 Action Gateway；运行结果由同一设备通过签名加密 Query 回读，其他设备的 Session 归属检查失败关闭。设备端保留未确认的原签名帧，重连先按追加事件游标追平，再在原 TTL 内重送同帧；审批仍由本机对精确 Action 决定。SQLite v23 为命令状态变化追加事件，`accepted` 后断线仍可按 Cursor 看到 `completed`。已过期或结果未知的副作用不得生成新命令自动重放。
+
+跨设备私有部署用 `operant remote-gateway serve` 在本机 loopback 提供受限 TLS edge，只转发配对、加密 Session Query、WSS Gateway 和 Target 单 Job Lease 验证。SSH 反向隧道只能指向此 edge，不能把完整 Core 管理端口映射给远端设备；否则远端请求在 Core 看来来自本机 loopback，可绕过普通 REST 的身份边界。edge 核对精确上游、受信 CA、Origin、请求体与 frame 上限，拒绝 `/web` 及其他管理 REST。此入口仍不声明公网服务能力。
 
 实现强制满足：
 
@@ -317,6 +401,18 @@ Lease token 只在首次 `no-store` 响应返回，SQLite 只保存 SHA-256；�
 route/recipient/TTL/nonce/fencing，使用调用方绝对 deadline，并对响应 body/stream frame 设置上限；
 Host Connector 在解密后执行同等重验。真实浏览器/桌面驱动矩阵、凭据下发运维与公网部署仍需单独
 验收。
+
+任务 5 的私有 Target 服务只监听远端 loopback、强制 TLS，并只接受白名单 `run_allowlisted` argv 和工作区内非保护文件的 `read_text`。本机 dispatch 经 HTTPS Connector 校验证书、Target 响应签名、目标身份与 Lease fencing。Target 在每次执行和取消前还向 Core 的受限验证入口核对当前 Lease、完整已领取 Job、工作区及 Manifest 能力；Lease 释放、到期或 Job 被改写时拒绝新动作。执行中 Lease 失效或结果丢失按未知结果保守收口，非幂等动作不自动重放。密钥、Bearer 与一次性 Lease Token 只在私有文件或目标进程环境中交接，不写日志或文档。
+
+## 本机操控与隔离扩展
+
+六类本地扩展按安装身份、包摘要和类别分别授权；安装不等于启用。来源目录须当前用户或 root 所有且组/其他用户不可写，规范化后验证目录边界，以固定目录句柄只读清单和插件脚本；拒绝路径穿越、符号链接及非普通文件。未认证代码只在已验证的隔离子进程运行，不获取 Core、数据库或模型凭据。Provider 适配器只能选择同来源且由 Discovery 确认的模型；Runtime 只能收窄输出预算；能力驱动仅提交提案，实际动作仍经 Target、Lease 和 Action Gateway。显式 Skill 命令重新读取项目授权与冻结 Role 绑定，并按审批的摘要取得上下文；Skill 正文不授予工具权限。
+
+本机管理与动作接口仅接受本机回环客户端，不能依赖调用方 Host 头判断来源。GUI 的暂停接管等待在途动作结束并撤销旧租约，恢复须取得新 fencing 并重新观察。插件安装和实际启停改变授权代次，旧会话或旧工具绑定不能继续使用。
+
+浏览器使用专用 Profile、精确 Origin 白名单和网络限制，不继承 Core 凭据；电脑只操控已批准的运行中 App 及精确窗口。敏感 App、安全输入框、密码字段和无法确认焦点的输入拒绝。输入在入队前加密封装；截图和有界剪贴板正文不写 SQLite，只留在五分钟有效的有界内存中，读取还须核对成功收据与独立审批。
+
+Worker 与 Core 每次只领取一个动作。非幂等结果未知时立即暂停，包括向 Core 发送回执失败的情况；持久未知状态阻止旧租约继续派发。人工核对只记录事实，不重放原动作；新的工作须重新授权。安装、管理和命令使用持久幂等收据，未知结果不自动重试。支持的真实任务和未覆盖范围以[本机扩展验收](docs/design/extension-runtime-governance/acceptance.md)为准，不由此承诺任意网站、App、跨平台沙箱或生产远程能力。
 
 ## Phase 6 Multi-Writer 边界
 

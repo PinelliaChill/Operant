@@ -8,6 +8,9 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { useOperant } from '../../context/ClientContext';
 import { B2LiveAdapter, normalizeB2Error } from '../../live/b2Adapter';
 import { createIdempotencyKey } from '../../live/liveState';
+import { formatDateTime } from '../../lib/format';
+import { LiveGoalPlanPanel } from './LiveGoalPlanPanel';
+import '../settings/live-config.css';
 
 type TaskFilter = 'all' | 'active' | 'done';
 
@@ -20,14 +23,17 @@ const ACTION_LABELS: Record<B2.TaskAction['action'], string> = {
 };
 
 const SOURCE_LABELS: Record<B2.TaskSource['source_type'], string> = {
-  session: 'Session',
-  workflow_run: 'WorkflowRun',
-  team_task: 'TeamTask',
+  session: '会话',
+  workflow_run: '流程运行',
+  team_task: '团队任务',
 };
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
-    active: '活跃',
+    active: '可处理',
+    queued: '等待开始',
+    pending: '等待处理',
+    blocked: '需要处理',
     running: '运行中',
     waiting_approval: '等待审批',
     completed: '已完成',
@@ -36,7 +42,7 @@ function statusLabel(status: string): string {
     cancelled: '已取消',
     archived: '已归档',
   };
-  return labels[status] || status;
+  return labels[status] || '状态待确认';
 }
 
 export const LiveTasksView: React.FC = () => {
@@ -88,7 +94,7 @@ export const LiveTasksView: React.FC = () => {
       navigate(`/runs/${encodeURIComponent(task.source.source_id)}?source_type=workflow_run`);
       return;
     }
-    setError({ code: 'task_inspect_unsupported', message: 'Core 返回的 TeamTask 没有本批 GUI 详情入口。', recovery: 'none' });
+    setError({ code: 'task_inspect_unsupported', message: '此类团队任务暂不支持查看详情。', recovery: 'none' });
   };
 
   const executeAction = async (task: B2.B2Task, action: B2.TaskAction) => {
@@ -98,13 +104,13 @@ export const LiveTasksView: React.FC = () => {
       return;
     }
     if (action.action === 'resume' || action.action === 'archive') {
-      setError({ code: `task_${action.action}_unsupported`, message: `Core 暂未提供 ${ACTION_LABELS[action.action]} Command；不会把“查看详情”冒充该动作。`, recovery: 'open_details' });
+      setError({ code: `task_${action.action}_unsupported`, message: `暂不支持${ACTION_LABELS[action.action]}此类任务。`, recovery: 'open_details' });
       inspectTask(task);
       return;
     }
     if (action.action !== 'cancel') return;
     if (task.source.source_type !== 'session') {
-      setError({ code: 'task_cancel_requires_graph_ui', message: 'WorkflowRun 取消请进入 Graph 运行详情，由对应服务端协议裁决。', recovery: 'open_details' });
+      setError({ code: 'task_cancel_requires_graph_ui', message: '请在流程运行详情中取消。', recovery: 'open_details' });
       inspectTask(task);
       return;
     }
@@ -115,8 +121,8 @@ export const LiveTasksView: React.FC = () => {
       const accepted = result.accepted;
       await load();
       setError(accepted
-        ? { code: 'session_cancel_projection_pending', message: 'Core 已接受取消请求；是否完成仍以刷新后的 Task Projection 为准。', recovery: 'refresh' }
-        : { code: 'session_cancel_rejected', message: 'Core 未接受取消请求，任务状态仍以服务端 Projection 为准。', recovery: 'refresh' });
+        ? { code: 'session_cancel_projection_pending', message: '取消请求已提交；请刷新确认结果。', recovery: 'refresh' }
+        : { code: 'session_cancel_rejected', message: '取消请求未成功；请刷新任务状态。', recovery: 'refresh' });
     } catch (caught: unknown) {
       setError(normalizeB2Error(caught).detail);
     } finally {
@@ -129,7 +135,7 @@ export const LiveTasksView: React.FC = () => {
       <header className="section-header">
         <div>
           <h1 className="section-title">任务</h1>
-          <p className="section-sub">B2 Core Task Projection · Session 与 WorkflowRun 保持来源语义</p>
+          <p className="section-sub">查看会话、流程和团队中的任务</p>
         </div>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => void load()} disabled={loading || connectionStatus !== 'connected'}>
           <RefreshCw size={14} aria-hidden="true" />刷新
@@ -143,31 +149,33 @@ export const LiveTasksView: React.FC = () => {
       {error && (
         <div className="live-alert live-alert-error b2-task-error" role="alert">
           <ShieldAlert size={16} aria-hidden="true" />
-          <div className="live-alert-content"><strong>{error.code}</strong><span>{error.message}</span><span className="live-alert-recovery">恢复：{error.recovery}</span></div>
+          <div className="live-alert-content"><strong>任务操作未完成</strong><span>{error.message}</span><span className="live-alert-recovery">请刷新列表核对任务状态，再决定是否重试。</span><details><summary>错误详情</summary><code>{error.code}</code> · {error.recovery}</details></div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()} disabled={loading}><RefreshCw size={13} aria-hidden="true" />重试</button>
         </div>
       )}
       <div className="section-scroll">
         <div className="section-inner">
+          <LiveGoalPlanPanel />
           {loading ? (
-            <div className="live-panel-loading b2-task-loading" role="status"><RefreshCw size={16} className="animate-spin" />正在读取 Core Task Projection…</div>
+            <div className="live-panel-loading b2-task-loading" role="status"><RefreshCw size={16} className="animate-spin" />正在读取任务…</div>
           ) : filteredTasks.length === 0 ? (
-            <div className="b2-task-empty"><EmptyState icon={ListTodo} title="暂无 Core 任务" description={tasks.length === 0 ? 'Core 没有返回任务 Projection。Live 不会用演示任务补齐。' : '当前过滤条件没有匹配的 Core 任务。'} /></div>
+            <div className="b2-task-empty"><EmptyState icon={ListTodo} title="暂无任务" description={tasks.length === 0 ? '当前没有任务。' : '当前筛选下没有任务。'} /></div>
           ) : (
             <ul className="chat-row-list b2-task-list">
               {filteredTasks.map((task) => (
                 <li className="chat-row chat-row-wrap b2-task-row" data-source-type={task.source.source_type} data-status={task.source_status} key={`${task.source.source_type}:${task.source.source_id}`}>
-                  <span className="b2-task-identity"><strong className="b2-task-source-type">{SOURCE_LABELS[task.source.source_type]}</strong><span className="b2-task-source-id section-mono">{task.source.source_id}</span></span>
-                  <span className="chat-row-main"><span className="chat-row-title">{task.title}</span><span className="b2-task-scope">{task.project_id || '无 Project'} · {task.workspace_id || '无 Workspace'}</span></span>
+                  <span className="b2-task-identity"><strong className="b2-task-source-type">{SOURCE_LABELS[task.source.source_type]}</strong></span>
+                  <span className="chat-row-main"><span className="chat-row-title">{task.title}</span><details><summary>任务详情</summary><span className="b2-task-scope">编号：{task.source.source_id} · 项目：{task.project_id || '无'} · 工作区：{task.workspace_id || '无'}</span></details></span>
                   <span className="b2-task-status"><StatusBadge status={task.source_status} label={statusLabel(task.source_status)} size="sm" /></span>
                   <span className="b2-task-actions">
                     {task.actions.map((action) => (
-                      <button type="button" className="btn btn-secondary btn-sm b2-task-action" data-action={action.action} data-availability={action.availability} key={action.action} disabled={action.availability !== 'available' || working === task.source.source_id} title={action.availability === 'available' ? undefined : action.reason_code || `Core 未允许${ACTION_LABELS[action.action]}`} onClick={() => void executeAction(task, action)}>
+                      <button type="button" className="btn btn-secondary btn-sm b2-task-action" data-action={action.action} data-availability={action.availability} key={action.action} disabled={action.availability !== 'available' || working === task.source.source_id} title={action.availability === 'available' ? undefined : `暂不可${ACTION_LABELS[action.action]}，可在操作详情中查看原因`} onClick={() => void executeAction(task, action)}>
                         {working === task.source.source_id && action.action === 'cancel' ? <RefreshCw size={12} className="animate-spin" /> : null}{ACTION_LABELS[action.action]}{action.action === 'inspect' && <ArrowRight size={12} aria-hidden="true" />}
                       </button>
                     ))}
                   </span>
-                  <time className="chat-row-meta" dateTime={task.created_at}>{task.created_at}</time>
+                  {task.actions.some((action) => action.reason_code) && <details><summary>操作详情</summary><ul>{task.actions.filter((action) => action.reason_code).map((action) => <li key={action.action}>{ACTION_LABELS[action.action]}：<code>{action.reason_code}</code></li>)}</ul></details>}
+                  <time className="chat-row-meta" dateTime={task.created_at}>{formatDateTime(task.created_at)}</time>
                 </li>
               ))}
             </ul>

@@ -251,6 +251,9 @@ class GraphWorkflowRun(BaseModel):
     workspace_or_target: str | None = None
     team_run_id: str | None = None
     legacy_workflow_run_id: str | None = None
+    parent_run_id: str | None = None
+    parent_node_run_id: str | None = None
+    parent_node_iteration: int = Field(default=0, ge=0)
     status: GraphRunStatus = GraphRunStatus.CREATED
     budget_snapshot: Budget
     policy_snapshot: dict[str, Any] = Field(default_factory=dict)
@@ -314,6 +317,7 @@ class BoundaryKind(str, Enum):
     HUMAN_INPUT = "human_input"
     WAIT = "wait"
     SUBWORKFLOW = "subworkflow"
+    MERGE = "merge"
 
 
 class BoundaryResolution(BaseModel):

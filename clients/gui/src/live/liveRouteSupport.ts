@@ -23,8 +23,11 @@ export function resolveLiveRouteSupport(pathname: string): LiveRouteSupportResul
   const primary = segments[0] || 'chat';
 
   // These exact legacy aliases redirect to supported Live pages in routes.tsx.
-  // Permit the Outlet to mount Navigate; do not admit arbitrary nested aliases.
-  if (segments.length === 1 && (primary === 'remote' || primary === 'session')) {
+  // Permit their redirect routes without admitting deeper Demo paths.
+  if (segments.length === 1 && (primary === 'remote' || primary === 'session' || primary === 'workflow')) {
+    return { isSupported: true, unavailableSection: primary };
+  }
+  if (primary === 'workflow' && segments.length === 2) {
     return { isSupported: true, unavailableSection: primary };
   }
 

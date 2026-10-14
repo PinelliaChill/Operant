@@ -20,7 +20,8 @@ test('approval component keeps manual decisions keyboard reachable and disconnec
   assert.match(source, /aria-label="允许 MCP 操作并使用同一幂等键重试"/);
   assert.match(source, /aria-label="拒绝 MCP 操作"/);
   assert.match(source, /disabled=\{busy \|\| disconnected\}/);
-  assert.match(source, /审批 ID/);
+  assert.match(source, /审批与操作详情/);
+  assert.match(source, /审批编号/);
   assert.match(source, /原因/);
 });
 

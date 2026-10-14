@@ -166,8 +166,8 @@ def generate(dist: Path) -> None:
     root_package.update(
         {
             "downloadLocation": "NOASSERTION",
-            "licenseConcluded": "Apache-2.0",
-            "licenseDeclared": "Apache-2.0",
+            "licenseConcluded": "PolyForm-Noncommercial-1.0.0",
+            "licenseDeclared": "PolyForm-Noncommercial-1.0.0",
             "checksums": [{"algorithm": "SHA256", "checksumValue": checksums[wheel.name]}],
             "comment": "Requires-Dist: " + "; ".join(requirements),
         }
@@ -248,8 +248,8 @@ def verify(dist: Path) -> None:
     expected_root.update(
         {
             "downloadLocation": "NOASSERTION",
-            "licenseConcluded": "Apache-2.0",
-            "licenseDeclared": "Apache-2.0",
+            "licenseConcluded": "PolyForm-Noncommercial-1.0.0",
+            "licenseDeclared": "PolyForm-Noncommercial-1.0.0",
             "checksums": [{"algorithm": "SHA256", "checksumValue": artifacts[wheel.name]}],
             "comment": "Requires-Dist: " + "; ".join(requirements),
         }

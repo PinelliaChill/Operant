@@ -327,6 +327,111 @@ class SQLiteSchedulerStore:
                 raise SchedulerConflictError("schedule changed while triggering manually")
             return self._insert_or_get_request(connection, request)
 
+    def enqueue_hook(
+        self,
+        schedule: ScheduleDefinition,
+        *,
+        idempotency_key: str,
+        requested_at: datetime,
+    ) -> RunRequest:
+        request = self._request_for(
+            schedule, requested_at, requested_at, idempotency_key=idempotency_key
+        )
+        with self._transaction() as connection:
+            head = connection.execute(
+                "SELECT current_version, status FROM schedule_heads WHERE schedule_id=?",
+                (schedule.id,),
+            ).fetchone()
+            if (
+                head is None
+                or int(head["current_version"]) != schedule.version
+                or head["status"] != ScheduleStatus.ENABLED.value
+            ):
+                raise SchedulerConflictError("hook schedule changed or is not enabled")
+            return self._insert_or_get_request(connection, request)
+
+    def observe_watch(
+        self,
+        schedule: ScheduleDefinition,
+        *,
+        fingerprint: str | None,
+        error_code: str | None,
+        leader_lease: SchedulerLease,
+        observed_at: datetime,
+    ) -> RunRequest | None:
+        """Persist one fenced observation and enqueue a change in the same transaction."""
+        now = require_aware_utc(observed_at, field="observed_at")
+        with self._transaction() as connection:
+            self._assert_authority(connection, leader_lease, now)
+            head = connection.execute(
+                "SELECT current_version, status FROM schedule_heads WHERE schedule_id=?",
+                (schedule.id,),
+            ).fetchone()
+            if (
+                head is None
+                or int(head["current_version"]) != schedule.version
+                or head["status"] != ScheduleStatus.ENABLED.value
+            ):
+                raise SchedulerConflictError("watch schedule changed or is not enabled")
+            row = connection.execute(
+                "SELECT fingerprint, generation FROM scheduler_watch_baselines "
+                "WHERE schedule_id=? AND schedule_version=?",
+                (schedule.id, schedule.version),
+            ).fetchone()
+            if error_code is not None:
+                if row is None:
+                    connection.execute(
+                        "INSERT INTO scheduler_watch_baselines VALUES (?,?,?,?,?,?)",
+                        (schedule.id, schedule.version, "", 0, _dt(now), error_code),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE scheduler_watch_baselines SET observed_at=?, error_code=? "
+                        "WHERE schedule_id=? AND schedule_version=?",
+                        (_dt(now), error_code, schedule.id, schedule.version),
+                    )
+                return None
+            assert fingerprint is not None
+            if row is None:
+                connection.execute(
+                    "INSERT INTO scheduler_watch_baselines VALUES (?,?,?,?,?,NULL)",
+                    (schedule.id, schedule.version, fingerprint, 0, _dt(now)),
+                )
+                return None
+            if row["fingerprint"] == fingerprint or not row["fingerprint"]:
+                connection.execute(
+                    "UPDATE scheduler_watch_baselines SET fingerprint=?, observed_at=?, "
+                    "error_code=NULL WHERE schedule_id=? AND schedule_version=?",
+                    (fingerprint, _dt(now), schedule.id, schedule.version),
+                )
+                return None
+            generation = int(row["generation"]) + 1
+            key = f"watch:{schedule.id}:v{schedule.version}:g{generation}:{fingerprint}"
+            request = self._request_for(schedule, now, now, idempotency_key=key)
+            queued = self._insert_or_get_request(connection, request)
+            connection.execute(
+                "UPDATE scheduler_watch_baselines SET fingerprint=?, generation=?, "
+                "observed_at=?, error_code=NULL WHERE schedule_id=? AND schedule_version=?",
+                (fingerprint, generation, _dt(now), schedule.id, schedule.version),
+            )
+            return queued
+
+    def get_watch_status(self, schedule_id: str, version: int) -> dict[str, object]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT fingerprint, generation, observed_at, error_code FROM "
+                "scheduler_watch_baselines WHERE schedule_id=? AND schedule_version=?",
+                (schedule_id, version),
+            ).fetchone()
+        if row is None:
+            return {"initialized": False, "generation": 0, "observed_at": None, "error_code": None}
+        return {
+            "initialized": bool(row["fingerprint"]),
+            "generation": row["generation"],
+            "observed_at": row["observed_at"],
+            "error_code": row["error_code"],
+        }
+
     def replay_dead_letter(
         self,
         request_id: str,
@@ -530,7 +635,7 @@ class SQLiteSchedulerStore:
                 "JOIN schedule_definitions d ON d.schedule_id=r.schedule_id "
                 "AND d.version=r.schedule_version "
                 "WHERE r.status IN ('queued','retry_wait') AND r.available_at<=? "
-                "AND r.cancel_requested=0 AND h.status!='cancelled' "
+                "AND r.cancel_requested=0 AND h.status='enabled' "
                 "ORDER BY r.available_at, r.created_at, r.request_id LIMIT 100",
                 (_dt(current_time),),
             ).fetchall()
@@ -692,6 +797,29 @@ class SQLiteSchedulerStore:
         with self._transaction() as connection:
             self._assert_authority(connection, writer_lease, current_time)
             self._recover_expired_jobs(connection, current_time)
+            # A committed GraphRun is already the durable side effect. Take over
+            # its expired lease without consuming a new dispatch attempt or
+            # creating another GraphRun, including when max_attempts is one.
+            expired = connection.execute(
+                "SELECT l.run_request_id, l.fencing FROM job_leases l "
+                "JOIN run_requests r ON r.request_id=l.run_request_id "
+                "WHERE r.status='leased' AND r.workflow_run_id IS NOT NULL "
+                "AND l.expires_at<=?",
+                (_dt(current_time),),
+            ).fetchall()
+            for row in expired:
+                connection.execute(
+                    "UPDATE job_leases SET owner=?, token=?, fencing=?, expires_at=? "
+                    "WHERE run_request_id=? AND expires_at<=?",
+                    (
+                        owner,
+                        token_urlsafe(24),
+                        int(row["fencing"]) + 1,
+                        _dt(expires),
+                        row["run_request_id"],
+                        _dt(current_time),
+                    ),
+                )
             rows = connection.execute(
                 "SELECT r.*, l.owner AS lease_owner, l.token AS lease_token, "
                 "l.fencing AS lease_fencing, l.attempt_number AS lease_attempt_number "
@@ -1029,6 +1157,10 @@ class SQLiteSchedulerStore:
             (_dt(now),),
         ).fetchall()
         for row in rows:
+            if row["workflow_run_id"] is not None:
+                # The Graph binding survives a Core restart. The next Writer
+                # takes over this lease and reads the same GraphRun terminal state.
+                continue
             unsafe = (
                 row["dispatch_idempotency"] == DispatchIdempotency.NON_IDEMPOTENT.value
                 and bool(row["side_effect_started"])

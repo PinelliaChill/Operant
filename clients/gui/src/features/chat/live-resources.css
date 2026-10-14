@@ -1,0 +1,13 @@
+.live-resources-panel { border-top: 1px solid var(--border-default); padding: 14px 0; }
+.live-resources-panel summary { cursor: pointer; font-weight: 600; }
+.live-resources-content { display: grid; gap: 12px; padding: 12px 0; font-size: 13px; }
+.live-resources-content p { margin: 0; overflow-wrap: anywhere; }
+.live-resource-list { display: grid; gap: 10px; padding: 0; list-style: none; }
+.live-resource-list li, .live-resource-preview { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border-default); border-radius: 10px; min-width: 0; }
+.live-resource-list label { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.live-resource-list input[type="checkbox"] { width: 18px; height: 18px; flex-shrink: 0; }
+.live-resource-list small { display: block; color: var(--text-secondary); overflow-wrap: anywhere; }
+.live-resource-list button { justify-self: start; }
+.live-resource-policy { display: grid; gap: 10px; border: 1px solid var(--border-default); border-radius: 8px; padding: 12px; min-width: 0; }
+.live-resource-policy label { display: grid; gap: 6px; }
+.live-resource-preview ul { padding-left: 18px; overflow-wrap: anywhere; }

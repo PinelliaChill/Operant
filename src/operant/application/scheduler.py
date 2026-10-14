@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -202,6 +204,14 @@ class SchedulerRepository(Protocol):
         requested_at: datetime,
     ) -> RunRequest: ...
 
+    def enqueue_hook(
+        self,
+        schedule: ScheduleDefinition,
+        *,
+        idempotency_key: str,
+        requested_at: datetime,
+    ) -> RunRequest: ...
+
     def replay_dead_letter(
         self,
         request_id: str,
@@ -229,6 +239,27 @@ class TriggerService:
         """Validate deterministic trigger and pinned Workflow facts without writes."""
         if schedule.trigger_kind is TriggerKind.CRON:
             CronExpression(schedule.cron_expression or "")
+        workspace = schedule.workflow_input.get("workspace_or_target")
+        # Filesystem access belongs to the authorized dispatch, not API validation.
+        if workspace is not None and (
+            not isinstance(workspace, str) or not Path(workspace).is_absolute()
+        ):
+            raise SchedulerValidationError("scheduled workspace must be an absolute path")
+        if schedule.hook_event_type in {"file.changed", "git.head.changed"}:
+            if not isinstance(workspace, str):
+                raise SchedulerValidationError("watch hooks require an absolute workflow workspace")
+            root = Path(workspace)
+            watched = Path(schedule.watch_path or "")
+            if (
+                not root.is_absolute()
+                or not watched.is_absolute()
+                or ".." in root.parts
+                or ".." in watched.parts
+                or root == Path(root.anchor)
+                or watched == root
+                or not watched.is_relative_to(root)
+            ):
+                raise SchedulerValidationError("watch_path must be inside the workflow workspace")
         if self._workflow_repository is not None:
             try:
                 definition = self._workflow_repository.get_definition(
@@ -277,6 +308,8 @@ class TriggerService:
         schedule = self._repository.get_schedule(schedule_id)
         if schedule.status is not ScheduleStatus.ENABLED:
             return ()
+        if schedule.trigger_kind is TriggerKind.HOOK:
+            return ()
         cursor = self._repository.get_schedule_cursor(schedule.id)
         due = self._due_occurrences(schedule, cursor=cursor, now=current)
         selected = self._apply_misfire(schedule, due, now=current)
@@ -303,6 +336,31 @@ class TriggerService:
             schedule, idempotency_key=idempotency_key, requested_at=current
         )
 
+    def signal_hook(
+        self,
+        schedule_id: str,
+        *,
+        event_id: str,
+        now: datetime | None = None,
+    ) -> RunRequest:
+        if not event_id or len(event_id) > 200:
+            raise SchedulerValidationError("hook event_id must contain 1-200 characters")
+        current = require_aware_utc(now or datetime.now(timezone.utc), field="now")
+        schedule = self._repository.get_schedule(schedule_id)
+        if (
+            schedule.trigger_kind is not TriggerKind.HOOK
+            or schedule.hook_event_type != "application.signal"
+        ):
+            raise SchedulerConflictError("schedule is not an application.signal hook")
+        if schedule.status is not ScheduleStatus.ENABLED:
+            raise SchedulerConflictError("hook schedule is not enabled")
+        digest = hashlib.sha256(f"application.signal\0{event_id}".encode()).hexdigest()
+        return self._repository.enqueue_hook(
+            schedule,
+            idempotency_key=f"hook:{schedule.id}:v{schedule.version}:{digest}",
+            requested_at=current,
+        )
+
     def replay_dead_letter(
         self,
         request_id: str,
@@ -325,6 +383,8 @@ class TriggerService:
             timer_at = schedule.timer_at
             assert timer_at is not None
             return (timer_at,) if cursor < timer_at <= now else ()
+        if schedule.trigger_kind is TriggerKind.HOOK:
+            return ()
         cron = CronExpression(schedule.cron_expression or "")
         # Read at most max_catch_up + 1 so overflow is detectable without an unbounded result.
         return cron.occurrences_between(

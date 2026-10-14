@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from operant.application.local_control import LocalControlSnapshotBinding
     from operant.memory_plugins.manager import MemoryManager
 
 import asyncio
@@ -20,12 +21,17 @@ from typing import Any, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
+from operant.application.approval_review import ApprovalModelReviewer, ReviewerConfig
 from operant.application.client_projection import (
     get_workspace_initialization,
     list_project_projections,
     list_workspace_files,
 )
-from operant.application.context import PersistentContextComposer
+from operant.application.context import (
+    ContextLimitExceeded,
+    PersistentContextComposer,
+    compaction_facts,
+)
 from operant.application.defaults import default_role_presets
 from operant.application.factory import AgentFactory
 from operant.application.security import (
@@ -154,9 +160,16 @@ from operant.persistence.sqlite import (
     SQLiteStore,
     WorkflowExecutionLease,
 )
+from operant.plugins.local_extensions import (
+    ExtensionModelProvider,
+    dispatch_persisted_runtime_event,
+    registry_for_database,
+)
 from operant.protocol import canonical_action_hash, redact_public_data, redact_public_text
 from operant.providers.base import ModelProvider
+from operant.providers.openai_compatible import provider_failure_payload
 from operant.runtime.loop import AgentLoop, RuntimeEvent, ToolActionClaim
+from operant.tools.extensions import ToolExtension
 from operant.tools.workspace import ApprovalCallback, ToolError, WorkspaceTools
 
 DEFAULT_ARTIFACT_MAX_SIZE_BYTES = 16 * 1024 * 1024
@@ -189,7 +202,12 @@ class _PersistentActionGateway:
         self._authorized_claims: set[str] = set()
 
     def _capabilities_for(self, name: str, arguments: dict[str, Any]) -> tuple[Capability, ...]:
+        extension_capabilities = self.tools.extension_capabilities(name)
+        if extension_capabilities is not None:
+            return extension_capabilities
         if name == "apply_patch":
+            return (Capability.WORKSPACE_WRITE,)
+        if name in {"delegate_agent", "send_agent_message"}:
             return (Capability.WORKSPACE_WRITE,)
         category = self.tools.required_approval_category(name, arguments)
         if category == "privileged":
@@ -239,7 +257,7 @@ class _PersistentActionGateway:
             principal=f"agent:{self.agent_id}",
             tool=name,
             operation="execute",
-            arguments=arguments,
+            arguments=self.tools.audit_arguments(name, arguments),
             requested_capabilities=capabilities,
             idempotency_key=f"{self.scope}:{tool_call_id}",
             policy_version=self.policy_engine.bundle.version,
@@ -384,12 +402,67 @@ class _PersistentActionGateway:
                 detail_summary=redact_public_text(detail, max_chars=500),
             )
         )
+        bound = self._security_claims.get(claim.receipt_id)
+        if bound is not None:
+            self._audit(
+                bound[0],
+                "approval.requested",
+                evaluation=bound[1],
+                detail={
+                    "approval_id": approval.id,
+                    "policy_version": bound[0].policy_version,
+                    "expires_at": approval.expires_at.isoformat(),
+                },
+            )
         return {
             "approval_id": approval.id,
             "action_hash": approval.action_hash,
             "expires_at": approval.expires_at.isoformat(),
             "continuation_available": True,
         }
+
+    def review_context(
+        self, approval: ApprovalRequest
+    ) -> tuple[ActionRequest, PolicyEvaluation] | None:
+        """Rebind a pending approval to its original action and current ASK policy."""
+
+        if (
+            approval.session_id != self.session_id
+            or approval.agent_id != self.agent_id
+            or approval.status is not ApprovalStatus.PENDING
+        ):
+            return None
+        bound = self._security_claims.get(approval.tool_action_receipt_id)
+        if bound is None:
+            return None
+        action, original = bound
+        try:
+            receipt = self.store.get_tool_action_receipt(approval.tool_action_receipt_id)
+            persisted = self.security_repository.get_security_action(action.action_hash)
+        except (KeyError, NotFoundError):
+            return None
+        if (
+            receipt.session_id != self.session_id
+            or receipt.agent_id != self.agent_id
+            or receipt.idempotency_key != approval.tool_call_id
+            or receipt.action_hash != approval.action_hash
+            or receipt.command_name != action.tool
+            or receipt.status is not ToolActionReceiptStatus.IN_PROGRESS
+            or persisted != action
+            or original.action_hash != action.action_hash
+            or original.policy_version != action.policy_version
+            or original.decision is not PolicyDecision.ASK
+        ):
+            return None
+        current = self.policy_engine.evaluate(action)
+        if (
+            current.decision is not PolicyDecision.ASK
+            or current.hard_deny
+            or not current.reviewer_eligible
+            or current.policy_version != action.policy_version
+        ):
+            return None
+        return action, current
 
     def verify_approval(
         self,
@@ -432,9 +505,18 @@ class _PersistentActionGateway:
         if bound is None or bound[1].decision is PolicyDecision.DENY:
             raise ToolError("security policy approval binding is unavailable")
         action, evaluation = bound
-        allowed = evaluation
-        if evaluation.decision is PolicyDecision.ASK:
-            allowed = evaluation.model_copy(
+        current = self.policy_engine.evaluate(action)
+        if (
+            current.decision is PolicyDecision.DENY
+            or current.hard_deny
+            or current.policy_version != action.policy_version
+        ):
+            raise ToolError("current security policy does not permit this approved action")
+        allowed = current
+        if current.decision is PolicyDecision.ASK:
+            if evaluation.decision is not PolicyDecision.ASK or not current.reviewer_eligible:
+                raise ToolError("approval does not match the current ASK policy")
+            allowed = current.model_copy(
                 update={
                     "decision": PolicyDecision.ALLOW,
                     "reviewer_eligible": False,
@@ -510,11 +592,15 @@ class ApplicationService:
         artifact_capability_secret: bytes | None = None,
         physical_delete_enabled: bool = False,
         physical_delete_authorization: str | None = None,
+        tool_extension_factory: Callable[[Path, ToolPolicy], dict[str, ToolExtension]]
+        | None = None,
     ) -> None:
         if session_lease_ttl_seconds <= 0:
             raise ValueError("session lease TTL must be positive")
         self.store = store
-        self.provider = provider
+        self.extension_registry = registry_for_database(store.path)
+        self.provider = ExtensionModelProvider(provider, self.extension_registry)
+        self.tool_extension_factory = tool_extension_factory
         # These are instance-owned so a service cannot inherit a manager or
         # factory from another ApplicationService instance.
         self.memory_manager = None
@@ -522,6 +608,8 @@ class ApplicationService:
         self.factory = AgentFactory(store)
         self.slash_commands = SlashCommandRegistry()
         self._cancellations: dict[str, asyncio.Event] = {}
+        self.workbench: Any | None = None
+        self.terminal_manager: Any | None = None
         self._sidecar_cancellations: dict[str, asyncio.Event] = {}
         self._approval_futures: dict[tuple[str, str], asyncio.Future[bool]] = {}
         self._approval_details: dict[tuple[str, str], dict[str, str]] = {}
@@ -568,6 +656,10 @@ class ApplicationService:
 
     def initialize(self) -> None:
         self.store.initialize()
+        if self.workbench is None:
+            from operant.api_workbench_agents import WorkbenchRuntime
+
+            self.workbench = WorkbenchRuntime(self)
 
     def close(self) -> None:
         """Release long-lived storage descriptors owned by this service."""
@@ -671,18 +763,93 @@ class ApplicationService:
         effort: str | None = None,
         budget_overrides: dict[str, Any] | None = None,
         thread_id: str | None = None,
+        project_id: str | None = None,
+        workspace_ref: str | None = None,
+        config_overrides: dict[str, Any] | None = None,
+        _configuration_workspace_ref: str | None = None,
+        _new_thread: ConversationThread | None = None,
+        _onboarding_command: tuple[str, str] | None = None,
+        _onboarding_title: str | None = None,
+        _local_control_bindings: tuple[LocalControlSnapshotBinding, ...] = (),
     ) -> Session:
         if (role_id is None) == (new_role is None):
             raise ValueError("provide exactly one of role_id or new_role")
         if new_role is not None:
             role_id = self.create_role(new_role).id
         assert role_id is not None
+        from operant.application.configuration import (
+            ConfigPatch,
+            ConfigService,
+            workspace_scope_id,
+        )
+
+        if project_id is not None:
+            project = self.store.get_workspace_initialization_by_id(project_id)
+            project_workspace = project.workspace_ref
+            if workspace_ref is not None and workspace_ref != project_workspace:
+                raise ValueError("project and workspace configuration scopes differ")
+            workspace_ref = project_workspace
+        if thread_id is not None:
+            thread = self.get_thread(thread_id)
+            if workspace_ref is not None and thread.workspace_ref != workspace_ref:
+                raise ValueError("workspace_ref differs from the bound Thread workspace")
+            workspace_ref = thread.workspace_ref
+        configuration_workspace = _configuration_workspace_ref or workspace_ref
+        if project_id is None and configuration_workspace is not None:
+            workspace_hash = workspace_scope_id(configuration_workspace)
+            # A Thread can be bound to a workspace before it is registered as a Project.
+            with suppress(NotFoundError):
+                project_id = self.store.get_workspace_initialization(workspace_hash).id
+        run_patch = dict(config_overrides or {})
+        if model_profile_id is not None:
+            run_patch["model_profile_id"] = model_profile_id
+        if effort is not None:
+            run_patch["effort"] = effort
+        if budget_overrides is not None:
+            run_patch["budget"] = {**run_patch.get("budget", {}), **budget_overrides}
+        config = ConfigService(self.store).effective(
+            self.get_role(role_id),
+            project_id=project_id,
+            workspace_ref=configuration_workspace,
+            run_overrides=ConfigPatch.model_validate(run_patch),
+        )
+        effective_values = dict(config.values)
+        local_sources: dict[str, str] = {}
+        if _local_control_bindings:
+            from operant.application.local_control import conversation_local_control_tools
+
+            policy = ToolPolicy.model_validate(effective_values["tool_policy"])
+            allowed = list(policy.allowed_tools)
+            seen_kinds: set[str] = set()
+            for binding in _local_control_bindings:
+                if binding.kind in seen_kinds:
+                    raise ValueError("a local control kind cannot be bound twice")
+                seen_kinds.add(binding.kind)
+                allowed.extend(conversation_local_control_tools(binding.kind))
+                local_sources.update(binding.config_sources())
+            effective_values["tool_policy"] = policy.model_copy(
+                update={"allowed_tools": tuple(dict.fromkeys(allowed))}
+            ).model_dump(mode="json")
+        normalized_workspace_ref = workspace_ref
         return self.factory.create_session(
             role_id,
             model_profile_id=model_profile_id,
             effort=effort,
             budget_overrides=budget_overrides,
             thread_id=thread_id,
+            _new_thread=_new_thread,
+            _onboarding_command=_onboarding_command,
+            _onboarding_title=_onboarding_title,
+            effective_config={
+                **effective_values,
+                "config_sources": {
+                    key: f"{source.scope_type}:{source.scope_id}"
+                    for key, source in config.sources.items()
+                }
+                | local_sources,
+                "config_workspace_ref": normalized_workspace_ref,
+                "config_project_id": project_id,
+            },
         )
 
     def get_session(self, session_id: str) -> Session:
@@ -913,7 +1080,7 @@ class ApplicationService:
 
         refs: list[ContextSourceRef] = []
         coverage = hashlib.sha256()
-        active_goal = ""
+        semantic_entries: list[tuple[str, str, str]] = []
         for item in items:
             assert item.cursor is not None
             item_hash = hashlib.sha256(
@@ -939,15 +1106,35 @@ class ApplicationService:
                 ).encode("utf-8")
             )
             coverage.update(b"\n")
-            if item.item_type.value in {"user_message", "steering"}:
-                text = item.payload.model_dump(mode="json").get("text")
+            if item.item_type.value in {"user_message", "steering", "agent_message"}:
+                text = getattr(item.payload, "text", None)
                 if isinstance(text, str):
-                    active_goal = redact_public_text(text, max_chars=500)
+                    semantic_entries.append(
+                        (
+                            item.id,
+                            "assistant" if item.item_type.value == "agent_message" else "user",
+                            text,
+                        )
+                    )
+        facts = compaction_facts(semantic_entries)
         summary = CompactionSummary(
-            active_goal=active_goal,
+            active_goal=facts["active_goal"],
+            constraints=facts["constraints"],
+            decisions=facts["decisions"],
+            open_tasks=facts["open_tasks"],
             completed_steps=(f"Compacted {len(refs)} committed Canonical Thread Items.",),
+            workspace_state={
+                "source_notes": facts["source_notes"],
+                "user_requirements": facts["user_requirements"],
+            },
             next_actions=("Continue from Items appended after the explicit baseline.",),
         )
+        summary_json = summary.model_dump_json()
+        if len(summary_json.encode("utf-8")) > 12_000:
+            raise ContextLimitExceeded(
+                "manual Compaction would omit required facts; explicitly clear Context "
+                "or start a new Thread"
+            )
         compaction = Compaction(
             session_id=session_id,
             agent_id=agent_id,
@@ -957,7 +1144,7 @@ class ApplicationService:
             source_cursor_end=refs[-1].cursor or 1,
             source_snapshot_hash=coverage.hexdigest(),
             summary=summary,
-            content_hash=hashlib.sha256(summary.model_dump_json().encode("utf-8")).hexdigest(),
+            content_hash=hashlib.sha256(summary_json.encode("utf-8")).hexdigest(),
             covered_item_refs=tuple(refs),
         )
         return compaction.model_copy(update={"id": deterministic_compaction_id(compaction)})
@@ -1542,6 +1729,8 @@ class ApplicationService:
         )
 
     def archive_thread(self, thread_id: str) -> ConversationThread:
+        if self.terminal_manager is not None:
+            self.terminal_manager.cancel_thread(thread_id)
         return self.store.archive_thread(thread_id)
 
     def set_thread_status(
@@ -1549,6 +1738,19 @@ class ApplicationService:
         thread_id: str,
         status: ThreadStatus | str,
     ) -> ConversationThread:
+        if (
+            status
+            in {
+                ThreadStatus.COMPLETED,
+                ThreadStatus.CANCELLED,
+                ThreadStatus.ARCHIVED,
+                "completed",
+                "cancelled",
+                "archived",
+            }
+            and self.terminal_manager is not None
+        ):
+            self.terminal_manager.cancel_thread(thread_id)
         return self.store.set_thread_status(thread_id, status)
 
     def create_turn(self, turn: Turn) -> Turn:
@@ -3090,6 +3292,93 @@ class ApplicationService:
         self._session_run_leases.pop(session_id, None)
         self.store.release_session_run_lease(expected_lease or lease)
 
+    async def _review_session_approval(
+        self,
+        gateway: _PersistentActionGateway,
+        approval: ApprovalRequest,
+    ) -> None:
+        """Try configured model review; every failure leaves the human queue intact."""
+
+        context = gateway.review_context(approval)
+        if context is None:
+            return
+        action, evaluation = context
+        try:
+            from operant.application.configuration import ConfigService
+
+            config = (
+                ConfigService(self.store).get_scope("global", "default").patch.approval_reviewer
+                or ReviewerConfig()
+            )
+            if config.mode != "auto":
+                return
+            attempt = await ApprovalModelReviewer(
+                provider=self.provider,
+                get_profile=self.get_model_profile,
+            ).review(action, evaluation, config)
+            if attempt.decision is None:
+                gateway._audit(
+                    action,
+                    "approval.review_deferred",
+                    evaluation=evaluation,
+                    detail={
+                        "approval_id": approval.id,
+                        "reason_code": attempt.reason_code,
+                        **({"model_profile_id": attempt.profile_id} if attempt.profile_id else {}),
+                    },
+                )
+                return
+            latest = self.store.get_approval_request(approval.session_id, approval.tool_call_id)
+            if latest.id != approval.id or gateway.review_context(latest) is None:
+                return
+            try:
+                result = self.decide_approval(
+                    approval.session_id,
+                    approval.tool_call_id,
+                    approved=attempt.decision.decision is PolicyDecision.ALLOW,
+                    decided_by="reviewer",
+                    reason_code=attempt.decision.reason_code,
+                )
+            except ConflictError:
+                return  # Human decision or expiry won the race.
+            if result["changed"]:
+                decided_evaluation = evaluation.model_copy(
+                    update={
+                        "decision": attempt.decision.decision,
+                        "reason_code": attempt.decision.reason_code,
+                        "reviewer_eligible": False,
+                    }
+                )
+                # The approval decision and its own audit row are committed together.
+                # A secondary security-audit failure must not label it pending again.
+                with suppress(Exception):
+                    gateway._audit(
+                        action,
+                        "approval.decided",
+                        evaluation=decided_evaluation,
+                        detail={
+                            "approval_id": approval.id,
+                            "decided_by": "reviewer",
+                            "reason_code": attempt.decision.reason_code,
+                            "review_summary": attempt.decision.summary,
+                            "model_profile_id": attempt.profile_id,
+                            "model_id": attempt.model_id,
+                        },
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            with suppress(Exception):
+                gateway._audit(
+                    action,
+                    "approval.review_deferred",
+                    evaluation=evaluation,
+                    detail={
+                        "approval_id": approval.id,
+                        "reason_code": "review_internal_error",
+                    },
+                )
+
     async def run_session(
         self,
         session_id: str,
@@ -3103,11 +3392,33 @@ class ApplicationService:
         references: Collection[ReferenceRequest] = (),
         _admission_granted: bool = False,
         memory_enabled: bool = True,
+        selected_skill_ids: Collection[str] | None = None,
+        expected_skill_digests: Mapping[str, str] | None = None,
         memory_run_id: str | None = None,
         _agent_instance_id: str | None = None,
         _collaboration_context: Callable[[], str] | None = None,
     ) -> AsyncIterator[RuntimeEvent]:
         session = self.get_session(session_id)
+        if selected_skill_ids is not None:
+            if not memory_enabled:
+                raise ValueError("explicit Skill invocation requires the memory runtime")
+            if not selected_skill_ids:
+                raise ValueError("explicit Skill invocation requires a selected Skill")
+            source = session.role_snapshot.config_sources.get("skill_ids")
+            if (
+                source
+                and source != f"role_base:{session.role_snapshot.role_id}"
+                and not set(selected_skill_ids).issubset(session.role_snapshot.skill_ids)
+            ):
+                raise PermissionError("Skill is outside the frozen Session binding")
+            if expected_skill_digests is not None and set(expected_skill_digests) != set(
+                selected_skill_ids
+            ):
+                raise PermissionError("selected Skill digest binding changed")
+        if session.role_snapshot.config_workspace_ref is not None and (
+            str(Path(workspace).resolve(strict=True)) != session.role_snapshot.config_workspace_ref
+        ):
+            raise ValueError("run workspace differs from the frozen Session configuration")
         if not _admission_granted:
             try:
                 admitted = self.admit_session_run(
@@ -3156,6 +3467,7 @@ class ApplicationService:
         agent = None
         cancellation: asyncio.Event | None = None
         run_lease: SessionRunLease | None = None
+        bound_history = False
 
         def release_plugin_runs() -> None:
             if self.memory_manager is None or agent is None:
@@ -3209,9 +3521,42 @@ class ApplicationService:
             self.store.update_agent_status(agent.id, AgentStatus.RUNNING)
             cancellation = asyncio.Event()
             self._cancellations[session.id] = cancellation
+            # A different Core may have cancelled this pre-admitted run before
+            # this worker entered the Agent loop. Do not start a model call.
+            if self.store.get_session_run_lease(session.id).cancel_requested:
+                cancellation.set()
+            collaboration = (
+                self.workbench.tools_for(thread_id)
+                if self.workbench is not None and bound_history and thread_id is not None
+                else None
+            )
+            reference_reader = None
+            if thread_id is not None and references:
+                from operant.api_workbench_context import read_context_reference
+
+                def reference_reader(artifact_id: str) -> dict[str, Any]:
+                    return read_context_reference(self, thread_id, tuple(references), artifact_id)
+
+            snapshot = session.role_snapshot
+            factory = self.tool_extension_factory
+            if any(key.startswith("local_control.") for key in snapshot.config_sources):
+                from operant.application.local_control import snapshot_control_bindings
+
+                snapshot_control_bindings(snapshot.config_sources)
+                resolver = getattr(factory, "for_snapshot", None)
+                if not callable(resolver):
+                    raise PermissionError("bound local control is unavailable")
+                extensions = resolver(self.store.path, snapshot)
+            else:
+                extensions = (
+                    factory(self.store.path, snapshot.tool_policy) if factory is not None else None
+                )
             tools = WorkspaceTools(
                 workspace,
-                policy=session.role_snapshot.tool_policy,
+                policy=snapshot.tool_policy,
+                collaboration=collaboration,
+                reference_reader=reference_reader,
+                extensions=extensions,
             )
             normalized_workspace = str(Path(workspace).resolve())
             manager = self.memory_manager
@@ -3219,10 +3564,27 @@ class ApplicationService:
                 manager = self.memory_manager_factory()
                 self.memory_manager = manager
             skill_context = (
-                manager.begin_skill_run(normalized_workspace, agent.id)
+                manager.begin_skill_run(
+                    normalized_workspace,
+                    agent.id,
+                    selected_ids=(
+                        selected_skill_ids
+                        if selected_skill_ids is not None
+                        else session.role_snapshot.skill_ids
+                        if session.role_snapshot.config_sources.get("skill_ids")
+                        and session.role_snapshot.config_sources.get("skill_ids")
+                        != f"role_base:{session.role_snapshot.role_id}"
+                        else None
+                    ),
+                    expected_digests=(
+                        dict(expected_skill_digests) if expected_skill_digests is not None else None
+                    ),
+                )
                 if manager is not None and memory_enabled
                 else ""
             )
+            if selected_skill_ids is not None and not skill_context:
+                raise ValueError("explicit Skill invocation has no authorized Skill context")
             experience_run = None
             if manager is not None:
                 from operant.memory_plugins.experience_runtime import begin_experience_run
@@ -3254,7 +3616,27 @@ class ApplicationService:
                     references=tuple(references),
                 )
             context_composer = PersistentContextComposer(
-                collaboration_context=_collaboration_context,
+                collaboration_context=(
+                    (
+                        lambda: "\n".join(
+                            filter(
+                                None,
+                                (
+                                    _collaboration_context()
+                                    if _collaboration_context is not None
+                                    else "",
+                                    self.workbench.peek_inbox(thread_id)
+                                    if self.workbench is not None
+                                    and bound_history
+                                    and thread_id is not None
+                                    else "",
+                                ),
+                            )
+                        )
+                    )
+                    if self.workbench is not None and bound_history and thread_id is not None
+                    else _collaboration_context
+                ),
                 before_compose=experience_run.guard if experience_run is not None else None,
                 memory_run=memory_run,
                 count_provider_tokens=manager is not None,
@@ -3274,16 +3656,17 @@ class ApplicationService:
                 artifact_reader=self._read_artifact_for_context,
                 artifact_writer=lambda content: self._write_tool_result_artifact(content=content),
             )
+            action_gateway = _PersistentActionGateway(
+                store=self.store,
+                session_id=session.id,
+                agent_id=agent.id,
+                tools=tools,
+                lease=lease,
+            )
             loop = AgentLoop(
                 self.provider,
                 tools,
-                action_gateway=_PersistentActionGateway(
-                    store=self.store,
-                    session_id=session.id,
-                    agent_id=agent.id,
-                    tools=tools,
-                    lease=lease,
-                ),
+                action_gateway=action_gateway,
                 context_composer=context_composer,
             )
         except Exception as exc:
@@ -3296,7 +3679,7 @@ class ApplicationService:
                         RuntimeEvent(
                             event_type="agent.failed",
                             turn=0,
-                            payload={"error_type": type(exc).__name__},
+                            payload=provider_failure_payload(exc),
                         ),
                         history_turn=history_turn,
                     )
@@ -3312,7 +3695,7 @@ class ApplicationService:
                         RuntimeEvent(
                             event_type="session.run_failed",
                             turn=0,
-                            payload={"error_type": type(exc).__name__},
+                            payload=provider_failure_payload(exc),
                         ),
                         history_turn=history_turn,
                     )
@@ -3356,6 +3739,9 @@ class ApplicationService:
                     "detail": detail,
                 }
             durable = self.store.get_approval_request(session.id, tool_call_id)
+            if durable.status is ApprovalStatus.PENDING and not future.done():
+                await self._review_session_approval(action_gateway, durable)
+                durable = self.store.get_approval_request(session.id, tool_call_id)
             if durable.status is not ApprovalStatus.PENDING and not future.done():
                 future.set_result(durable.status is ApprovalStatus.APPROVED)
             return await future
@@ -3372,7 +3758,6 @@ class ApplicationService:
         async def watch_lease() -> None:
             current = run_lease
             while True:
-                await asyncio.sleep(self._session_lease_heartbeat_seconds)
                 renewed = self.store.renew_session_run_lease(
                     current,
                     ttl_seconds=self._session_lease_ttl_seconds,
@@ -3384,6 +3769,7 @@ class ApplicationService:
                 mapped = self._session_run_leases.get(session.id)
                 if mapped is not None and self._same_lease(mapped, run_lease):
                     self._session_run_leases[session.id] = renewed
+                await asyncio.sleep(self._session_lease_heartbeat_seconds)
 
         lease_watcher = asyncio.create_task(watch_lease())
         next_event: asyncio.Future[RuntimeEvent] | None = None
@@ -3391,6 +3777,16 @@ class ApplicationService:
 
         try:
             while True:
+                if cancellation.is_set():
+                    cancel_event = self._persist_runtime_event(
+                        session.id,
+                        agent.id,
+                        RuntimeEvent(event_type="agent.cancelled", turn=0, payload={}),
+                        history_turn=history_turn,
+                    )
+                    yield cancel_event
+                    final_status = AgentStatus.CANCELLED
+                    break
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     timeout_event = RuntimeEvent(
@@ -3476,11 +3872,47 @@ class ApplicationService:
                             "detail": str(runtime_event.payload["detail"]),
                         }
 
-                runtime_event = self._persist_runtime_event(
-                    session.id, agent.id, runtime_event, history_turn=history_turn
-                )
+                try:
+                    runtime_event = self._persist_runtime_event(
+                        session.id, agent.id, runtime_event, history_turn=history_turn
+                    )
+                except ConflictError:
+                    if runtime_event.event_type != "agent.completed":
+                        raise
+                    current_lease = self.store.get_session_run_lease(session.id)
+                    if not current_lease.cancel_requested:
+                        raise
+                    runtime_event = self._persist_runtime_event(
+                        session.id,
+                        agent.id,
+                        RuntimeEvent(event_type="agent.cancelled", turn=runtime_event.turn),
+                        history_turn=history_turn,
+                    )
                 yield runtime_event
+                extension_results = await dispatch_persisted_runtime_event(
+                    self.extension_registry,
+                    event_type=runtime_event.event_type,
+                    turn=runtime_event.turn,
+                    payload=runtime_event.payload,
+                )
+                for extension_result in extension_results:
+                    extension_event = self._persist_runtime_event(
+                        session.id,
+                        agent.id,
+                        RuntimeEvent(
+                            event_type="extension.runtime_dispatched",
+                            turn=runtime_event.turn,
+                            payload=extension_result,
+                        ),
+                        history_turn=history_turn,
+                    )
+                    yield extension_event
+                if runtime_event.event_type == "agent.cancelled":
+                    final_status = AgentStatus.CANCELLED
+                    break
                 if runtime_event.event_type == "model.completed":
+                    if self.workbench is not None and bound_history and thread_id is not None:
+                        self.workbench.acknowledge_inbox(thread_id)
                     try:
                         self._record_runtime_cache_observation(session, runtime_event)
                     except Exception as exc:
@@ -3509,7 +3941,7 @@ class ApplicationService:
             failure_event = RuntimeEvent(
                 event_type="agent.failed",
                 turn=0,
-                payload={"error_type": type(exc).__name__},
+                payload=provider_failure_payload(exc),
             )
             failure_event = self._persist_runtime_event(
                 session.id, agent.id, failure_event, history_turn=history_turn
@@ -3535,11 +3967,24 @@ class ApplicationService:
                 self.store.update_agent_status(agent.id, final_status)
                 if self._cancellations.get(session.id) is cancellation:
                     self._cancellations.pop(session.id, None)
+                if self.workbench is not None and bound_history and thread_id is not None:
+                    self.workbench.clear_run_inbox(thread_id)
                 self._clear_session_approvals(session.id)
                 self.release_session_run(session.id, run_lease)
+                if (
+                    final_status is AgentStatus.COMPLETED
+                    and self.workbench is not None
+                    and bound_history
+                    and thread_id is not None
+                ):
+                    self.workbench.schedule_pending_wake(thread_id)
 
     def cancel_session(self, session_id: str) -> bool:
         self.get_session(session_id)
+        if self.terminal_manager is not None:
+            self.terminal_manager.cancel_session(session_id)
+        if self.workbench is not None:
+            self.workbench.cancel_session_children(session_id)
         accepted = self.store.cancel_session_run_lease(session_id)
         cancellation = self._cancellations.get(session_id)
         if cancellation is not None:
@@ -3560,12 +4005,16 @@ class ApplicationService:
         tool_call_id: str,
         *,
         approved: bool,
+        decided_by: str = "user",
+        reason_code: str | None = None,
     ) -> dict[str, object]:
         self.get_session(session_id)
         request, decision, changed = self.store.decide_approval(
             session_id,
             tool_call_id,
             approved=approved,
+            decided_by=decided_by,
+            reason_code=reason_code,
         )
         key = (session_id, tool_call_id)
         future = self._approval_futures.get(key)
@@ -3647,15 +4096,26 @@ class ApplicationService:
                     turn_id=history_turn.id,
                     payload=payload,
                 )
-        persisted = self.store.append_event(
-            Event(
-                session_id=session_id,
-                agent_id=agent_id,
-                event_type=sanitized_event.event_type,
-                payload={"turn": sanitized_event.turn, **sanitized_event.payload},
-            ),
-            history_item=history_item,
+        durable_event = Event(
+            session_id=session_id,
+            agent_id=agent_id,
+            event_type=sanitized_event.event_type,
+            payload={"turn": sanitized_event.turn, **sanitized_event.payload},
         )
+        try:
+            persisted = self.store.append_event(durable_event, history_item=history_item)
+        except ConflictError:
+            # A second Core can cancel the Thread before this owner records
+            # its final event. The Thread history is closed, but the Session
+            # event still needs a durable terminal fact for recovery.
+            if (
+                history_item is None
+                or history_turn is None
+                or event.event_type not in {"agent.cancelled", "agent.failed", "agent.timed_out"}
+                or self.get_thread(history_turn.thread_id).status is ThreadStatus.ACTIVE
+            ):
+                raise
+            persisted = self.store.append_event(durable_event)
         return sanitized_event.model_copy(update={"cursor": persisted.cursor})
 
     def _clear_session_approvals(self, session_id: str) -> None:

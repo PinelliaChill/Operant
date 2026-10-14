@@ -102,6 +102,7 @@ function legacyId(
 export function mapThreadProjection(thread: Phase1E.ThreadProjection): LiveThread {
   return {
     id: thread.id,
+    parentThreadId: thread.parent_thread_id,
     title: thread.id,
     workspaceRef: thread.workspace_ref,
     workspace: thread.workspace_ref || '',
@@ -145,6 +146,22 @@ export function mapWorkspaceFile(entry: Phase1E.WorkspaceFileEntry): LiveWorkspa
     size: entry.size_bytes,
     modifiedAt: entry.modified_at,
   };
+}
+
+export interface LiveWorkspaceFilePage {
+  files: LiveWorkspaceFile[];
+  snapshot: string;
+  nextPageToken: string | null;
+}
+
+/** Keep the server's order while discarding duplicate paths across pages. */
+export function appendWorkspaceFiles(current: LiveWorkspaceFile[], next: LiveWorkspaceFile[]): LiveWorkspaceFile[] {
+  const seen = new Set(current.map((file) => file.path));
+  return [...current, ...next.filter((file) => {
+    if (seen.has(file.path)) return false;
+    seen.add(file.path);
+    return true;
+  })];
 }
 
 function eventData(data: unknown): Phase1E.RuntimeEvent {
@@ -240,11 +257,33 @@ export class LiveClientAdapter {
   }
 
   async listWorkspaceFiles(workspaceId: string, relativePath = ''): Promise<LiveWorkspaceFile[]> {
+    return (await this.listWorkspaceFilePage(workspaceId, relativePath)).files;
+  }
+
+  async listWorkspaceFilePage(
+    workspaceId: string,
+    relativePath = '',
+    pageToken?: string,
+  ): Promise<LiveWorkspaceFilePage> {
     try {
       const page = await this.client.listWorkspaceFiles(workspaceId, {
         path: relativePath || undefined,
+        limit: 100,
+        pageToken,
       });
-      return page.entries.map(mapWorkspaceFile);
+      if (page.workspace_id !== workspaceId) {
+        throw new LiveAdapterError({
+          code: 'workspace_scope_mismatch',
+          message: 'Core 返回了其他项目的文件目录，请刷新后重试。',
+          retryable: false,
+          recovery: 'none',
+        });
+      }
+      return {
+        files: page.entries.map(mapWorkspaceFile),
+        snapshot: page.snapshot,
+        nextPageToken: page.next_page_token,
+      };
     } catch (error: unknown) {
       throw normalizeLiveError(error);
     }

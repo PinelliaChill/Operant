@@ -32,7 +32,7 @@ export function B24ContextInspector({ sessionId, busy }: { sessionId: string; bu
         const impact = await b25Client.getContextImpact(sessionId);
         if (version === epoch.current) { setImpacts(impact.entries); setImpactError(''); }
       } catch {
-        if (version === epoch.current) setImpactError('无法读取当前治理状态；保留上次投影，不能据此确认来源仍有效。');
+        if (version === epoch.current) setImpactError('无法读取当前来源状态；上次结果可能已过期，请刷新后再确认来源是否有效。');
       }
     } catch (e) {
       if (version !== epoch.current) return;
@@ -46,7 +46,7 @@ export function B24ContextInspector({ sessionId, busy }: { sessionId: string; bu
     const impact = impacts.find((item) => item.ref.dataset_id === ref.dataset_id && item.ref.record_id === ref.record_id && item.ref.version === ref.version && item.ref.content_digest === ref.content_digest);
     if (!impact) return null;
     return <p className={!impact.source_and_time_valid ? 'b24-error' : undefined}>
-      当前来源与时效：{impact.source_and_time_valid ? '检查通过，发送前仍由 Core 复核' : '已失效或不可用；已发送内容保留，后续请求可能被阻止'}
+      当前来源与时效：{impact.source_and_time_valid ? '检查通过，发送前仍会复核' : '已失效或不可用；已发送内容保留，后续请求可能被阻止'}
       {(impact.conflict_proposal_ids ?? []).length > 0 && <> · 有 {(impact.conflict_proposal_ids ?? []).length} 项冲突候选待人工核对</>}
     </p>;
   }

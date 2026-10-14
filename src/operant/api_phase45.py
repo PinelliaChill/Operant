@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from operant.application.approval_review import ApprovalModelReviewer, ReviewerConfig
 from operant.application.graph import GraphRuntime
 from operant.application.phase45_gateway import Phase45ActionGateway
 from operant.application.scheduler import (
@@ -52,7 +54,12 @@ from operant.persistence.graph_team import SQLiteGraphRepository
 from operant.persistence.phase45 import SQLitePhase45Repository
 from operant.persistence.scheduler import SQLiteSchedulerStore
 from operant.persistence.security import SQLiteSecurityRepository
-from operant.persistence.sqlite import ConflictError, IdempotencyConflictError, SQLiteStore
+from operant.persistence.sqlite import (
+    ConflictError,
+    IdempotencyConflictError,
+    NotFoundError,
+    SQLiteStore,
+)
 from operant.runtime.scheduler import SchedulerWorker
 from operant.runtime.scheduler_integration import (
     GraphSchedulerActionGateway,
@@ -61,6 +68,7 @@ from operant.runtime.scheduler_integration import (
     SQLiteGraphDispatchRegistry,
     fastapi_scheduler_lifespan,
 )
+from operant.runtime.scheduler_watch import SchedulerWatchService
 from operant.skills import SkillDiscovery, SkillDiscoveryLimits
 
 _SECRET_REF_PATTERN = r"^[A-Z][A-Z0-9_]{1,127}$"
@@ -174,6 +182,7 @@ class McpToolCallBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     arguments: dict[str, Any] = Field(default_factory=dict)
+    session_id: str | None = Field(default=None, min_length=1, max_length=300)
 
 
 class Phase45ApprovalDecisionBody(BaseModel):
@@ -194,6 +203,13 @@ class IdempotentTriggerBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     idempotency_key: str = Field(min_length=1, max_length=300)
+
+
+class ApplicationSignalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal["application.signal"]
+    event_id: str = Field(min_length=1, max_length=200)
 
 
 class LeasedReferenceResolver:
@@ -234,6 +250,8 @@ def install_phase45_routes(
     mcp_workspace_roots: Mapping[str, str | Path] | None = None,
     policy_engine: PolicyEngine | None = None,
     approval_reviewer: ApprovalReviewerAdapter | None = None,
+    approval_model_reviewer: ApprovalModelReviewer | None = None,
+    approval_reviewer_config: Callable[[], ReviewerConfig] | None = None,
 ) -> None:
     repository = SQLiteSecurityRepository(store)
     phase_repository = SQLitePhase45Repository(store)
@@ -242,14 +260,19 @@ def install_phase45_routes(
     engine = policy_engine or PolicyEngine(balanced_policy_bundle())
     broker = CapabilityBroker(repository)
     remediator = DenialRemediator(repository)
-    phase_gateway = Phase45ActionGateway(repository, phase_repository, engine)
+    phase_gateway = Phase45ActionGateway(
+        repository,
+        phase_repository,
+        engine,
+        on_approval_requested=lambda approval_id: schedule_automatic_review(approval_id),
+    )
     secret_broker = SecretBroker()
     trusted_skill_roots: dict[str, Path] = {}
     for root_ref, configured_root in (skill_roots or {}).items():
         root = Path(configured_root)
         if not root_ref or len(root_ref) > 200 or not root.is_absolute():
             raise ValueError("configured skill roots require bounded references and absolute paths")
-        trusted_skill_roots[root_ref] = root.resolve(strict=True)
+        trusted_skill_roots[root_ref] = root.resolve(strict=False)
     trusted_mcp_workspace_roots: dict[str, Path] = {}
     for root_ref, configured_root in (mcp_workspace_roots or {}).items():
         root = Path(configured_root)
@@ -264,6 +287,7 @@ def install_phase45_routes(
         trusted_mcp_workspace_roots[root_ref] = resolved
     mcp_runtimes: dict[str, McpAdapter] = {}
     mcp_expiry_tasks: dict[str, asyncio.Task[None]] = {}
+    approval_review_tasks: dict[str, asyncio.Task[None]] = {}
     phase_repository.reconcile_mcp_lifecycle()
     graph_repository = SQLiteGraphRepository(store)
     graph_runtime = GraphRuntime(graph_repository)
@@ -279,6 +303,8 @@ def install_phase45_routes(
         graph_runtime=graph_runtime,
         security=scheduler_security,
         dispatch_registry=SQLiteGraphDispatchRegistry(store.path),
+        execution_scheduler=lambda run_id: app.state.b24_schedule_graph(run_id),
+        execution_canceller=lambda run_id: app.state.b24_graph_executor.cancel(run_id),
     )
     scheduler_worker = SchedulerWorker(
         store=scheduler_store,
@@ -289,6 +315,7 @@ def install_phase45_routes(
         store=scheduler_store,
         trigger_service=trigger_service,
         worker=scheduler_worker,
+        watch_service=SchedulerWatchService(scheduler_store),
         owner=f"operant-core-{os.getpid()}",
     )
     app.state.security_repository = repository
@@ -303,6 +330,11 @@ def install_phase45_routes(
     app.state.scheduler_coordinator = scheduler_coordinator
 
     async def close_mcp_runtimes() -> None:
+        for task in approval_review_tasks.values():
+            task.cancel()
+        if approval_review_tasks:
+            await asyncio.gather(*approval_review_tasks.values(), return_exceptions=True)
+        approval_review_tasks.clear()
         for task in mcp_expiry_tasks.values():
             task.cancel()
         if mcp_expiry_tasks:
@@ -468,7 +500,14 @@ def install_phase45_routes(
             raise HTTPException(status_code=404, detail="approval not found") from exc
 
     def audit_approval_decision(
-        approval: dict[str, Any], *, approved: bool, decided_by: str, changed: bool
+        approval: dict[str, Any],
+        *,
+        approved: bool,
+        decided_by: str,
+        changed: bool,
+        review_summary: str | None = None,
+        model_profile_id: str | None = None,
+        model_id: str | None = None,
     ) -> None:
         if not changed:
             return
@@ -483,9 +522,106 @@ def install_phase45_routes(
                     "approval_id": approval["approval_id"],
                     "decided_by": decided_by,
                     "reason_code": approval["reason_code"],
+                    **({"review_summary": review_summary} if review_summary else {}),
+                    **({"model_profile_id": model_profile_id} if model_profile_id else {}),
+                    **({"model_id": model_id} if model_id else {}),
                 },
             )
         )
+
+    async def automatic_review(approval_id: str, config: ReviewerConfig) -> None:
+        if approval_model_reviewer is None:
+            return
+        action: ActionRequest | None = None
+        try:
+            pending = phase_repository.get_phase45_approval(approval_id)
+            if pending["status"] != "pending":
+                return
+            action = repository.get_security_action(str(pending["action_hash"]))
+            evaluation = engine.evaluate(action)
+            attempt = await approval_model_reviewer.review(action, evaluation, config)
+            if attempt.decision is None:
+                repository.append_security_audit(
+                    SecurityAuditEvent(
+                        action_hash=action.action_hash,
+                        principal=action.principal,
+                        event_type="approval.review_deferred",
+                        decision=PolicyDecision.ASK,
+                        detail={
+                            "approval_id": approval_id,
+                            "reason_code": attempt.reason_code,
+                            **(
+                                {"model_profile_id": attempt.profile_id}
+                                if attempt.profile_id
+                                else {}
+                            ),
+                        },
+                    )
+                )
+                return
+            # A changed policy, action binding, or new hard DENY invalidates the
+            # model's earlier recommendation before writing a decision.
+            current = engine.evaluate(action)
+            if (
+                current.decision is not PolicyDecision.ASK
+                or current.hard_deny
+                or not current.reviewer_eligible
+                or current.policy_version != pending["policy_version"]
+            ):
+                return
+            approved = attempt.decision.decision is PolicyDecision.ALLOW
+            try:
+                approval, changed = phase_repository.decide_phase45_approval(
+                    approval_id,
+                    approved=approved,
+                    decided_by="reviewer",
+                    reason_code=attempt.decision.reason_code,
+                )
+            except ConflictError:
+                return  # A human decision or expiry won the race.
+            audit_approval_decision(
+                approval,
+                approved=approved,
+                decided_by="reviewer",
+                changed=changed,
+                review_summary=attempt.decision.summary,
+                model_profile_id=attempt.profile_id,
+                model_id=attempt.model_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if action is not None:
+                with suppress(Exception):
+                    repository.append_security_audit(
+                        SecurityAuditEvent(
+                            action_hash=action.action_hash,
+                            principal=action.principal,
+                            event_type="approval.review_deferred",
+                            decision=PolicyDecision.ASK,
+                            detail={
+                                "approval_id": approval_id,
+                                "reason_code": "review_internal_error",
+                            },
+                        )
+                    )
+
+    def schedule_automatic_review(approval_id: str) -> None:
+        if approval_model_reviewer is None or approval_reviewer_config is None:
+            return
+        try:
+            config = approval_reviewer_config()
+        except Exception:
+            return
+        if config.mode != "auto" or approval_id in approval_review_tasks:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # Synchronous callers leave the durable approval for a human.
+        task = loop.create_task(automatic_review(approval_id, config))
+        approval_review_tasks[approval_id] = task
+        task.add_done_callback(lambda _: approval_review_tasks.pop(approval_id, None))
 
     @app.post("/v1/security/approvals/{approval_id}", operation_id="decidePhase45Approval")
     async def decide_phase45_approval(
@@ -522,6 +658,15 @@ def install_phase45_routes(
             action = repository.get_security_action(str(pending["action_hash"]))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="approval not found") from exc
+        if (
+            re.fullmatch(r"paired-skill-source:caller_[0-9a-f]{32}", action.principal)
+            and action.tool == "skill_source"
+            and action.operation in {"add", "remove"}
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="paired Skill source changes require a user decision",
+            )
         evaluation = engine.evaluate(action)
         try:
             reviewer_decision = await approval_reviewer.review(action, evaluation)
@@ -624,10 +769,10 @@ def install_phase45_routes(
 
     @app.post("/v1/skills/discover", operation_id="discoverSkills")
     async def discover_skills(body: SkillDiscoverBody) -> dict[str, Any]:
-        selected_refs = body.root_refs or tuple(sorted(trusted_skill_roots))
-        if any(ref not in trusted_skill_roots for ref in selected_refs):
+        configured = dict(getattr(app.state, "b23_skill_roots", trusted_skill_roots))
+        selected_refs = body.root_refs or tuple(sorted(configured))
+        if any(ref not in configured for ref in selected_refs):
             raise HTTPException(status_code=404, detail="configured skill root not found")
-        selected_roots = tuple(trusted_skill_roots[ref] for ref in selected_refs)
         guard_side_effect(
             tool="skill_discovery",
             operation="read",
@@ -637,19 +782,28 @@ def install_phase45_routes(
             idempotency_key="skill-discovery:"
             + ActionRequest.calculate_hash({"root_refs": list(selected_refs)}),
         )
+        available = {ref: Path(path) for ref, path in configured.items() if Path(path).is_dir()}
+        ordered_refs = tuple(sorted(available))
         try:
-            result = SkillDiscovery(selected_roots, limits=SkillDiscoveryLimits()).discover()
+            result = SkillDiscovery(
+                tuple(available[ref] for ref in ordered_refs), limits=SkillDiscoveryLimits()
+            ).discover()
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         persisted: list[dict[str, Any]] = []
-        for root_index, root_ref in enumerate(selected_refs):
-            root_candidates = tuple(
+        for root_ref in selected_refs:
+            root_index = ordered_refs.index(root_ref) if root_ref in ordered_refs else -1
+            candidates = tuple(
                 candidate for candidate in result.candidates if candidate.root_index == root_index
             )
-            persisted.extend(phase_repository.replace_skill_candidates(root_ref, root_candidates))
+            persisted.extend(phase_repository.replace_skill_candidates(root_ref, candidates))
         return {
             "candidates": persisted,
-            "issues": [issue.model_dump(mode="json") for issue in result.issues],
+            "issues": [
+                issue.model_dump(mode="json")
+                for issue in result.issues
+                if ordered_refs[issue.root_index] in selected_refs
+            ],
         }
 
     @app.get("/v1/skills", operation_id="listSkills")
@@ -985,6 +1139,15 @@ def install_phase45_routes(
         server_id: str, tool_name: str, body: McpToolCallBody
     ) -> dict[str, Any]:
         bounded(body.arguments)
+        if body.session_id is not None:
+            try:
+                bound_session = store.get_session(body.session_id)
+            except NotFoundError as exc:
+                raise HTTPException(status_code=404, detail="Session not found") from exc
+            if server_id not in bound_session.role_snapshot.mcp_server_ids:
+                raise HTTPException(
+                    status_code=403, detail="MCP server is not bound to this Session"
+                )
         adapter = mcp_runtimes.get(server_id)
         if adapter is None:
             raise HTTPException(status_code=409, detail="MCP server is not running")
@@ -1087,6 +1250,20 @@ def install_phase45_routes(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="schedule not found") from exc
 
+    @app.get("/v1/schedules/{schedule_id}/watch-status", operation_id="getScheduleWatchStatus")
+    async def get_schedule_watch_status(schedule_id: str) -> dict[str, Any]:
+        try:
+            schedule = scheduler_store.get_schedule(schedule_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="schedule not found") from exc
+        if schedule.hook_event_type not in {"file.changed", "git.head.changed"}:
+            raise HTTPException(status_code=409, detail="schedule is not a file or Git watcher")
+        return {
+            "schedule_id": schedule.id,
+            "schedule_version": schedule.version,
+            **scheduler_store.get_watch_status(schedule.id, schedule.version),
+        }
+
     @app.post("/v1/schedules/{schedule_id}/status", operation_id="setScheduleStatus")
     async def set_schedule_status(schedule_id: str, body: ScheduleStatusBody) -> dict[str, Any]:
         guard_schedule(
@@ -1120,6 +1297,28 @@ def install_phase45_routes(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return request.model_dump(mode="json")
 
+    @app.post("/v1/schedules/{schedule_id}/hook", operation_id="signalScheduleHook")
+    async def signal_schedule_hook(
+        schedule_id: str, body: ApplicationSignalBody, request: Request
+    ) -> dict[str, Any]:
+        if request.client is None or request.client.host not in {"127.0.0.1", "::1", "testclient"}:
+            raise HTTPException(
+                status_code=403, detail="application signals require a local caller"
+            )
+        guard_schedule(
+            "signal_hook",
+            schedule_id,
+            body.model_dump(mode="json"),
+            f"hook:{schedule_id}:{hashlib.sha256(body.event_id.encode()).hexdigest()}",
+        )
+        try:
+            queued = trigger_service.signal_hook(schedule_id, event_id=body.event_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="schedule not found") from exc
+        except SchedulerConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return queued.model_dump(mode="json")
+
     @app.get("/v1/scheduler/queue", operation_id="listSchedulerQueue")
     async def list_scheduler_queue(
         status: RunRequestStatus | None = None,
@@ -1131,6 +1330,15 @@ def install_phase45_routes(
                 for item in scheduler_store.list_requests(status=status, limit=limit)
             ]
         }
+
+    @app.post("/v1/scheduler/queue/{request_id}/cancel", operation_id="cancelRunRequest")
+    async def cancel_run_request(request_id: str) -> dict[str, Any]:
+        guard_schedule("cancel_request", request_id, {}, f"scheduler-cancel:{request_id}")
+        try:
+            queued = scheduler_store.request_cancel(request_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="run request not found") from exc
+        return queued.model_dump(mode="json")
 
     @app.get("/v1/scheduler/dead-letter", operation_id="listDeadLetter")
     async def list_dead_letter(

@@ -47,6 +47,7 @@ PHASE45_CAPABILITIES: tuple[str, ...] = (
     "dead_letter_replay",
 )
 PHASE56_PROTOCOL_VERSION = "phase56.v1"
+CALLER_PAIRING_PROTOCOL_VERSION = "caller-pairing.v1"
 PHASE56_MIN_CLIENT_VERSION = "phase56.v1"
 PHASE56_CAPABILITIES: tuple[str, ...] = (
     "remote_control",
@@ -68,6 +69,16 @@ BETA_CAPABILITIES: tuple[str, ...] = (
     "https_target_connector",
     "container_writer_lifecycle",
     "generated_client",
+)
+WORKBENCH_PROTOCOL_VERSION = "workbench.v1"
+WORKBENCH_CAPABILITIES: tuple[str, ...] = (
+    "child_agents",
+    "directed_mailbox",
+    "context_references",
+    "conversation_commands",
+    "workspace_file_content",
+    "workspace_file_diff",
+    "interactive_terminal",
 )
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
@@ -100,6 +111,26 @@ def phase1e_protocol_metadata() -> dict[str, Any]:
         "min_client_version": PHASE1E_MIN_CLIENT_VERSION,
         "capabilities": list(PHASE1E_CAPABILITIES),
     }
+
+
+def workbench_protocol_metadata() -> dict[str, Any]:
+    return _protocol_metadata(
+        digest_path=protocol_schema_path("operant-workbench.openapi.sha256"),
+        protocol_version=WORKBENCH_PROTOCOL_VERSION,
+        min_client_version=WORKBENCH_PROTOCOL_VERSION,
+        capabilities=WORKBENCH_CAPABILITIES,
+        label="Workbench",
+    )
+
+
+def caller_pairing_protocol_metadata() -> dict[str, Any]:
+    return _protocol_metadata(
+        digest_path=protocol_schema_path("operant-caller-pairing.openapi.sha256"),
+        protocol_version=CALLER_PAIRING_PROTOCOL_VERSION,
+        min_client_version=CALLER_PAIRING_PROTOCOL_VERSION,
+        capabilities=("exclusive_skill_source_pairing", "encrypted_caller_readback"),
+        label="Caller pairing",
+    )
 
 
 def phase23_protocol_metadata() -> dict[str, Any]:

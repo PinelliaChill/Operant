@@ -1122,7 +1122,7 @@ class SequentialCodingWorkflow:
                 execution_lease
             ):
                 raise ConflictError("workflow execution lease is expired, cancelled, or fenced")
-            session = self.service.create_session(capture.role_id)
+            session = self.service.create_session(capture.role_id, workspace_ref=str(workspace))
             capture.session_id = session.id
             async for event in self.service.run_session(
                 session.id,

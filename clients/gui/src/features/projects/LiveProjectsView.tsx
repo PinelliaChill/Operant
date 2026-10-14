@@ -111,10 +111,10 @@ export const LiveProjectsView: React.FC = () => {
                 <span className="live-project-card-copy"><strong>{project.name}</strong><span>{project.workspaceRef}</span></span>
                 <StatusBadge status={project.writable ? 'active' : 'paused'} label={project.writable ? '可写' : '只读'} size="sm" />
               </button>
-              <div className="live-project-card-meta"><span>{projectThreads.length} 个 Thread</span><span>{project.runIds.length} 个 Run 摘要</span></div>
+              <div className="live-project-card-meta"><span>{projectThreads.length} 个对话</span><span>{project.runIds.length} 个任务</span></div>
               {isSelected && <ProjectFiles files={filesWorkspaceId === project.id ? files : []} loading={filesLoadingId === project.id} onLoad={() => void showProjectFiles(project)} />}
               <div className="live-project-card-actions">
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { if (selectProject(project.id)) navigate('/chat'); }}>查看 Thread</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { if (selectProject(project.id)) navigate('/chat'); }}>查看对话</button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => void showProjectFiles(project)} disabled={filesLoadingId === project.id}>浏览文件</button>
               </div>
             </article>

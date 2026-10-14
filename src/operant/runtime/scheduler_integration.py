@@ -31,6 +31,7 @@ from operant.runtime.scheduler import (
     SchedulerActionGateway,
     WorkflowDispatch,
 )
+from operant.runtime.scheduler_watch import SchedulerWatchService
 
 
 def utc_now() -> datetime:
@@ -306,6 +307,8 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
         security: SchedulerSecurityService,
         dispatch_registry: GraphDispatchRegistry,
         workspace_resolver: Callable[[WorkflowDispatch], str | None] | None = None,
+        execution_scheduler: Callable[[str], None] | None = None,
+        execution_canceller: Callable[[str], None] | None = None,
     ) -> None:
         if graph_runtime.repository is not graph_repository:
             raise ValueError("graph runtime and repository must share one authority")
@@ -313,7 +316,9 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
         self.graph_runtime = graph_runtime
         self.security = security
         self.dispatch_registry = dispatch_registry
-        self.workspace_resolver = workspace_resolver or (lambda _dispatch: None)
+        self.workspace_resolver = workspace_resolver or self._workspace_from_input
+        self.execution_scheduler = execution_scheduler
+        self.execution_canceller = execution_canceller
 
     def dispatch_workflow(self, action: WorkflowDispatch) -> str:
         # Definition existence, publication, compilation/input validity and policy
@@ -333,6 +338,10 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
                 f"scheduler.workflow_invalid.{type(exc).__name__}", outcome_unknown=False
             ) from exc
         authorized = self.security.authorize(action)
+        try:
+            workspace = self.workspace_resolver(action)
+        except (OSError, ValueError, TypeError) as exc:
+            raise DispatchError("scheduler.workspace_invalid", outcome_unknown=False) from exc
         graph_run_id = self._graph_run_id(
             action.source_run_request_id, authorized.action.action_hash
         )
@@ -374,7 +383,7 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
             run = self.graph_runtime.create_run(
                 definition,
                 input=dict(action.workflow_input),
-                workspace_or_target=self.workspace_resolver(action),
+                workspace_or_target=workspace,
                 run_id=graph_run_id,
             )
             started = self.graph_runtime.start_run(run.id)
@@ -408,6 +417,28 @@ class GraphSchedulerActionGateway(SchedulerActionGateway):
 
     def workflow_status(self, workflow_run_id: str) -> GraphRunStatus:
         return self.graph_repository.get_run(workflow_run_id).status
+
+    def ensure_execution(self, workflow_run_id: str) -> None:
+        if self.execution_scheduler is not None:
+            self.execution_scheduler(workflow_run_id)
+
+    def cancel_workflow(self, workflow_run_id: str) -> None:
+        if self.execution_canceller is not None:
+            self.execution_canceller(workflow_run_id)
+        else:
+            self.graph_runtime.cancel_run(workflow_run_id)
+
+    @staticmethod
+    def _workspace_from_input(dispatch: WorkflowDispatch) -> str | None:
+        value = dispatch.workflow_input.get("workspace_or_target")
+        if value is None:
+            return None
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise ValueError("scheduled workspace must be an absolute path")
+        resolved = Path(value).resolve(strict=True)
+        if not resolved.is_dir():
+            raise ValueError("scheduled workspace must be a directory")
+        return str(resolved)
 
     @staticmethod
     def _graph_run_id(source_run_request_id: str, action_hash: str) -> str:
@@ -444,6 +475,7 @@ class SchedulerCoordinator:
         store: SQLiteSchedulerStore,
         trigger_service: TriggerService,
         worker: SchedulerWorkerPort,
+        watch_service: SchedulerWatchService | None = None,
         owner: str,
         interval_seconds: float = 1.0,
         lease_ttl_seconds: int = 30,
@@ -462,6 +494,7 @@ class SchedulerCoordinator:
         self.store = store
         self.trigger_service = trigger_service
         self.worker = worker
+        self.watch_service = watch_service
         self.owner = owner
         self.interval_seconds = interval_seconds
         self.lease_ttl_seconds = lease_ttl_seconds
@@ -496,7 +529,7 @@ class SchedulerCoordinator:
         try:
             while not self.stop_event.is_set():
                 try:
-                    self.run_cycle()
+                    await self.run_cycle_async()
                     self.last_error_code = None
                 except Exception as exc:
                     self.last_error_code = f"scheduler.{type(exc).__name__}"
@@ -509,13 +542,52 @@ class SchedulerCoordinator:
         now = require_aware_utc(self.clock(), field="scheduler clock")
         leader, writer = self._ensure_leases(now)
         materialized = self.trigger_service.materialize_all_due(leader_lease=leader, now=now)
+        watched = (
+            self.watch_service.materialize_all(leader_lease=leader, now=now)
+            if self.watch_service is not None
+            else ()
+        )
         dispatched = 0
         for _ in range(self.max_dispatches_per_cycle):
             request: RunRequest | None = self.worker.run_one(writer)
             if request is None:
                 break
             dispatched += 1
-        return SchedulerCycleResult(materialized=len(materialized), dispatched=dispatched)
+        return SchedulerCycleResult(
+            materialized=len(materialized) + len(watched), dispatched=dispatched
+        )
+
+    async def run_cycle_async(self) -> SchedulerCycleResult:
+        """Keep slow filesystem and Git probes off the API/model event loop."""
+        now = require_aware_utc(self.clock(), field="scheduler clock")
+        leader, _writer = self._ensure_leases(now)
+        materialized = self.trigger_service.materialize_all_due(leader_lease=leader, now=now)
+        watched = (
+            await asyncio.to_thread(
+                self.watch_service.materialize_all,
+                leader_lease=leader,
+                now=now,
+                should_stop=self.stop_event.is_set,
+            )
+            if self.watch_service is not None
+            else ()
+        )
+        if self.stop_event.is_set():
+            return SchedulerCycleResult(materialized=len(materialized) + len(watched), dispatched=0)
+        # A slow probe may consume the old lease. Renew with the actual time
+        # before dispatch; observe_watch already fences each write after probing.
+        _leader, writer = self._ensure_leases(
+            require_aware_utc(self.clock(), field="scheduler clock")
+        )
+        dispatched = 0
+        for _ in range(self.max_dispatches_per_cycle):
+            request: RunRequest | None = self.worker.run_one(writer)
+            if request is None:
+                break
+            dispatched += 1
+        return SchedulerCycleResult(
+            materialized=len(materialized) + len(watched), dispatched=dispatched
+        )
 
     def _ensure_leases(self, now: datetime) -> tuple[SchedulerLease, SchedulerLease]:
         if self._leader_lease is None or self._writer_lease is None:

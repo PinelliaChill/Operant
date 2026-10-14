@@ -24,6 +24,9 @@ PROTOCOL_VERSION = "phase23.v1"
 
 EXPECTED_OPERATION_IDS = {
     "negotiateProtocol",
+    "suggestWorkflowDraft",
+    "listWorkflowSuggestionConversations",
+    "getWorkflowSuggestionConversation",
     "createWorkflowDraft",
     "compileWorkflowDraft",
     "publishWorkflow",
@@ -36,6 +39,8 @@ EXPECTED_OPERATION_IDS = {
     "resumeGraphRun",
     "cancelGraphRun",
     "provideNodeInput",
+    "getGraphNodeApproval",
+    "decideGraphNodeApproval",
     "createTeamDefinition",
     "startTeamRun",
     "getTeamRun",

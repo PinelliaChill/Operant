@@ -45,7 +45,6 @@ from operant.domain.graph import (
 from operant.domain.models import RolePreset, RoleStatus, ToolPolicy
 from operant.domain.scheduler import (
     DispatchIdempotency,
-    MisfirePolicy,
     ScheduleDefinition,
     ScheduleStatus,
     TriggerKind,
@@ -1332,6 +1331,22 @@ class MaintenanceAwareSchedulerGateway:
         self.graph_gateway = graph_gateway
         self.maintenance_gateway = maintenance_gateway
 
+    def _is_maintenance_run(self, workflow_run_id: str) -> bool:
+        run = self.graph_gateway.graph_repository.get_run(workflow_run_id)
+        definition = self.graph_gateway.graph_repository.get_definition(
+            run.workflow_definition_id, run.workflow_definition_version
+        )
+        return any(node.metadata.get("maintenance") is True for node in definition.nodes)
+
+    def ensure_execution(self, workflow_run_id: str) -> None:
+        if not self._is_maintenance_run(workflow_run_id):
+            self.graph_gateway.ensure_execution(workflow_run_id)
+
+    def cancel_workflow(self, workflow_run_id: str) -> None:
+        if self._is_maintenance_run(workflow_run_id):
+            self.maintenance_gateway.cancel_workflow(workflow_run_id)
+        self.graph_gateway.cancel_workflow(workflow_run_id)
+
     def dispatch_workflow(self, action: Any) -> str:
         controller = self.maintenance_gateway.coordinator.executor.controller
         with controller.service.store._connect() as connection:
@@ -2085,10 +2100,11 @@ class MaintenanceController:
             schedule = ScheduleDefinition(
                 id="maintenance_schedule_" + snapshot.job_id.removeprefix("maintenance_"),
                 name=f"Memory maintenance {snapshot.job_id}",
-                trigger_kind=TriggerKind.TIMER,
-                timer_at=now,
+                # The maintenance command enqueues the only occurrence. An
+                # application signal hook has no clock-based materialization.
+                trigger_kind=TriggerKind.HOOK,
+                hook_event_type="application.signal",
                 timezone_name="UTC",
-                misfire_policy=MisfirePolicy.FIRE_ONCE,
                 workflow_id=snapshot.workflow_id,
                 workflow_version=snapshot.workflow_version,
                 workflow_input={
@@ -2099,7 +2115,7 @@ class MaintenanceController:
                 # A model execution with an unknown result cannot safely be
                 # repeated merely because its eventual DB commit is idempotent.
                 dispatch_idempotency=DispatchIdempotency.NON_IDEMPOTENT,
-                status=ScheduleStatus.PAUSED,
+                status=ScheduleStatus.ENABLED,
             )
             trigger.create_schedule(schedule)
             request = trigger.manual_trigger(

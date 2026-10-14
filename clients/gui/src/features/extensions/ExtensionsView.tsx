@@ -1,10 +1,4 @@
-/**
- * 插件与MCP中心（v8：MCP Server 与插件配置）
- * - 支持 Model Context Protocol (MCP) Server (stdio / sse) 与系统插件管理；
- * - 页头「+ 添加 插件/MCP」弹窗：配置服务名称、协议模式、启动命令或 SSE 端点；
- * - 卡片列表：展示 MCP 状态、可用工具数、启动命令/URL、版本与启停开关；
- * - 提供「测试连接」交互，验证 MCP 进程/端点健康度。
- */
+/** Live 扩展页使用正式 Core Client 管理本地驱动、外部扩展和 MCP。 */
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -35,6 +29,9 @@ import {
 } from '../../live45/phase45State';
 import { buildMcpServerRequest } from '../../live45/mcpForm';
 import { McpSafetyPanels } from './McpSafetyPanels';
+import { LocalExtensionsPanel } from './LocalExtensionsPanel';
+import { LocalControlPanel } from './LocalControlPanel';
+import { localStateLabel } from '../../lib/statusCopy';
 import './live-extensions.css';
 import { LiveManagementView } from '../management/LiveManagementView';
 
@@ -102,10 +99,10 @@ const DemoExtensionsView: React.FC = () => {
   };
 
   return (
-    <div className="section-view">
+    <div className="section-view" data-client-mode="mock">
       <header className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h1 className="section-title">插件与MCP</h1>
+          <h1 className="section-title">插件与 MCP（演示）</h1>
           <p className="section-sub">
             管理 Model Context Protocol (MCP) 服务与系统插件（共 {extensions.length} 个）
           </p>
@@ -451,12 +448,15 @@ const LiveExtensionsView: React.FC = () => {
   const sideEffectsDisabled = phase45SideEffectsDisabled(phase, connectionStatus, busy);
   const unavailableMessage = phase45UnavailableMessage(phase, connectionStatus, error?.code);
 
-  if (phase === 'loading' && servers.length === 0) return <div className="live-route-state" role="status"><RefreshCw size={22} aria-hidden="true" /><h1>正在读取 MCP Projection…</h1><p>Live 模式不会用演示插件填充页面。</p></div>;
+  if (phase === 'loading' && servers.length === 0) return <div className="live-route-state" role="status"><RefreshCw size={22} aria-hidden="true" /><h1>正在读取插件…</h1><p>连接后会显示已配置的插件。</p></div>;
 
   return <div className="section-view" data-client-mode="live">
-    <header className="section-header mcp-live-header"><div><h1 className="section-title">MCP 服务</h1><p className="section-sub">Phase 5A MCP 配置、审批、调用 Receipt 与生命周期；所有副作用仍由 Action Gateway 裁决。</p></div><div className="mcp-live-actions"><Link className="btn btn-secondary" to="/projects?tab=plugins"><Puzzle size={14} aria-hidden="true" />记忆插件</Link><button type="button" className="btn btn-secondary" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} aria-hidden="true" />刷新</button><button type="button" className="btn btn-primary" onClick={() => setModalOpen(true)} disabled={sideEffectsDisabled}><Plus size={14} aria-hidden="true" />添加 MCP</button></div></header>
+    <header className="section-header mcp-live-header"><div><h1 className="section-title">本机能力与扩展</h1><p className="section-sub">使用本机应用、网站和已连接的工具。</p></div><div className="mcp-live-actions"><Link className="btn btn-secondary" to="/settings?section=tools&page=plugins"><Puzzle size={14} aria-hidden="true" />插件管理</Link><button type="button" className="btn btn-secondary" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} aria-hidden="true" />刷新</button><button type="button" className="btn btn-primary" onClick={() => setModalOpen(true)} disabled={sideEffectsDisabled}><Plus size={14} aria-hidden="true" />添加 MCP</button></div></header>
     <div className="section-scroll"><div className="section-inner">
-      <div className="mcp-route-alerts" aria-live="polite">{unavailableMessage && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{unavailableMessage}</div>}{error && !unavailableMessage && !mcpIntervention && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{error.code}：{error.message}</div>}{actionLabel && <div className="live-alert" role="status">{actionLabel}处理中，请等待 Core 确认。</div>}{toolError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{toolError}</div>}</div>
+      <LocalControlPanel />
+      <LocalExtensionsPanel />
+      <section className="local-panel" aria-labelledby="mcp-section-title"><h2 id="mcp-section-title">MCP 服务</h2><p>查看连接状态、调用工具及审批结果。</p></section>
+      <div className="mcp-route-alerts" aria-live="polite">{unavailableMessage && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{unavailableMessage}</div>}{error && !unavailableMessage && !mcpIntervention && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />工具连接失败，请刷新后重试。<details><summary>查看原因</summary>{error.message}（{error.code}）</details></div>}{actionLabel && <div className="live-alert" role="status">{actionLabel}处理中，请等待结果。</div>}{toolError && <div className="live-alert live-alert-error" role="alert"><AlertTriangle size={16} aria-hidden="true" />{toolError}</div>}</div>
       <McpSafetyPanels
         intervention={mcpIntervention}
         receipt={mcpReceipt}
@@ -465,11 +465,11 @@ const LiveExtensionsView: React.FC = () => {
         onDecision={(approved) => void decideMcpApproval(approved)}
         onLoadReceipt={(hash) => void loadMcpReceipt(hash)}
       />
-      {servers.length === 0 ? <div className="section-empty-wrap"><EmptyState icon={Server} title="没有 MCP 服务" description="只可创建 Core 支持的 stdio 或 legacy SSE 配置；Live 模式不支持演示插件。" /></div> : <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {servers.length === 0 ? <div className="section-empty-wrap"><EmptyState icon={Server} title="没有 MCP 服务" description="可添加受支持的 MCP 服务。" /></div> : <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {servers.map((server) => { const tools = toolsByServer[server.id] ?? []; const actions = mcpActionState(server.lifecycle, sideEffectsDisabled); return <section key={server.id} className="card mcp-server-card" aria-labelledby={`mcp-${server.id}`}>
-          <div className="mcp-server-heading"><div><h2 id={`mcp-${server.id}`}>{server.id}</h2><p><code>{server.transport}</code> · {server.transport === 'stdio' ? `${server.workspaceRootRef ?? 'unknown root'} / ${server.cwdRef ?? '.'} / ${server.stdioArgv.length} 个 argv` : `Endpoint Ref: ${server.endpointRef ?? 'unknown'}`}</p><StatusBadge status={server.lifecycle === 'running' ? 'connected' : server.lifecycle === 'failed' ? 'denied' : 'pending'} label={server.lifecycle} size="sm" /></div>
+          <div className="mcp-server-heading"><div><h2 id={`mcp-${server.id}`}>{server.id}</h2><StatusBadge status={server.lifecycle === 'running' ? 'connected' : server.lifecycle === 'failed' ? 'denied' : 'pending'} label={localStateLabel(server.lifecycle)} size="sm" /><details><summary>连接详情</summary><p><code>{server.transport}</code> · {server.transport === 'stdio' ? `${server.workspaceRootRef ?? 'unknown root'} / ${server.cwdRef ?? '.'} / ${server.stdioArgv.length} 个参数` : `端点引用：${server.endpointRef ?? 'unknown'}`}</p></details></div>
           <div className="mcp-server-actions">
-            {server.lifecycle === 'running' ? <button type="button" className="btn btn-secondary btn-sm" disabled={!actions.canStop} onClick={() => { if (window.confirm(`停止 MCP 服务“${server.id}”？进行中的调用可能失败。`)) void stopMcpServer(server.id); }}><Square size={13} aria-hidden="true" />停止</button> : <button type="button" className="btn btn-primary btn-sm" disabled={!actions.canStart} onClick={() => { if (window.confirm(`启动 MCP 服务“${server.id}”？Core 将先经过 Policy/Approval 裁决。`)) void startMcpServer(server.id); }}><Play size={13} aria-hidden="true" />启动</button>}
+            {server.lifecycle === 'running' ? <button type="button" className="btn btn-secondary btn-sm" disabled={!actions.canStop} onClick={() => { if (window.confirm(`停止 MCP 服务“${server.id}”？进行中的调用可能失败。`)) void stopMcpServer(server.id); }}><Square size={13} aria-hidden="true" />停止</button> : <button type="button" className="btn btn-primary btn-sm" disabled={!actions.canStart} onClick={() => { if (window.confirm(`启动 MCP 服务“${server.id}”？启动前可能需要审批。`)) void startMcpServer(server.id); }}><Play size={13} aria-hidden="true" />启动</button>}
             <button type="button" className="btn btn-secondary btn-sm" disabled={!actions.canRefreshTools} onClick={() => void loadMcpTools(server.id)}><Wrench size={13} aria-hidden="true" />工具</button>
             <button type="button" className="btn btn-ghost btn-sm" disabled={!actions.canDelete} onClick={() => { if (window.confirm(`永久删除已停止的 MCP 配置“${server.id}”？此操作不可撤销。`)) void deleteMcpServer(server.id); }}><Trash2 size={13} aria-hidden="true" />删除</button>
           </div></div>
@@ -486,7 +486,6 @@ const LiveExtensionsView: React.FC = () => {
           })}</div>}
         </section>; })}
       </div>}
-      <p className="section-footnote">客户端不直接执行命令、不解析 Secret；MCP tool call 必须经过 Action Gateway，outcome_unknown 永不自动重放。</p>
     </div></div>
     <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="添加 MCP 服务" footer={<><button type="button" className="btn btn-ghost" onClick={() => setModalOpen(false)}>取消</button><button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={sideEffectsDisabled || !serverId.trim() || (transport === 'stdio' && workspaceRoots.length === 0)}>保存配置</button></>}>
       <div className="mcp-form">
@@ -496,13 +495,13 @@ const LiveExtensionsView: React.FC = () => {
         {transport === 'stdio' ? <>
           <label htmlFor="mcp-root-ref">工作区 Root Ref</label>
           <select id="mcp-root-ref" className="select" value={workspaceRootRef} onChange={(event) => setWorkspaceRootRef(event.target.value)} aria-describedby="mcp-root-help" required>
-            <option value="" disabled>{workspaceRoots.length ? '请选择 Core Root Ref' : 'Core 未返回可用 Root Ref'}</option>
+            <option value="" disabled>{workspaceRoots.length ? '请选择工作区目录' : '没有可用的工作区目录'}</option>
             {workspaceRoots.map((root) => <option key={root.rootRef} value={root.rootRef}>{root.rootRef}</option>)}
           </select>
-          <small id="mcp-root-help">只能选择 Core 返回的引用；客户端不会显示或提交宿主绝对路径。</small>
+          <small id="mcp-root-help">只能选择已有目录；此处不显示本机绝对路径。</small>
           <label htmlFor="mcp-cwd-ref">相对工作目录</label><input id="mcp-cwd-ref" className="input" value={cwdRef} onChange={(event) => setCwdRef(event.target.value)} aria-describedby="mcp-cwd-help" required /><small id="mcp-cwd-help">相对于所选 Root Ref，例如 <code>.</code> 或 <code>tools/server</code>；禁止绝对路径和 <code>..</code>。</small>
           <label htmlFor="mcp-docker-image">Docker 镜像 digest</label><input id="mcp-docker-image" className="input" value={dockerImage} onChange={(event) => setDockerImage(event.target.value)} placeholder="registry/image@sha256:…" aria-describedby="mcp-image-help" required /><small id="mcp-image-help">必须固定到 64 位小写 sha256 digest，不接受可变 tag。</small>
-          <label htmlFor="mcp-argv">argv（JSON 字符串数组）</label><textarea id="mcp-argv" className="input" rows={4} value={stdioArgv} onChange={(event) => setStdioArgv(event.target.value)} aria-describedby="mcp-argv-help" required /><small id="mcp-argv-help">命令与参数分项传给 Core，不经过 Shell；文件参数应相对于容器工作目录。</small>
+          <label htmlFor="mcp-argv">argv（JSON 字符串数组）</label><textarea id="mcp-argv" className="input" rows={4} value={stdioArgv} onChange={(event) => setStdioArgv(event.target.value)} aria-describedby="mcp-argv-help" required /><small id="mcp-argv-help">命令不会经过 Shell；文件参数请使用相对于容器工作目录的路径。</small>
         </> : <>
           <label htmlFor="mcp-endpoint-ref">Endpoint Ref</label><input id="mcp-endpoint-ref" className="input" value={endpointRef} onChange={(event) => setEndpointRef(event.target.value)} aria-describedby="mcp-endpoint-help" required /><small id="mcp-endpoint-help">只填环境变量引用名，不填写 URL。</small>
           <label htmlFor="mcp-secret-ref">Secret Ref（可选）</label><input id="mcp-secret-ref" className="input" value={secretRef} onChange={(event) => setSecretRef(event.target.value)} aria-describedby="mcp-secret-help" /><small id="mcp-secret-help">只填环境变量引用名，不填写 Token 或密钥。</small>

@@ -335,7 +335,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
             {loading && <Loader2 size={16} className="animate-spin" aria-label="加载中" />}
           </h1>
           <p className="b25-subtitle">
-            项目范围：<code>{state?.project_id ?? '未指定项目'}</code> · 遵循 MP-4 水位幂等、有权限历史与有限后台整理规范
+            当前项目：<code>{state?.project_id ?? '未指定项目'}</code>
           </p>
         </div>
 
@@ -347,12 +347,12 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
             {activeTab === 'history' ? (
               <>
                 <History size={13} aria-hidden="true" />
-                <span>当时事实视角 (historical_fact)</span>
+                <span>当时的记录</span>
               </>
             ) : (
               <>
                 <FileText size={13} aria-hidden="true" />
-                <span>当前约定视角 (current_agreement)</span>
+                <span>当前约定</span>
               </>
             )}
           </span>
@@ -408,7 +408,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
           <AlertTriangle size={17} aria-hidden="true" />
           <div className="b25-alert-content">
             <strong>当前处于只读模式：</strong>
-            <span>服务断线或无修改权限，界面仅展示本地已有只读投影。所有提议、审阅及后台调度操作均已禁用。</span>
+            <span>连接中断或没有修改权限。当前内容可能已过期，提议、审阅及后台整理操作已禁用。</span>
           </div>
           <div className="b25-alert-actions">
             <button
@@ -474,7 +474,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
           <div className="b25-batch-header">
             <h2 id="b25-batch-title" className="b25-batch-title">
               <CheckSquare size={16} aria-hidden="true" />
-              <span>批量精确审阅（已选中 {selected.length} 项 ExactProposal）</span>
+              <span>批量审阅（已选中 {selected.length} 项）</span>
             </h2>
             <button
               type="button"
@@ -755,7 +755,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
                 当前正式知识约定
               </h2>
               <p className="b25-subtitle">
-                当前项目共 {state?.records?.length ?? 0} 条知识记录（含已阻止项）；修改需以 Proposal / CAS 提议提交，不会自动静默覆盖。
+                当前项目共 {state?.records?.length ?? 0} 条知识记录（含已阻止项）；修改需提交提议，不会直接覆盖现有记录。
               </p>
             </div>
 
@@ -810,8 +810,8 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
 
                 <div className="b25-form-col">
                   <label className="b25-label">
-                    <span>期望基准 head revision</span>
-                    <span className="b25-label-help">（CAS 乐观并发检查）</span>
+                    <span>基准版本</span>
+                    <span className="b25-label-help">（保存前检查版本，避免覆盖新改动）</span>
                   </label>
                   <input
                     type="number"
@@ -1073,7 +1073,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
                 原始执行历史查询
               </h2>
               <p className="b25-subtitle">
-                查阅具有权限边界的不可变原始历史事实（historical_fact 视角）；展开来源只读取真实记录，不拼接虚构数据。
+                查阅有权限访问的历史记录及其来源。
               </p>
             </div>
           </div>
@@ -1093,7 +1093,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
                 className="b25-input b25-search-input"
                 value={query}
                 onChange={(e) => onQueryChange(e.target.value)}
-                placeholder="搜索原始历史事实、Thread 内容、错误与产物摘要..."
+                placeholder="搜索历史记录、会话内容、错误与产物摘要..."
               />
             </div>
 
@@ -1128,7 +1128,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
                   </h3>
                   <div className="b25-card-meta">
                     <span>视角: {detail.perspective}</span>
-                    <span>Thread: <code>{detail.entry.thread_id}</code></span>
+                    <span>会话：<code>{detail.entry.thread_id}</code></span>
                     <span>Cursor: #{detail.entry.cursor}</span>
                     <span>时间: {formatDate(detail.entry.occurred_at)}</span>
                   </div>
@@ -1188,7 +1188,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
                         <code>{item.item_id}</code>
                       </h3>
                       <div className="b25-card-meta">
-                        <span>Thread: <code>{item.thread_id}</code></span>
+                        <span>会话：<code>{item.thread_id}</code></span>
                         <span>Cursor: #{item.cursor}</span>
                         <span>类型: {item.kind}</span>
                         <span>时间: {formatDate(item.occurred_at)}</span>
@@ -1369,7 +1369,7 @@ export const B25Presentation: React.FC<B25PresentationProps> = ({
                     <div className="b25-job-progress">
                       <div className="b25-card-meta">
                         <span>
-                          处理水线: {job.processed_cursor} / {job.source_cursor} ({progressPercent}%)
+                          处理进度：{job.processed_cursor} / {job.source_cursor} ({progressPercent}%)
                         </span>
                         <span>重试尝试: {job.attempts} / {job.max_attempts}</span>
                       </div>

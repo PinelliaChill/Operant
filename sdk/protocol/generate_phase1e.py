@@ -1464,13 +1464,43 @@ def _python_package_init() -> str:
         '    "BETA_SCHEMA_DIGEST",\n',
         1,
     )
-    return source.replace(
+    source = source.replace(
         '    "Phase45ProtocolNegotiationError",\n',
         '    "Phase45ProtocolNegotiationError",\n'
         '    "Phase56Client",\n'
         '    "Phase56ProtocolNegotiationError",\n'
         '    "BetaClient",\n'
         '    "BetaProtocolNegotiationError",\n',
+        1,
+    )
+    source = source.replace(
+        "from .transport import Phase23Error\n",
+        "from .transport import Phase23Error\nfrom .workbench_generated import WorkbenchClient\n",
+        1,
+    )
+    source = source.replace(
+        "from .phase1e_generated import (\n",
+        "from .onboarding_generated import (\n"
+        "    ONBOARDING_MAX_CURSOR,\n"
+        "    ONBOARDING_PROTOCOL_VERSION,\n"
+        "    ONBOARDING_SCHEMA_DIGEST,\n"
+        "    OnboardingClient,\n"
+        ")\n"
+        "from .onboarding_generated import (\n"
+        "    ProtocolNegotiationError as OnboardingProtocolNegotiationError,\n"
+        ")\n"
+        "from .phase1e_generated import (\n",
+        1,
+    )
+    return source.replace(
+        '    "PHASE1E_MAX_CURSOR",\n',
+        '    "WorkbenchClient",\n'
+        '    "OnboardingClient",\n'
+        '    "OnboardingProtocolNegotiationError",\n'
+        '    "ONBOARDING_MAX_CURSOR",\n'
+        '    "ONBOARDING_PROTOCOL_VERSION",\n'
+        '    "ONBOARDING_SCHEMA_DIGEST",\n'
+        '    "PHASE1E_MAX_CURSOR",\n',
         1,
     )
 

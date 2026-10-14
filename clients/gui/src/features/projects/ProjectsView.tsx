@@ -6,8 +6,9 @@
  * 文件/任务两栏摘要卡；项目 id 不存在时显示空态。
  */
 
+import { PathInput } from '../../components/PathInput';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   FileText,
   FolderKanban,
@@ -24,6 +25,8 @@ import { formatRelativeDay } from '../../lib/format';
 import type { DemoWorkflowDirectoryItem } from '../../demo/types';
 import { useOperant } from '../../context/ClientContext';
 import { LiveManagementView } from '../management/LiveManagementView';
+import { ProjectFilesPanel } from './ProjectFilesPanel';
+import '../tasks/task-hub.css';
 
 /** 预置项目标识颜色 */
 const PRESET_COLORS = ['#2563eb', '#ea580c', '#059669', '#7c3aed', '#db2777', '#0891b2'];
@@ -101,21 +104,17 @@ const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClose }) =>
 
         <div>
           <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
-            工作区绑定目录路径
+            项目文件夹
           </label>
-          <input
-            type="text"
-            className="input"
-            placeholder="/Users/operant/workspace/..."
+          <PathInput
+            aria-label="项目文件夹"
+            placeholder="选择文件夹或填写完整路径"
             value={path}
-            onChange={(e) => {
-              setPath(e.target.value);
+            onChange={(value) => {
+              setPath(value);
               setPathCustomized(true);
             }}
           />
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
-            与本地文件系统 workspace 目录绑定，会话与工作流生成的文件将归属于该路径。
-          </span>
         </div>
 
         <div>
@@ -491,8 +490,19 @@ const ProjectDetail: React.FC<{ projectId: string }> = ({ projectId }) => {
 
 export const ProjectsView: React.FC = () => {
   const { clientMode } = useOperant();
-  if (clientMode === 'live') return <LiveManagementView initialTab="projects" />;
+  if (clientMode === 'live') return <LiveProjectsHub />;
   return <DemoProjectsView />;
+};
+
+const LiveProjectsHub: React.FC = () => {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') === 'knowledge' ? 'knowledge' : params.get('tab') === 'files' ? 'files' : 'projects';
+  return <div className="task-hub">
+    <nav className="task-hub-tabs" aria-label="项目页面">
+      {([['projects', '项目内容'], ['files', '文件'], ['knowledge', '项目知识']] as const).map(([key, label]) => <button key={key} type="button" className={`task-hub-tab${tab === key ? ' active' : ''}`} aria-current={tab === key ? 'page' : undefined} onClick={() => setParams({ tab: key })}>{label}</button>)}
+    </nav>
+    {tab === 'files' ? <ProjectFilesPanel /> : <LiveManagementView initialTab={tab} focused />}
+  </div>;
 };
 
 const DemoProjectsView: React.FC = () => {

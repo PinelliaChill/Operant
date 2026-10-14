@@ -17,6 +17,8 @@ import type { Phase23 } from '@operant/sdk';
 import type * as B2 from '../../../../../sdk/typescript-client/b2.generated';
 import type * as B24 from '../../../../../sdk/typescript-client/b2_4.generated';
 import { useOperant } from '../../context/ClientContext';
+import { SearchSelect } from '../../components/SearchSelect';
+import { requestErrorCopy } from '../../lib/requestErrorCopy';
 import {
   consumeIteratorForEpoch,
   cursorForScope,
@@ -50,6 +52,13 @@ import {
   type CollaborationGraphRun,
   type CollaborationTeam,
 } from './b24-client';
+import { LiveWorkflowCanvas, graphDifference } from './canvas/LiveWorkflowCanvas';
+import { WorkflowAssistant } from './WorkflowAssistant';
+import { GraphMergeControls } from './GraphMergeControls';
+import { GraphApprovalControls } from './GraphApprovalControls';
+import { graphRunIdFromSearch } from './graphRunLink';
+import { graphRunControlAvailability } from './graphRunControls';
+import { graphNodeDisplayName } from './graphNodeName';
 import './live-graph-team.css';
 
 type LiveTab = 'home' | 'canvas' | 'runs';
@@ -64,7 +73,7 @@ const MESSAGE_KINDS = [
 const TASK_STATUSES: TaskStatus[] = ['open', 'in_progress', 'blocked', 'completed', 'cancelled'];
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Core 请求失败，请检查本地服务后重试。';
+  return requestErrorCopy(error);
 }
 
 function workflowIdentity(workflow: B24.WorkflowDefinition | undefined): string | null {
@@ -108,10 +117,6 @@ function unique(values: string[]): string[] {
   return [...new Set(values.filter((value) => value.trim()))];
 }
 
-function rolesIn(workflow: B24.WorkflowDefinition | undefined): string[] {
-  if (!workflow) return [];
-  return unique(workflow.nodes.map((node) => node.metadata?.role_id).filter((id): id is string => typeof id === 'string'));
-}
 
 function memberLabel(member: Phase23.TeamRosterMember, team: CollaborationTeam | undefined): string {
   const definition = team?.members.find((candidate) => candidate.member_id === member.member_id);
@@ -130,6 +135,7 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
   const [searchParams] = useSearchParams();
   const legacyParam = searchParams.get('legacyWorkflowRunId') || '';
   const teamRunParam = searchParams.get('teamRunId') || '';
+  const graphRunParam = graphRunIdFromSearch(searchParams);
 
   const keys = useRef(new IdempotencyKeyRegistry());
   const streamEpoch = useRef(0);
@@ -149,12 +155,16 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
   const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [workflowSelection, setWorkflowSelection] = useState('');
   const [teamSelection, setTeamSelection] = useState('');
-  const [roleIds, setRoleIds] = useState<string[]>([]);
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [graphName, setGraphName] = useState('');
   const [graphDescription, setGraphDescription] = useState('');
   const [graphTask, setGraphTask] = useState('');
-  const [workflowDefinition, setWorkflowDefinition] = useState<B24.WorkflowDefinition | null>(null);
+  const [workflowDefinition, setWorkflowDefinition] = useState<Phase23.WorkflowDefinition | null>(null);
+  const [draftNodes, setDraftNodes] = useState<Phase23.NodeSpec[]>([]);
+  const [draftEdges, setDraftEdges] = useState<Phase23.EdgeSpec[]>([]);
+  const [diagnostics, setDiagnostics] = useState<Phase23.CompileDiagnostic[]>([]);
+  const [runDefinition, setRunDefinition] = useState<Phase23.WorkflowDefinition | null>(null);
+  const [suggestedDefinition, setSuggestedDefinition] = useState<Phase23.WorkflowDefinition | null>(null);
   const [legacyWorkflowRunId, setLegacyWorkflowRunId] = useState('');
   const [graphRunId, setGraphRunId] = useState('');
   const [graphRun, setGraphRun] = useState<Phase23.GraphWorkflowRun | null>(null);
@@ -162,6 +172,7 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
   const [graphRunsHasMore, setGraphRunsHasMore] = useState(false);
   const [graphRunsCursor, setGraphRunsCursor] = useState<string | null>(null);
   const [nodeRuns, setNodeRuns] = useState<Phase23.NodeRun[]>([]);
+  const [nodeInputValues, setNodeInputValues] = useState<Record<string, string>>({});
   const [writerWorkspaces, setWriterWorkspaces] = useState<WriterWorkspaceView[]>([]);
   const [writerArtifacts, setWriterArtifacts] = useState<WriterArtifactView[]>([]);
   const [writerConflicts, setWriterConflicts] = useState<WriterConflictView[]>([]);
@@ -187,6 +198,24 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const provideHumanInput = (node: Phase23.NodeRun) => {
+    const value = nodeInputValues[node.id]?.trim();
+    if (!graphRunId || node.status !== 'waiting_input' || !node.wait_token || !value) return;
+    const scope = graphScopeEpoch.current;
+    const action = `node-input:${graphRunId}:${node.id}:${node.wait_token}`;
+    void run(async () => {
+      await phase23Client.provideNodeInput(
+        graphRunId, node.node_id,
+        { value, wait_token: node.wait_token } as Phase23.NodeInputRequest & { wait_token: string },
+        commandOptions(keys.current.get(action)),
+      );
+      await refreshGraph(graphRunId, scope);
+      keys.current.release(action);
+      setNodeInputValues((current) => { const next = { ...current }; delete next[node.id]; return next; });
+      addNotification('success', `节点 ${node.node_id} 的输入已提交。`);
+    }, () => scope === graphScopeEpoch.current);
+  };
+
   const selectedWorkflow = useMemo(
     () => directory?.workflows.find((workflow) => workflowIdentity(workflow) === workflowSelection),
     [directory, workflowSelection],
@@ -197,6 +226,8 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
   );
   const workflowId = selectedWorkflow?.workflow_id || '';
   const workflowVersion = Number(selectedWorkflow?.version || 1);
+  const difference = graphDifference(workflowDefinition, draftNodes, draftEdges);
+  const graphDirty = Boolean(suggestedDefinition || (workflowDefinition && (difference.added.length || difference.removed.length || difference.changed.length || difference.edgeAdded.length || difference.edgeRemoved.length || graphName !== workflowDefinition.name || graphDescription !== (workflowDefinition.description || '') || (workflowDefinition.default_policy?.team_id && teamSelection !== `${workflowDefinition.default_policy?.team_id}:v${workflowDefinition.default_policy?.team_version}`))));
   const teamId = selectedTeam?.team_id || '';
   const teamVersion = Number(selectedTeam?.version || 1);
   const roster = currentRoster(teamRun?.roster ?? []);
@@ -240,7 +271,6 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
         ? current
         : workflowIdentity(next.workflows.filter((item) => item.status === 'published').sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0] || next.workflows[0]) || '');
       setTeamSelection((current) => current && next.teams.some((item) => teamIdentity(item) === current) ? current : teamIdentity(next.teams[0]) || '');
-      setRoleIds((current) => { const ids = new Set(next.roles.map((role) => role.id)); const keep = current.filter((id) => ids.has(id)); return keep.length ? keep : next.roles.slice(0, 3).map((role) => role.id); });
       return next;
     } catch (caught) {
       if (epoch !== directoryEpoch.current) return;
@@ -262,13 +292,6 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
 
   useEffect(() => { void loadDirectory(); void loadAgents(); }, [loadAgents, loadDirectory]);
 
-  useEffect(() => {
-    if (!selectedWorkflow) return;
-    setGraphName((current) => current || selectedWorkflow.name);
-    setGraphDescription((current) => current || selectedWorkflow.description || '');
-    const ids = rolesIn(selectedWorkflow);
-    if (ids.length) setRoleIds((current) => unique([...ids, ...current]));
-  }, [selectedWorkflow]);
 
   useEffect(() => {
     const ids = selectedTeam?.members.map((member) => member.member_id) ?? [];
@@ -306,14 +329,15 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
   };
 
   const refreshGraph = async (runId = graphRunId, expectedScope = graphScopeEpoch.current, current = () => true) => {
-    const id = runId.trim(); if (!id) throw new Error('请先选择一个 Graph Run。');
+    const id = runId.trim(); if (!id) throw new Error('请先选择一个流程运行。');
     const epoch = ++graphQueryEpoch.current;
     const [nextRun, nextNodes, multiWriter] = await Promise.all([phase23Client.getGraphRun(id), phase23Client.listNodeRuns(id), loadMultiWriterProjection(phase56Client, id)]);
+    const nextDefinition = await phase23Client.getWorkflowDefinition(nextRun.workflow_definition_id, nextRun.workflow_definition_version);
     if (epoch !== graphQueryEpoch.current || expectedScope !== graphScopeEpoch.current || !current()) return null;
-    if (nextRun.workspace_or_target && nextRun.workspace_or_target !== activeWorkspace.trim()) throw new Error('Core 返回了其他工作区的 Graph Run。');
-    setGraphRun(nextRun);
+    if (activeWorkspace.trim() && nextRun.workspace_or_target && nextRun.workspace_or_target !== activeWorkspace.trim()) throw new Error('这个流程运行属于其他工作区。');
+    setGraphRun(nextRun); setRunDefinition(nextDefinition);
     const summary = graphRunSummaryFromProjection(nextRun);
-    if (summary.workspace_or_target === activeWorkspace.trim()) {
+    if (!activeWorkspace.trim() || summary.workspace_or_target === activeWorkspace.trim()) {
       setKnownGraphRuns((items) => [summary, ...items.filter((item) => item.id !== summary.id)]);
     }
     setNodeRuns(nextNodes);
@@ -324,21 +348,34 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
   const loadDefinition = () => {
     const expectedWorkspace = workspaceEpoch.current;
     return run(async () => {
-      if (!workflowId) throw new Error('请先从 Core 目录选择工作流模板。');
+      if (!workflowId) throw new Error('请先选择工作流。');
       const definition = await phase23Client.getWorkflowDefinition(workflowId, workflowVersion);
       if (expectedWorkspace !== workspaceEpoch.current) return;
-      setWorkflowDefinition(definition); setGraphName(definition.name); setGraphDescription(definition.description || '');
+      setWorkflowDefinition(definition); setSuggestedDefinition(null); setDraftNodes(definition.nodes); setDraftEdges(definition.edges || []); setDiagnostics([]); setGraphName(definition.name); setGraphDescription(definition.description || '');
+      if (definition.default_policy?.team_id && definition.default_policy?.team_version) setTeamSelection(`${definition.default_policy.team_id}:v${definition.default_policy.team_version}`);
     }, () => expectedWorkspace === workspaceEpoch.current);
   };
+
+  useEffect(() => {
+    if (activeTab !== 'canvas' || !workflowId) return;
+    let cancelled = false;
+    void phase23Client.getWorkflowDefinition(workflowId, workflowVersion).then((definition) => {
+      if (cancelled) return;
+      setWorkflowDefinition(definition); setSuggestedDefinition(null); setDraftNodes(definition.nodes); setDraftEdges(definition.edges || []);
+      setDiagnostics([]); setGraphName(definition.name); setGraphDescription(definition.description || '');
+      if (definition.default_policy?.team_id && definition.default_policy?.team_version) setTeamSelection(`${definition.default_policy.team_id}:v${definition.default_policy.team_version}`);
+    }).catch((caught) => { if (!cancelled) setError(errorMessage(caught)); });
+    return () => { cancelled = true; };
+  }, [activeTab, workflowId, workflowVersion, phase23Client]);
 
   const resolveLegacy = (requested = legacyWorkflowRunId) => {
     const scope = invalidateGraph({ clearRunId: true });
     return run(async () => {
-      if (!requested.trim()) throw new Error('请填写旧 Coding Workflow Run ID。');
+      if (!requested.trim()) throw new Error('请填写原流程运行编号。');
       const linked = await phase23Client.getGraphRunByLegacyWorkflow(requested.trim());
-      const nodes = await phase23Client.listNodeRuns(linked.id);
+      const [nodes, definition] = await Promise.all([phase23Client.listNodeRuns(linked.id), phase23Client.getWorkflowDefinition(linked.workflow_definition_id, linked.workflow_definition_version)]);
       if (scope !== graphScopeEpoch.current) return;
-      setGraphRunId(linked.id); setGraphRun(linked); setNodeRuns(nodes);
+      setGraphRunId(linked.id); setGraphRun(linked); setRunDefinition(definition); setNodeRuns(nodes);
       const summary = graphRunSummaryFromProjection(linked);
       if (summary.workspace_or_target === activeWorkspace.trim()) {
         setKnownGraphRuns((items) => [summary, ...items.filter((item) => item.id !== summary.id)]);
@@ -354,72 +391,106 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
 
   const createGraph = () => run(async () => {
     if (!graphName.trim()) throw new Error('请填写工作流名称。');
-    if (!roleIds.length) throw new Error('请至少选择一个 RolePreset。');
-    const logical = `graph-create:${workflowId || 'new'}:${graphName}:${graphDescription}:${roleIds.join(',')}:${activeWorkspace}`;
-    const result = await b24Client.execute({ action: 'graph_create_from_roles', name: graphName.trim(), description: graphDescription.trim() || undefined, role_ids: roleIds, workflow_id: workflowId || undefined, workspace_or_target: activeWorkspace.trim() || undefined, task: graphTask.trim() || undefined }, commandOptions(keys.current.get(logical)));
+    if (!draftNodes.length) throw new Error('请至少添加一个节点。');
+    const id = workflowId || suggestedDefinition?.workflow_id || `workflow_${crypto.randomUUID().slice(0, 12)}`;
+    const version = Math.max(0, ...(directory?.workflows.filter((item) => item.workflow_id === id).map((item) => Number(item.version || 0)) || [])) + 1;
+    if (!selectedTeam?.team_id || !selectedTeam.version) throw new Error('请先选择团队，工作流需要绑定执行成员。');
+    const needsRoleLookup = draftNodes.some((node) => ['agent', 'tool', 'script'].includes(node.node_kind) && !(typeof node.metadata?.role_version === 'number' && Number.isInteger(node.metadata.role_version) && node.metadata.role_version > 0));
+    const roles = needsRoleLookup ? await b2Client.listRoles() : [];
+    const roleVersions = Object.fromEntries(roles.filter((role) => role.id && role.version).map((role) => [role.id!, role.version!]));
+    const sourceDefinition = suggestedDefinition || workflowDefinition;
+    const preparedNodes = draftNodes.map((node) => {
+      if (!['agent', 'tool', 'script'].includes(node.node_kind)) return node;
+      const roleId = typeof node.metadata?.role_id === 'string' ? node.metadata.role_id : '';
+      const pinnedVersion = node.metadata?.role_version;
+      const version = typeof pinnedVersion === 'number' && Number.isInteger(pinnedVersion) && pinnedVersion > 0 ? pinnedVersion : roleVersions[roleId];
+      if (!roleId || !version) throw new Error(`节点 ${node.node_id} 缺少有效的 RolePreset 绑定。`);
+      return { ...node, metadata: { ...node.metadata, role_version: version } };
+    });
+    const lockedRoleVersions = Object.fromEntries(preparedNodes.filter((node) => ['agent', 'tool', 'script'].includes(node.node_kind)).map((node) => [String(node.metadata?.role_id), Number(node.metadata?.role_version)]));
+    const request: Phase23.CreateWorkflowDraftRequest = {
+      workflow_id: id, version, name: graphName.trim(), description: graphDescription.trim(),
+      nodes: preparedNodes, edges: draftEdges,
+      input_schema: sourceDefinition?.input_schema || {}, output_schema: sourceDefinition?.output_schema || {},
+      graph_limits: sourceDefinition?.graph_limits, default_budget: sourceDefinition?.default_budget,
+      default_policy: { ...(sourceDefinition?.default_policy || {}), b24_executor: true, team_id: selectedTeam.team_id, team_version: selectedTeam.version },
+      locked_role_versions: lockedRoleVersions,
+      locked_provider_versions: sourceDefinition?.locked_provider_versions,
+      required_plugins: sourceDefinition?.required_plugins,
+      required_capabilities: sourceDefinition?.required_capabilities,
+    };
+    const logical = `graph-draft:${id}:${version}:${JSON.stringify(request)}`;
+    const receipt = await phase23Client.createWorkflowDraft(request, commandOptions(keys.current.get(logical)));
+    if (!receipt.accepted) throw new Error('草稿保存失败。');
+    const confirmed = await phase23Client.getWorkflowDefinition(id, version);
     keys.current.release(logical);
-    const id = commandResourceId(result, 'Graph 编排');
-    const nextDirectory = normalizeCollaborationDirectory(result.directory); setDirectory(nextDirectory);
-    const created = nextDirectory.workflows.filter((item) => item.workflow_id === id).sort((a, b) => Number(b.version || 0) - Number(a.version || 0))[0];
-    if (created) { setWorkflowSelection(workflowIdentity(created) || ''); setWorkflowDefinition(null); }
-    addNotification('success', 'Graph 草稿已由 Core 创建；请校验并发布后运行。');
+    if (confirmed.status !== 'draft') throw new Error('无法确认草稿状态，请刷新。');
+    await loadDirectory();
+    setWorkflowSelection(`${id}:v${version}`); setWorkflowDefinition(confirmed);
+    setDraftNodes(confirmed.nodes); setDraftEdges(confirmed.edges || []); setSuggestedDefinition(null); setDiagnostics([]);
+    addNotification('success', `草稿 ${id} v${version} 已保存。`);
   });
 
   const compileGraph = () => run(async () => {
-    if (!workflowId) throw new Error('请先选择工作流模板。');
+    if (!workflowId || !workflowDefinition) throw new Error('请先保存草稿。');
+    if (graphDirty) throw new Error('画布有未保存改动，请先保存为新草稿版本。');
     const logical = `graph-compile:${workflowId}:${workflowVersion}`;
     const result = await phase23Client.compileWorkflowDraft(workflowId, { definition_version: workflowVersion }, commandOptions(keys.current.get(logical)));
-    keys.current.release(logical);
+    keys.current.release(logical); setDiagnostics(result.diagnostics);
     if (!result.valid) throw new Error(result.diagnostics.map((item) => `${item.code}: ${item.message}`).join('；') || 'Graph 校验未通过。');
     addNotification('success', `Graph 校验通过：${workflowId} v${workflowVersion}。`);
   });
 
   const publishGraph = () => run(async () => {
     if (!workflowId) throw new Error('请先选择工作流模板。');
+    if (graphDirty) throw new Error('画布有未保存改动，请先保存为新草稿版本。');
     if (selectedWorkflow?.status === 'published') throw new Error('当前版本已经发布；如需编辑，请创建新的草稿版本。');
     const logical = `graph-publish:${workflowId}:${workflowVersion}`;
     const receipt = await phase23Client.publishWorkflow(workflowId, { draft_version: workflowVersion }, commandOptions(keys.current.get(logical)));
-    keys.current.release(logical); if (!receipt.accepted) throw new Error('Core 未接受发布请求。');
+    keys.current.release(logical); if (!receipt.accepted) throw new Error('发布请求未成功。');
     const nextDirectory = await loadDirectory();
     const published = nextDirectory?.workflows
       .filter((item) => item.workflow_id === workflowId && item.status === 'published')
       .sort((left, right) => Number(right.version || 0) - Number(left.version || 0))[0];
-    if (published) setWorkflowSelection(workflowIdentity(published) || workflowSelection);
-    addNotification('success', '工作流版本已提交发布；状态以 Core 目录刷新结果为准。');
+    if (!published || Number(published.version) !== workflowVersion + 1) throw new Error('发布请求已提交，但状态尚未确认。请刷新目录核对。');
+    setWorkflowSelection(workflowIdentity(published) || workflowSelection);
+    const confirmed = await phase23Client.getWorkflowDefinition(workflowId, workflowVersion + 1);
+    setWorkflowDefinition(confirmed); setDraftNodes(confirmed.nodes); setDraftEdges(confirmed.edges || []);
+    addNotification('success', '工作流已发布。');
   });
 
   const startGraph = () => {
     const scope = invalidateGraph({ clearRunId: true }); const expectedWorkspace = workspaceEpoch.current; const current = () => scope === graphScopeEpoch.current && expectedWorkspace === workspaceEpoch.current;
     return run(async () => {
       if (!workflowId) throw new Error('请先选择工作流模板。');
-      if (selectedWorkflow?.status !== 'published') throw new Error('只有 Core 目录中的已发布版本可以运行。');
+      if (selectedWorkflow?.status !== 'published') throw new Error('请先发布工作流，再启动运行。');
       const logical = `start-graph:${workflowId}:${workflowVersion}:${activeWorkspace}`;
       const receipt = await phase23Client.startGraphRun({ workflow_id: workflowId, definition_version: workflowVersion, input: graphTask.trim() ? { task: graphTask.trim() } : {}, workspace_or_target: activeWorkspace.trim() || undefined }, commandOptions(keys.current.get(logical)));
-      keys.current.release(logical); if (!receipt.resource_id) throw new Error('Core 未返回 Graph Run ID。'); if (!current()) return;
-      setGraphRunId(receipt.resource_id); const runProjection = await refreshGraph(receipt.resource_id, scope, current); if (runProjection) addNotification('success', `Graph Run 已创建：${runProjection.id}。`);
+      keys.current.release(logical); if (!receipt.resource_id) throw new Error('未取得流程运行 ID。'); if (!current()) return;
+      setGraphRunId(receipt.resource_id); const runProjection = await refreshGraph(receipt.resource_id, scope, current); if (runProjection) addNotification('success', `流程已启动：${runProjection.id}。`);
     }, current);
   };
 
   const monitorGraph = async () => {
     setError(null); const id = graphRunId.trim(); const expectedScope = graphScopeEpoch.current; let epoch = streamEpoch.current; let iterator: AsyncIterator<Phase23.SseFrame> | null = null;
     try {
-      if (!id) throw new Error('请先选择一个 Graph Run。');
+      if (!id) throw new Error('请先选择一个流程运行。');
       stopStream(); epoch = ++streamEpoch.current; const current = () => epoch === streamEpoch.current && expectedScope === graphScopeEpoch.current; setStreamStatus('connecting'); const scope = `graph_run:${id}`;
       const stream = await phase23Client.streamGraphRunEvents(id, { lastEventId: cursorForScope(events, scope) }); iterator = stream.events[Symbol.asyncIterator]();
       if (!current()) { safelyReturnIterator(iterator); return; } streamIterator.current = iterator; setStreamStatus('live');
       const completion = await consumeIteratorForEpoch(iterator, current, (frame) => setEvents((state) => reduceRuntimeEvent(state, mapRuntimeFrame(frame, scope))));
       if (streamIterator.current === iterator) streamIterator.current = null; if (completion === 'stale' || !current()) return;
-      const corrected = await refreshGraph(id, expectedScope, current); if (corrected && graphRunIsTerminal(corrected.status)) setStreamStatus('idle'); else { setStreamStatus('disconnected'); setError('事件流已结束，但 Graph Run 尚未终止。已保留 Cursor，可点击“从 Cursor 重连”。'); }
+      const corrected = await refreshGraph(id, expectedScope, current); if (corrected && graphRunIsTerminal(corrected.status)) setStreamStatus('idle'); else { setStreamStatus('disconnected'); setError('连接已中断，流程仍在运行。可点击“重新连接”继续监控。'); }
     } catch (caught) {
-      if (epoch !== streamEpoch.current || expectedScope !== graphScopeEpoch.current) return; if (streamIterator.current === iterator) streamIterator.current = null; setStreamStatus('disconnected'); setError(`${errorMessage(caught)} 已保留 Cursor，点击“从 Cursor 重连”继续。`);
+      if (epoch !== streamEpoch.current || expectedScope !== graphScopeEpoch.current) return; if (streamIterator.current === iterator) streamIterator.current = null; setStreamStatus('disconnected'); setError(`${errorMessage(caught)} 点击“重新连接”继续监控。`);
     }
   };
 
   const refreshTeamProjection = async (expectedScope = teamScopeEpoch.current, requestedViewer = viewerAgentId, requestedRunId = teamRunId) => {
-    const id = requestedRunId.trim(); if (!id) throw new Error('请先启动 Team Run 或打开已有 Team Run。'); const epoch = ++teamQueryEpoch.current; const nextRun = await phase23Client.getTeamRun(id);
+    const id = requestedRunId.trim(); if (!id) throw new Error('请先启动或选择团队协作。'); const epoch = ++teamQueryEpoch.current; const nextRun = await phase23Client.getTeamRun(id);
     if (epoch !== teamQueryEpoch.current || expectedScope !== teamScopeEpoch.current) return;
     const viewer = currentRoster(nextRun.roster).find((item) => item.agent_instance_id === requestedViewer)?.agent_instance_id || currentRoster(nextRun.roster)[0]?.agent_instance_id;
-    if (!viewer) throw new Error('Core 返回的 Team Roster 没有可用 Agent。');
+    if (!viewer) throw new Error('当前团队没有可用成员。');
     const [nextMessages, nextMailbox, nextTasks, nextArtifacts] = await Promise.all([phase23Client.listTeamMessages(id, { viewerId: viewer }), phase23Client.getMailbox(id, viewer), phase23Client.getTaskBoard(id), phase23Client.getArtifactBoard(id, { viewerId: viewer })]);
     if (epoch !== teamQueryEpoch.current || expectedScope !== teamScopeEpoch.current) return;
     setTeamSelection(`${nextRun.team_id}:v${nextRun.team_version}`);
@@ -443,8 +514,8 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
     const graphEpoch = invalidateGraph({ clearRunId: true, clearEvents: true, cancelPending: true });
     const teamEpoch = clearTeam(true, true);
     if (!id) return;
-    if (!knownGraphRuns.some((item) => item.id === id && item.workspace_or_target === activeWorkspace.trim())) {
-      setError('请选择当前工作区的 Core Graph Run。'); return;
+    if (!knownGraphRuns.some((item) => item.id === id && (!activeWorkspace.trim() || item.workspace_or_target === activeWorkspace.trim()))) {
+      setError('请选择当前工作区的流程运行。'); return;
     }
     setGraphRunId(id);
     const current = () => graphEpoch === graphScopeEpoch.current && teamEpoch === teamScopeEpoch.current;
@@ -458,45 +529,86 @@ export const LiveGraphTeamView: React.FC<{ activeTab: LiveTab }> = ({ activeTab 
     }, current);
   };
 
+  useEffect(() => {
+    if (activeTab !== 'runs' || !graphRunParam) return;
+    const graphEpoch = invalidateGraph({ clearRunId: true, clearEvents: true, cancelPending: true });
+    const teamEpoch = clearTeam(true, true);
+    setGraphRunId(graphRunParam);
+    const current = () => graphEpoch === graphScopeEpoch.current && teamEpoch === teamScopeEpoch.current;
+    void run(async () => {
+      const selected = await refreshGraph(graphRunParam, graphEpoch, current);
+      if (!selected || !current() || !selected.team_run_id) return;
+      setTeamRunId(selected.team_run_id);
+      await refreshTeamProjection(teamEpoch, '', selected.team_run_id);
+    }, current);
+  }, [activeTab, activeWorkspace, graphRunParam, phase23Client]);
+
   const startTeam = () => {
     if (!canPrepareTeamForGraph(graphRun)) return;
     const scope = clearTeam(true); const graphId = graphRunId.trim();
     return run(async () => {
-      if (!teamId) throw new Error('请先从 Core 目录选择 Team 模板。'); if (!graphId) throw new Error('请先启动或选择一个 Graph Run。'); if (!selectedTeam || memberIds.length !== selectedTeam.members.length) throw new Error('该 Team 需要选择完整 Roster。');
+      if (!teamId) throw new Error('请先选择团队模板。'); if (!graphId) throw new Error('请先启动或选择一个流程运行。'); if (!selectedTeam || memberIds.length !== selectedTeam.members.length) throw new Error('请选中全部团队成员。');
       const logical = `team-start:${teamId}:${teamVersion}:${graphId}:${memberIds.join(',')}:${activeWorkspace}`;
       const result = await b24Client.execute({ action: 'team_start_from_roles', team_id: teamId, team_version: teamVersion, workflow_run_id: graphId, member_ids: memberIds, workspace_or_target: activeWorkspace.trim() || undefined, task: teamTask.trim() || undefined }, commandOptions(keys.current.get(logical)));
-      keys.current.release(logical); const id = commandResourceId(result, 'Team 协作'); if (scope !== teamScopeEpoch.current) return; setTeamRunId(id); await loadAgents(); await refreshTeamProjection(scope, '', id); addNotification('success', `Team Run 已创建：${id}。`);
+      keys.current.release(logical); const id = commandResourceId(result, '团队协作'); if (scope !== teamScopeEpoch.current) return; setTeamRunId(id); await loadAgents(); await refreshTeamProjection(scope, '', id); addNotification('success', `团队协作已启动：${id}。`);
     }, () => scope === teamScopeEpoch.current);
   };
 
   const acknowledge = (deliveryId: string) => { const scope = teamScopeEpoch.current; const logical = `ack:${teamRunId}:${viewerAgentId}:${deliveryId}`; return run(async () => { await phase23Client.acknowledgeMailboxDelivery(teamRunId.trim(), viewerAgentId.trim(), deliveryId, commandOptions(keys.current.get(logical))); keys.current.release(logical); await refreshTeamProjection(scope); }, () => scope === teamScopeEpoch.current); };
   const sendMessage = () => {
     const scope = teamScopeEpoch.current; const text = outgoing.trim(); const recipients = messageAudience === 'team' ? unique(roster.map((item) => item.agent_instance_id)) : recipientAgentId.trim() ? [recipientAgentId.trim()] : []; const logical = `message:${teamRunId}:${viewerAgentId}:${messageAudience}:${recipients.join(',')}:${messageKind}:${text}`;
-    return run(async () => { if (!teamRunId.trim()) throw new Error('请先启动 Team Run。'); if (!viewerAgentId.trim() || !recipients.length || !text) throw new Error('请选择发送方、接收方并填写消息内容。'); if (!messageRecipientsActive) throw new Error('接收成员已结束，不能接收新消息。'); await phase23Client.sendTeamMessage(teamRunId.trim(), { sender_id: viewerAgentId.trim(), recipient_ids: recipients, audience: messageAudience, message_kind: messageKind, payload: { text }, requires_ack: true }, commandOptions(keys.current.get(logical))); keys.current.release(logical); setOutgoing((current) => current.trim() === text ? '' : current); await refreshTeamProjection(scope); }, () => scope === teamScopeEpoch.current);
+    return run(async () => { if (!teamRunId.trim()) throw new Error('请先启动团队协作。'); if (!viewerAgentId.trim() || !recipients.length || !text) throw new Error('请选择发送方、接收方并填写消息内容。'); if (!messageRecipientsActive) throw new Error('接收成员已结束，不能接收新消息。'); await phase23Client.sendTeamMessage(teamRunId.trim(), { sender_id: viewerAgentId.trim(), recipient_ids: recipients, audience: messageAudience, message_kind: messageKind, payload: { text }, requires_ack: true }, commandOptions(keys.current.get(logical))); keys.current.release(logical); setOutgoing((current) => current.trim() === text ? '' : current); await refreshTeamProjection(scope); }, () => scope === teamScopeEpoch.current);
   };
   const updateTask = (task: Phase23.TeamTask, status: TaskStatus) => { const scope = teamScopeEpoch.current; const logical = `task:${teamRunId}:${task.task_id}:${task.revision}:${status}`; return run(async () => { await phase23Client.updateTeamTask(teamRunId.trim(), task.task_id, { title: task.title, summary: task.summary, assignee_ids: task.assignee_ids, status, artifact_refs: task.artifact_refs, source_message_id: task.source_message_id, expected_revision: task.revision }, commandOptions(keys.current.get(logical))); keys.current.release(logical); await refreshTeamProjection(scope); }, () => scope === teamScopeEpoch.current); };
-  const publishArtifact = () => { const scope = teamScopeEpoch.current; const candidate = artifactCandidates.find((item) => item.artifactId === artifactToPublish); const logical = `artifact:${teamRunId}:${artifactToPublish}:${artifactTitle}:${candidate?.revision || 0}`; return run(async () => { if (!candidate) throw new Error('请选择 Core 已返回的 Artifact 引用。'); if (!artifactTitle.trim()) throw new Error('请填写产物标题。'); await phase23Client.publishArtifactBoardItem(teamRunId.trim(), { artifact_id: candidate.artifactId, title: artifactTitle.trim(), publisher_id: viewerAgentId.trim(), recipient_ids: messageAudience === 'team' ? roster.map((item) => item.agent_instance_id) : [viewerAgentId.trim()], source_message_id: candidate.sourceMessageId, expected_revision: candidate.revision }, commandOptions(keys.current.get(logical))); keys.current.release(logical); await refreshTeamProjection(scope); addNotification('success', 'Artifact 发布请求已由 Core 接收。'); }, () => scope === teamScopeEpoch.current); };
+  const publishArtifact = () => { const scope = teamScopeEpoch.current; const candidate = artifactCandidates.find((item) => item.artifactId === artifactToPublish); const logical = `artifact:${teamRunId}:${artifactToPublish}:${artifactTitle}:${candidate?.revision || 0}`; return run(async () => { if (!candidate) throw new Error('请选择已有产物。'); if (!artifactTitle.trim()) throw new Error('请填写产物标题。'); await phase23Client.publishArtifactBoardItem(teamRunId.trim(), { artifact_id: candidate.artifactId, title: artifactTitle.trim(), publisher_id: viewerAgentId.trim(), recipient_ids: messageAudience === 'team' ? roster.map((item) => item.agent_instance_id) : [viewerAgentId.trim()], source_message_id: candidate.sourceMessageId, expected_revision: candidate.revision }, commandOptions(keys.current.get(logical))); keys.current.release(logical); await refreshTeamProjection(scope); addNotification('success', '产物发布请求已提交。'); }, () => scope === teamScopeEpoch.current); };
 
   useLayoutEffect(() => { if (previousWorkspace.current === activeWorkspace) return; previousWorkspace.current = activeWorkspace; workspaceEpoch.current += 1; directoryEpoch.current += 1; invalidateGraph({ clearRunId: true, clearEvents: true, cancelPending: true }); clearTeam(true, true); setWorkflowDefinition(null); setKnownGraphRuns([]); setGraphRunsHasMore(false); setGraphRunsCursor(null); }, [activeWorkspace]);
   useEffect(() => () => { directoryEpoch.current += 1; streamEpoch.current += 1; graphScopeEpoch.current += 1; graphQueryEpoch.current += 1; teamScopeEpoch.current += 1; teamQueryEpoch.current += 1; busyEpoch.current += 1; safelyReturnIterator(streamIterator.current); streamIterator.current = null; }, []);
 
   const connected = connectionStatus === 'connected';
+  const runControls = graphRunControlAvailability(graphRun?.status ?? null, connected, busy);
+  const renderedGraphScope = graphScopeEpoch.current;
   const renderDirectoryError = directoryError && <div className="b24-error" role="alert"><ShieldAlert size={16} aria-hidden="true" /><span>协作目录读取失败：{directoryError}</span><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDirectory()} disabled={directoryLoading}>重试</button></div>;
   return (
     <div className="section-scroll"><div className="section-inner live23-shell b24-layout" data-client-mode="live">
-      <div className="live23-status b24-card" role="status" aria-live="polite"><B24Status label={connectionStatus === 'connected' ? '已连接本地 Core' : '本地 Core 未连接'} tone={connected ? 'success' : connectionStatus === 'reconnecting' ? 'warning' : 'danger'} /><span className="live23-muted">选择成员并发布工作流，运行状态由本地服务同步。</span></div>
+      <div className="live23-status b24-card" role="status" aria-live="polite"><B24Status label={connectionStatus === 'connected' ? '已连接' : '连接已断开'} tone={connected ? 'success' : connectionStatus === 'reconnecting' ? 'warning' : 'danger'} /><span className="live23-muted"></span></div>
       {graphRunsHasMore && <div className="b24-actions"><span className="b24-field-help">当前工作区还有更早的运行。</span><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDirectory(graphRunsCursor || undefined)} disabled={directoryLoading || !graphRunsCursor}>加载更早运行</button></div>}
       {error && <div className="live23-error b24-error" role="alert"><ShieldAlert size={16} aria-hidden="true" /><span>{error}</span></div>}{renderDirectoryError}
 
-      {activeTab === 'canvas' && <div className="b24-layout-split"><div className="b24-layout-main"><B24Section title="Graph 编排" description="从 Core 返回的 RolePreset 选择成员，编辑后创建新的版本草稿。已发布定义保持不可变。" actions={<div className="b24-actions"><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDirectory()} disabled={busy || directoryLoading}><RefreshCw size={14} aria-hidden="true" />刷新目录</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDefinition()} disabled={busy || !workflowId}><RefreshCw size={14} aria-hidden="true" />读取定义</button></div>}>
-        <form className="b24-form" onSubmit={(event) => { event.preventDefault(); void createGraph(); }}><div className="b24-grid b24-grid-2"><label className="b24-field"><span className="b24-field-label">模板版本<span className="b24-field-required">*</span></span><select value={workflowSelection} onChange={(event) => { setWorkflowSelection(event.target.value); setWorkflowDefinition(null); }}><option value="">选择 Core 模板</option>{directory?.workflows.map((workflow) => { const id = workflowIdentity(workflow); return id ? <option key={id} value={id}>{workflow.name} · v{workflow.version} · {statusLabel(workflow.status || 'draft')}</option> : null; })}</select><span className="b24-field-help">选择已有版本，或填写名称新建工作流。</span></label><label className="b24-field"><span className="b24-field-label">工作流名称<span className="b24-field-required">*</span></span><input value={graphName} onChange={(event) => setGraphName(event.target.value)} placeholder="例如：代码评审协作" /></label></div><label className="b24-field"><span className="b24-field-label">描述</span><textarea rows={2} value={graphDescription} onChange={(event) => setGraphDescription(event.target.value)} placeholder="说明这个编排适用的任务条件。" /></label><label className="b24-field"><span className="b24-field-label">本次任务提示</span><textarea rows={2} value={graphTask} onChange={(event) => setGraphTask(event.target.value)} placeholder="运行 Graph 时传给节点的任务提示。" /></label><fieldset className="b24-fieldset b24-card"><legend>RolePreset 成员</legend><div className="b24-list b24-list-grid">{directory?.roles.map((role) => <label className="b24-check-row" key={role.id}><input type="checkbox" checked={roleIds.includes(role.id)} onChange={(event) => setRoleIds((current) => event.target.checked ? unique([...current, role.id]) : current.filter((id) => id !== role.id))} /><span><strong>{roleLabel(role)}</strong><small>推理强度：{role.effort}</small></span></label>)}{directory?.roles.length === 0 && <B24Empty title="Core 尚未返回 RolePreset" description="请先在 Agent 设置中配置可用角色。" />}</div></fieldset><div className="b24-actions"><button type="submit" className="btn btn-primary" disabled={busy || !connected || !directory || !roleIds.length}><SquarePen size={14} aria-hidden="true" />保存为新草稿版本</button><button type="button" className="btn btn-secondary" onClick={() => void compileGraph()} disabled={busy || !connected || !workflowId}><FileCheck size={14} aria-hidden="true" />校验当前版本</button><button type="button" className="btn btn-secondary" onClick={() => void publishGraph()} disabled={busy || !connected || !workflowId || selectedWorkflow?.status === 'published'}><Check size={14} aria-hidden="true" />发布当前草稿</button><button type="button" className="btn btn-primary" onClick={() => void startGraph()} disabled={busy || !connected || !workflowId || selectedWorkflow?.status !== 'published'}><Play size={14} aria-hidden="true" />启动 Graph Run</button></div></form>
-        {workflowDefinition && <div className="b24-card b24-card-subtle"><strong>{workflowDefinition.name} · v{workflowDefinition.version}</strong><span>{workflowDefinition.nodes.length} 节点 · {workflowDefinition.edges?.length || 0} 连线</span><ol className="b24-list">{workflowDefinition.nodes.map((node) => <li key={node.node_id}><span>{node.node_id}</span><B24Status label={node.node_kind} /></li>)}</ol></div>}
-      </B24Section></div><aside className="b24-layout-aside"><B24Section title="当前目录" description="只显示 Core 已确认的工作流、Team 和角色。">{directoryLoading && <p className="b24-field-help">正在读取 Core 协作目录…</p>}{!directoryLoading && !directory && <B24Empty title="协作目录不可用" description="Live 请求失败后不会回退演示数据。" />}{directory && <dl className="b24-detail-list"><div><dt>工作流</dt><dd>{directory.workflows.length}</dd></div><div><dt>Team</dt><dd>{directory.teams.length}</dd></div><div><dt>RolePreset</dt><dd>{directory.roles.length}</dd></div></dl>}</B24Section></aside></div>}
+      {activeTab === 'canvas' && <div className="livegraph-page"><B24Section title="流程编排" description="编辑节点和连线，保存后再校验、发布。" actions={<div className="b24-actions"><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDirectory()} disabled={busy || directoryLoading}><RefreshCw size={14} aria-hidden="true" />刷新目录</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => { setWorkflowSelection(''); setWorkflowDefinition(null); setSuggestedDefinition(null); setDraftNodes([]); setDraftEdges([]); setDiagnostics([]); setGraphName(''); setGraphDescription(''); }} disabled={busy}>新建空白编排</button><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDefinition()} disabled={busy || !workflowId}>重新读取所选版本</button></div>}>
+        <form className="b24-form" onSubmit={(event) => event.preventDefault()}><div className="b24-grid b24-grid-2"><label className="b24-field"><span className="b24-field-label">工作流版本</span><select value={workflowSelection} onChange={(event) => { setWorkflowSelection(event.target.value); setWorkflowDefinition(null); setSuggestedDefinition(null); setDraftNodes([]); setDraftEdges([]); setDiagnostics([]); }}><option value="">新建工作流</option>{directory?.workflows.map((workflow) => { const id = workflowIdentity(workflow); return id ? <option key={id} value={id}>{workflow.name} · v{workflow.version} · {statusLabel(workflow.status || 'draft')}</option> : null; })}</select></label><div className="b24-field"><SearchSelect label="协作团队" value={teamSelection} onChange={setTeamSelection} placeholder="选择团队" options={directory?.teams.flatMap((team) => { const id = teamIdentity(team); return id ? [{ value: id, label: teamLabel(team), detail: `${team.members.length} 名成员` }] : []; }) ?? []} /></div><label className="b24-field"><span className="b24-field-label">工作流名称</span><input value={graphName} onChange={(event) => setGraphName(event.target.value)} required /></label></div><label className="b24-field"><span className="b24-field-label">描述</span><textarea rows={2} value={graphDescription} onChange={(event) => setGraphDescription(event.target.value)} /></label><label className="b24-field"><span className="b24-field-label">运行任务提示</span><textarea rows={2} value={graphTask} onChange={(event) => setGraphTask(event.target.value)} /></label>
+        <WorkflowAssistant client={phase23Client} team={selectedTeam} baseWorkflow={selectedWorkflow && selectedTeam && selectedWorkflow.default_policy?.team_id === selectedTeam.team_id && selectedWorkflow.default_policy?.team_version === selectedTeam.version ? { workflow_id: selectedWorkflow.workflow_id || '', version: Number(selectedWorkflow.version || 1) } : undefined} disabled={busy || !connected} onDraftReady={(definition) => { if (definition.workflow_id !== workflowId) { setWorkflowSelection(''); setWorkflowDefinition(null); } setGraphName(definition.name); setGraphDescription(definition.description || ''); setDraftNodes(definition.nodes); setDraftEdges(definition.edges || []); setSuggestedDefinition(definition); setDiagnostics([]); }} />
+        <LiveWorkflowCanvas key={`${workflowSelection}:${suggestedDefinition?.version ?? "core"}`} nodes={draftNodes} edges={draftEdges} diagnostics={diagnostics} roles={directory?.roles.map((role) => ({ id: role.id, label: roleLabel(role) })) || []} onChangeNodes={(nodes) => { setDraftNodes(nodes); setDiagnostics([]); }} onChangeEdges={(edges) => { setDraftEdges(edges); setDiagnostics([]); }} disabled={busy || !connected} />
+        <div className="livegraph-diff" aria-live="polite"><strong>{workflowDefinition ? `与已保存版本 v${workflowDefinition.version} 比较` : '新工作流草稿'}</strong><span>新增节点 {difference.added.length} · 移除节点 {difference.removed.length} · 修改节点 {difference.changed.length} · 新增/修改连线 {difference.edgeAdded.length} · 移除连线 {difference.edgeRemoved.length}</span>{graphDirty && <span>当前画布或绑定有未保存改动。</span>}{Boolean(workflowDefinition?.default_policy?.team_id) && workflowDefinition && teamSelection !== `${workflowDefinition.default_policy?.team_id}:v${workflowDefinition.default_policy?.team_version}` && <span>协作团队：{String(workflowDefinition.default_policy?.team_id)} → {selectedTeam?.team_id || '未选择'}</span>}{[...difference.added, ...difference.removed, ...difference.changed, ...difference.edgeAdded, ...difference.edgeRemoved].length > 0 && <details><summary>查看节点和连线差异</summary><ul>{difference.added.map((id) => <li key={`added:${id}`}>新增节点 {id}</li>)}{difference.removed.map((id) => <li key={`removed:${id}`}>移除节点 {id}</li>)}{difference.changed.map((id) => <li key={`changed:${id}`}>修改节点 {id}</li>)}{difference.edgeAdded.map((id) => <li key={`edgeAdded:${id}`}>新增或修改连线 {id}</li>)}{difference.edgeRemoved.map((id) => <li key={`edgeRemoved:${id}`}>移除连线 {id}</li>)}</ul></details>}</div>
+        {diagnostics.length > 0 && <div className="livegraph-diagnostics" role="status"><strong>流程校验：{diagnostics.filter((item) => item.severity === 'error').length} 个错误，{diagnostics.filter((item) => item.severity === 'warning').length} 个警告</strong><ul>{diagnostics.map((item, index) => <li key={`${item.code}:${index}`}><b>{item.severity === 'error' ? '错误' : '警告'}</b> {item.node_id || item.edge_id || '全图'} · {item.code}: {item.message}</li>)}</ul></div>}
+        <div className="b24-actions"><button type="button" className="btn btn-primary" onClick={() => void createGraph()} disabled={busy || !connected || !draftNodes.length}><SquarePen size={14} aria-hidden="true" />保存为新草稿版本</button><button type="button" className="btn btn-secondary" onClick={() => void compileGraph()} disabled={busy || !connected || !workflowId || graphDirty}><FileCheck size={14} aria-hidden="true" />校验已保存版本</button><button type="button" className="btn btn-secondary" onClick={() => void publishGraph()} disabled={busy || !connected || !workflowId || graphDirty || selectedWorkflow?.status === 'published'}><Check size={14} aria-hidden="true" />发布已保存版本</button><button type="button" className="btn btn-primary" onClick={() => void startGraph()} disabled={busy || !connected || !workflowId || selectedWorkflow?.status !== 'published' || graphDirty}><Play size={14} aria-hidden="true" />运行流程</button></div></form>
+      </B24Section></div>}
 
-      {activeTab === 'runs' && <B24Section title="Graph 运行进度" description="选择已有运行或使用编排页启动。事件流结束但运行未终止时，会明确保留 Cursor 重连。" actions={<div className="b24-actions"><button className="btn btn-secondary btn-sm" disabled={busy || !graphRunId} onClick={() => void run(() => refreshGraph())}><RefreshCw size={14} aria-hidden="true" />刷新投影</button><button className="btn btn-primary btn-sm" disabled={busy || streamStatus === 'live' || !graphRunId} onClick={() => void monitorGraph()}><RotateCcw size={14} aria-hidden="true" />{streamStatus === 'disconnected' ? '从 Cursor 重连' : '监控事件'}</button><button className="btn btn-secondary btn-sm" disabled={streamStatus === 'idle'} onClick={stopStream}><CircleStop size={14} aria-hidden="true" />停止监控</button></div>}><div className="b24-form"><div className="b24-grid b24-grid-2"><label className="b24-field"><span className="b24-field-label">Graph Run</span><select value={graphRunId} onChange={(event) => selectGraphRun(event.target.value)}><option value="">选择 Graph Run</option>{knownGraphRuns.map((item) => <option key={item.id} value={item.id}>{item.id} · {statusLabel(item.status)}</option>)}</select><span className="b24-field-help">运行由 Core 返回并自动加入列表。</span></label><div className="b24-field"><span className="b24-field-label">运行控制</span><div className="b24-actions"><button className="btn btn-primary btn-sm" disabled={busy || !connected || !graphRunId} onClick={() => void (async () => { const scope = graphScopeEpoch.current; await run(async () => { await phase23Client.resumeGraphRun(graphRunId, { allow_unknown_side_effect_replay: false }, commandOptions(keys.current.get(`resume:${graphRunId}`))); await refreshGraph(graphRunId, scope); addNotification('success', '恢复请求已由 Core 接收。'); }, () => scope === graphScopeEpoch.current); })()}><Play size={13} aria-hidden="true" />恢复</button><button className="btn btn-secondary btn-sm" disabled title="phase23.v1 未提供 Graph Pause Command"><Pause size={13} aria-hidden="true" />暂停（协议待补）</button><button className="btn btn-danger btn-sm" disabled={busy || !connected || !graphRunId} onClick={() => void (async () => { if (!window.confirm(`确认取消 Graph Run ${graphRunId}？`)) return; const scope = graphScopeEpoch.current; await run(async () => { await phase23Client.cancelGraphRun(graphRunId, commandOptions(keys.current.get(`cancel:${graphRunId}`))); await refreshGraph(graphRunId, scope); addNotification('success', '取消请求已由 Core 接收。'); }, () => scope === graphScopeEpoch.current); })()}><CircleStop size={13} aria-hidden="true" />取消运行</button></div></div></div><p className="b24-field-help">流状态：{statusLabel(streamStatus)} · Cursor {cursorForScope(events, graphScope).toString()}</p><details className="b24-compat"><summary>兼容旧 Coding Workflow 深链</summary><div className="b24-form-row"><label className="b24-field"><span className="b24-field-label">旧 Run ID</span><input value={legacyWorkflowRunId} onChange={(event) => setLegacyWorkflowRunId(event.target.value)} placeholder="仅用于已有深链恢复" /></label><button type="button" className="btn btn-secondary btn-sm" onClick={() => void resolveLegacy()} disabled={busy}>解析旧 Workflow</button></div></details>{graphRun && <div className="b24-card b24-card-subtle"><div className="b24-card-heading"><strong>{statusLabel(graphRun.status)}</strong><B24Status label={`revision ${graphRun.revision}`} /></div><span>当前节点：{graphRun.current_node_ids.join('、') || '无'}</span></div>}</div><div className="b24-grid b24-grid-2"><B24Section title="节点"><ul className="b24-list">{nodeRuns.map((node) => <li key={node.id}><span><strong>{node.node_id}</strong><small>{node.id}</small></span><B24Status label={statusLabel(node.status)} tone={toneFor(node.status)} /></li>)}{nodeRuns.length === 0 && <B24Empty title="暂无节点投影" description="选择运行并刷新后查看。" />}</ul></B24Section><B24Section title="最近事件"><ul className="b24-list">{scopedEvents.slice().reverse().map((event) => <li key={`${event.resourceScope}:${event.id}`}><span>{event.eventType}</span><code>{event.cursor?.toString() || '—'}</code></li>)}{scopedEvents.length === 0 && <B24Empty title="暂无事件" description="启动事件监控后查看。" />}</ul></B24Section></div><div className="b24-grid b24-grid-2"><B24Section title="Writer Workspace / Lease"><ul className="b24-list">{writerWorkspaces.map((item) => <li key={item.writerWorkspaceId}><span>{item.writerKey}<small>{item.isolationKind} · {item.isolationRef}</small></span><B24Status label={item.lease === null ? '无 Lease' : item.lease.releasedAt ? '已释放' : `fence ${item.lease.fencing}`} tone={item.lease?.releasedAt ? 'neutral' : 'warning'} /></li>)}{!writerWorkspaces.length && <B24Empty title="暂无 Writer Projection" />}</ul></B24Section><B24Section title="Patch / Commit Artifact"><ul className="b24-list">{writerArtifacts.map((item) => <li key={item.writerArtifactId}><span>{item.artifactKind}<small>{item.changedPaths.join('、')}</small></span><B24Status label={`${item.testEvidenceRefs.length} 份测试证据`} /></li>)}{!writerArtifacts.length && <B24Empty title="暂无 Writer Artifact" />}</ul></B24Section><B24Section title="Conflict"><ul className="b24-list">{writerConflicts.map((item) => <li key={item.conflictId}><span>{item.paths.join('、')}</span><B24Status label={item.status} tone={toneFor(item.status)} /></li>)}{!writerConflicts.length && <B24Empty title="暂无 Conflict" />}</ul></B24Section><B24Section title="Merge Node"><ul className="b24-list">{mergeRuns.map((item) => <li key={item.mergeRunId}><span>{item.mergeNodeId}<small>{item.resultArtifactRef || item.errorCode || '等待结果'}</small></span><B24Status label={item.status} tone={toneFor(item.status)} /></li>)}{!mergeRuns.length && <B24Empty title="暂无 Merge Node" />}</ul></B24Section></div></B24Section>}
+      {activeTab === 'runs' && <B24Section title="运行进度" description="查看流程运行状态；连接中断后可继续监控。" actions={<div className="b24-actions"><button className="btn btn-secondary btn-sm" disabled={busy || !graphRunId} onClick={() => void run(() => refreshGraph())}><RefreshCw size={14} aria-hidden="true" />刷新状态</button><button className="btn btn-primary btn-sm" disabled={busy || streamStatus === 'live' || !graphRunId} onClick={() => void monitorGraph()}><RotateCcw size={14} aria-hidden="true" />{streamStatus === 'disconnected' ? '重新连接' : '监控事件'}</button><button className="btn btn-secondary btn-sm" disabled={streamStatus === 'idle'} onClick={stopStream}><CircleStop size={14} aria-hidden="true" />停止监控</button></div>}><div className="b24-form"><div className="b24-grid b24-grid-2"><label className="b24-field"><span className="b24-field-label">流程运行</span><select value={graphRunId} onChange={(event) => selectGraphRun(event.target.value)}><option value="">选择流程运行</option>{knownGraphRuns.map((item) => <option key={item.id} value={item.id}>{item.id} · {statusLabel(item.status)}</option>)}</select></label><div className="b24-field"><span className="b24-field-label">运行控制</span><div className="b24-actions"><button className="btn btn-primary btn-sm" disabled={!runControls.canResume} onClick={() => void (async () => { const scope = graphScopeEpoch.current; await run(async () => { await phase23Client.resumeGraphRun(graphRunId, { allow_unknown_side_effect_replay: false }, commandOptions(keys.current.get(`resume:${graphRunId}`))); await refreshGraph(graphRunId, scope); addNotification('success', '恢复请求已提交。'); }, () => scope === graphScopeEpoch.current); })()}><Play size={13} aria-hidden="true" />恢复</button><button className="btn btn-secondary btn-sm" disabled title="当前暂不支持暂停流程"><Pause size={13} aria-hidden="true" />暂停（暂不可用）</button><button className="btn btn-danger btn-sm" disabled={!runControls.canCancel} onClick={() => void (async () => { if (!window.confirm(`确认取消流程运行 ${graphRunId}？`)) return; const scope = graphScopeEpoch.current; await run(async () => { await phase23Client.cancelGraphRun(graphRunId, commandOptions(keys.current.get(`cancel:${graphRunId}`))); await refreshGraph(graphRunId, scope); addNotification('success', '取消请求已提交。'); }, () => scope === graphScopeEpoch.current); })()}><CircleStop size={13} aria-hidden="true" />取消运行</button></div></div></div><p className="b24-field-help">连接状态：{statusLabel(streamStatus)} · 进度位置 {cursorForScope(events, graphScope).toString()}</p><details className="b24-compat"><summary>查找旧流程</summary><div className="b24-form-row"><label className="b24-field"><span className="b24-field-label">原流程运行编号</span><input value={legacyWorkflowRunId} onChange={(event) => setLegacyWorkflowRunId(event.target.value)} placeholder="填写原流程运行编号" /></label><button type="button" className="btn btn-secondary btn-sm" onClick={() => void resolveLegacy()} disabled={busy}>查找流程</button></div></details>{graphRun && <div className="b24-card b24-card-subtle"><div className="b24-card-heading"><strong>{statusLabel(graphRun.status)}</strong></div><span>当前节点：{graphRun.current_node_ids.map((id) => graphNodeDisplayName(runDefinition, id)).join('、') || '无'}</span><details><summary>运行详情</summary><span>修订号：{graphRun.revision}</span><code>{graphRun.id}</code></details></div>}</div>{runDefinition && graphRun && <details className="livegraph-run-canvas"><summary>运行图（高级） · {runDefinition.name} v{runDefinition.version}</summary><LiveWorkflowCanvas nodes={runDefinition.nodes} edges={runDefinition.edges || []} diagnostics={[]} nodeRuns={nodeRuns} roles={[]} onChangeNodes={() => undefined} onChangeEdges={() => undefined} disabled /></details>}<div className="b24-grid b24-grid-2"><B24Section title="节点"><ul className="b24-list">{nodeRuns.map((node) => <li key={node.id}><span><strong>{graphNodeDisplayName(runDefinition, node.node_id)}</strong><details><summary>节点详情</summary><small>节点：<code>{node.node_id}</code></small><small>运行编号：<code>{node.id}</code></small><small>修订号：{node.revision}</small></details></span><B24Status label={statusLabel(node.status)} tone={toneFor(node.status)} /></li>)}{nodeRuns.length === 0 && <B24Empty title="暂无节点状态" description="选择运行并刷新后查看。" />}</ul></B24Section><B24Section title="最近事件"><ul className="b24-list">{scopedEvents.slice().reverse().map((event) => <li key={`${event.resourceScope}:${event.id}`}><span>{event.eventType}</span><code>{event.cursor?.toString() || '—'}</code></li>)}{scopedEvents.length === 0 && <B24Empty title="暂无事件" description="启动事件监控后查看。" />}</ul></B24Section></div><div className="b24-grid b24-grid-2"><B24Section title="写入工作区与授权"><ul className="b24-list">{writerWorkspaces.map((item) => <li key={item.writerWorkspaceId}><span>{item.writerKey}<small>{item.isolationKind} · {item.isolationRef}</small></span><B24Status label={item.lease === null ? '无 Lease' : item.lease.releasedAt ? '已释放' : `fence ${item.lease.fencing}`} tone={item.lease?.releasedAt ? 'neutral' : 'warning'} /></li>)}{!writerWorkspaces.length && <B24Empty title="暂无隔离工作区" />}</ul></B24Section><B24Section title="变更产物"><ul className="b24-list">{writerArtifacts.map((item) => <li key={item.writerArtifactId}><span>{item.artifactKind}<small>{item.changedPaths.join('、')}</small></span><B24Status label={`${item.testEvidenceRefs.length} 份测试证据`} /></li>)}{!writerArtifacts.length && <B24Empty title="暂无写入产物" />}</ul></B24Section><B24Section title="冲突"><ul className="b24-list">{writerConflicts.map((item) => <li key={item.conflictId}><span>{item.paths.join('、')}</span><B24Status label={item.status} tone={toneFor(item.status)} /></li>)}{!writerConflicts.length && <B24Empty title="暂无冲突" />}</ul></B24Section><B24Section title="合并步骤"><ul className="b24-list">{mergeRuns.map((item) => <li key={item.mergeRunId}><span>{item.mergeNodeId}<small>{item.resultArtifactRef || item.errorCode || '等待结果'}</small></span><B24Status label={item.status} tone={toneFor(item.status)} /></li>)}{!mergeRuns.length && <B24Empty title="暂无合并步骤" />}</ul></B24Section></div></B24Section>}
 
-      {activeTab === 'home' && <div className="b24-layout-split"><div className="b24-layout-main"><B24Section title="Team 协作" description="从 Core 目录选择 Team 与成员。启动命令由 Core 创建 Graph 绑定、Session、Agent 和 Thread，页面不要求手填内部 ID。" actions={<div className="b24-actions"><button className="btn btn-secondary btn-sm" onClick={() => void loadDirectory()} disabled={busy || directoryLoading}><RefreshCw size={14} aria-hidden="true" />刷新目录</button><button className="btn btn-secondary btn-sm" onClick={() => void refreshTeam()} disabled={busy || !teamRunId}><RefreshCw size={14} aria-hidden="true" />刷新 Team</button></div>}><form className="b24-form" onSubmit={(event) => event.preventDefault()}><div className="b24-grid b24-grid-2"><label className="b24-field"><span className="b24-field-label">Team 模板<span className="b24-field-required">*</span></span><select value={teamSelection} onChange={(event) => setTeamSelection(event.target.value)}><option value="">选择 Core Team</option>{directory?.teams.map((team) => { const id = teamIdentity(team); return id ? <option key={id} value={id}>{teamLabel(team)}</option> : null; })}</select></label><label className="b24-field"><span className="b24-field-label">绑定 Graph Run</span><select value={graphRunId} onChange={(event) => selectGraphRun(event.target.value)}><option value="">选择已知 Graph Run</option>{knownGraphRuns.map((item) => <option key={item.id} value={item.id}>{item.id} · {statusLabel(item.status)}</option>)}</select></label></div><fieldset className="b24-fieldset b24-card"><legend>Roster 成员</legend>{selectedTeam ? <div className="b24-list b24-list-grid">{selectedTeam.members.map((member) => <label className="b24-check-row" key={member.member_id}><input type="checkbox" checked={memberIds.includes(member.member_id)} onChange={(event) => setMemberIds((current) => event.target.checked ? unique([...current, member.member_id]) : current.filter((id) => id !== member.member_id))} /><span><strong>{member.role}</strong><small>{member.agent_definition_id}{member.can_coordinate ? ' · 可协调' : ''}</small></span></label>)}</div> : <B24Empty title="请先选择 Team" description="Team 成员会在这里显示。" />}<p className="b24-field-help">当前 Team 服务端要求完整 Roster；成员身份由 Core 目录提供。</p></fieldset><label className="b24-field"><span className="b24-field-label">协作任务</span><textarea rows={2} value={teamTask} onChange={(event) => setTeamTask(event.target.value)} placeholder="描述本次 Team 要共同完成的任务。" /></label><div className="b24-actions"><button type="button" className="btn btn-primary" onClick={() => void startTeam()} disabled={busy || !connected || !teamId || !graphRunId || !canPrepareTeamForGraph(graphRun) || !selectedTeam || memberIds.length !== selectedTeam.members.length}><Play size={14} aria-hidden="true" />启动 Team Run</button>{teamRunId && <B24Status label={`当前 Run ${teamRunId}`} tone="success" />}</div></form>{teamRun && <div className="b24-card b24-card-subtle"><div className="b24-card-heading"><strong>{statusLabel(teamRun.status)}</strong><B24Status label={`${teamRun.roster.length} 名成员`} /></div><span>绑定 Graph Run：{teamRun.workflow_run_id}</span></div>}</B24Section>
-      {teamRun && <><B24Section title="Agent 个人页" description="查看当前 Team Roster 中一个 Agent 的身份、状态和会话入口。"><label className="b24-field"><span className="b24-field-label">当前 Agent</span><select value={viewerAgentId} onChange={(event) => changeViewer(event.target.value)}><option value="">选择 Agent</option>{roster.map((item) => <option key={item.agent_instance_id} value={item.agent_instance_id}>{memberLabel(item, selectedTeam)} · {statusLabel(item.status || 'invited')}</option>)}</select></label>{selectedViewer ? <article className="b24-agent-profile"><div className="b24-agent-avatar" aria-hidden="true">{memberLabel(selectedViewer, selectedTeam).slice(0, 1)}</div><div className="b24-agent-profile-main"><h3>{memberLabel(selectedViewer, selectedTeam)}</h3><B24Status label={statusLabel(selectedViewer.status || 'invited')} tone={toneFor(selectedViewer.status || 'invited')} /><dl className="b24-detail-list"><div><dt>Agent Instance</dt><dd><code>{selectedViewer.agent_instance_id}</code></dd></div><div><dt>Thread</dt><dd>{selectedViewer.thread_id ? <Link to={`/chat/${encodeURIComponent(selectedViewer.thread_id)}`}><LinkIcon size={13} aria-hidden="true" />打开会话</Link> : 'Core 未返回 Thread'}</dd></div><div><dt>历史条目</dt><dd>{agentHistory?.items.length ?? '—'}</dd></div></dl></div></article> : <B24Empty title="请选择当前 Agent" description="消息和 Mailbox 会按当前 Agent 权限读取。" />}</B24Section><div className="b24-grid b24-grid-2"><B24Section title="消息与 Mailbox" description="群聊和定向消息沿用服务端可见性；消息正文作为不可信上下文显示。"><div className="b24-form"><div className="b24-grid b24-grid-2"><label className="b24-field"><span className="b24-field-label">消息范围</span><select value={messageAudience} onChange={(event) => setMessageAudience(event.target.value as Audience)}><option value="direct">定向给一名 Agent</option><option value="team">发送到 Team</option></select></label><label className="b24-field"><span className="b24-field-label">消息类型</span><select value={messageKind} onChange={(event) => setMessageKind(event.target.value as (typeof MESSAGE_KINDS)[number])}>{MESSAGE_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}</select></label></div>{messageAudience === 'direct' && <label className="b24-field"><span className="b24-field-label">接收 Agent</span><select value={recipientAgentId} onChange={(event) => setRecipientAgentId(event.target.value)}><option value="">选择接收 Agent</option>{roster.map((item) => <option key={item.agent_instance_id} value={item.agent_instance_id}>{memberLabel(item, selectedTeam)}</option>)}</select></label>}<label className="b24-field"><span className="b24-field-label">消息内容</span><textarea rows={3} value={outgoing} onChange={(event) => setOutgoing(event.target.value)} placeholder="发送持久消息…" /></label><div className="b24-actions"><button type="button" className="btn btn-primary" onClick={() => void sendMessage()} disabled={busy || !viewerAgentId || !messageRecipientsActive}><Send size={14} aria-hidden="true" />发送持久消息</button>{!messageRecipientsActive && <p className="b24-helper-text">请选择仍在协作中的接收成员。</p>}</div></div><ul className="b24-list b24-message-list">{messages.map((item) => <li className="b24-message" key={item.message_id}><div className="b24-message-meta"><strong>{item.message_kind}</strong><span>{item.sender_id === viewerAgentId ? '我' : item.sender_id}</span><B24Status label={item.audience === 'team' ? 'Team' : '定向'} /></div><p>{payloadText(item)}</p></li>)}{!messages.length && <B24Empty title="暂无可见消息" description="Core 会按当前 Agent 的可见性投影消息。" />}</ul><h3>Mailbox</h3><ul className="b24-list">{mailbox.map((item) => <li key={item.delivery_id}><span><strong>{item.message.message_kind}</strong><small>{payloadText(item.message)}</small></span><div className="b24-actions"><B24Status label={statusLabel(item.status)} tone={toneFor(item.status)} />{item.status !== 'acked' && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void acknowledge(item.delivery_id)}>确认</button>}</div></li>)}{!mailbox.length && <B24Empty title="Mailbox 为空" description="暂无发给当前 Agent 的待确认消息。" />}</ul></B24Section><B24Section title="Task Board" description="状态更新带上 Core revision，冲突会显式失败并要求刷新。"><ul className="b24-list">{tasks.map((item) => <li className="b24-board-item" key={item.task_id}><div><strong>{item.title}</strong><small>{item.summary || '无摘要'}{item.assignee_ids.length ? ` · ${item.assignee_ids.length} 名负责人` : ''}</small></div><div className="b24-actions"><select aria-label={`${item.title} 状态`} value={item.status} onChange={(event) => void updateTask(item, event.target.value as TaskStatus)} disabled={busy}>{TASK_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select><B24Status label={`rev ${item.revision}`} /></div></li>)}{!tasks.length && <B24Empty title="暂无任务" description="Task 由 Core Projection 或协作消息产生。" />}</ul></B24Section></div><B24Section title="Artifact Board" description="页面只操作 Core 已返回的 Artifact 引用；文件内容和权限由服务端校验。"><div className="b24-form-row"><label className="b24-field"><span className="b24-field-label">已有 Artifact 引用</span><select value={artifactToPublish} onChange={(event) => { setArtifactToPublish(event.target.value); const candidate = artifactCandidates.find((item) => item.artifactId === event.target.value); if (candidate) setArtifactTitle(candidate.title); }}><option value="">选择 Artifact</option>{artifactCandidates.map((item) => <option key={item.artifactId} value={item.artifactId}>{item.title} · rev {item.revision}</option>)}</select></label><label className="b24-field"><span className="b24-field-label">发布标题</span><input value={artifactTitle} onChange={(event) => setArtifactTitle(event.target.value)} placeholder="Artifact 在板上的标题" /></label><button type="button" className="btn btn-secondary btn-sm" onClick={() => void publishArtifact()} disabled={busy || !artifactToPublish || !viewerAgentId}><Send size={13} aria-hidden="true" />发布引用</button></div><ul className="b24-list">{artifacts.map((item) => <li key={item.artifact_id}><span><strong>{item.title}</strong><small>{item.media_type} · publisher {item.publisher_id} · revision {item.revision}</small></span><B24Status label={item.visibility} /></li>)}{!artifacts.length && <B24Empty title="暂无 Artifact" description="Core 尚未返回当前 Agent 可见的产物。" />}</ul></B24Section></>}{!teamRun && <B24Empty title="尚未加载 Team Run" description="选择 Team、绑定已知 Graph Run 后启动协作。" />}</div><aside className="b24-layout-aside"><B24Section title="Team 目录" description="Team 定义是版本化协作契约.">{directory?.teams.map((team) => <article className={`b24-card b24-card-subtle${teamIdentity(team) === teamSelection ? ' b24-card-selected' : ''}`} key={teamIdentity(team) || team.default_coordinator}><div className="b24-card-heading"><strong>{teamLabel(team)}</strong><B24Status label={`${team.members.length} 名成员`} /></div><p>{team.members.map((member) => member.role).join('、')}</p></article>)}{(!directory || !directory.teams.length) && <B24Empty title="Core 尚未返回 Team" description="请先创建可用 Team 定义。" />}</B24Section></aside></div>}
+      {activeTab === 'runs' && graphRunId && runDefinition && <B24Section title="隔离工作区合并" description="合并前请核对各工作区改动和结果。">
+        <GraphMergeControls key={graphRunId} client={phase56Client} runId={graphRunId} definition={runDefinition} artifacts={writerArtifacts} workspaces={writerWorkspaces} merges={mergeRuns} disabled={busy || !connected} onChanged={async () => { await refreshGraph(graphRunId, renderedGraphScope); }} onWarning={(message) => addNotification('warn', message)} />
+      </B24Section>}
+      {activeTab === 'runs' && nodeRuns.some((node) => ['waiting_input', 'waiting_approval', 'waiting'].includes(node.status)) && <B24Section title="等待处理" description="处理等待输入或审批的节点。">
+        <div className="b24-list">
+          {nodeRuns.filter((node) => ['waiting_input', 'waiting_approval', 'waiting'].includes(node.status)).map((node) => {
+            const spec = runDefinition?.nodes.find((item) => item.node_id === node.node_id);
+            const prompt = spec?.metadata?.prompt;
+            return <div className="b24-card b24-card-subtle" key={node.id}>
+              <strong>{graphNodeDisplayName(runDefinition, node.node_id)} · {statusLabel(node.status)}</strong>
+              {typeof prompt === 'string' && prompt && <p>{prompt}</p>}
+              {node.status === 'waiting_input' && <form onSubmit={(event) => { event.preventDefault(); provideHumanInput(node); }}>
+                <label className="b24-field"><span className="b24-field-label">人工输入</span><textarea rows={2} value={nodeInputValues[node.id] ?? ''} onChange={(event) => setNodeInputValues((current) => ({ ...current, [node.id]: event.target.value }))} disabled={busy || !connected} /></label>
+                <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !connected || !node.wait_token || !nodeInputValues[node.id]?.trim()}>提交输入</button>
+              </form>}
+              {node.status === 'waiting_approval' && graphRunId && <GraphApprovalControls client={phase23Client} runId={graphRunId} node={node} disabled={busy || !connected} onChanged={async () => { await refreshGraph(graphRunId, renderedGraphScope); }} />}
+              {node.status === 'waiting' && <p className="b24-field-help">正在等待；到期后刷新状态或继续监控。</p>}
+            </div>;
+          })}
+        </div>
+      </B24Section>}
+      {activeTab === 'home' && <div className="b24-layout-split"><div className="b24-layout-main"><B24Section title="团队协作" actions={<div className="b24-actions"><button className="btn btn-secondary btn-sm" onClick={() => void loadDirectory()} disabled={busy || directoryLoading}><RefreshCw size={14} aria-hidden="true" />刷新目录</button><button className="btn btn-secondary btn-sm" onClick={() => void refreshTeam()} disabled={busy || !teamRunId}><RefreshCw size={14} aria-hidden="true" />刷新团队</button></div>}><form className="b24-form" onSubmit={(event) => event.preventDefault()}><div className="b24-grid b24-grid-2"><div className="b24-field"><SearchSelect label="团队模板" value={teamSelection} onChange={setTeamSelection} placeholder="选择团队" options={directory?.teams.flatMap((team) => { const id = teamIdentity(team); return id ? [{ value: id, label: teamLabel(team), detail: `${team.members.length} 名成员` }] : []; }) ?? []} /></div><div className="b24-field"><SearchSelect label="关联流程运行" value={graphRunId} onChange={selectGraphRun} placeholder="选择流程运行" options={knownGraphRuns.map((item) => ({ value: item.id, label: statusLabel(item.status), detail: item.id }))} /></div></div><fieldset className="b24-fieldset b24-card"><legend>团队成员</legend>{selectedTeam ? <div className="b24-list b24-list-grid">{selectedTeam.members.map((member) => <label className="b24-check-row" key={member.member_id}><input type="checkbox" checked={memberIds.includes(member.member_id)} onChange={(event) => setMemberIds((current) => event.target.checked ? unique([...current, member.member_id]) : current.filter((id) => id !== member.member_id))} /><span><strong>{member.role}</strong><small>{member.agent_definition_id}{member.can_coordinate ? ' · 可协调' : ''}</small></span></label>)}</div> : <B24Empty title="请先选择团队" description="选择团队后显示成员。" />}<p className="b24-field-help">启动协作前需选中全部成员。</p></fieldset><label className="b24-field"><span className="b24-field-label">协作任务</span><textarea rows={2} value={teamTask} onChange={(event) => setTeamTask(event.target.value)} placeholder="描述团队要完成的任务。" /></label><div className="b24-actions"><button type="button" className="btn btn-primary" onClick={() => void startTeam()} disabled={busy || !connected || !teamId || !graphRunId || !canPrepareTeamForGraph(graphRun) || !selectedTeam || memberIds.length !== selectedTeam.members.length}><Play size={14} aria-hidden="true" />启动团队协作</button>{teamRunId && <B24Status label={`当前运行 ${teamRunId}`} tone="success" />}</div></form>{teamRun && <div className="b24-card b24-card-subtle"><div className="b24-card-heading"><strong>{statusLabel(teamRun.status)}</strong><B24Status label={`${teamRun.roster.length} 名成员`} /></div><span>关联流程运行：{teamRun.workflow_run_id}</span></div>}</B24Section>
+      {teamRun && <><B24Section title="成员详情"><label className="b24-field"><span className="b24-field-label">当前成员</span><select value={viewerAgentId} onChange={(event) => changeViewer(event.target.value)}><option value="">选择成员</option>{roster.map((item) => <option key={item.agent_instance_id} value={item.agent_instance_id}>{memberLabel(item, selectedTeam)} · {statusLabel(item.status || 'invited')}</option>)}</select></label>{selectedViewer ? <article className="b24-agent-profile"><div className="b24-agent-avatar" aria-hidden="true">{memberLabel(selectedViewer, selectedTeam).slice(0, 1)}</div><div className="b24-agent-profile-main"><h3>{memberLabel(selectedViewer, selectedTeam)}</h3><B24Status label={statusLabel(selectedViewer.status || 'invited')} tone={toneFor(selectedViewer.status || 'invited')} /><dl className="b24-detail-list"><div><dt>成员 ID</dt><dd><code>{selectedViewer.agent_instance_id}</code></dd></div><div><dt>会话</dt><dd>{selectedViewer.thread_id ? <Link to={`/chat/${encodeURIComponent(selectedViewer.thread_id)}`}><LinkIcon size={13} aria-hidden="true" />打开会话</Link> : '暂无会话'}</dd></div><div><dt>历史条目</dt><dd>{agentHistory?.items.length ?? '—'}</dd></div></dl></div></article> : <B24Empty title="请选择当前成员" description="选择成员后查看其消息。" />}</B24Section><div className="b24-grid b24-grid-2"><B24Section title="消息与收件箱" description="只显示当前成员可查看的消息。"><div className="b24-form"><div className="b24-grid b24-grid-2"><label className="b24-field"><span className="b24-field-label">消息范围</span><select value={messageAudience} onChange={(event) => setMessageAudience(event.target.value as Audience)}><option value="direct">发给一名成员</option><option value="team">发给团队</option></select></label><label className="b24-field"><span className="b24-field-label">消息类型</span><select value={messageKind} onChange={(event) => setMessageKind(event.target.value as (typeof MESSAGE_KINDS)[number])}>{MESSAGE_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}</select></label></div>{messageAudience === 'direct' && <label className="b24-field"><span className="b24-field-label">接收成员</span><select value={recipientAgentId} onChange={(event) => setRecipientAgentId(event.target.value)}><option value="">选择接收成员</option>{roster.map((item) => <option key={item.agent_instance_id} value={item.agent_instance_id}>{memberLabel(item, selectedTeam)}</option>)}</select></label>}<label className="b24-field"><span className="b24-field-label">消息内容</span><textarea rows={3} value={outgoing} onChange={(event) => setOutgoing(event.target.value)} placeholder="输入消息…" /></label><div className="b24-actions"><button type="button" className="btn btn-primary" onClick={() => void sendMessage()} disabled={busy || !viewerAgentId || !messageRecipientsActive}><Send size={14} aria-hidden="true" />发送消息</button>{!messageRecipientsActive && <p className="b24-helper-text">请选择仍在协作中的接收成员。</p>}</div></div><ul className="b24-list b24-message-list">{messages.map((item) => <li className="b24-message" key={item.message_id}><div className="b24-message-meta"><strong>{item.message_kind}</strong><span>{item.sender_id === viewerAgentId ? '我' : item.sender_id}</span><B24Status label={item.audience === 'team' ? '团队' : '定向'} /></div><p>{payloadText(item)}</p></li>)}{!messages.length && <B24Empty title="暂无可见消息" description="暂无当前成员可查看的消息。" />}</ul><h3>收件箱</h3><ul className="b24-list">{mailbox.map((item) => <li key={item.delivery_id}><span><strong>{item.message.message_kind}</strong><small>{payloadText(item.message)}</small></span><div className="b24-actions"><B24Status label={statusLabel(item.status)} tone={toneFor(item.status)} />{item.status !== 'acked' && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void acknowledge(item.delivery_id)}>确认</button>}</div></li>)}{!mailbox.length && <B24Empty title="收件箱为空" description="暂无待确认消息。" />}</ul></B24Section><B24Section title="任务板" description="如状态已变化，请刷新后重试。"><ul className="b24-list">{tasks.map((item) => <li className="b24-board-item" key={item.task_id}><div><strong>{item.title}</strong><small>{item.summary || '无摘要'}{item.assignee_ids.length ? ` · ${item.assignee_ids.length} 名负责人` : ''}</small></div><div className="b24-actions"><select aria-label={`${item.title} 状态`} value={item.status} onChange={(event) => void updateTask(item, event.target.value as TaskStatus)} disabled={busy}>{TASK_STATUSES.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select><B24Status label={`rev ${item.revision}`} /></div></li>)}{!tasks.length && <B24Empty title="暂无任务" description="协作任务会显示在这里。" />}</ul></B24Section></div><B24Section title="产物板" description="选择已有产物，发布给团队成员。"><div className="b24-form-row"><label className="b24-field"><span className="b24-field-label">已有产物</span><select value={artifactToPublish} onChange={(event) => { setArtifactToPublish(event.target.value); const candidate = artifactCandidates.find((item) => item.artifactId === event.target.value); if (candidate) setArtifactTitle(candidate.title); }}><option value="">选择产物</option>{artifactCandidates.map((item) => <option key={item.artifactId} value={item.artifactId}>{item.title} · rev {item.revision}</option>)}</select></label><label className="b24-field"><span className="b24-field-label">发布标题</span><input value={artifactTitle} onChange={(event) => setArtifactTitle(event.target.value)} placeholder="产物标题" /></label><button type="button" className="btn btn-secondary btn-sm" onClick={() => void publishArtifact()} disabled={busy || !artifactToPublish || !viewerAgentId}><Send size={13} aria-hidden="true" />发布引用</button></div><ul className="b24-list">{artifacts.map((item) => <li key={item.artifact_id}><span><strong>{item.title}</strong><small>{item.media_type} · publisher {item.publisher_id} · revision {item.revision}</small></span><B24Status label={item.visibility} /></li>)}{!artifacts.length && <B24Empty title="暂无产物" description="暂无当前成员可查看的产物。" />}</ul></B24Section></>}{!teamRun && <B24Empty title="尚未启动团队协作" description="选择团队和流程运行后启动协作。" />}</div><aside className="b24-layout-aside"><B24Section title="团队目录">{directory?.teams.map((team) => <article className={`b24-card b24-card-subtle${teamIdentity(team) === teamSelection ? ' b24-card-selected' : ''}`} key={teamIdentity(team) || team.default_coordinator}><div className="b24-card-heading"><strong>{teamLabel(team)}</strong><B24Status label={`${team.members.length} 名成员`} /></div><p>{team.members.map((member) => member.role).join('、')}</p></article>)}{(!directory || !directory.teams.length) && <B24Empty title="暂无团队" description="请先创建团队。" />}</B24Section></aside></div>}
     </div></div>
   );
 };

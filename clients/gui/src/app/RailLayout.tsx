@@ -2,26 +2,22 @@
  * RailLayout：Shell v2 壳层（取代 ShellLayout）
  * 结构：IconRail 64px + ContextSidebar 280px（随分区切换内容）+ Main + StatusBar 32px。
  * 响应式：
- * - <960px：IconRail 隐藏改底部 TabBar（会话/任务/项目/设置）；ContextSidebar 变覆盖抽屉
+ * - <960px：IconRail 隐藏改底部 TabBar（对话/项目/协作/任务/设置）；ContextSidebar 变覆盖抽屉
  *   （复用 components/Drawer：遮罩 + Esc + 焦点管理 + 焦点还原）；StatusBar 隐藏。
  * - >=960px（所有桌面宽度）：ContextSidebar 内联且可收起为细竖把手（v6 §3），展开状态按
  *   模式持久化 localStorage（operant.panel.chatSidebar / operant.panel.collabSidebar），
- *   ChatSidebar 与 CollabSidebar 互不影响；rail 不再设"会话"项（v6 §2），
- *   顶部模式切换钮（v6 §1）为桌面端对话/协作唯一入口。
+ *   ChatSidebar 与 CollabSidebar 互不影响；rail 展示对话/项目/协作/任务四个入口。
  */
 
 import React, { useState } from 'react';
+import { focusPageSection } from '../lib/focusPageSection';
 import '../styles/ui-refine-shell.css';
 import { NavLink, Outlet, useLocation, useMatch } from 'react-router-dom';
 import {
   MessageSquare,
   ListTodo,
-  ShieldCheck,
-  CalendarClock,
   FolderKanban,
-  Bot,
-  Puzzle,
-  Sparkles,
+  Users,
   Settings,
   Sun,
   Moon,
@@ -31,7 +27,6 @@ import type { ContextRevision } from '@operant/sdk';
 import { useOperant } from '../context/ClientContext';
 import { useDemo } from '../demo/DemoContext';
 import { Drawer } from '../components/Drawer';
-import { ModeSwitchButton } from '../components/ModeSwitchButton';
 import { PanelCollapseHandle, usePanelExpanded } from '../components/CollapsiblePanel';
 import { StatusBadge } from '../components/StatusBadge';
 import { ContextRing } from '../components/ContextRing';
@@ -40,7 +35,26 @@ import { getWorkflowDisplayName } from '../features/chat/chatUtils';
 import { CollabSidebar } from '../features/collab/CollabSidebar';
 import { APPROVAL_MODE_LABELS } from '../demo/DemoContext';
 import { useLive } from '../live/LiveContext';
+import { useOnboarding } from '../live/OnboardingContext';
+import { shouldCancelPendingOnRoute } from '../live/pendingConversationSend';
 import { LiveUnavailableView } from '../live/LiveUnavailableView';
+
+const PendingSendRouteGuard: React.FC = () => {
+  const location = useLocation();
+  const { pendingSend, setPendingSend, noteRouteChange } = useOnboarding();
+  const lastRouteKey = React.useRef(location.key);
+  const visitedTarget = React.useRef<string | null>(null);
+  React.useLayoutEffect(() => {
+    if (lastRouteKey.current !== location.key) { lastRouteKey.current = location.key; noteRouteChange(); }
+  }, [location.key, noteRouteChange]);
+  React.useEffect(() => {
+    if (!pendingSend) { visitedTarget.current = null; return; }
+    const target = `/chat/${encodeURIComponent(pendingSend.threadId)}`;
+    if (location.pathname === target) { visitedTarget.current = pendingSend.threadId; return; }
+    if (shouldCancelPendingOnRoute(pendingSend, location.pathname, visitedTarget.current === pendingSend.threadId)) setPendingSend(null);
+  }, [location.pathname, pendingSend, setPendingSend]);
+  return null;
+};
 
 /** 监听 CSS 媒体查询，用于壳层响应式行为（内联/覆盖抽屉切换） */
 function useMediaQuery(query: string): boolean {
@@ -57,28 +71,25 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-/** 顶部分区 + 底部设置（v6 §2：移除"会话"项——对话/协作经顶部模式切换钮进入，底部 TabBar 保留会话） */
+/** 桌面四个分区入口加底部设置；窄屏 TabBar 展示五项。 */
 const RAIL_SECTIONS = [
-  { to: '/tasks', label: '任务', icon: ListTodo },
-  { to: '/approvals', label: '审批', icon: ShieldCheck },
-  { to: '/schedules', label: '调度', icon: CalendarClock },
+  { to: '/chat', label: '对话', icon: MessageSquare },
   { to: '/projects', label: '项目', icon: FolderKanban },
-  { to: '/agents', label: '模型与角色', icon: Bot },
-  { to: '/extensions', label: '插件与MCP', icon: Puzzle },
-  { to: '/skills', label: '技能', icon: Sparkles },
+  { to: '/collab', label: '协作', icon: Users },
+  { to: '/tasks', label: '任务', icon: ListTodo },
 ] as const;
 
 const TABBAR_ITEMS = [
-  { to: '/chat', label: '会话', icon: MessageSquare },
-  { to: '/tasks', label: '任务', icon: ListTodo },
-  { to: '/approvals', label: '审批', icon: ShieldCheck },
+  { to: '/chat', label: '对话', icon: MessageSquare },
   { to: '/projects', label: '项目', icon: FolderKanban },
+  { to: '/collab', label: '协作', icon: Users },
+  { to: '/tasks', label: '任务', icon: ListTodo },
   { to: '/settings', label: '设置', icon: Settings },
 ] as const;
 
 /** 分区 → document.title 中文名（runs 为运行详情内容路由；/workflow 深链归协作分区；未知分区回退"会话"） */
 const SECTION_TITLES: Record<string, string> = {
-  chat: '会话',
+  chat: '对话',
   collab: '协作',
   // /workflow/* 保留深链（群聊 / Agent 个人界面）与 StatusBar 一致归协作分区
   workflow: '协作',
@@ -233,19 +244,19 @@ const LiveRailStatusBar: React.FC = () => {
   const { phase, stream, selectedThread, projectionStale } = useLive();
   const status = phase === 'error' ? 'disconnected' : phase === 'ready' && stream.status !== 'replaying' ? 'connected' : 'pending';
   const label = phase === 'error'
-    ? 'Core 连接失败'
+    ? '连接失败'
     : stream.status === 'replaying'
-      ? 'SSE 回放中'
+      ? '正在同步进度'
       : phase === 'ready'
-        ? 'Core 已连接'
-        : 'Core 连接中';
+        ? '已连接'
+        : '连接中';
   return (
     <footer className="rail-statusbar" data-client-mode="live">
       <div className="rail-statusbar-side">
-        <span className="rail-statusbar-text">Workspace：{selectedThread?.workspace || activeWorkspace || '未选择 Workspace'}</span>
+        <span className="rail-statusbar-text">工作区：{selectedThread?.workspace || activeWorkspace || '未选择工作区'}</span>
       </div>
       <div className="rail-statusbar-side">
-        {projectionStale && <span className="rail-statusbar-text">Projection 待校正 · </span>}
+        {projectionStale && <span className="rail-statusbar-text">状态待同步 · </span>}
         <StatusBadge status={status} label={label} size="sm" pulse={status === 'pending'} />
       </div>
     </footer>
@@ -482,16 +493,15 @@ export const RailLayout: React.FC = () => {
 
   return (
     <div className="rail-container ui-refined-shell">
+      <PendingSendRouteGuard />
       {/* 跳转链接：仅键盘焦点时可见 */}
-      <a href="#main-content" className="skip-link">
+      <a href="#main-content" className="skip-link" onClick={(event) => { event.preventDefault(); focusPageSection('main-content'); }}>
         跳到主内容
       </a>
 
       <div className="rail-body">
         {/* IconRail 64px（<960px 隐藏，改底部 TabBar） */}
         <nav className="rail-icon-rail" aria-label="分区导航">
-          {/* 唯一模式切换钮（v6 §1）："会话"图标上方，恒显当前模式图标 + 菜单切换 */}
-          <ModeSwitchButton />
           {RAIL_SECTIONS.map((item) => {
             const Icon = item.icon;
             return (
@@ -503,7 +513,6 @@ export const RailLayout: React.FC = () => {
                 title={item.label}
               >
                 <Icon size={20} />
-                <span className="rail-nav-caption">{item.label}</span>
               </NavLink>
             );
           })}
@@ -517,7 +526,6 @@ export const RailLayout: React.FC = () => {
             title={theme === 'light' ? '切换到深色主题' : '切换到浅色主题'}
           >
             {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
-            <span className="rail-nav-caption">外观</span>
           </button>
           <NavLink
             to="/settings"
@@ -526,7 +534,6 @@ export const RailLayout: React.FC = () => {
             title="设置"
           >
             <Settings size={20} />
-            <span className="rail-nav-caption">设置</span>
           </NavLink>
         </nav>
 
@@ -610,26 +617,6 @@ export const RailLayout: React.FC = () => {
             minHeight: 0,
           }}
         >
-          <div className="rail-drawer-mode">
-            <ModeSwitchButton onNavigate={() => setDrawerOpen(false)} />
-            <span className="rail-drawer-mode-label">
-              {/* 与 RailStatusBar 口径一致：/workflow 深链同属协作语境（v6 修复轮） */}
-              {location.pathname.startsWith('/collab') || location.pathname.startsWith('/workflow')
-                ? '切换到对话模式'
-                : '切换到协作模式'}
-            </span>
-          </div>
-          {/* 抽屉内保留审批入口，便于窄屏用户在上下文导航中直接进入。 */}
-          <div className="rail-drawer-approvals">
-            <NavLink
-              to="/approvals"
-              className="rail-sidebar-row"
-              onClick={() => setDrawerOpen(false)}
-            >
-              <ShieldCheck size={14} className="rail-drawer-approvals-icon" aria-hidden="true" />
-              <span className="rail-sidebar-row-title">审批</span>
-            </NavLink>
-          </div>
           {contextSidebar}
         </Drawer>
       </div>

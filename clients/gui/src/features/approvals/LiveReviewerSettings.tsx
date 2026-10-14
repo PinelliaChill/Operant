@@ -1,0 +1,70 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { RefreshCw, Save } from 'lucide-react';
+import { useOperant } from '../../context/ClientContext';
+import { SearchSelect } from '../../components/SearchSelect';
+import { sessionControlClient, type ConfigOverride } from '../../live/sessionControlClient';
+
+interface ReviewerConfig {
+  mode: 'off' | 'human' | 'auto';
+  profile_id: string | null;
+  strictness: 'cautious' | 'balanced' | 'permissive';
+  custom_rules: string[];
+}
+const DEFAULT: ReviewerConfig = { mode: 'human', profile_id: null, strictness: 'balanced', custom_rules: [] };
+
+function parseConfig(value: unknown): ReviewerConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return DEFAULT;
+  const source = value as Record<string, unknown>;
+  if (!['off', 'human', 'auto'].includes(String(source.mode)) || !['cautious', 'balanced', 'permissive'].includes(String(source.strictness))) throw new Error('Core Reviewer 配置格式无效');
+  if (!Array.isArray(source.custom_rules) || source.custom_rules.some((rule) => typeof rule !== 'string')) throw new Error('Core Reviewer 自定义规则格式无效');
+  return { mode: source.mode as ReviewerConfig['mode'], strictness: source.strictness as ReviewerConfig['strictness'], profile_id: typeof source.profile_id === 'string' ? source.profile_id : null, custom_rules: source.custom_rules as string[] };
+}
+
+export const LiveReviewerSettings: React.FC = () => {
+  const { b2Client, connectionStatus } = useOperant();
+  const [override, setOverride] = useState<ConfigOverride | null>(null);
+  const [config, setConfig] = useState<ReviewerConfig>(DEFAULT);
+  const [rulesText, setRulesText] = useState('');
+  const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const load = useCallback(async () => {
+    if (connectionStatus !== 'connected') return;
+    setBusy(true); setError('');
+    try {
+      const [next, profiles] = await Promise.all([sessionControlClient.getOverride('global', 'default'), b2Client.listModels()]);
+      const value = parseConfig(next.patch.approval_reviewer);
+      setOverride(next); setConfig(value); setRulesText(value.custom_rules.join('\n'));
+      setModels(profiles.filter((model) => model.id && model.enabled !== false).map((model) => ({ id: model.id!, name: model.name })));
+    } catch (cause) { setError('审核设置读取失败，请刷新后重试。'); }
+    finally { setBusy(false); }
+  }, [b2Client, connectionStatus]);
+  useEffect(() => { void load(); }, [load]);
+
+  const save = async () => {
+    if (!override || busy) return;
+    if (config.mode === 'auto' && !config.profile_id) { setError('请选择审核模型。'); return; }
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const custom_rules = rulesText.split('\n').map((rule) => rule.trim()).filter(Boolean);
+      await sessionControlClient.saveOverride('global', 'default', { ...override.patch, approval_reviewer: { ...config, custom_rules } }, override.revision);
+      await load();
+      setNotice('审核设置已保存。');
+    } catch (cause) { setError('设置未保存，请刷新后核对。'); }
+    finally { setBusy(false); }
+  };
+
+  return <section className="config-card" aria-labelledby="reviewer-config-heading" data-client-mode="live">
+    <div className="config-field-head"><h2 id="reviewer-config-heading">自动审核</h2><button type="button" className="btn btn-ghost btn-sm" onClick={() => void load()} disabled={busy}><RefreshCw size={13} />刷新</button></div>
+
+    {error && <div className="live-alert live-alert-error" role="alert">{error}</div>}
+    {notice && <div className="live-alert" role="status">{notice}</div>}
+    {override && <><div className="config-grid">
+      <SearchSelect label="处理方式" value={config.mode} onChange={(value) => setConfig((current) => ({ ...current, mode: value as ReviewerConfig['mode'] }))} options={[{ value: 'off', label: '关闭自动审核' }, { value: 'human', label: '始终人工处理' }, { value: 'auto', label: '自动建议' }]} />
+      <SearchSelect label="审核模型" value={config.profile_id || ''} onChange={(value) => setConfig((current) => ({ ...current, profile_id: value || null }))} disabled={config.mode !== 'auto'} placeholder="选择模型" options={models.map((model) => ({ value: model.id, label: model.name, detail: model.id }))} />
+      <SearchSelect label="严格度" value={config.strictness} onChange={(value) => setConfig((current) => ({ ...current, strictness: value as ReviewerConfig['strictness'] }))} options={[{ value: 'cautious', label: '谨慎' }, { value: 'balanced', label: '均衡' }, { value: 'permissive', label: '宽松' }]} />
+    </div><label className="config-rules-label">自定义规则（每行一条）<textarea className="input config-textarea" value={rulesText} onChange={(event) => setRulesText(event.target.value)} placeholder="写明审核要求，不输入密钥或敏感内容" /></label><div className="config-actions"><button type="button" className="btn btn-primary" onClick={() => void save()} disabled={busy || connectionStatus !== 'connected'}><Save size={14} />保存审核设置</button></div></>}
+  </section>;
+};

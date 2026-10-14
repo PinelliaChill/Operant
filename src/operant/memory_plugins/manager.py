@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import sys
 from collections.abc import Callable, Collection
 from contextlib import nullcontext
 from datetime import timedelta
@@ -936,11 +937,28 @@ class MemoryManager:
                     "upgrade_required", "experience Skills require exact B2-6 version commands"
                 )
         if cmd.action == "skill_discover":
-            if not self.skill_roots:
-                raise ValueError("尚未配置可信 Skill 根目录")
-            for root_ref, root in self.skill_roots.items():
-                discovered = SkillDiscovery((root,)).discover()
-                repository.replace_skill_candidates(root_ref, discovered.candidates)
+            available = [
+                (root_ref, root) for root_ref, root in self.skill_roots.items() if root.is_dir()
+            ]
+            discovered = (
+                SkillDiscovery(tuple(root for _, root in available)).discover()
+                if available
+                else None
+            )
+            for index, (root_ref, _) in enumerate(available):
+                assert discovered is not None
+                repository.replace_skill_candidates(
+                    root_ref,
+                    tuple(
+                        candidate
+                        for candidate in discovered.candidates
+                        if candidate.root_index == index
+                    ),
+                )
+            available_refs = {root_ref for root_ref, _ in available}
+            for root_ref in self.skill_roots:
+                if root_ref not in available_refs:
+                    repository.replace_skill_candidates(root_ref, ())
             return
         if cmd.action in ("skill_enable", "skill_disable", "skill_uninstall"):
             skill = next((s for s in self._state["skills"] if s["skill_id"] == cmd.skill_id), None)
@@ -974,11 +992,26 @@ class MemoryManager:
         selected_root = self.skill_roots.get(candidate["root_ref"])
         if selected_root is None:
             raise PermissionError("configured Skill root is unavailable")
+        available = [
+            (root_ref, root) for root_ref, root in self.skill_roots.items() if root.is_dir()
+        ]
+        selected_index = next(
+            (
+                index
+                for index, (root_ref, _) in enumerate(available)
+                if root_ref == candidate["root_ref"]
+            ),
+            None,
+        )
+        if selected_index is None:
+            raise PermissionError("configured Skill root is unavailable")
+        discovered = SkillDiscovery(tuple(root for _, root in available)).discover()
         current = next(
             (
                 s
-                for s in SkillDiscovery((selected_root,)).discover().candidates
-                if s.relative_directory == candidate["relative_directory"]
+                for s in discovered.candidates
+                if s.root_index == selected_index
+                and s.relative_directory == candidate["relative_directory"]
             ),
             None,
         )
@@ -990,6 +1023,15 @@ class MemoryManager:
         ):
             raise ValueError("Skill is already installed")
         source = selected_root / current.relative_directory
+        if source.is_symlink():
+            linked = source.resolve(strict=True)
+            if not any(
+                linked == root.resolve(strict=True)
+                or linked.is_relative_to(root.resolve(strict=True))
+                for _, root in available
+            ):
+                raise PermissionError("Skill link target is outside registered roots")
+            source = linked
         before = compute_package_digest(source)
         skill_id = "skill_" + uuid4().hex
         destination = self.root / "skills" / skill_id
@@ -1859,14 +1901,72 @@ class MemoryManager:
         elif cmd.action == "artifact_restore":
             self.service.restore_artifact(artifact_id, capability=token)
 
-    def begin_skill_run(self, workspace: str, run_id: str) -> str:
+    def list_invocable_skills(self, workspace: str) -> list[dict[str, str]]:
+        """List installed project Skills whose managed bytes still match the grant."""
         from operant.plugins.protocol import compute_package_digest
         from operant.skills import SkillDiscovery
 
+        state = self._load()
         project = next(
             (
                 p
-                for p in self._state["projects"]
+                for p in state["projects"]
+                if not p["archived"]
+                and self.store.get_workspace_initialization_by_id(p["workspace_id"]).workspace_ref
+                == workspace
+            ),
+            None,
+        )
+        if project is None:
+            return []
+        eligible = [
+            skill
+            for skill in state["skills"]
+            if skill["state"] == "installed"
+            and project["project_id"] in skill.get("project_ids", [])
+        ]
+        skills_root = self.root / "skills"
+        if not eligible or not skills_root.is_dir():
+            return []
+        candidates = {
+            candidate.relative_directory: candidate
+            for candidate in SkillDiscovery((skills_root,)).discover().candidates
+        }
+        result: list[dict[str, str]] = []
+        for skill in eligible:
+            skill_id = str(skill["skill_id"])
+            candidate = candidates.get(skill_id)
+            if candidate is None:
+                continue
+            if compute_package_digest(self.root / "skills" / skill_id) != state.get(
+                "skill_digests", {}
+            ).get(skill_id):
+                continue
+            result.append(
+                {
+                    "skill_id": skill_id,
+                    "name": candidate.name,
+                    "description": candidate.description,
+                    "digest": str(state["skill_digests"][skill_id]),
+                }
+            )
+        return result
+
+    def begin_skill_run(
+        self,
+        workspace: str,
+        run_id: str,
+        selected_ids: Collection[str] | None = None,
+        expected_digests: dict[str, str] | None = None,
+    ) -> str:
+        from operant.plugins.protocol import compute_package_digest
+        from operant.skills import SkillDiscovery
+
+        state = self._load() if expected_digests is not None else self._state
+        project = next(
+            (
+                p
+                for p in state["projects"]
                 if not p["archived"]
                 and self.store.get_workspace_initialization_by_id(p["workspace_id"]).workspace_ref
                 == workspace
@@ -1877,15 +1977,29 @@ class MemoryManager:
             return ""
         selected = [
             s
-            for s in self._state["skills"]
+            for s in state["skills"]
             if s["state"] == "installed" and project["project_id"] in s.get("project_ids", [])
         ]
+        if selected_ids is not None:
+            requested = set(selected_ids)
+            available = {skill["skill_id"] for skill in selected}
+            if requested - available:
+                raise PluginError(
+                    "package_unavailable", "bound Skill is not enabled for this project"
+                )
+            selected = [skill for skill in selected if skill["skill_id"] in requested]
+            if expected_digests is not None and set(expected_digests) != requested:
+                raise PermissionError("selected Skill digest binding changed")
         content = []
         snapshot_ids = set()
         for skill in selected:
-            if compute_package_digest(self.root / "skills" / skill["skill_id"]) != self._state[
-                "skill_digests"
-            ].get(skill["skill_id"]):
+            if expected_digests is not None and state.get("skill_digests", {}).get(
+                skill["skill_id"]
+            ) != expected_digests.get(skill["skill_id"]):
+                raise PermissionError("selected Skill digest changed after approval")
+            if compute_package_digest(self.root / "skills" / skill["skill_id"]) != state.get(
+                "skill_digests", {}
+            ).get(skill["skill_id"]):
                 raise PluginError("package_unavailable", "installed Skill contents changed")
             candidates = SkillDiscovery((self.root / "skills",)).discover().candidates
             candidate = next(
@@ -1893,7 +2007,17 @@ class MemoryManager:
             )
             if candidate is None:
                 raise PluginError("package_unavailable", "installed Skill snapshot unavailable")
-            content.append(f"技能 {candidate.name} ({candidate.manifest_sha256})\n{candidate.body}")
+            if (
+                candidate.frontmatter.get("disable-model-invocation") == "true"
+                and selected_ids is None
+            ):
+                continue
+            content.append(
+                f"技能 {candidate.name} ({candidate.manifest_sha256})\n"
+                f"Runtime Python: {sys.executable}\n"
+                f"Installed Skill path: {self.root / 'skills' / skill['skill_id']}\n"
+                f"{candidate.body}"
+            )
             snapshot_ids.add(skill["skill_id"])
         self._active_skill_runs[run_id] = snapshot_ids
         return "\n\n".join(content)

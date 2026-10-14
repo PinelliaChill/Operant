@@ -4,6 +4,7 @@ import {
   LiveAdapterError,
   LiveClientAdapter,
   UnsupportedLiveCapabilityError,
+  appendWorkspaceFiles,
   mapApprovalProjection,
   mapProjectProjection,
   mapSseFrame,
@@ -65,6 +66,45 @@ test('live createSession forwards the exact selected Thread binding', async () =
     budget_overrides: undefined,
     thread_id: 'thread-selected',
   });
+});
+
+test('project files use formal page tokens and a fixed first page size', async () => {
+  const calls: Array<{ workspaceId: string; options: unknown }> = [];
+  const adapter = new LiveClientAdapter(fakeClient({
+    listWorkspaceFiles: async (workspaceId: string, options: unknown) => {
+      calls.push({ workspaceId, options });
+      return {
+        workspace_id: workspaceId,
+        path: 'docs',
+        snapshot: 'snapshot-a',
+        next_page_token: calls.length === 1 ? 'page-2' : null,
+        entries: [{ path: `docs/${calls.length}.md`, name: `${calls.length}.md`, type: 'file', size_bytes: 1, modified_at: null }],
+      };
+    },
+  }) as never);
+  const first = await adapter.listWorkspaceFilePage('project-a', 'docs');
+  const second = await adapter.listWorkspaceFilePage('project-a', 'docs', first.nextPageToken || undefined);
+  assert.deepEqual(calls, [
+    { workspaceId: 'project-a', options: { path: 'docs', limit: 100, pageToken: undefined } },
+    { workspaceId: 'project-a', options: { path: 'docs', limit: 100, pageToken: 'page-2' } },
+  ]);
+  assert.equal(first.nextPageToken, 'page-2');
+  assert.equal(second.nextPageToken, null);
+  assert.deepEqual(appendWorkspaceFiles(first.files, second.files).map((file) => file.path), ['docs/1.md', 'docs/2.md']);
+});
+
+test('project file pages preserve first-seen order and reject another workspace', async () => {
+  const file = (path: string) => ({ path, name: path, kind: 'file' as const, size: 1, modifiedAt: null });
+  assert.deepEqual(
+    appendWorkspaceFiles([file('a'), file('b')], [file('b'), file('c'), file('c'), file('d')]).map((item) => item.path),
+    ['a', 'b', 'c', 'd'],
+  );
+  const adapter = new LiveClientAdapter(fakeClient({
+    listWorkspaceFiles: async () => ({ workspace_id: 'project-b', entries: [], snapshot: 'snapshot-a', next_page_token: null }),
+  }) as never);
+  await assert.rejects(() => adapter.listWorkspaceFilePage('project-a'), (error: unknown) => (
+    error instanceof LiveAdapterError && error.detail.code === 'workspace_scope_mismatch'
+  ));
 });
 
 test('project and thread relationships use exact generated IDs and legacy refs', () => {

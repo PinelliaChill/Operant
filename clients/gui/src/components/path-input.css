@@ -1,0 +1,6 @@
+.path-field { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.path-input-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.path-input-row > input { flex: 1; min-width: 0; width: 100%; }
+.path-input-row > .path-browse { flex: none; min-height: 40px; white-space: nowrap; }
+.path-input-error { margin: 0; font-size: var(--text-sm, 13px); color: var(--status-error-text); }
+@media (max-width: 480px) { .path-input-row { flex-wrap: wrap; } .path-input-row > input { flex-basis: 100%; } }
