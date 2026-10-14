@@ -184,7 +184,6 @@ def source_identity() -> tuple[str, str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python-archive", type=Path, required=True)
-    parser.add_argument("--runtime-licenses", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True, help="new empty output directory")
     parser.add_argument("--uv-cache", type=Path, required=True)
     parser.add_argument(
@@ -193,7 +192,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     python_archive = args.python_archive.resolve(strict=True)
-    runtime_licenses = args.runtime_licenses.resolve(strict=True)
+    runtime_licenses = SCRIPT_DIR / "runtime-licenses"
     output = args.output.resolve()
     source_head, source_tree = source_identity()
     version = project_version()

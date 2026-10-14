@@ -12,14 +12,13 @@ npm ci --prefix clients/desktop
 
 还需 Node、Rust、macOS Xcode Command Line Tools 与 `uv`。打包器要求工作树干净且 HEAD 在构建前后不变，自行执行 `uv build --wheel --offline` 与 `npm run tauri --prefix clients/desktop -- build`，不接受外部 App 或 wheel。它再次核对 App、wheel 与产品版本、arm64 架构和锁文件。
 
-Python 输入是 [python-build-standalone 20260728](https://github.com/astral-sh/python-build-standalone/releases/tag/20260728) 的 `cpython-3.13.14+20260728-aarch64-apple-darwin-install_only_stripped.tar.gz`（SHA-256 `aa2a054f5e04bde63ae199e3bb6bbb634e457423efd294842deeb1299e7e5932`）。打包器先核对归档摘要，再解压到新输出目录；`libpython3.13.dylib` 的 install name 须为 `@rpath/libpython3.13.dylib`。与此归档对应的第三方许可目录须包含既有已核验的 `SOURCE.json`（SHA-256 `e9ec960dba08bec071817e546ad9b8ba5d93be21c9771d7519f2d9db666469ee`），脚本逐项核验 `PYTHON.json` 及许可原文，拒绝额外文件。
+Python 输入是 [python-build-standalone 20260728](https://github.com/astral-sh/python-build-standalone/releases/tag/20260728) 的 `cpython-3.13.14+20260728-aarch64-apple-darwin-install_only_stripped.tar.gz`（SHA-256 `aa2a054f5e04bde63ae199e3bb6bbb634e457423efd294842deeb1299e7e5932`）。打包器先核对归档摘要，再解压到新输出目录；`libpython3.13.dylib` 的 install name 须为 `@rpath/libpython3.13.dylib`。对应的公开第三方许可文本和上游来源清单已存于 [runtime-licenses](runtime-licenses)，脚本核对 `SOURCE.json` 的固定摘要及其逐文件摘要，拒绝额外文件。新 clone 只需另取上述公开 Python 归档，无需旧 Beta 发布包或本机隐藏目录。
 
 正常分发模式保留当前 Tauri 产品 bundle ID、显示名和默认数据目录语义。下例的 `--candidate-id` 是**本轮隔离验收必填**的显式选项；它写入 App 元数据，生成独立 bundle ID 和仅当前用户可访问的 `~/Library/Application Support/Operant Candidates/<候选 bundle ID>/`，不接触现有安装版数据库。将占位路径替换为实际绝对路径，输出目录必须为空：
 
 ```bash
 uv run --extra dev python scripts/macos_dmg/build.py \
   --python-archive /absolute/path/to/cpython-3.13.14+20260728-aarch64-apple-darwin-install_only_stripped.tar.gz \
-  --runtime-licenses /absolute/path/to/runtime-licenses \
   --uv-cache /absolute/path/to/uv-cache \
   --candidate-id current-main-20261014 \
   --output /absolute/path/to/empty-output

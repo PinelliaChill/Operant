@@ -82,3 +82,9 @@ def test_runtime_license_input_cannot_add_private_files(
     (tmp_path / ".env").write_text("DO_NOT_COPY=1")
     with pytest.raises(ValueError, match="unexpected"):
         build.verified_runtime_licenses(tmp_path)
+
+
+def test_vendored_runtime_licenses_match_verified_source() -> None:
+    files = build.verified_runtime_licenses(build.SCRIPT_DIR / "runtime-licenses")
+    assert any(path.name == "PYTHON.json" for path in files)
+    assert any(path.name == "LICENSE.cpython.txt" for path in files)
