@@ -36,7 +36,7 @@ import { approvalId, outcomeNeedsReconciliation, requestCode, requiredText } fro
 import { parseExtensionArguments } from './extensionCommandArguments';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
 import { useOnboarding } from '../../live/OnboardingContext';
-import { visibleOnboardingError } from '../../live/createRequestRecovery';
+import { recoveredCreateIsOpen, visibleOnboardingError } from '../../live/createRequestRecovery';
 import { requestErrorCopy } from '../../lib/requestErrorCopy';
 import { chatFailureCode, chatFailureCopy } from '../../lib/chatFailureCopy';
 import type { LiveApproval, LiveEvent } from '../../live/liveState';
@@ -295,8 +295,13 @@ export const LiveChatView: React.FC = () => {
     loadFiles,
     clearError,
   } = useLive();
-  const { setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const { setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty, dismissRecoveredCreateNotice } = useOnboarding();
   const onboardingError = visibleOnboardingError(createError, metadataWarning);
+  useEffect(() => {
+    if (recoveredCreateIsOpen(recoveredConversationId, conversationId, selectedThread?.id ?? null, createOutcomeUnknown)) {
+      dismissRecoveredCreateNotice(recoveredConversationId!);
+    }
+  }, [conversationId, createOutcomeUnknown, dismissRecoveredCreateNotice, recoveredConversationId, selectedThread?.id]);
   const projectSelectRef = useRef<HTMLButtonElement>(null);
   const [showFiles, setShowFiles] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);

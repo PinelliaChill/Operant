@@ -7,7 +7,7 @@ import { useLive } from './LiveContext';
 import { metadataRefreshKey } from './metadataRefreshKey';
 import { readConversationMetadata, type MetadataReadResult } from './metadataRead';
 import type { PendingConversationSend } from './pendingConversationSend';
-import { confirmedCreateMetadata, createRequestStorageKey, mergeConversationMetadata, renameIsConfirmed } from './createRequestRecovery';
+import { confirmedCreateMetadata, createRequestStorageKey, isConversationInitialization, mergeConversationMetadata, renameIsConfirmed } from './createRequestRecovery';
 import { requestErrorCopy } from '../lib/requestErrorCopy';
 import { isWriteOutcomeUnknown } from '../lib/writeOutcome';
 
@@ -36,6 +36,7 @@ interface OnboardingContextValue {
   initializeConversation: (input?: ConversationStart) => Promise<ConversationInitialization | null>;
   renameConversation: (threadId: string, title: string) => Promise<boolean>;
   clearCreateUncertainty: () => Promise<void>;
+  dismissRecoveredCreateNotice: (threadId: string) => void;
 }
 
 const Context = createContext<OnboardingContextValue | null>(null);
@@ -143,6 +144,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       storeCreateKey(requestKey);
       stored = true;
       const result = await client.initializeConversation(input, { idempotencyKey: requestKey });
+      if (!isConversationInitialization(result)) throw new Error('创建对话的响应缺少必要信息，请核对原请求。');
       storeCreateKey(null);
       setCreateOutcomeUnknown(false);
       try {
@@ -217,7 +219,13 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, [client, connectionStatus, live, pendingCreateKey, refreshMetadata, renameOutcomeUnknown, renamePendingTarget, showMetadataWarning, storeCreateKey]);
 
-  return <Context.Provider value={{ client, setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, noteRouteChange, pendingSend, setPendingSend, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, refreshSetup, refreshMetadata, bootstrap, initializeConversation, renameConversation, clearCreateUncertainty }}>{children}</Context.Provider>;
+  const dismissRecoveredCreateNotice = useCallback((threadId: string) => {
+    if (createOutcomeUnknown || pendingCreateKey || recoveredConversationId !== threadId) return;
+    setRecoveredConversationId(null);
+    setCreateError((current) => current === '已找到先前创建的对话，可直接打开。' ? '' : current);
+  }, [createOutcomeUnknown, pendingCreateKey, recoveredConversationId]);
+
+  return <Context.Provider value={{ client, setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, noteRouteChange, pendingSend, setPendingSend, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, refreshSetup, refreshMetadata, bootstrap, initializeConversation, renameConversation, clearCreateUncertainty, dismissRecoveredCreateNotice }}>{children}</Context.Provider>;
 };
 
 export function useOnboarding(): OnboardingContextValue {

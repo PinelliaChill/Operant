@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { confirmedCreateMetadata, createRequestStorageKey, mergeConversationMetadata, renameIsConfirmed, visibleOnboardingError } from '../src/live/createRequestRecovery.ts';
+import { confirmedCreateMetadata, createRequestStorageKey, isConversationInitialization, mergeConversationMetadata, recoveredCreateIsOpen, renameIsConfirmed, visibleOnboardingError } from '../src/live/createRequestRecovery.ts';
 
 const item = (threadId: string, title: string, revision = 1) => ({ thread_id: threadId, title, title_source: 'manual' as const, revision });
 
@@ -31,4 +31,21 @@ test('an interleaved title read failure cannot hide an unknown create or rename'
   assert.equal(visibleOnboardingError(writeError, titleWarning), writeError);
   writeError = '';
   assert.equal(visibleOnboardingError(writeError, titleWarning), titleWarning);
+});
+
+test('a confirmed created conversation notice ends only after that thread opens', () => {
+  assert.equal(recoveredCreateIsOpen('thread-a', 'thread-a', 'thread-a', false), true);
+  assert.equal(recoveredCreateIsOpen('thread-a', 'thread-a', 'thread-b', false), false);
+  assert.equal(recoveredCreateIsOpen('thread-a', 'thread-b', 'thread-a', false), false);
+  assert.equal(recoveredCreateIsOpen('thread-a', 'thread-a', 'thread-a', true), false);
+  assert.equal(recoveredCreateIsOpen(null, 'thread-a', 'thread-a', false), false);
+});
+
+test('malformed successful create data keeps the original request for read-only reconciliation', () => {
+  const valid = { thread_id: 'thread-a', session_id: 'session-a', workspace_id: 'workspace-a', title: '新对话' };
+  assert.equal(isConversationInitialization(valid), true);
+  assert.equal(isConversationInitialization({ ...valid, title: '' }), true);
+  for (const invalid of [null, undefined, {}, { ...valid, thread_id: '' }, { ...valid, session_id: null }, { ...valid, workspace_id: 7 }]) {
+    assert.equal(isConversationInitialization(invalid), false);
+  }
 });

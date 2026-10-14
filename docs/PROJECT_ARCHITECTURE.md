@@ -16,7 +16,7 @@
 ## 当前版本速览
 
 - **开箱即用与界面整理（实施中，2026-10-07）**：User 已批准 [完整方案](design/onboarding-ux/plan.md)，基于 Beta 3 `939e3cc` 改进会话标题、默认助手、模型/API/OAuth、技能发现和唯一设置入口。逐项状态见 [验收记录](design/onboarding-ux/acceptance.md)。本条记录实施范围，不表示新能力已交付；实际模块说明随代码和验收更新。
-- **Codex 订阅连接（实施中，2026-10-14）**：User 批准从 `main@d4c9ece` 新增独立 `codex` Provider，作为默认 ChatGPT 入口；原 `chatgpt` 第三方 OAuth 与已有配置保留在高级设置。官方 CLI 只负责隔离登录，模型、工具和审批仍由 Operant 执行。本轮源码在 `codex/codex-subscription`，检查与真实验收沿用 [UX-07 / S3](design/onboarding-ux/acceptance.md)；新链路尚未完成真实验收，不改变旧 Mountain 拒绝记录或安装版。
+- **Codex 订阅连接（实施中，2026-10-14）**：User 批准从 `main@d4c9ece` 新增独立 `codex` Provider，作为默认 ChatGPT 入口；原 `chatgpt` 第三方 OAuth 与已有配置保留在高级设置。官方 CLI 只负责隔离登录，模型、工具和审批仍由 Operant 执行。本轮源码在 `codex/codex-subscription`，隔离登录、正式模型发现、原生流式文件任务已通过；续期、取消、远端撤销等仍待验，完整结果沿用 [UX-07 / S3](design/onboarding-ux/acceptance.md)。旧 Mountain 拒绝记录及安装版保留。
 
 - **当前源码**：任务 1～5 已合入会话工作台、编排、配置与任务控制、本机扩展和私有跨设备能力。本轮补齐随 Core 分发的六项默认 Skill、文档依赖、记忆召回修复与桌面退出回收；整体结论以 Git 与[任务 6 验收记录](design/beta-daily/acceptance.md)核对。
 - **公开版本**：本次 `v0.1.0-beta.2` 源码和候选包发行范围与检查见[发行说明](releases/v0.1.0-beta.2.md)。`v0.1.0-beta.1` 保留为 2026-09-14 的 B2-3 快照；新能力不回填旧标签。
@@ -277,8 +277,8 @@ GUI 的 `PathInput` 通过 Tauri 官方 Dialog 插件打开本机文件或文件
 新增 `onboarding.v1`，由 `contracts/onboarding.py` 定义 DTO，`sdk/protocol/generate_onboarding.py`
 生成独立 Schema、digest 和 TS/Python Client。旧协议与 digest 保持不变。查询与命令分别管理
 首次配置、模型连接、标题、技能源、本机应用列表、对话专用控制会话和基础团队模板。
-当前源码契约含 24 个操作，摘要为
-`4f1a5ab639869b762c5641cf0739b529dc1d4effe485a3acf594e6a3469c0d32`。
+当前源码契约含 25 个操作，摘要为
+`ea8a0619f31fb055e1b5200fab2f302a61d8c16b12eaf28d723f56f22d1c82ad`。
 
 `application/onboarding.py` 准备默认通用、规划、探索、编程、审查角色、个人工作区及六项内置技能。
 首次配置新增的通用与编程助手在已登记的可信工作区使用 Host，写入与命令仍走 Policy/审批；
@@ -286,7 +286,8 @@ CLI 的 Docker 默认值和已有角色保持原值。`api_onboarding.py` 的统
 快照与幂等结果；改名支持版本检查。SQLite v24 的标题元数据只影响展示，第一条消息生成自动名称，
 手动名称优先；旧会话可从首条消息读出默认标题，历史内容不变。单个标题可独立查询，不依赖
 历史列表分页；子对话也保存标题。未知创建结果通过原幂等键只读查询已提交的完整绑定，查询失败
-或尚无结果时继续等待核对，不重新发送创建命令。
+或尚无结果时继续等待核对，不重新发送创建命令。通用命令中间件归一响应头名称后覆盖幂等头，
+避免重复响应头导致原生桥接拒收成功结果；已找回提示在路由与选中对话均匹配时清除。
 
 `model_connections` 负责受保护 `.env` 的原子读写及 OAuth，`api_model_connections.py` 仅向可信本机
 客户端开放。连接信息与私有 Provider 状态由 `persistence/onboarding.py` 持久化；只接受凭据引用及
