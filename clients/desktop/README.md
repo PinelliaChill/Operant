@@ -4,7 +4,7 @@
 模型、工具、审批、数据库和任务恢复仍由 Python Core 处理。
 
 桌面壳需要匹配版本的 Core，不能只复制 `.app` 就假定已经完成安装。
-上述源码构建输出为 macOS `.app`；预发布安装包见根 README。尚无正式 Developer ID 签名、公证或自动更新。
+上述源码构建输出为 macOS `.app`；自包含 arm64 DMG 的构建方法见 [打包说明](../../scripts/macos_dmg/README.md)。尚无正式 Developer ID 签名、公证或自动更新。
 
 ## 从源码启动（macOS）
 

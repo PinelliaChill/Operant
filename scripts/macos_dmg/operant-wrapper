@@ -1,0 +1,7 @@
+#!/bin/sh
+# Tauri's managed Child PID becomes the embedded Core PID after exec.
+set -eu
+wrapper_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+python="$wrapper_dir/../python/bin/python3.13"
+data_dir=$(dirname -- "$OPERANT_DB_PATH")
+exec "$python" -I -B -c 'from operant.cli import app; app()' "$@" >>"$data_dir/core.log" 2>&1

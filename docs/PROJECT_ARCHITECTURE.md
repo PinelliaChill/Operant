@@ -112,7 +112,7 @@ Model Profile 和 Role Preset。Session 创建时会
 | 客户端 | React Live GUI 的会话、编排画布、配置继承、审批 Reviewer、Goal/Plan/BTW 与调度管理入口；Tauri壳、TUI运行/审批 | Task 1 已接入文件正文、Diff、本机 PTY、普通 Artifact/会话引用及 TUI 配置、Goal/Plan；隔离 GUI/TUI 正式模型读取和原生 WebView 文件、Diff、历史、审批、终端输入/输出/回收均已验收 |
 | Remote/Writer | 单 Host 远控协议、设备 CLI、受限 TLS edge、签名加密 Session 命令/Query、追加 Cursor；远端 Target TLS Worker、实时 Lease/Job 验证与受限文件/命令执行；受限 Container 和 Git 隔离合并 | macOS↔Ubuntu 私有双设备链路以任务 5 验收记录裁决；公网、任意远程桌面/跨平台 App 与分布式 Core 不外推 |
 | 本机能力插件 | 随 Core 发布的浏览器/电脑适配器摘要绑定安装、白名单、启停/卸载；Core 管理会话、观察、输入、截图/剪贴板及人工接管；六类隔离扩展可接入正式服务与能力提案 | Beta 任务 4 的真实验收范围以扩展验收记录为准；不从本机回环推定任务 5 跨设备通过 |
-| 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证 | 非正式签名/公证发布，无完整安装向导、DMG或自动更新；本机启动适配另有安装记录 |
+| 候选交付 | macOS arm64候选、Core/TUI分发、SBOM/hash及隔离安装验证；自包含 DMG 构建脚本 | 非正式签名/公证发布，无完整安装向导或自动更新；DMG 原生安装验收单独记录，本机启动适配另有安装记录 |
 
 可复用的最近证据：B2-7范围与负结果见[任务包](design/b2-7/task-package.md)；
 UI关键页面与集中验收见[任务包](design/ui-refine-2-3/task-package.md)。
@@ -260,6 +260,8 @@ Remote Execution Target 的远端进程由 `remote/target_service.py` 和 `opera
 记忆检索仍受固定候选预算约束，长任务查询从完整词序中保留首尾并为单词留预算，避免前几个短语耗尽名额。Provider 上下文和持久检查共用 `MEMORY_EVIDENCE_PREFIX`，明确所选版本已由 Core 确认发布，同时保留内容不可信、不可覆盖指令和权限的边界。确认发布撤销活动插件租约；同一 Session 重新获取租约仍遵守原知识截止，新 Session 才采用新版本。
 
 桌面在 Tauri `RunEvent::Exit` 回收自己启动的 Core Child；接入已有 Core 时没有该 Child，不停止外部进程。`scripts/distribution.py` 提供私有目录下完整 SQLite/插件/工件文件快照、逐文件 SHA 校验、恢复到新目录及隔离桌面启动。回退使用升级前快照和旧版 Core，不直接降级新版库。支持与操作见[候选安装说明](guide/candidate-installation.md)，真实日常任务、macOS arm64 桌面、Ubuntu Core/TUI 和升级回退证据见[本轮验收](design/beta-daily/acceptance.md)。
+
+`scripts/macos_dmg/build.py` 从干净且固定的源码提交构建当前 Tauri App 与 Core wheel，按锁文件安装依赖并封装已核验的 arm64 Python 运行时。最终 App 内置固定 Core 命令路径；Tauri 原有 `ManagedCore` 继续负责回环端口、匿名 stdin 密钥、身份确认和自有 Child 回收。显式 `--candidate-id` 在 App 元数据中建立独立 bundle ID 与数据库路径；省略时保留普通产品身份和默认数据路径。打包脚本对嵌入二进制做 ad-hoc 签名与摘要校验，原生安装及跨机器验收仍须单独完成，步骤见[打包说明](../scripts/macos_dmg/README.md)。
 
 ### 2.8 界面文案与本机路径选择
 
@@ -2281,7 +2283,7 @@ Planner → Explorer(s) → Coder → Reviewer → 可选 Main，并关闭 Memor
 9. **外部能力与隔离**：本机 Chrome 已有真实隔离 Profile 与 Core Job 链路，Agent 工具入口已完成真实模型在临时网页上的观察、导航、非密码输入和点击；macOS Computer 适配器已通过真实回环 HTTP Core/Worker/生成客户端点击独立临时 App；任务 4 已在约定 macOS App 验证观察、输入、截图/剪贴板和人工接管，GUI 提供相应入口。六类本地扩展均通过独立宿主与分类授权，支持范围见任务 4 验收；其他平台桌面和公网生产 Remote 未据此验收。MCP Streamable HTTP、真实第三方 Server 长时验证、多 Host 发现/通知与移动推送仍有缺口。历史 Docker 隔离测试与真实 Host 模型任务是不同证据；候选中的 Docker skip 及生产 HTTPS Target 限制继续保留。
 10. **扩展与审批**：新增受信 Tool 扩展边界、隔离第三方 Tool 包和两种随 Core 发布的能力适配器，任务 4 已补齐六类扩展契约。任务 6 的六项默认 Skill 随 Core 包发布；文档能力需可选 artifacts 依赖和正式运行授权，实际结果以本轮逐项产物验收为准。审批模型默认不开启，启用后失联或重启中的审核保持人工待审；模型不能修改 Policy。
 11. **保留策略与缓存**：Artifact 可 Pin/归档/计划删除/Trash/Restore/显式孤儿修复，物理删除另行启用；新增浏览器临时 Profile 正常关闭即清理、崩溃后一小时回收，任务 2 新增会话资源盘点与临时引用快照 TTL 执行器，其他权威记录保留，不按临时 TTL 物理删除。Provider 缓存目前只做观测，不复制或裁决 Provider 内部缓存；不得按临时 TTL 删除长期知识/审计/恢复证据。
-12. **评测与发布**：价格/首次模型等待等部分遥测未知；缺自动价格发现、一般化统计显著性、Evaluation Run逐Result续跑等，历史Exp19—24学习验收未完成。候选已测本机macOS arm64，不代表Windows/Linux/浏览器矩阵或正式签名WebView。仓库仍缺完整安装向导、Developer ID/公证、DMG和自动更新；本机launcher适配不等于跨设备安装产品。历史安全扫描事项未全部清零。
+12. **评测与发布**：价格/首次模型等待等部分遥测未知；缺自动价格发现、一般化统计显著性、Evaluation Run逐Result续跑等，历史Exp19—24学习验收未完成。候选已测本机macOS arm64，不代表Windows/Linux/浏览器矩阵或正式签名WebView。仓库已有自包含 DMG 构建脚本，仍缺完整安装向导、Developer ID/公证和自动更新；DMG 构建与本机 launcher 适配不等于跨设备安装产品。历史安全扫描事项未全部清零。
 
 ## 19. 文档维护规则
 
