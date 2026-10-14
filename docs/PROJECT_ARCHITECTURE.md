@@ -16,7 +16,7 @@
 ## 当前版本速览
 
 - **开箱即用与界面整理（实施中，2026-10-07）**：User 已批准 [完整方案](design/onboarding-ux/plan.md)，基于 Beta 3 `939e3cc` 改进会话标题、默认助手、模型/API/OAuth、技能发现和唯一设置入口。逐项状态见 [验收记录](design/onboarding-ux/acceptance.md)。本条记录实施范围，不表示新能力已交付；实际模块说明随代码和验收更新。
-- **Codex 订阅连接（实施中，2026-10-14）**：User 批准从 `main@d4c9ece` 新增独立 `codex` Provider，作为默认 ChatGPT 入口；原 `chatgpt` 第三方 OAuth 与已有配置保留在高级设置。官方 CLI 只负责隔离登录，模型、工具和审批仍由 Operant 执行。本轮源码在 `codex/codex-subscription`，隔离登录、正式模型发现、原生流式文件任务已通过；续期、取消、远端撤销等仍待验，完整结果沿用 [UX-07 / S3](design/onboarding-ux/acceptance.md)。旧 Mountain 拒绝记录及安装版保留。
+- **Codex 订阅连接（实施中，2026-10-14）**：User 批准从 `main@d4c9ece` 新增独立 `codex` Provider，作为默认 ChatGPT 入口；原 `chatgpt` 第三方 OAuth 与已有配置保留在高级设置。官方 CLI 只负责隔离登录，模型、工具和审批仍由 Operant 执行。本轮源码在 `codex/codex-subscription`，隔离登录、正式模型发现、原生流式文件任务、实际续期、取消运行及重开后继续调用已通过。断连清理及原刷新令牌续期拒绝已观察，服务端错误码未解析；完整门禁及交付状态沿用 [UX-07 / S3](design/onboarding-ux/acceptance.md)。旧 Mountain 拒绝记录及安装版保留。
 
 - **当前源码**：任务 1～5 已合入会话工作台、编排、配置与任务控制、本机扩展和私有跨设备能力。本轮补齐随 Core 分发的六项默认 Skill、文档依赖、记忆召回修复与桌面退出回收；整体结论以 Git 与[任务 6 验收记录](design/beta-daily/acceptance.md)核对。
 - **公开版本**：本次 `v0.1.0-beta.2` 源码和候选包发行范围与检查见[发行说明](releases/v0.1.0-beta.2.md)。`v0.1.0-beta.1` 保留为 2026-09-14 的 B2-3 快照；新能力不回填旧标签。
@@ -337,7 +337,9 @@ Codex 增量由 `model_connections/codex.py` 管理独立登录，
 正常完成、取消、超时或父管道关闭后，helper 回收自有进程与目录，并留下无凭据的私有结束标记，
 用于重启后的原请求核对。同一数据目录以文件锁防止并行登录；不同数据目录通过 1455 端口检测
 拒绝已占用端口，不声称全机原子排他。登录凭据导入同一受保护 `.env`，续期、登录写入和断连共用
-连接锁；重新登录不得把已有连接换成另一账号。
+连接锁；重新登录不得把已有连接换成另一账号。续期以返回 Access JWT 的 `exp` 判断有效期，
+不猜测可选 `expires_in` 的上限。撤销按官方 Codex 的 JSON 请求格式提交；结果未确认时保留
+凭据和屏障。已结算的运行失败可跳到同一模型设置页，未知写入继续核对原请求。
 
 `providers/codex_responses.py` 通过 Codex 后端目录发现精确模型、上下文与推理能力，适配普通
 Responses 和目录指定的 Responses Lite。`0.159.0` 是适配器使用的请求协议标识，不能据此声称

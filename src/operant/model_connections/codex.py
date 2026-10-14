@@ -608,7 +608,7 @@ class CodexConnections:
                 async with httpx.AsyncClient(transport=self.transport, timeout=20) as client:
                     response = await client.post(
                         _REVOKE_URL,
-                        data={
+                        json={
                             "token": refresh,
                             "token_type_hint": "refresh_token",
                             "client_id": _CODEX_CLIENT_ID,

@@ -23,7 +23,7 @@ from operant.domain.messages import Message, MessageRole, ToolDefinition
 from operant.domain.models import Effort, RoleSnapshot
 from operant.model_connections.codex import CodexAttempt, CodexConnections
 from operant.model_connections.credentials import CredentialStore
-from operant.model_connections.oauth import OAuthConnections, secret_ref
+from operant.model_connections.oauth import OAuthConnections, OAuthError, secret_ref
 from operant.persistence.onboarding import UXRepository
 from operant.persistence.sqlite import SQLiteStore
 from operant.providers.codex_responses import CodexResponsesProvider
@@ -666,6 +666,60 @@ async def test_codex_refresh_failure_keeps_safe_state(
     assert current.get("error") == expected_error
     assert credentials.get(reference) == access
     assert credentials.get(secret_ref(connection_id, "REFRESH_TOKEN")) == "old-refresh"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [200, 204, 400, 503])
+async def test_codex_disconnect_uses_json_and_keeps_unconfirmed_credentials(
+    tmp_path: Path, status_code: int
+) -> None:
+    repo, credentials, _ = _repository(tmp_path)
+    connection_id = "disconnect-fixture"
+    access_ref = secret_ref(connection_id, "ACCESS_TOKEN")
+    refresh_ref = secret_ref(connection_id, "REFRESH_TOKEN")
+    identity_ref = secret_ref(connection_id, "ID_TOKEN")
+    credentials.put_many(
+        {access_ref: "access-fixture", refresh_ref: "refresh-fixture", identity_ref: "id-fixture"}
+    )
+    record = {
+        "connection_id": connection_id,
+        "provider": "codex",
+        "auth_method": "oauth",
+        "status": "ready",
+        "secret_ref": access_ref,
+    }
+    repo.save_connection(connection_id, record)
+    calls = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.method == "POST"
+        assert str(request.url) == "https://auth.openai.com/oauth/revoke"
+        assert request.headers["content-type"] == "application/json"
+        assert json.loads(request.content) == {
+            "token": "refresh-fixture",
+            "token_type_hint": "refresh_token",
+            "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+        }
+        return httpx.Response(status_code)
+
+    manager = CodexConnections(repo, credentials, transport=httpx.MockTransport(handle))
+    if status_code in {200, 204}:
+        await manager.disconnect(record)
+        assert repo.get_connection(connection_id) is None
+        assert all(credentials.get(ref) is None for ref in (access_ref, refresh_ref, identity_ref))
+    else:
+        with pytest.raises(OAuthError, match="Codex 撤销结果未确认"):
+            await manager.disconnect(record)
+        current = repo.get_connection(connection_id)
+        assert current is not None
+        assert current["status"] == "needs_auth"
+        assert current["error"] == "revocation_unconfirmed"
+        assert credentials.get(access_ref) == "access-fixture"
+        assert credentials.get(refresh_ref) == "refresh-fixture"
+        assert credentials.get(identity_ref) == "id-fixture"
+    assert calls == 1
 
 
 @pytest.mark.asyncio

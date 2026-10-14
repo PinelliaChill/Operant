@@ -30,6 +30,15 @@ export function chatFailureCode(error: unknown): string | undefined {
   return code && knownCodes.has(code) ? code : undefined;
 }
 
+/** A read-only settings route is useful for a settled model run failure, never for an unknown write. */
+export function canOpenModelSettingsForChatFailure(error: unknown, manualReconcileRequired: boolean): boolean {
+  if (manualReconcileRequired || outcomeNeedsReconciliation(error)) return false;
+  if (error && typeof error === 'object' && 'recovery' in error
+    && (error as { recovery?: unknown }).recovery === 'retry_same_idempotency_key') return false;
+  const code = chatFailureCode(error);
+  return code === 'agent_failed' || code === 'session_run_failed' || code === 'authentication_required';
+}
+
 export function chatFailureCopy(error: unknown, context: ChatFailureContext): string {
   const recovery = error && typeof error === 'object' && 'recovery' in error
     ? (error as { recovery?: unknown }).recovery : undefined;
