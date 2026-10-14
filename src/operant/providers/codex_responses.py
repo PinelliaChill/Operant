@@ -118,7 +118,9 @@ class CodexResponsesProvider:
         try:
             token, account_id = await self.connections.access_token(record)
         except OAuthError as exc:
-            raise ProviderError("Codex connection needs sign-in") from exc
+            if str(exc) in {"Codex 连接需要重新登录", "Codex 登录已过期，请重新登录"}:
+                raise ProviderError("Codex connection needs sign-in") from exc
+            raise ProviderError("Codex authorization could not be refreshed; try again") from exc
         return token, account_id, record
 
     @staticmethod

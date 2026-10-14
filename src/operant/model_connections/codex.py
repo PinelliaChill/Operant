@@ -547,7 +547,6 @@ class CodexConnections:
             access = body.get("access_token") if isinstance(body, dict) else None
             replacement = body.get("refresh_token", refresh) if isinstance(body, dict) else None
             replacement_identity = body.get("id_token") if isinstance(body, dict) else None
-            expires_in = body.get("expires_in") if isinstance(body, dict) else None
             if (
                 not isinstance(access, str)
                 or not access
@@ -555,10 +554,8 @@ class CodexConnections:
                 or not replacement
             ):
                 raise OAuthError("Codex 续期结果无效")
-            if expires_in is not None and (
-                not isinstance(expires_in, (int, float)) or not 1 <= expires_in <= 86400
-            ):
-                raise OAuthError("Codex 续期结果无效")
+            # The official refresh response does not promise expires_in. The
+            # Access JWT exp is the authority for this connection's lifetime.
             refreshed_claims = _claims(access)
             expires_at = refreshed_claims.get("exp")
             if not isinstance(expires_at, int) or expires_at <= int(self.clock()) + 90:

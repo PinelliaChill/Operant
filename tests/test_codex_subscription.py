@@ -557,12 +557,16 @@ def test_codex_select_rechecks_generation_under_connection_lock(
 
 
 @pytest.mark.asyncio
-async def test_codex_refresh_uses_access_jwt_exp_without_expires_in(tmp_path: Path) -> None:
+@pytest.mark.parametrize("expires_in", [None, 172800, "172800", 1])
+async def test_codex_refresh_uses_access_jwt_exp(
+    tmp_path: Path, expires_in: int | str | None
+) -> None:
     repo, credentials, _ = _repository(tmp_path)
     connection_id = "refresh-test"
     account = "acct_fixture"
     old_access = _jwt(account, int(time.time()) + 30)
-    new_access = _jwt(account, int(time.time()) + 3600)
+    new_expires_at = int(time.time()) + 3600
+    new_access = _jwt(account, new_expires_at)
     new_identity = _jwt(account, int(time.time()) + 1000)
     reference = secret_ref(connection_id, "ACCESS_TOKEN")
     credentials.put_many(
@@ -583,13 +587,16 @@ async def test_codex_refresh_uses_access_jwt_exp_without_expires_in(tmp_path: Pa
 
     def handle(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/oauth/token"
+        payload: dict[str, Any] = {
+            "access_token": new_access,
+            "refresh_token": "rotated-refresh",
+            "id_token": new_identity,
+        }
+        if expires_in is not None:
+            payload["expires_in"] = expires_in
         return httpx.Response(
             200,
-            json={
-                "access_token": new_access,
-                "refresh_token": "rotated-refresh",
-                "id_token": new_identity,
-            },
+            json=payload,
         )
 
     manager = CodexConnections(repo, credentials, transport=httpx.MockTransport(handle))
@@ -597,15 +604,27 @@ async def test_codex_refresh_uses_access_jwt_exp_without_expires_in(tmp_path: Pa
     assert credentials.get(reference) == new_access
     assert credentials.get(secret_ref(connection_id, "REFRESH_TOKEN")) == "rotated-refresh"
     assert credentials.get(secret_ref(connection_id, "ID_TOKEN")) == new_identity
-    assert repo.get_connection(connection_id)["expires_at"] > time.time() + 3000
+    assert repo.get_connection(connection_id)["expires_at"] == new_expires_at
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status_code", "body", "expected_status", "expected_error"),
+    ("status_code", "body", "expected_status", "expected_error", "expected_copy"),
     [
-        (400, {"error": "invalid_grant"}, "needs_auth", "authentication_required"),
-        (503, {"error": "temporarily_unavailable"}, "connected", None),
+        (
+            400,
+            {"error": "invalid_grant"},
+            "needs_auth",
+            "authentication_required",
+            "Codex connection needs sign-in",
+        ),
+        (
+            503,
+            {"error": "temporarily_unavailable"},
+            "connected",
+            None,
+            "Codex authorization could not be refreshed; try again",
+        ),
     ],
 )
 async def test_codex_refresh_failure_keeps_safe_state(
@@ -614,6 +633,7 @@ async def test_codex_refresh_failure_keeps_safe_state(
     body: dict[str, str],
     expected_status: str,
     expected_error: str | None,
+    expected_copy: str,
 ) -> None:
     repo, credentials, _ = _repository(tmp_path)
     connection_id = "refresh-failure"
@@ -635,8 +655,11 @@ async def test_codex_refresh_failure_keeps_safe_state(
         credentials,
         transport=httpx.MockTransport(lambda _request: httpx.Response(status_code, json=body)),
     )
-    with pytest.raises(Exception, match="Codex"):
-        await manager.access_token(record)
+    provider = CodexResponsesProvider(manager, repo, lambda _reference: record, lambda *_args: None)
+    with pytest.raises(ProviderError, match=expected_copy):
+        await provider.list_models(
+            base_url="https://chatgpt.com/backend-api/codex", secret_ref=reference
+        )
     current = repo.get_connection(connection_id)
     assert current is not None
     assert current["status"] == expected_status
