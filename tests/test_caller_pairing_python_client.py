@@ -25,6 +25,7 @@ from operant.caller_pairing.crypto import (
     derive_key,
     encrypt,
     sign,
+    unb64,
 )
 from operant.caller_pairing.runtime import CallerPairingRuntime
 from operant.contracts.caller_pairing import CallerCommand, CallerPairRequest
@@ -60,6 +61,15 @@ class Effects:
 
     def remove_source(self, root_ref: str, _key: str) -> SimpleNamespace:
         return SimpleNamespace(model_dump=lambda **_: {"root_ref": root_ref})
+
+
+def _corrupt_signature(signature: str) -> str:
+    original = unb64(signature, length=64)
+    corrupted = bytes([original[0] ^ 1]) + original[1:]
+    result = b64(corrupted)
+    assert result != signature
+    assert unb64(result, length=64) != original
+    return result
 
 
 class FakeTransport:
@@ -104,7 +114,7 @@ class FakeTransport:
         else:
             raise AssertionError(path)
         if self.tamper_reply and path != "/v1/protocol/caller-pairing":
-            result["signature"] = "A" + result["signature"][1:]
+            result["signature"] = _corrupt_signature(result["signature"])
         if self.invalid_grant and path == PAIR_PATH:
             request_value = json.loads(request.body or "{}")
             key = derive_key(
@@ -320,6 +330,14 @@ def test_legacy_pending_keeps_read_only_lookup_behavior(tmp_path: Path) -> None:
         client.readback()
     assert client.pending_request() == legacy
     assert runtime.repo.get_receipt(legacy["device_id"], legacy["request_id"]) is None
+
+
+def test_signature_tamper_changes_bytes_even_with_a_prefix() -> None:
+    original = b64(bytes([1]) + bytes(range(1, 64)))
+    assert original.startswith("A")
+    tampered = _corrupt_signature(original)
+    assert tampered.startswith("A")
+    assert unb64(tampered, length=64) != unb64(original, length=64)
 
 
 def test_invalid_ticket_pin_reply_and_secret_permissions_fail_closed(tmp_path: Path) -> None:

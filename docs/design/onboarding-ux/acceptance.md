@@ -24,7 +24,11 @@ f2f75dd 的三类扫描结果均为0，50c4b001各CodeQL作业成功，不能据
 
 `eb196f6` 的 CI 38572916987 全部成功：Python 3.10/3.12 各1730通过、16跳过，GUI239通过；
 CodeQL 38572916178成功。后续新建对话修复的正式路由3项、GUI定向5项及完整GUI测试/构建通过，
-该增量仍需自己的完整CI。新增后端场景位于 `tests/test_codex_subscription.py`，沿用同一验收表。
+最终 `c0ee7d2` 的 CI 38594186239：Python3.12 有1项旧配对测试失败、1737通过/16跳过，
+3.10因fail-fast取消，GUI243及CodeQL成功。旧fixture把签名首字符固定写A，原本就是A时未真正
+篡改；现改为翻转签名的实际字节，并覆盖固定A开头样例。caller SDK整文件18项通过，生产验签
+不变，仍须新CI通过。失败日志保存在 `ci-c0ee7d2-failed.log`。
+新增后端场景位于 `tests/test_codex_subscription.py`，沿用同一验收表。
 
 本轮证据位于隔离树 `.operant/codex-subscription/evidence/`：`model-discover.log`、
 `real-task-result.json` 和 `create-fix-native-result.json`。首次新建虽然 HTTP 200、DTO 完整，
