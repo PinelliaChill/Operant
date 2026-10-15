@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chatFailureCode, chatFailureCopy } from '../src/lib/chatFailureCopy.ts';
+import { canOpenModelSettingsForChatFailure, chatFailureCode, chatFailureCopy } from '../src/lib/chatFailureCopy.ts';
+
+test('settled model run failures offer settings without relaxing unknown-write guards', () => {
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'agent_failed', recovery: 'none' }, false), true);
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'session_run_failed', recovery: 'none' }, false), true);
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'authentication_required', recovery: 'none' }, false), true);
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'agent_failed', recovery: 'manual_reconcile' }, false), false);
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'agent_failed', recovery: 'retry_same_idempotency_key' }, false), false);
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'agent_failed', recovery: 'none' }, true), false);
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'command_outcome_unknown', recovery: 'manual_reconcile' }, false), false);
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'agent_cancelled', recovery: 'none' }, false), false);
+  assert.equal(canOpenModelSettingsForChatFailure({ code: 'network_error', recovery: 'none' }, false), false);
+});
 
 const secret = 'SENTINEL_SECRET_IN_EXCEPTION';
 

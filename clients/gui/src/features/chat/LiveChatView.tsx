@@ -11,7 +11,7 @@ import './ui-refine-chat.css';
 import { approvalActionLabel, historyItemLabel } from './chatPresentation';
 import { systemEventLabel, toolActionLabel, toolResultLabel } from './historyPresentation';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ChevronRight,
@@ -36,9 +36,9 @@ import { approvalId, outcomeNeedsReconciliation, requestCode, requiredText } fro
 import { parseExtensionArguments } from './extensionCommandArguments';
 import { useLive, liveThreadTitle } from '../../live/LiveContext';
 import { useOnboarding } from '../../live/OnboardingContext';
-import { visibleOnboardingError } from '../../live/createRequestRecovery';
+import { recoveredCreateIsOpen, visibleOnboardingError } from '../../live/createRequestRecovery';
 import { requestErrorCopy } from '../../lib/requestErrorCopy';
-import { chatFailureCode, chatFailureCopy } from '../../lib/chatFailureCopy';
+import { canOpenModelSettingsForChatFailure, chatFailureCode, chatFailureCopy } from '../../lib/chatFailureCopy';
 import type { LiveApproval, LiveEvent } from '../../live/liveState';
 import { approvalsForSession, canDecideApproval, formatCursor } from '../../live/liveState';
 import type { RailOutletContext } from '../../app/RailLayout';
@@ -111,9 +111,10 @@ const LiveErrorBanner: React.FC<{
   code: string;
   recovery?: string;
   detail?: unknown;
+  showModelSettings?: boolean;
   onRetry?: () => void;
   onClear?: () => void;
-}> = ({ code, recovery, detail, onRetry, onClear }) => (
+}> = ({ code, recovery, detail, showModelSettings = false, onRetry, onClear }) => (
   <div className="live-alert live-alert-error" role="alert">
     <AlertTriangle size={17} aria-hidden="true" />
     <div className="live-alert-content">
@@ -121,6 +122,7 @@ const LiveErrorBanner: React.FC<{
       {chatFailureCode({ code }) && <details><summary>查看错误详情</summary><code>{chatFailureCode({ code })}</code></details>}
     </div>
     <div className="live-alert-actions">
+      {showModelSettings && <Link className="btn btn-secondary btn-sm" to="/settings?section=models">检查模型连接</Link>}
       {onRetry && (
         <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
           <RefreshCw size={13} aria-hidden="true" />
@@ -295,8 +297,13 @@ export const LiveChatView: React.FC = () => {
     loadFiles,
     clearError,
   } = useLive();
-  const { setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty } = useOnboarding();
+  const { setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty, dismissRecoveredCreateNotice } = useOnboarding();
   const onboardingError = visibleOnboardingError(createError, metadataWarning);
+  useEffect(() => {
+    if (recoveredCreateIsOpen(recoveredConversationId, conversationId, selectedThread?.id ?? null, createOutcomeUnknown)) {
+      dismissRecoveredCreateNotice(recoveredConversationId!);
+    }
+  }, [conversationId, createOutcomeUnknown, dismissRecoveredCreateNotice, recoveredConversationId, selectedThread?.id]);
   const projectSelectRef = useRef<HTMLButtonElement>(null);
   const [showFiles, setShowFiles] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
@@ -763,6 +770,7 @@ export const LiveChatView: React.FC = () => {
           code={topError.code}
           recovery={topError.recovery}
           detail={topError.detail}
+          showModelSettings={canOpenModelSettingsForChatFailure(topError, manualReconcileRequired)}
           onRetry={topError.retryable ? () => void reconnect() : undefined}
           onClear={clearError}
         />

@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from operant.api import create_app
 from operant.api_onboarding import install_onboarding_routes
 from operant.api_skill_commands import install_skill_command_routes
 from operant.application.phase45_gateway import Phase45ActionGateway
@@ -47,6 +48,47 @@ class _AnswerProvider(ModelProvider):
             event_type="model.completed",
             response=ModelResponse(content="已完成。", finish_reason="stop"),
         )
+
+
+def test_formal_conversation_response_has_one_idempotency_header(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    app = create_app(
+        root / "core.sqlite",
+        artifact_root=root / "artifacts",
+        phase45_skill_roots={},
+        phase56_local_authorizer=lambda _request: True,
+    )
+    profile = app.state.operant_service.add_model_profile(
+        ModelProfile(
+            name="ready",
+            model_id="test-model",
+            base_url="https://example.test/v1",
+            secret_ref="TEST_MODEL_KEY",
+            effort_parameter=None,
+        )
+    )
+    with TestClient(app) as client:
+        bootstrapped = client.post(
+            "/v1/setup/bootstrap",
+            json={"model_profile_id": profile.id},
+            headers={"Idempotency-Key": "bootstrap-single-header"},
+        )
+        assert bootstrapped.status_code == 200, bootstrapped.text
+        key = "conversation-single-header"
+        created = client.post("/v1/setup/conversations", json={}, headers={"Idempotency-Key": key})
+        assert created.status_code == 200, created.text
+        created_headers = [
+            value for name, value in created.headers.raw if name.lower() == b"idempotency-key"
+        ]
+        assert created_headers == [key.encode()]
+        assert set(created.json()) == {"thread_id", "session_id", "workspace_id", "title"}
+        replayed = client.post("/v1/setup/conversations", json={}, headers={"Idempotency-Key": key})
+        assert replayed.status_code == 200, replayed.text
+        assert replayed.json() == created.json()
+        replayed_headers = [
+            value for name, value in replayed.headers.raw if name.lower() == b"idempotency-key"
+        ]
+        assert replayed_headers == [key.encode()]
 
 
 def test_new_conversation_and_rename_are_persistent_and_idempotent(tmp_path: Path) -> None:

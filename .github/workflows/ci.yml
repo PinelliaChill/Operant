@@ -35,7 +35,8 @@ jobs:
     # Always emit the existing required check names, including for documentation.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The complete suite takes about an hour; include setup and cleanup margin.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

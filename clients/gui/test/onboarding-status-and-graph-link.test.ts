@@ -30,6 +30,14 @@ test('common OAuth, collaboration and local states are understandable', () => {
   assert.equal(localStateLabel('failed'), '失败，请查看详情');
 });
 
+test('Codex login shows specific safe errors and cancellation state', () => {
+  assert.equal(oauthStatusLabel('cancelled'), '登录已取消');
+  assert.match(modelConnectionErrorLabel('未找到 Codex CLI。请先安装官方 Codex CLI，再重试登录。'), /未找到官方 Codex CLI/);
+  assert.match(modelConnectionErrorLabel('Codex 登录端口 1455 已被占用，请关闭占用程序后重试。'), /端口 1455 已被占用/);
+  assert.match(modelConnectionErrorLabel('Codex 登录未完成，请重试。'), /登录未完成/);
+  assert.doesNotMatch(modelConnectionErrorLabel('Codex 登录失败 secret=value'), /secret=value/);
+});
+
 test('OAuth connection failures use distinct recovery actions', () => {
   assert.match(modelConnectionErrorLabel('chatgpt_plan_usage_disabled'), /已登录.*套餐调用.*重新授权.*API/);
   assert.match(modelConnectionErrorLabel('user_not_eligible'), /没有套餐调用资格/);
@@ -47,6 +55,8 @@ test('OAuth connection failures use distinct recovery actions', () => {
   assert.equal(offersApiKeyAlternative('permission_denied'), false);
   assert.equal(offersApiKeyAlternative('usage_unavailable'), false);
   assert.equal(modelConnectionStatusLabel('error', 'usage_unavailable'), '用量暂不可查');
+  assert.equal(modelConnectionStatusLabel('error', 'limit_unconfirmed'), '限额待确认');
+  assert.match(modelConnectionErrorLabel('limit_unconfirmed'), /限额状态待确认/);
   assert.match(modelConnectionErrorLabel('unsupported_capability'), /本模型不支持当前请求参数.*高级参数/);
   assert.match(modelConnectionErrorLabel('revocation_unconfirmed'), /重试断开.*不要重新登录/);
   assert.equal(canReauthorizeModelConnection('error', 'revocation_unconfirmed'), false);

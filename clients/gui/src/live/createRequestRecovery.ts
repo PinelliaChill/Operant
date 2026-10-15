@@ -1,4 +1,22 @@
-import type { ConversationMetadata } from '../../../../sdk/typescript-client/onboarding.generated';
+import type { ConversationInitialization, ConversationMetadata } from '../../../../sdk/typescript-client/onboarding.generated';
+
+export function isConversationInitialization(value: unknown): value is ConversationInitialization {
+  if (!value || typeof value !== 'object') return false;
+  const result = value as Record<string, unknown>;
+  return ['thread_id', 'session_id', 'workspace_id'].every((key) =>
+    typeof result[key] === 'string' && result[key].length > 0)
+    && typeof result.title === 'string';
+}
+
+export function recoveredCreateIsOpen(
+  recoveredId: string | null,
+  routeId: string | undefined,
+  selectedThreadId: string | null,
+  createOutcomeUnknown: boolean,
+): boolean {
+  return !createOutcomeUnknown && Boolean(recoveredId)
+    && recoveredId === routeId && recoveredId === selectedThreadId;
+}
 
 export function createRequestStorageKey(coreOrigin: string): string {
   return `operant.setup.pending-conversation:${encodeURIComponent(coreOrigin)}`;

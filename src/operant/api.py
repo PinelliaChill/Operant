@@ -1850,11 +1850,11 @@ def create_app(
                     )
 
             headers = {
-                key: value
+                key.lower(): value
                 for key, value in response.headers.items()
                 if key.lower() not in {"content-length", "content-type"}
             }
-            headers["Idempotency-Key"] = idempotency_key
+            headers["idempotency-key"] = idempotency_key
             return StreamingResponse(
                 receipt_stream(),
                 status_code=response.status_code,
@@ -1886,7 +1886,7 @@ def create_app(
                 error_code="sensitive_response_not_replayable",
             )
             passthrough_headers = {
-                key: value
+                key.lower(): value
                 for key, value in response.headers.items()
                 if key.lower()
                 not in {
@@ -1896,8 +1896,8 @@ def create_app(
                     SENSITIVE_RESPONSE_HEADER,
                 }
             }
-            passthrough_headers["Idempotency-Key"] = idempotency_key
-            passthrough_headers["Cache-Control"] = "no-store"
+            passthrough_headers["idempotency-key"] = idempotency_key
+            passthrough_headers["cache-control"] = "no-store"
             return Response(
                 content=response_body,
                 status_code=response.status_code,
@@ -1933,11 +1933,11 @@ def create_app(
                 http_status=response.status_code,
             )
         safe_headers = {
-            key: value
+            key.lower(): value
             for key, value in response.headers.items()
             if key.lower() not in {"content-length", "content-type"}
         }
-        safe_headers["Idempotency-Key"] = idempotency_key
+        safe_headers["idempotency-key"] = idempotency_key
         return JSONResponse(
             content=stored_payload,
             status_code=response.status_code,

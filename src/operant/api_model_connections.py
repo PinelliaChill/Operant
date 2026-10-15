@@ -29,8 +29,9 @@ from operant.contracts.onboarding import (
     ProviderConnection,
     ProviderConnectionList,
 )
-from operant.domain.models import ModelProfile
+from operant.domain.models import Effort, ModelProfile
 from operant.domain.security import Capability
+from operant.model_connections.codex import CodexConnections
 from operant.model_connections.credentials import CredentialError, CredentialStore
 from operant.model_connections.oauth import (
     Attempt,
@@ -56,7 +57,7 @@ def _view(record: dict[str, Any]) -> ProviderConnection:
     )
 
 
-def _oauth_view(attempt: Attempt, repo: ConnectionRepository) -> OAuthAttempt:
+def _oauth_view(attempt: Attempt | Any, repo: ConnectionRepository) -> OAuthAttempt:
     status = {
         "pending": "pending",
         "processing": "pending",
@@ -83,6 +84,7 @@ def _oauth_view(attempt: Attempt, repo: ConnectionRepository) -> OAuthAttempt:
                 "authentication_required",
                 "rate_limited",
                 "usage_limit",
+                "limit_unconfirmed",
                 "network_error",
                 "revocation_unconfirmed",
                 "unsupported_capability",
@@ -104,6 +106,21 @@ def _oauth_view(attempt: Attempt, repo: ConnectionRepository) -> OAuthAttempt:
             "expires_at": datetime.fromtimestamp(attempt.started_at + 600, tz=timezone.utc),
         }
     )
+
+
+def _codex_start_error(exc: Exception) -> HTTPException:
+    message = str(exc)
+    if message.startswith("未找到 Codex CLI"):
+        code = "codex_cli_missing"
+    elif message == "Codex 登录正在进行":
+        code = "codex_login_in_progress"
+    elif message.startswith("Codex 登录端口 1455 已被占用"):
+        code = "codex_login_port_busy"
+    elif message in {"无法启动 Codex CLI 登录", "无法创建 Codex 登录临时目录"}:
+        code = "codex_login_start_failed"
+    else:
+        code, message = "codex_connection_invalid", "Codex 连接不可用，请重试。"
+    return HTTPException(status_code=400, detail={"code": code, "message": message})
 
 
 def _trusted_local(request: Request, local_authorizer: Callable[[Request], bool] | None) -> bool:
@@ -170,12 +187,18 @@ def install_model_connection_routes(
 ) -> ConnectionProviderRouter:
     credentials = CredentialStore(service.store.path.parent / ".env")
     oauth = OAuthConnections(repo, credentials)
+    codex = CodexConnections(repo, credentials)
+    app.router.add_event_handler("shutdown", codex.close)
     previous_provider = getattr(service, "provider", None)
     previous_provider = getattr(previous_provider, "delegate", previous_provider)
     if not all(hasattr(previous_provider, method) for method in ("list_models", "stream")):
         previous_provider = None
     router = ConnectionProviderRouter(
-        repo, credentials, oauth, compatible_provider=cast(ModelProvider | None, previous_provider)
+        repo,
+        credentials,
+        oauth,
+        codex=codex,
+        compatible_provider=cast(ModelProvider | None, previous_provider),
     )
 
     def require_local(request: Request) -> None:
@@ -300,6 +323,79 @@ def install_model_connection_routes(
         require_local(request)
         connection_id = _connection_id_for_request(request_id)
         record, receipt = repo.get_connection_request_snapshot(request_id, connection_id)
+        raw_result = receipt.get("result") if receipt else None
+        if isinstance(raw_result, dict) and raw_result.get("_operation") == "codex_oauth_cancel":
+            attempt_id = raw_result.get("attempt_id")
+            cancel_connection_id = raw_result.get("connection_id")
+            if (
+                isinstance(attempt_id, str)
+                and isinstance(cancel_connection_id, str)
+                and raw_result.get("provider") == "codex"
+                and raw_result.get("status")
+                in {"connected", "ready", "cancelled", "expired", "error"}
+                and codex.was_reaped(attempt_id)
+            ):
+                current = repo.get_connection(cancel_connection_id)
+                if current is None or (
+                    current.get("provider") == "codex" and current.get("auth_method") == "oauth"
+                ):
+                    safe_result = {
+                        key: value
+                        for key, value in raw_result.items()
+                        if key in OAuthAttempt.model_fields
+                    }
+                    safe_result["authorization_url"] = None
+                    return ConnectionRequestResult(
+                        request_id=request_id,
+                        status="completed",
+                        connection=_view(current) if current is not None else None,
+                        oauth_attempt=OAuthAttempt.model_validate(safe_result),
+                    )
+            return ConnectionRequestResult(request_id=request_id, status="unconfirmed")
+        if isinstance(raw_result, dict) and raw_result.get("_operation") == "codex_oauth_start":
+            attempt_id = raw_result.get("attempt_id")
+            live = codex.attempts.get(attempt_id) if isinstance(attempt_id, str) else None
+            if live is not None and raw_result.get("connection_id") == live.connection_id:
+                current = repo.get_connection(live.connection_id)
+                if current is not None and current.get("provider") == "codex":
+                    return ConnectionRequestResult(
+                        request_id=request_id,
+                        status="completed",
+                        connection=_view(current),
+                        oauth_attempt=_oauth_view(codex.status(live.id), repo),
+                    )
+            if (
+                isinstance(attempt_id, str)
+                and codex.was_reaped(attempt_id)
+                and isinstance(raw_result.get("connection_id"), str)
+            ):
+                current = repo.get_connection(raw_result["connection_id"])
+                if (
+                    current is not None
+                    and current.get("provider") == "codex"
+                    and current.get("auth_method") == "oauth"
+                ):
+                    changed = isinstance(current.get("auth_generation"), str) and current.get(
+                        "auth_generation"
+                    ) != raw_result.get("_auth_generation_before")
+                    recovered_status = (
+                        current.get("status")
+                        if changed and current.get("status") in {"connected", "ready"}
+                        else "expired"
+                    )
+                    safe_result = {
+                        key: value
+                        for key, value in raw_result.items()
+                        if key in OAuthAttempt.model_fields
+                    }
+                    safe_result.update(status=recovered_status, authorization_url=None)
+                    return ConnectionRequestResult(
+                        request_id=request_id,
+                        status="completed",
+                        connection=_view(current),
+                        oauth_attempt=OAuthAttempt.model_validate(safe_result),
+                    )
+            return ConnectionRequestResult(request_id=request_id, status="unconfirmed")
         if record is None:
             return ConnectionRequestResult(request_id=request_id, status="unavailable")
         try:
@@ -350,8 +446,8 @@ def install_model_connection_routes(
         ),
     ) -> ProviderConnection:
         require_local(request)
-        if body.provider == "chatgpt":
-            raise HTTPException(status_code=400, detail="ChatGPT requires OAuth sign-in")
+        if body.provider in {"chatgpt", "codex"}:
+            raise HTTPException(status_code=400, detail="This provider requires OAuth sign-in")
         if body.api_key is None or not body.api_key.get_secret_value():
             raise HTTPException(status_code=400, detail="API key is required")
         if (
@@ -490,8 +586,27 @@ def install_model_connection_routes(
             )
         except (ProviderError, OAuthError) as exc:
             raise HTTPException(status_code=502, detail="model discovery failed") from exc
-        latest = repo.get_connection(connection_id) or record
-        repo.save_connection(connection_id, {**latest, "model_ids": models})
+        lock_fd = None
+        if record.get("provider") == "codex":
+            lock_fd = credentials.try_acquire_lock(
+                "codex-refresh-" + connection_id.replace("-", "")
+            )
+            if lock_fd is None:
+                raise HTTPException(status_code=409, detail="Codex connection is being updated")
+        try:
+            latest = repo.get_connection(connection_id)
+            if latest is None or (
+                record.get("provider") == "codex"
+                and (
+                    latest.get("auth_generation") != record.get("auth_generation")
+                    or latest.get("error") == "revocation_unconfirmed"
+                )
+            ):
+                raise HTTPException(status_code=409, detail="model connection changed")
+            repo.save_connection(connection_id, {**latest, "model_ids": models})
+        finally:
+            if lock_fd is not None:
+                credentials.release_lock(lock_fd)
         result = ConnectionModels(
             connection_id=connection_id, model_ids=models, model_names=latest.get("model_names", {})
         )
@@ -520,50 +635,114 @@ def install_model_connection_routes(
         )
         if cached is not None:
             return ConnectionProfile.model_validate(cached)
-        record = get_record(connection_id)
-        if record.get("status") not in {"connected", "ready"}:
-            raise HTTPException(status_code=409, detail="model connection is not ready")
-        if body.model_id not in record.get("model_ids", []):
-            raise HTTPException(status_code=400, detail="model must be selected from discovery")
-        profile_id = "model_" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"operant:model-profile:{key}"))
-        if profile_id in record.get("profile_ids", []):
-            result = ConnectionProfile(
-                connection_id=connection_id,
-                model_profile_id=profile_id,
+
+        def complete_selection(record: dict[str, Any]) -> ConnectionProfile:
+            if record.get("status") not in {"connected", "ready"}:
+                raise HTTPException(status_code=409, detail="model connection is not ready")
+            if body.model_id not in record.get("model_ids", []):
+                raise HTTPException(status_code=400, detail="model must be selected from discovery")
+            profile_id = "model_" + str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"operant:model-profile:{key}")
+            )
+            if profile_id in record.get("profile_ids", []):
+                result = ConnectionProfile(
+                    connection_id=connection_id,
+                    model_profile_id=profile_id,
+                    model_id=body.model_id,
+                )
+                save_command(key, fingerprint, result)
+                return result
+            model_name = record.get("model_names", {}).get(body.model_id, body.model_id)
+            codex_options: dict[str, Any] = {}
+            if record["provider"] == "codex":
+                capability = record.get("model_capabilities", {}).get(body.model_id)
+                if not isinstance(capability, dict):
+                    raise HTTPException(
+                        status_code=409, detail="Codex model capabilities are unavailable"
+                    )
+                levels = capability.get("reasoning_levels")
+                supported = tuple(
+                    effort
+                    for effort in (Effort.LOW, Effort.MEDIUM, Effort.HIGH)
+                    if isinstance(levels, list) and effort.value in levels
+                )
+                if not supported:
+                    raise HTTPException(
+                        status_code=409, detail="Codex model has no supported effort"
+                    )
+                default_value = capability.get("default_reasoning_level")
+                default_effort = next(
+                    (effort for effort in supported if effort.value == default_value),
+                    Effort.MEDIUM if Effort.MEDIUM in supported else supported[0],
+                )
+                codex_options = {
+                    "context_window": capability.get("context_window"),
+                    "supported_efforts": supported,
+                    "default_effort": default_effort,
+                    "effort_parameter": "reasoning",
+                }
+            profile = ModelProfile(
+                id=profile_id,
+                name=body.name or f"{record['name']} · {model_name}"[:100],
+                provider=str(record["provider"]),
                 model_id=body.model_id,
+                base_url=(
+                    "https://generativelanguage.googleapis.com/v1beta"
+                    if record["provider"] == "gemini"
+                    else str(record["base_url"])
+                ),
+                secret_ref=str(record["secret_ref"]),
+                supports_temperature=False,
+                effort_parameter=None if record["provider"] != "codex" else "reasoning",
+                **{key: value for key, value in codex_options.items() if key != "effort_parameter"},
+            )
+            try:
+                service.add_model_profile(profile)
+            except (ConflictError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="model profile could not be created"
+                ) from exc
+            ids = [*record.get("profile_ids", []), profile.id]
+            repo.save_connection(
+                connection_id,
+                {
+                    **record,
+                    "profile_ids": ids,
+                    "status": "ready",
+                    **(
+                        {"selection_generation": record.get("auth_generation")}
+                        if record["provider"] == "codex"
+                        else {}
+                    ),
+                },
+            )
+            if repo.get_setting("default_model_profile_id") is None:
+                repo.set_setting("default_model_profile_id", profile.id)
+            result = ConnectionProfile(
+                connection_id=connection_id, model_profile_id=profile.id, model_id=body.model_id
             )
             save_command(key, fingerprint, result)
             return result
-        model_name = record.get("model_names", {}).get(body.model_id, body.model_id)
-        profile = ModelProfile(
-            id=profile_id,
-            name=body.name or f"{record['name']} · {model_name}"[:100],
-            provider=str(record["provider"]),
-            model_id=body.model_id,
-            base_url=(
-                "https://generativelanguage.googleapis.com/v1beta"
-                if record["provider"] == "gemini"
-                else str(record["base_url"])
-            ),
-            secret_ref=str(record["secret_ref"]),
-            supports_temperature=False,
-            effort_parameter=None,
-        )
+
+        record = get_record(connection_id)
+        if record.get("provider") != "codex":
+            return complete_selection(record)
+        lock_fd = credentials.try_acquire_lock("codex-refresh-" + connection_id.replace("-", ""))
+        if lock_fd is None:
+            raise HTTPException(status_code=409, detail="Codex connection is being updated")
         try:
-            service.add_model_profile(profile)
-        except (ConflictError, ValueError) as exc:
-            raise HTTPException(
-                status_code=400, detail="model profile could not be created"
-            ) from exc
-        ids = [*record.get("profile_ids", []), profile.id]
-        repo.save_connection(connection_id, {**record, "profile_ids": ids, "status": "ready"})
-        if repo.get_setting("default_model_profile_id") is None:
-            repo.set_setting("default_model_profile_id", profile.id)
-        result = ConnectionProfile(
-            connection_id=connection_id, model_profile_id=profile.id, model_id=body.model_id
-        )
-        save_command(key, fingerprint, result)
-        return result
+            current = repo.get_connection(connection_id)
+            if (
+                current is None
+                or current.get("provider") != "codex"
+                or current.get("auth_method") != "oauth"
+                or current.get("auth_generation") != record.get("auth_generation")
+                or current.get("error") == "revocation_unconfirmed"
+            ):
+                raise HTTPException(status_code=409, detail="model connection changed")
+            return complete_selection(current)
+        finally:
+            credentials.release_lock(lock_fd)
 
     @app.delete(
         "/v1/setup/connections/{connection_id}",
@@ -588,7 +767,9 @@ def install_model_connection_routes(
             return ConnectionDeleted.model_validate(cached)
         record = get_record(connection_id)
         try:
-            if record.get("auth_method") == "oauth":
+            if record.get("provider") == "codex":
+                await codex.disconnect(record)
+            elif record.get("auth_method") == "oauth":
                 await oauth.disconnect(record)
             else:
                 credentials.delete(str(record["secret_ref"]))
@@ -636,8 +817,14 @@ def install_model_connection_routes(
         )
         if cached is not None:
             attempt_id = cached.get("attempt_id")
-            attempt = oauth.attempts.get(str(attempt_id))
+            manager = codex if body.provider == "codex" else oauth
+            attempt = manager.attempts.get(str(attempt_id))
             if attempt is None:
+                if body.provider == "codex":
+                    recovered = get_connection_request(request, response, supplied_key)
+                    if recovered.status == "completed" and recovered.oauth_attempt is not None:
+                        return recovered.oauth_attempt
+                    raise manual_reconcile_request(supplied_key)
                 return OAuthAttempt.model_validate(
                     {
                         **cached,
@@ -645,8 +832,32 @@ def install_model_connection_routes(
                         "authorization_url": None,
                     }
                 )
-            oauth.status(attempt.id)
+            manager.status(attempt.id)
             return _oauth_view(attempt, repo)
+        if body.provider == "codex":
+            if body.client_id or body.client_secret or body.project_id:
+                raise HTTPException(
+                    status_code=400, detail="Codex login does not accept OAuth client fields"
+                )
+            try:
+                attempt = codex.start(connection_id=body.connection_id)
+            except (OAuthError, CredentialError) as exc:
+                raise _codex_start_error(exc) from exc
+            result = _oauth_view(attempt, repo)
+            try:
+                repo.save_command(
+                    key,
+                    fingerprint,
+                    {
+                        **result.model_dump(mode="json"),
+                        "_operation": "codex_oauth_start",
+                        "_auth_generation_before": attempt.auth_generation_before,
+                    },
+                )
+            except Exception as exc:
+                codex.cancel(attempt.id)
+                raise manual_reconcile_request(supplied_key) from exc
+            return result
         server = request.scope.get("server")
         if (
             not isinstance(server, (tuple, list))
@@ -694,8 +905,11 @@ def install_model_connection_routes(
         response.headers["Cache-Control"] = "no-store"
         require_local(request)
         try:
-            attempt = oauth._attempt(attempt_id)
-            oauth.status(attempt_id)
+            if attempt_id in codex.attempts:
+                return _oauth_view(codex.status(attempt_id), repo)
+            else:
+                attempt = oauth._attempt(attempt_id)
+                oauth.status(attempt_id)
         except OAuthError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return _oauth_view(attempt, repo)
@@ -722,13 +936,28 @@ def install_model_connection_routes(
             idempotency_key=idempotency_key,
         )
         if cached is not None:
-            return OAuthAttempt.model_validate(cached)
+            return OAuthAttempt.model_validate(
+                {key: value for key, value in cached.items() if key in OAuthAttempt.model_fields}
+            )
         try:
-            oauth.cancel(attempt_id)
+            if attempt_id in codex.attempts:
+                codex.cancel(attempt_id)
+            else:
+                oauth.cancel(attempt_id)
         except OAuthError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         result = oauth_status(request, response, attempt_id)
-        save_command(key, fingerprint, result)
+        if result.provider == "codex":
+            try:
+                repo.save_command(
+                    key,
+                    fingerprint,
+                    {**result.model_dump(mode="json"), "_operation": "codex_oauth_cancel"},
+                )
+            except Exception as exc:
+                raise manual_reconcile_request(key) from exc
+        else:
+            save_command(key, fingerprint, result)
         return result
 
     @app.get("/internal/model-auth/{provider}/callback", include_in_schema=False)

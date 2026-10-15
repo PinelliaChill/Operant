@@ -5,8 +5,9 @@ import { useOnboarding } from '../../live/OnboardingContext';
 import { isWriteOutcomeUnknown } from '../../lib/writeOutcome';
 import { requestErrorCopy } from '../../lib/requestErrorCopy';
 import { ModelConnectionsView } from './ModelConnectionsView';
+import { sameOAuthAttempt, startOAuthStatusPolling } from './oauthStatusPolling';
 import { currentBrowserOrigin } from '../../lib/liveBaseUrl';
-import { decodeModelRequest, encodeModelRequest, modelRequestIsConfirmed, modelRequestResultCopy, modelRequestStorageKey, type PendingModelRequest } from './modelRequestRecovery';
+import { codexLoginRequestHasEnded, decodeModelRequest, encodeModelRequest, modelRequestAfterReconciliation, modelRequestIsConfirmed, modelRequestResultCopy, modelRequestStorageKey, type PendingModelRequest } from './modelRequestRecovery';
 
 const errorText = (value: unknown) => value instanceof Error ? value.message : '请求失败，请刷新后核对。';
 
@@ -15,6 +16,7 @@ export const LiveModelConnections: React.FC = () => {
   const navigate = useNavigate();
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [attempt, setAttempt] = useState<OAuthAttempt | null>(null);
+  const [knownCodexAttemptId, setKnownCodexAttemptId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -40,16 +42,26 @@ export const LiveModelConnections: React.FC = () => {
 
   useEffect(() => {
     if (!attempt || attempt.status !== 'pending') return;
-    let active = true;
-    const timer = window.setTimeout(() => {
-      void client.getModelOAuthStatus(attempt.attempt_id).then((next) => {
-        if (!active) return;
+    return startOAuthStatusPolling({
+      read: () => client.getModelOAuthStatus(attempt.attempt_id),
+      retryOnError: attempt.provider === 'codex',
+      onStatus: (next) => {
+        if (!sameOAuthAttempt(attempt, next)) {
+          setError('登录状态与当前请求不一致，请核对原请求。');
+          setErrorDetail('');
+          if (attempt.provider === 'codex') setWriteUncertain(true);
+          return;
+        }
+        if (attempt.provider === 'codex') setError((current) => current === 'Codex 登录状态暂时读不到，恢复连接后会自动重试。' ? '' : current);
         setAttempt(next);
         if (next.status !== 'pending') void refresh();
         if (next.status === 'connected' || next.status === 'ready') void refreshSetup();
-      }).catch((cause: unknown) => { if (active) { setError('登录状态读取失败，请刷新连接列表核对。'); setErrorDetail(errorText(cause)); } });
-    }, 2500);
-    return () => { active = false; window.clearTimeout(timer); };
+      },
+      onError: (cause) => {
+        setError(attempt.provider === 'codex' ? 'Codex 登录状态暂时读不到，恢复连接后会自动重试。' : '登录状态读取失败，请刷新连接列表核对。');
+        setErrorDetail(errorText(cause));
+      },
+    });
   }, [attempt, client, refresh, refreshSetup]);
 
   const storeRequest = useCallback((value: PendingModelRequest | null) => {
@@ -58,15 +70,29 @@ export const LiveModelConnections: React.FC = () => {
     setPendingRequest(value);
   }, [storageKey]);
 
-  const write = useCallback(async <T,>(label: string, run: () => Promise<T>, tracked?: PendingModelRequest): Promise<T | null> => {
+  useEffect(() => {
+    if (!writeUncertain && codexLoginRequestHasEnded(pendingRequest, attempt, knownCodexAttemptId)) {
+      try { storeRequest(null); }
+      catch { setWriteUncertain(true); setError('无法清除本地登录记录，请先核对原请求。'); }
+    }
+  }, [attempt, knownCodexAttemptId, pendingRequest, storeRequest, writeUncertain]);
+  useEffect(() => {
+    if (attempt?.provider === 'codex' && attempt.status !== 'pending') setReconcileMessage('');
+  }, [attempt?.provider, attempt?.status]);
+
+  const write = useCallback(async <T,>(label: string, run: () => Promise<T>, tracked?: PendingModelRequest, allowDuringCodexLogin = false, restoreOnKnownFailure?: PendingModelRequest | null): Promise<T | null> => {
     if (inFlight.current || writeUncertain) return null;
+    if (!allowDuringCodexLogin && pendingRequest !== 'invalid' && pendingRequest?.kind === 'codex_oauth' && attempt?.status === 'pending') {
+      setError('Codex 登录正在进行。请完成或取消当前登录后继续。');
+      return null;
+    }
     inFlight.current = true; setBusy(true); setError(''); setErrorDetail(''); setReconcileMessage('');
     let dispatched = false;
     try {
       if (tracked) storeRequest(tracked);
       dispatched = true;
       const result = await run();
-      if (tracked) storeRequest(null);
+      if (tracked && tracked.kind !== 'codex_oauth' && tracked.kind !== 'codex_cancel') storeRequest(null);
       return result;
     }
     catch (cause: unknown) {
@@ -75,12 +101,12 @@ export const LiveModelConnections: React.FC = () => {
       setErrorDetail(errorText(cause));
       if (uncertain) setWriteUncertain(true);
       else if (tracked && dispatched) {
-        try { storeRequest(null); } catch { setWriteUncertain(true); }
+        try { storeRequest(restoreOnKnownFailure ?? null); } catch { setWriteUncertain(true); }
       }
       return null;
     }
     finally { inFlight.current = false; setBusy(false); }
-  }, [storeRequest, writeUncertain]);
+  }, [attempt?.status, pendingRequest, storeRequest, writeUncertain]);
 
   const createKeyConnection = async (input: ConnectionCreate) => {
     const requestId = crypto.randomUUID();
@@ -89,17 +115,39 @@ export const LiveModelConnections: React.FC = () => {
     await refresh(); await refreshSetup();
     return true;
   };
-  const startOAuth = (provider: 'chatgpt' | 'gemini', connectionId?: string, projectId?: string, clientId?: string, clientSecret?: string) => {
+  const startOAuth = (provider: 'chatgpt' | 'gemini' | 'codex', connectionId?: string, projectId?: string, clientId?: string, clientSecret?: string) => {
     void (async () => {
       const requestId = crypto.randomUUID();
-      const next = await write('启动账号登录', () => client.startModelOAuth({ provider, ...(connectionId ? { connection_id: connectionId } : {}), ...(projectId ? { project_id: projectId } : {}), ...(clientId ? { client_id: clientId } : {}), ...(clientSecret ? { client_secret: clientSecret } : {}) }, { idempotencyKey: requestId }), { requestId, kind: 'oauth' });
-      if (next) { setAttempt(next); await refresh(); }
+      const next = await write('启动账号登录', () => client.startModelOAuth({ provider, ...(connectionId ? { connection_id: connectionId } : {}), ...(projectId ? { project_id: projectId } : {}), ...(clientId ? { client_id: clientId } : {}), ...(clientSecret ? { client_secret: clientSecret } : {}) }, { idempotencyKey: requestId }), { requestId, kind: provider === 'codex' ? 'codex_oauth' : 'oauth' });
+      if (next) {
+        if (next.provider !== provider) {
+          setWriteUncertain(true);
+          setError('登录响应与请求不一致，请核对原请求。');
+          return;
+        }
+        if (provider === 'codex') setKnownCodexAttemptId(next.attempt_id);
+        setAttempt(next); await refresh();
+      }
     })();
   };
   const cancelOAuth = (attemptId: string) => {
     void (async () => {
-      const next = await write('取消账号登录', () => client.cancelModelOAuth(attemptId, { idempotencyKey: crypto.randomUUID() }));
-      if (next) { setAttempt(next); await refresh(); }
+      const cancelRequestId = crypto.randomUUID();
+      const tracked = attempt?.provider === 'codex' ? { requestId: cancelRequestId, kind: 'codex_cancel' as const, attemptId } : undefined;
+      const previous = pendingRequest && pendingRequest !== 'invalid' ? pendingRequest : null;
+      const next = await write('取消账号登录', () => client.cancelModelOAuth(attemptId, { idempotencyKey: cancelRequestId }), tracked, true, previous);
+      if (next) {
+        if (tracked && (next.provider !== 'codex' || next.attempt_id !== attemptId || next.status === 'pending')) {
+          setWriteUncertain(true);
+          setError('取消登录响应与请求不一致，请核对原请求。');
+          return;
+        }
+        if (tracked) {
+          try { storeRequest(null); }
+          catch { setWriteUncertain(true); setError('无法清除本地取消记录，请核对原请求。'); return; }
+        }
+        setAttempt(next); await refresh();
+      }
     })();
   };
   const discover = (connectionId: string) => {
@@ -133,9 +181,13 @@ export const LiveModelConnections: React.FC = () => {
         const result = await client.getModelConnectionRequest(pendingRequest.requestId);
         setReconcileMessage(modelRequestResultCopy(pendingRequest, result));
         if (modelRequestIsConfirmed(pendingRequest, result)) {
-          storeRequest(null);
+          if (!modelRequestAfterReconciliation(pendingRequest, result)) storeRequest(null);
           setConfirmedRequestId(pendingRequest.requestId);
           setWriteUncertain(false);
+          if ((pendingRequest.kind === 'codex_oauth' || pendingRequest.kind === 'codex_cancel') && result.oauth_attempt) {
+            if (pendingRequest.kind === 'codex_oauth') setKnownCodexAttemptId(result.oauth_attempt.attempt_id);
+            setAttempt(result.oauth_attempt);
+          }
           await refresh(); await refreshSetup();
         }
       } catch (cause: unknown) {
@@ -144,6 +196,18 @@ export const LiveModelConnections: React.FC = () => {
       } finally { inFlight.current = false; setBusy(false); }
     })();
   };
+
+  useEffect(() => {
+    if (!writeUncertain || !pendingRequest || pendingRequest === 'invalid' || !['codex_oauth', 'codex_cancel'].includes(pendingRequest.kind)) return;
+    let active = true;
+    let timer: number;
+    const reconcile = () => {
+      acknowledge();
+      if (active) timer = window.setTimeout(reconcile, 5000);
+    };
+    reconcile();
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [pendingRequest, writeUncertain, client]);
 
   return <ModelConnectionsView connections={connections} loading={loading} busy={busy || selectionBusy || loading} error={error} errorDetail={errorDetail} writeUncertain={writeUncertain} reconcileMessage={reconcileMessage} confirmedRequestId={confirmedRequestId} pendingRequestId={pendingRequest && pendingRequest !== 'invalid' ? pendingRequest.requestId : undefined} attempt={attempt} onRefresh={() => { void refresh(); }} onCreateKeyConnection={createKeyConnection} onStartOAuth={startOAuth} onCancelOAuth={cancelOAuth} onDiscover={discover} onSelectModel={selectModel} onDisconnect={disconnect} onAcknowledge={acknowledge} />;
 };

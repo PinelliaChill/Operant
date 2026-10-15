@@ -3,6 +3,19 @@ export function oauthStatusLabel(status: string): string {
 }
 
 const MODEL_CONNECTION_ERRORS: Record<string, string> = {
+  '未找到 Codex CLI。请先安装官方 Codex CLI，再重试登录。': '未找到官方 Codex CLI。安装后可重新连接。',
+  'Codex 登录端口 1455 已被占用，请关闭占用程序后重试。': 'Codex 登录端口 1455 已被占用。关闭占用程序后重试。',
+  'Codex 登录正在进行': 'Codex 登录正在进行，请等待当前登录完成或取消。',
+  '无法启动 Codex CLI 登录': '无法启动官方 Codex CLI 登录。请检查安装后重试。',
+  'Codex 登录未完成，请重试。': 'Codex 登录未完成，可重新连接。',
+  'Codex 登录结果无效': 'Codex 登录结果无效，请重新连接。',
+  'Codex 登录凭据文件权限不安全': 'Codex 登录文件权限不安全，请检查本机文件权限后重试。',
+  'Codex 登录结果过大': 'Codex 登录结果超出安全限制，请重新连接。',
+  'Codex 登录结果不是 ChatGPT 账号': '本次登录未使用 ChatGPT 账号，请换账号重新连接。',
+  'Codex 登录结果缺少令牌': 'Codex 登录结果不完整，请重新连接。',
+  'Codex 登录结果缺少账号标识': 'Codex 登录结果缺少账号信息，请重新连接。',
+  'Codex 登录令牌已过期': 'Codex 登录已过期，请重新连接。',
+  'Codex 登录结果需人工核对': 'Codex 登录结果需要核对，请先查看连接状态，暂时不要重新登录。',
   chatgpt_plan_usage_disabled: '已登录，但未启用 ChatGPT 套餐调用。可重新授权套餐使用，或连接 API 密钥。',
   user_not_eligible: '此账号目前没有套餐调用资格。请确认账号套餐，或连接 API 密钥。',
   permission_denied: '当前服务未允许此账号或密钥访问。请检查授权和项目设置。',
@@ -10,6 +23,7 @@ const MODEL_CONNECTION_ERRORS: Record<string, string> = {
   authentication_required: '账号或密钥已失效，请重新连接。',
   usage_limit: '本期套餐用量已用完，请等待额度恢复或连接 API 密钥。',
   rate_limited: '请求过于频繁，请稍后再查找模型。',
+  limit_unconfirmed: '限额状态待确认，请稍后再试或查看账号用量。',
   provider_unavailable: '模型服务暂时不可用，请稍后再查找模型。',
   network_error: '网络连接失败，请检查网络后再查找模型。',
   unsupported_capability: '本模型不支持当前请求参数。请调整模型或高级参数后重试。',
@@ -60,6 +74,7 @@ export function modelConnectionStatusLabel(status: string, error: string | null 
   if (error?.trim() === 'user_not_eligible') return '套餐不可用';
   if (error?.trim() === 'permission_denied') return '无访问权限';
   if (error?.trim() === 'usage_unavailable') return '用量暂不可查';
+  if (error?.trim() === 'limit_unconfirmed') return '限额待确认';
   if (error?.trim() === 'revocation_unconfirmed') return '撤销待确认';
   return ({ needs_auth: '需要登录', connected: '已连接', ready: '可用', error: '连接受阻' } as Record<string, string>)[status] ?? '状态待确认';
 }

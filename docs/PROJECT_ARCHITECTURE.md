@@ -2,7 +2,7 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-10-13（开箱即用增量实施中；记录身份：Codex 主线程，保留原历史署名）
+> 最后更新：2026-10-14（Codex 连接增量实施中；记录身份：Codex 主线程，保留原历史署名）
 >
 > 对应源码：`codex/onboarding-ux`，基线 Beta 3 `939e3cc`，SQLite 新增 v24、v25、v26。当前代码与验收状态见[本轮记录](design/onboarding-ux/acceptance.md)，尚未整体交付。既有 H-01～H-18 与四项完成标准的历史结果见[任务 6 验收记录](design/beta-daily/acceptance.md)。本轮不更新已安装 App 或真实用户库。
 
@@ -16,6 +16,7 @@
 ## 当前版本速览
 
 - **开箱即用与界面整理（实施中，2026-10-07）**：User 已批准 [完整方案](design/onboarding-ux/plan.md)，基于 Beta 3 `939e3cc` 改进会话标题、默认助手、模型/API/OAuth、技能发现和唯一设置入口。逐项状态见 [验收记录](design/onboarding-ux/acceptance.md)。本条记录实施范围，不表示新能力已交付；实际模块说明随代码和验收更新。
+- **Codex 订阅连接（实施中，2026-10-14）**：User 批准从 `main@d4c9ece` 新增独立 `codex` Provider，作为默认 ChatGPT 入口；原 `chatgpt` 第三方 OAuth 与已有配置保留在高级设置。官方 CLI 只负责隔离登录，模型、工具和审批仍由 Operant 执行。本轮源码在 `codex/codex-subscription`，隔离登录、正式模型发现、原生流式文件任务、实际续期、取消运行及重开后继续调用已通过。断连清理及原刷新令牌续期拒绝已观察，服务端错误码未解析；完整门禁及交付状态沿用 [UX-07 / S3](design/onboarding-ux/acceptance.md)。旧 Mountain 拒绝记录及安装版保留。
 
 - **当前源码**：任务 1～5 已合入会话工作台、编排、配置与任务控制、本机扩展和私有跨设备能力。本轮补齐随 Core 分发的六项默认 Skill、文档依赖、记忆召回修复与桌面退出回收；整体结论以 Git 与[任务 6 验收记录](design/beta-daily/acceptance.md)核对。
 - **公开版本**：本次 `v0.1.0-beta.2` 源码和候选包发行范围与检查见[发行说明](releases/v0.1.0-beta.2.md)。`v0.1.0-beta.1` 保留为 2026-09-14 的 B2-3 快照；新能力不回填旧标签。
@@ -276,8 +277,8 @@ GUI 的 `PathInput` 通过 Tauri 官方 Dialog 插件打开本机文件或文件
 新增 `onboarding.v1`，由 `contracts/onboarding.py` 定义 DTO，`sdk/protocol/generate_onboarding.py`
 生成独立 Schema、digest 和 TS/Python Client。旧协议与 digest 保持不变。查询与命令分别管理
 首次配置、模型连接、标题、技能源、本机应用列表、对话专用控制会话和基础团队模板。
-当前源码契约含 24 个操作，摘要为
-`4f1a5ab639869b762c5641cf0739b529dc1d4effe485a3acf594e6a3469c0d32`。
+当前源码契约含 25 个操作，摘要为
+`ea8a0619f31fb055e1b5200fab2f302a61d8c16b12eaf28d723f56f22d1c82ad`。
 
 `application/onboarding.py` 准备默认通用、规划、探索、编程、审查角色、个人工作区及六项内置技能。
 首次配置新增的通用与编程助手在已登记的可信工作区使用 Host，写入与命令仍走 Policy/审批；
@@ -285,7 +286,8 @@ CLI 的 Docker 默认值和已有角色保持原值。`api_onboarding.py` 的统
 快照与幂等结果；改名支持版本检查。SQLite v24 的标题元数据只影响展示，第一条消息生成自动名称，
 手动名称优先；旧会话可从首条消息读出默认标题，历史内容不变。单个标题可独立查询，不依赖
 历史列表分页；子对话也保存标题。未知创建结果通过原幂等键只读查询已提交的完整绑定，查询失败
-或尚无结果时继续等待核对，不重新发送创建命令。
+或尚无结果时继续等待核对，不重新发送创建命令。通用命令中间件归一响应头名称后覆盖幂等头，
+避免重复响应头导致原生桥接拒收成功结果；已找回提示在路由与选中对话均匹配时清除。
 
 `model_connections` 负责受保护 `.env` 的原子读写及 OAuth，`api_model_connections.py` 仅向可信本机
 客户端开放。连接信息与私有 Provider 状态由 `persistence/onboarding.py` 持久化；只接受凭据引用及
@@ -326,8 +328,34 @@ TUI页面挂载测试归属 `clients/tui/test/test_caller_pairing.py`，与其�
 Gemini OAuth 的 Operant 桌面客户端由受保护 `.env` 或进程环境配置
 `OPERANT_GEMINI_OAUTH_CLIENT_ID`、`OPERANT_GEMINI_OAUTH_CLIENT_SECRET`，首次用户连接提供 Cloud
 项目。缺少应用配置、账号授权或真实调用条件时明确报错，不使用其他应用的客户端身份。
-Gemini 的免费项目已完成真实登录、流式工具调用、续期和撤销；ChatGPT 仍受账号与组织条件限制，
-整项按[验收记录](design/onboarding-ux/acceptance.md)保留未完成，fixture 只证明边界与协议处理。
+Gemini 的免费项目已完成真实登录、流式工具调用、续期和撤销；旧第三方 ChatGPT OAuth 仍受账号与
+组织条件限制，新 Codex 入口按下文及[验收记录](design/onboarding-ux/acceptance.md)单独核对，
+fixture 只证明边界与协议处理。
+
+Codex 增量由 `model_connections/codex.py` 管理独立登录，
+`codex_login_helper.py` 持有官方 CLI 子进程和父管道。临时 HOME/CODEX_HOME 使用 0700 目录，
+凭据使用文件存储；标准代理与证书环境可继承，账号密钥及 Codex 配置覆盖不继承。CLI 输出不落盘。
+helper 以 Python `-B` 启动，避免在安装包内生成字节码缓存并破坏应用签名；不依赖被清理的父进程环境。
+正常完成、取消、超时或父管道关闭后，helper 回收自有进程与目录，并留下无凭据的私有结束标记，
+用于重启后的原请求核对。同一数据目录以文件锁防止并行登录；不同数据目录通过 1455 端口检测
+拒绝已占用端口，不声称全机原子排他。登录凭据导入同一受保护 `.env`，续期、登录写入和断连共用
+连接锁；重新登录不得把已有连接换成另一账号。续期以返回 Access JWT 的 `exp` 判断有效期，
+不猜测可选 `expires_in` 的上限。撤销按官方 Codex 的 JSON 请求格式提交；结果未确认时保留
+凭据和屏障。已结算的运行失败可跳到同一模型设置页，未知写入继续核对原请求。
+
+`providers/codex_responses.py` 通过 Codex 后端目录发现精确模型、上下文与推理能力，适配普通
+Responses 和目录指定的 Responses Lite。`0.159.0` 是适配器使用的请求协议标识，不能据此声称
+本机 CLI 已升级。适配器保留 Operant 的工具往返与统一用量；仅不透明加密推理项进入私有 Provider
+状态，正文不进入消息、日志或公开投影。当前产品的普通推理档仍是低、中、高，Provider 参数映射
+在模型支持范围内生效。晚到的目录和流结果不能覆盖新的登录状态或撤销屏障。
+
+Codex 启动与取消各保存自己的安全收据。现有原请求查询可返回可选 `oauth_attempt`，不返回登录
+地址或凭据；旧 API 回执字段保持原样。GUI 待登录时仅持久化原请求编号，刷新后只读恢复；取消
+响应丢失时核对取消收据，不能用启动收据解锁。旧第三方 OAuth 的未知结果规则保持。新链路的真实
+登录、调用、续期与远端撤销均须单独验证；撤销端点的无凭据 HTTP 200 不是有效 Token 撤销证据。
+`onboarding.v1` 仍使用严格 Schema digest 握手，新增 DTO 改变其摘要；Core、GUI 与生成 SDK
+须成套升级，旧生成客户端不能透明连接新 Core。旧 Provider 请求、API 回执格式和其他既有协议
+Schema 保留，不绕过摘要检查。
 
 Gemini 流解析严格校验布尔 `thought` 标记，思维正文不进入公开增量、完成消息、历史或私有
 元数据。思维 Part 若混入工具/代码字段，或自身带签名而无法在不保存正文的前提下原样恢复，
