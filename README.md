@@ -5,16 +5,19 @@
 当前处于 **Beta 阶段**，采用**非商业使用许可，商用须另行协商授权**。
 | 版本入口 | 包含什么 |
 | --- | --- |
-| [`v0.1.0-beta.2`](docs/releases/v0.1.0-beta.2.md) | 本次 Beta：源码、Core/TUI 安装包与未公证 macOS arm64 App；会话协作、可视化编排、可调自动审批、经验复用、本机扩展与私有跨设备能力 |
+| [`v0.1.0-beta.4`](docs/releases/v0.1.0-beta.4.md) | 当前 Beta：自包含 macOS arm64 DMG；首次连接、默认助手、对话名称、技能发现，以及 ChatGPT（Codex）和 Gemini 连接 |
+| [Beta 3](https://github.com/PinelliaChill/Operant/releases/tag/v0.1.0-beta.3) | 2026-10-06 的安装包；不包含 Beta 4 的首次使用流程和 Codex 接入 |
+| [`v0.1.0-beta.2`](docs/releases/v0.1.0-beta.2.md) | 历史源码、Core/TUI 与桌面包；会话协作、编排、审批、记忆与扩展能力 |
 | 当前 `main` | 持续开发分支；日常使用建议选择固定标签 |
-| [`v0.1.0-beta.1`](docs/releases/v0.1.0-beta.1.md) | 2026-09-14 的早期源码快照，范围截至 B2-3 |
-| [旧桌面候选](https://github.com/PinelliaChill/Operant/releases/tag/desktop-candidate-2026-09-28-08e65ea) | 9 月 28 日的 macOS arm64 包，不包含本次全部更新；桌面仍无 Developer ID 签名、公证或自动更新 |
 
-[本次发行说明](docs/releases/v0.1.0-beta.2.md) · [更新记录](CHANGELOG.md) · [安装、升级与回退](docs/guide/candidate-installation.md)
+[下载 macOS DMG](https://github.com/PinelliaChill/Operant/releases/tag/v0.1.0-beta.4) · [本次发行说明](docs/releases/v0.1.0-beta.4.md) · [更新记录](CHANGELOG.md) · [安装、升级与回退](docs/guide/candidate-installation.md)
 
-开发中的[开箱即用与界面整理方案](docs/design/onboarding-ux/plan.md)增加首次连接、默认助手、对话名称、
-模型账号登录和四项导航。实现与[验收进度](docs/design/onboarding-ux/acceptance.md)单独记录；
-尚未发行，也没有替换已安装 App 或迁移用户数据。
+Apple Silicon Mac 下载 DMG 后，将 Operant 拖入 Applications。App 已内置 Core、Python 和运行依赖，
+首次打开后连接模型即可创建对话；ChatGPT（Codex）连接还需要本机安装官方 Codex CLI。
+安装包采用 ad-hoc 签名，尚未通过 Apple 公证，没有自动更新。
+
+[开箱即用与界面整理方案](docs/design/onboarding-ux/plan.md)的实现与验收范围见[本轮记录](docs/design/onboarding-ux/acceptance.md)。
+TUI 的部分原生视觉验收仍有缺口；发行不表示原计划全部验收完成，也不会自动替换本机已安装 App 或迁移用户数据。
 
 ## 项目定位
 
