@@ -223,6 +223,44 @@ def test_codex_cli_inherits_network_env_without_auth_overrides(
     manager.close()
 
 
+def test_codex_login_does_not_write_into_installed_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed = tmp_path / "Installed Copy"
+    package = installed / "operant" / "model_connections"
+    package.mkdir(parents=True)
+    (installed / "operant" / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    helper = Path(__file__).parents[1] / "src/operant/model_connections/codex_login_helper.py"
+    (package / helper.name).write_bytes(helper.read_bytes())
+    observed = tmp_path / "login-started"
+    cli = tmp_path / "codex"
+    cli.write_text(
+        f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(observed)!r}).touch()\n"
+    )
+    cli.chmod(0o700)
+    monkeypatch.setattr("operant.model_connections.codex._cli_path", lambda: cli)
+    real_popen = subprocess.Popen
+
+    def installed_helper(args: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+        # Simulate an installed package without changing the developer's cache.
+        kwargs["env"] = {**kwargs["env"], "PYTHONPATH": str(installed)}
+        return real_popen(args, **kwargs)
+
+    monkeypatch.setattr("operant.model_connections.codex.subprocess.Popen", installed_helper)
+    repo, credentials, _ = _repository(tmp_path)
+    manager = CodexConnections(repo, credentials)
+    try:
+        manager.start()
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline and not observed.exists():
+            time.sleep(0.05)
+        assert observed.exists()
+    finally:
+        manager.close()
+    assert not list(installed.rglob("__pycache__"))
+
+
 def test_codex_reauth_rejects_other_account_before_credential_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

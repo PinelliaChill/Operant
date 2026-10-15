@@ -229,6 +229,9 @@ class CodexConnections:
                 process = subprocess.Popen(
                     [
                         sys.executable,
+                        # The sanitized child does not inherit Python flags;
+                        # writing bytecode would invalidate a signed App bundle.
+                        "-B",
                         "-m",
                         "operant.model_connections.codex_login_helper",
                         str(cli),

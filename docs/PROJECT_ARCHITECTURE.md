@@ -328,12 +328,14 @@ TUI页面挂载测试归属 `clients/tui/test/test_caller_pairing.py`，与其�
 Gemini OAuth 的 Operant 桌面客户端由受保护 `.env` 或进程环境配置
 `OPERANT_GEMINI_OAUTH_CLIENT_ID`、`OPERANT_GEMINI_OAUTH_CLIENT_SECRET`，首次用户连接提供 Cloud
 项目。缺少应用配置、账号授权或真实调用条件时明确报错，不使用其他应用的客户端身份。
-Gemini 的免费项目已完成真实登录、流式工具调用、续期和撤销；ChatGPT 仍受账号与组织条件限制，
-整项按[验收记录](design/onboarding-ux/acceptance.md)保留未完成，fixture 只证明边界与协议处理。
+Gemini 的免费项目已完成真实登录、流式工具调用、续期和撤销；旧第三方 ChatGPT OAuth 仍受账号与
+组织条件限制，新 Codex 入口按下文及[验收记录](design/onboarding-ux/acceptance.md)单独核对，
+fixture 只证明边界与协议处理。
 
 Codex 增量由 `model_connections/codex.py` 管理独立登录，
 `codex_login_helper.py` 持有官方 CLI 子进程和父管道。临时 HOME/CODEX_HOME 使用 0700 目录，
 凭据使用文件存储；标准代理与证书环境可继承，账号密钥及 Codex 配置覆盖不继承。CLI 输出不落盘。
+helper 以 Python `-B` 启动，避免在安装包内生成字节码缓存并破坏应用签名；不依赖被清理的父进程环境。
 正常完成、取消、超时或父管道关闭后，helper 回收自有进程与目录，并留下无凭据的私有结束标记，
 用于重启后的原请求核对。同一数据目录以文件锁防止并行登录；不同数据目录通过 1455 端口检测
 拒绝已占用端口，不声称全机原子排他。登录凭据导入同一受保护 `.env`，续期、登录写入和断连共用
