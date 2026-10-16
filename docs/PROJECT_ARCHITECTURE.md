@@ -2,9 +2,9 @@
 
 > 文档状态：持续维护
 >
-> 最后更新：2026-10-14（Codex 连接增量实施中；记录身份：Codex 主线程，保留原历史署名）
+> 最后更新：2026-10-16（开箱即用整理与最后 TUI 原生补验通过；记录身份：Codex 主线程，保留原历史署名）
 >
-> 对应源码：`codex/onboarding-ux`，基线 Beta 3 `939e3cc`，SQLite 新增 v24、v25、v26。当前代码与验收状态见[本轮记录](design/onboarding-ux/acceptance.md)，尚未整体交付。既有 H-01～H-18 与四项完成标准的历史结果见[任务 6 验收记录](design/beta-daily/acceptance.md)。本轮不更新已安装 App 或真实用户库。
+> 对应源码：`main@92a8ab4` / `v0.1.0-beta.4`，基线 Beta 3 `939e3cc`，SQLite 新增 v24、v25、v26。当前代码与验收状态见[本轮记录](design/onboarding-ux/acceptance.md)，原18项与最后TUI补验已通过。既有 H-01～H-18 与四项完成标准的历史结果见[任务 6 验收记录](design/beta-daily/acceptance.md)。本轮未替换用户已安装 App 或迁移真实用户库。
 
 本文档是 Operant 当前架构、模块边界和实现状态的唯一权威说明。README 只保留项目简介和
 常用命令，学习资料和个人规划不作为项目实现依据。
@@ -15,8 +15,8 @@
 
 ## 当前版本速览
 
-- **开箱即用与界面整理（实施中，2026-10-07）**：User 已批准 [完整方案](design/onboarding-ux/plan.md)，基于 Beta 3 `939e3cc` 改进会话标题、默认助手、模型/API/OAuth、技能发现和唯一设置入口。逐项状态见 [验收记录](design/onboarding-ux/acceptance.md)。本条记录实施范围，不表示新能力已交付；实际模块说明随代码和验收更新。
-- **Codex 订阅连接（实施中，2026-10-14）**：User 批准从 `main@d4c9ece` 新增独立 `codex` Provider，作为默认 ChatGPT 入口；原 `chatgpt` 第三方 OAuth 与已有配置保留在高级设置。官方 CLI 只负责隔离登录，模型、工具和审批仍由 Operant 执行。本轮源码在 `codex/codex-subscription`，隔离登录、正式模型发现、原生流式文件任务、实际续期、取消运行及重开后继续调用已通过。断连清理及原刷新令牌续期拒绝已观察，服务端错误码未解析；完整门禁及交付状态沿用 [UX-07 / S3](design/onboarding-ux/acceptance.md)。旧 Mountain 拒绝记录及安装版保留。
+- **开箱即用与界面整理（验收通过，2026-10-16）**：基于 Beta 3 `939e3cc` 改进会话标题、默认助手、模型/API/OAuth、技能发现和唯一设置入口，已合入主线并发布 Beta 4。原18项及独立客户端的目录变更自动刷新、撤销后原生错误提示均有对应证据；完整范围、失败历史和已知限制见[验收记录](design/onboarding-ux/acceptance.md)。本轮只补验，不自动更新用户安装版。
+- **Codex 订阅连接（已交付）**：独立 `codex` Provider 作为默认 ChatGPT 入口；原 `chatgpt` 第三方 OAuth 与已有配置保留在高级设置。官方 CLI 只负责隔离登录，模型、工具和审批仍由 Operant 执行。隔离登录、正式模型发现、原生流式文件任务、实际续期、取消、重开后调用及撤销均已通过；打包候选撤销后原刷新令牌得到401 / `refresh_token_invalidated`。完整门禁及交付范围见 [UX-07 / S3](design/onboarding-ux/acceptance.md)，旧 Mountain 拒绝历史保留。
 
 - **当前源码**：任务 1～5 已合入会话工作台、编排、配置与任务控制、本机扩展和私有跨设备能力。本轮补齐随 Core 分发的六项默认 Skill、文档依赖、记忆召回修复与桌面退出回收；整体结论以 Git 与[任务 6 验收记录](design/beta-daily/acceptance.md)核对。
 - **公开版本**：`v0.1.0-beta.4` 提供当前源码的自包含 macOS arm64 DMG，首次使用、模型连接与已知验收缺口见[发行说明](releases/v0.1.0-beta.4.md)。较大更新同步发布对应 DMG、校验摘要和更新说明；发行不替换本机安装版或自动迁移用户库。历史版本保持原标签，新能力不回填旧包。
