@@ -81,3 +81,13 @@ export function draftThreadForSelection(path: string, selectedThreadId: string |
 export function isNewConversationDraft(snapshot: DraftSnapshot): boolean {
   try { return JSON.parse(snapshot.scope)[1] === 'new'; } catch { return false; }
 }
+
+/** Called only after a read of the exact original create request confirms its thread. Never sends. */
+export function restoreConfirmedConversationDraft(store: ConversationDrafts, sourceScope: string | undefined, targetScope: string): string {
+  if (!sourceScope || sourceScope === targetScope) return '';
+  const source = store.read(sourceScope);
+  if (!source.text) return '';
+  if (store.read(targetScope).text) return source.text;
+  store.move(source, targetScope);
+  return '';
+}

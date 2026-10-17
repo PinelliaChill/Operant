@@ -3,7 +3,8 @@ import test from 'node:test';
 import { Phase1EError } from '../../../sdk/typescript-client/phase1e-transport.ts';
 import { requestErrorCopy } from '../src/lib/requestErrorCopy.ts';
 import { isWriteOutcomeUnknown } from '../src/lib/writeOutcome.ts';
-import { ConversationDrafts, draftScope } from '../src/live/conversationDrafts.ts';
+import { ConversationDrafts, draftScope, restoreConfirmedConversationDraft } from '../src/live/conversationDrafts.ts';
+import { decodeCreateRequest, encodeCreateRequest, confirmedCreateMetadata } from '../src/live/createRequestRecovery.ts';
 import { modelReadiness } from '../src/features/settings/modelReadiness.ts';
 import { synchronizeProjectMutation } from '../src/live/projectSynchronization.ts';
 
@@ -180,4 +181,34 @@ test('CLI-configured default profiles remain selected without a connection wrapp
   const failed = modelReadiness(setup, [{ connection_id: 'wrapped', profile_ids: ['profile'], status: 'error', error: 'authentication_required' }], false);
   assert.equal(failed.modelSelected, true);
   assert.equal(failed.ready, false);
+});
+
+test('unknown-create recovery survives reopen and exposes conflicts without redirecting another project draft', () => {
+  const disk = storage();
+  const origin = 'https://core.test';
+  const a = draftScope(origin, 'project-a', null);
+  const b = draftScope(origin, 'project-b', null);
+  const target = draftScope(origin, '', 'created-thread');
+  const store = new ConversationDrafts(() => disk);
+  store.write(a, 'clicked then edited');
+  store.write(b, 'other project text');
+  const ticket = encodeCreateRequest({ requestId: 'same-original-key', draftScope: a });
+  assert.doesNotMatch(ticket, /clicked then edited|other project text/);
+  assert.equal(decodeCreateRequest(ticket, 'https://different-core.test')?.draftScope, undefined);
+  assert.equal(decodeCreateRequest(encodeCreateRequest({ requestId: 'id', draftScope: target }), origin)?.draftScope, undefined);
+  assert.equal(decodeCreateRequest('legacy-key', origin)?.requestId, 'legacy-key');
+  assert.equal(confirmedCreateMetadata([]), null);
+  const reopened = new ConversationDrafts(() => disk);
+  reopened.write(target, 'target draft created while request was unknown');
+  const recovered = decodeCreateRequest(ticket, origin)!;
+  assert.equal(recovered.requestId, 'same-original-key');
+  assert.equal(restoreConfirmedConversationDraft(reopened, recovered.draftScope, target), 'clicked then edited');
+  assert.equal(reopened.read(a).text, 'clicked then edited');
+  assert.equal(reopened.read(target).text, 'target draft created while request was unknown');
+  const afterAnotherReopen = new ConversationDrafts(() => disk);
+  afterAnotherReopen.write(target, '');
+  assert.equal(restoreConfirmedConversationDraft(afterAnotherReopen, recovered.draftScope, target), '');
+  assert.equal(afterAnotherReopen.read(target).text, 'clicked then edited');
+  assert.equal(afterAnotherReopen.read(a).text, '');
+  assert.equal(afterAnotherReopen.read(b).text, 'other project text');
 });

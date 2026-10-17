@@ -1,8 +1,9 @@
+import { encodeCreateRequest, decodeCreateRequest } from '../src/live/createRequestRecovery.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { projectWorkspaceMetadata } from '../src/live/projectDisplayNames.ts';
 import { modelReadiness } from '../src/features/settings/modelReadiness.ts';
-import { ConversationDrafts, draftScope, draftThreadFromPath, draftThreadForSelection, isNewConversationDraft } from '../src/live/conversationDrafts.ts';
+import { ConversationDrafts, draftScope, draftThreadFromPath, draftThreadForSelection, isNewConversationDraft, restoreConfirmedConversationDraft } from '../src/live/conversationDrafts.ts';
 import { synchronizeProjectMutation, projectSelectionStorageKey, readProjectSelection } from '../src/live/projectSynchronization.ts';
 
 const setup = { ready: true, default_model_profile_id: 'profile-a', models: [{ id: 'profile-a', name: 'Current model', model_id: 'actual-model' }] };
@@ -76,4 +77,41 @@ test('root chat retains the selected thread draft; only an empty welcome scope m
   assert.equal(draftThreadForSelection('/chat', null), null);
   assert.equal(isNewConversationDraft({ scope: draftScope(origin, 'project', draftThreadForSelection('/chat', 'existing')), text: 'old work', revision: 1 }), false);
   assert.equal(isNewConversationDraft({ scope: draftScope(origin, 'project', draftThreadForSelection('/chat', null)), text: 'first send', revision: 1 }), true);
+});
+
+test('unknown create reopening restores only the referenced source draft after exact confirmation, without sending', () => {
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+  const origin = 'https://core.test';
+  const source = draftScope(origin, 'project-a', null);
+  const other = draftScope(origin, 'project-b', null);
+  const target = draftScope(origin, 'project-a', 'confirmed-thread');
+  const store = new ConversationDrafts(() => storage);
+  store.write(source, 'original user draft');
+  store.write(other, 'other project');
+  const encoded = encodeCreateRequest({ requestId: 'original-request', draftScope: source });
+  assert.equal(encoded.includes('original user draft'), false);
+  const ticket = decodeCreateRequest(encoded, origin)!;
+  const reopened = new ConversationDrafts(() => storage);
+  assert.equal(restoreConfirmedConversationDraft(reopened, ticket.draftScope, target), '');
+  assert.equal(reopened.read(target).text, 'original user draft');
+  assert.equal(reopened.read(source).text, '');
+  assert.equal(reopened.read(other).text, 'other project');
+  assert.equal(new ConversationDrafts(() => storage).read(target).text, 'original user draft');
+  assert.equal(decodeCreateRequest('legacy-request', origin)?.requestId, 'legacy-request');
+  assert.equal(decodeCreateRequest(encoded, 'https://other.test')?.draftScope, undefined);
+});
+test('confirmed create recovery exposes a conflicting source without overwriting either draft', () => {
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+  const store = new ConversationDrafts(() => storage);
+  const source = draftScope('https://core.test', 'project-a', null);
+  const target = draftScope('https://core.test', 'project-a', 'confirmed-thread');
+  store.write(source, 'source retained'); store.write(target, 'target retained');
+  assert.equal(restoreConfirmedConversationDraft(store, source, target), 'source retained');
+  assert.equal(store.read(source).text, 'source retained');
+  assert.equal(store.read(target).text, 'target retained');
+  store.write(target, '');
+  assert.equal(restoreConfirmedConversationDraft(store, source, target), '');
+  assert.equal(store.read(target).text, 'source retained');
 });

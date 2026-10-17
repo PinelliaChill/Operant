@@ -7,10 +7,10 @@ import { useLive } from './LiveContext';
 import { metadataRefreshKey } from './metadataRefreshKey';
 import { readConversationMetadata, type MetadataReadResult } from './metadataRead';
 import type { PendingConversationSend } from './pendingConversationSend';
-import { confirmedCreateMetadata, createRequestStorageKey, isConversationInitialization, mergeConversationMetadata, renameIsConfirmed } from './createRequestRecovery';
+import { confirmedCreateMetadata, createRequestStorageKey, decodeCreateRequest, encodeCreateRequest, type PendingCreateRequest, isConversationInitialization, mergeConversationMetadata, renameIsConfirmed } from './createRequestRecovery';
 import { requestErrorCopy } from '../lib/requestErrorCopy';
 import { isWriteOutcomeUnknown } from '../lib/writeOutcome';
-import { ConversationDrafts, draftScope, draftThreadFromPath, draftThreadForSelection, type DraftSnapshot } from './conversationDrafts';
+import { ConversationDrafts, draftScope, draftThreadFromPath, draftThreadForSelection, isNewConversationDraft, restoreConfirmedConversationDraft, type DraftSnapshot } from './conversationDrafts';
 
 interface OnboardingContextValue {
   client: OnboardingClient;
@@ -27,6 +27,7 @@ interface OnboardingContextValue {
   acceptDraft: (snapshot: DraftSnapshot) => void;
   moveDraftToThread: (snapshot: DraftSnapshot, threadId: string) => DraftSnapshot;
   draftWarning: string;
+  recoveredDraftConflict: string;
   getRouteRevision: () => number;
   noteRouteChange: (pathname?: string) => void;
   pendingSend: PendingConversationSend | null;
@@ -102,9 +103,11 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   }, []);
   const [pendingSend, setPendingSend] = useState<PendingConversationSend | null>(null);
   const [createBusy, setCreateBusy] = useState(false);
-  const [pendingCreateKey, setPendingCreateKey] = useState<string | null>(() => {
-    try { return localStorage.getItem(createStorageKey) || null; } catch { return null; }
+  const [pendingCreateRequest, setPendingCreateRequest] = useState<PendingCreateRequest | null>(() => {
+    try { return decodeCreateRequest(localStorage.getItem(createStorageKey), currentBrowserOrigin()); } catch { return null; }
   });
+  const pendingCreateKey = pendingCreateRequest?.requestId || null;
+  const [recoveredDraftConflict, setRecoveredDraftConflict] = useState('');
   const [createOutcomeUnknown, setCreateOutcomeUnknown] = useState(Boolean(pendingCreateKey));
   const [createError, setCreateError] = useState(pendingCreateKey ? '上次新建对话的结果尚未确认。请刷新并核对原请求。' : '');
   const [metadataWarning, setMetadataWarning] = useState('');
@@ -115,10 +118,11 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const renameInFlight = useRef(false);
   const [renameOutcomeUnknown, setRenameOutcomeUnknown] = useState(false);
   const [renamePendingTarget, setRenamePendingTarget] = useState<{ threadId: string; title: string } | null>(null);
-  const storeCreateKey = useCallback((key: string | null) => {
-    if (key) localStorage.setItem(createStorageKey, key);
+  const storeCreateKey = useCallback((key: string | null, draftScope?: string) => {
+    const request = key ? { requestId: key, ...(draftScope ? { draftScope } : {}) } : null;
+    if (request) localStorage.setItem(createStorageKey, encodeCreateRequest(request));
     else localStorage.removeItem(createStorageKey);
-    setPendingCreateKey(key);
+    setPendingCreateRequest(request);
   }, [createStorageKey]);
   const showMetadataWarning = useCallback((warning: string) => {
     setMetadataWarning(warning);
@@ -188,7 +192,8 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const requestKey = crypto.randomUUID();
     let stored = false;
     try {
-      storeCreateKey(requestKey);
+      const source = captureDraft();
+      storeCreateKey(requestKey, isNewConversationDraft(source) ? source.scope : undefined);
       stored = true;
       const result = await client.initializeConversation(input, { idempotencyKey: requestKey });
       if (!isConversationInitialization(result)) throw new Error('创建对话的响应缺少必要信息，请核对原请求。');
@@ -211,7 +216,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
       return null;
     } finally { createInFlight.current = false; setCreateBusy(false); }
-  }, [client, connectionStatus, createOutcomeUnknown, live, refreshMetadata, showMetadataWarning, storeCreateKey, setup?.default_workspace_id]);
+  }, [client, connectionStatus, createOutcomeUnknown, live, refreshMetadata, showMetadataWarning, storeCreateKey, setup?.default_workspace_id, captureDraft]);
 
   const renameConversation = useCallback(async (threadId: string, title: string) => {
     if (renameInFlight.current || renameOutcomeUnknown) return false;
@@ -243,6 +248,15 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
         setMetadata((items) => mergeConversationMetadata(items, [confirmed]));
         setRecoveredConversationId(confirmed.thread_id);
+        const conflict = restoreConfirmedConversationDraft(draftStore, pendingCreateRequest?.draftScope, draftScope(currentBrowserOrigin(), '', confirmed.thread_id));
+        renderDraft((revision) => revision + 1);
+        setRecoveredDraftConflict(conflict);
+        if (conflict) {
+          setCreateOutcomeUnknown(true);
+          setCreateError('已找到原请求的对话，但该对话已有草稿。原草稿保留在下方，请先复制保存或合并，再清空目标输入框并刷新核对。没有自动发送。');
+          await live.refresh();
+          return;
+        }
         storeCreateKey(null);
         setCreateOutcomeUnknown(false);
         setCreateError('已找到先前创建的对话，可直接打开。');
@@ -264,7 +278,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     } catch {
       setCreateError('原请求暂时无法核对。请恢复连接后刷新，暂时不要重复提交。');
     }
-  }, [client, connectionStatus, live, pendingCreateKey, refreshMetadata, renameOutcomeUnknown, renamePendingTarget, showMetadataWarning, storeCreateKey]);
+  }, [client, connectionStatus, live, pendingCreateKey, refreshMetadata, renameOutcomeUnknown, renamePendingTarget, showMetadataWarning, storeCreateKey, pendingCreateRequest, draftStore]);
 
   const dismissRecoveredCreateNotice = useCallback((threadId: string) => {
     if (createOutcomeUnknown || pendingCreateKey || recoveredConversationId !== threadId) return;
@@ -272,7 +286,7 @@ export const OnboardingProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setCreateError((current) => current === '已找到先前创建的对话，可直接打开。' ? '' : current);
   }, [createOutcomeUnknown, pendingCreateKey, recoveredConversationId]);
 
-  return <Context.Provider value={{ client, setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, captureDraft, getDraftScope, draftReturnPath, acceptDraft, moveDraftToThread, draftWarning, getRouteRevision, noteRouteChange, pendingSend, setPendingSend, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, refreshSetup, refreshMetadata, bootstrap, initializeConversation, renameConversation, clearCreateUncertainty, dismissRecoveredCreateNotice }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ client, setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, captureDraft, getDraftScope, draftReturnPath, acceptDraft, moveDraftToThread, draftWarning, recoveredDraftConflict, getRouteRevision, noteRouteChange, pendingSend, setPendingSend, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, refreshSetup, refreshMetadata, bootstrap, initializeConversation, renameConversation, clearCreateUncertainty, dismissRecoveredCreateNotice }}>{children}</Context.Provider>;
 };
 
 export function useOnboarding(): OnboardingContextValue {

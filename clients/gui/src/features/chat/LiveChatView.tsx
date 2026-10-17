@@ -299,7 +299,7 @@ export const LiveChatView: React.FC = () => {
     loadFiles,
     clearError,
   } = useLive();
-  const { setup, setupLoading, setupError, metadata, draft, setDraft, captureDraft, getDraftScope, acceptDraft, moveDraftToThread, draftWarning, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty, dismissRecoveredCreateNotice } = useOnboarding();
+  const { setup, setupLoading, setupError, metadata, draft, setDraft, captureDraft, getDraftScope, acceptDraft, moveDraftToThread, draftWarning, recoveredDraftConflict, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty, dismissRecoveredCreateNotice } = useOnboarding();
   const onboardingError = visibleOnboardingError(createError, metadataWarning);
   useEffect(() => {
     if (recoveredCreateIsOpen(recoveredConversationId, conversationId, selectedThread?.id ?? null, createOutcomeUnknown)) {
@@ -795,6 +795,7 @@ export const LiveChatView: React.FC = () => {
         </div>
       )}
 
+      {recoveredDraftConflict && <section className="live-alert live-alert-warn" aria-label="原请求的草稿"><label>原请求的草稿（请复制保存或合并）<textarea className="textarea" readOnly value={recoveredDraftConflict} rows={3} onFocus={(event) => event.currentTarget.select()} /></label></section>}
       <div className="live-chat-toolbar ui-chat-project-bar">
         <SearchSelect label="工作项目" buttonRef={projectSelectRef} value={selectedProjectId ?? ''} onChange={(value) => { if (selectProject(value || null)) navigate('/chat'); }} placeholder="选择项目" options={projects.filter((project) => project.readable).map((project) => ({ value: project.id, label: projectNames[project.id] || project.name, detail: project.workspaceRef, disabled: archivedProjectIds.includes(project.id) }))} />
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void beginConversation()}
