@@ -375,11 +375,17 @@ fn persist_secret_reference(app: AppHandle, secret_ref: String) -> Result<(), St
 
 #[tauri::command]
 fn desktop_build_info(app: AppHandle) -> Result<build_info::BuildInfo, String> {
-    let resources = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "无法定位构建来源摘要。")?;
-    build_info::read_build_info(&resources, &app.config().identifier)
+    eprintln!("operant:build_info:requested");
+    let resources = app.path().resource_dir().map_err(|_| {
+        eprintln!("operant:build_info:resource_directory_unavailable");
+        "无法定位构建来源摘要。"
+    })?;
+    let result = build_info::read_build_info(&resources, &app.config().identifier);
+    eprintln!(
+        "operant:build_info:{}",
+        if result.is_ok() { "loaded" } else { "rejected" }
+    );
+    result
 }
 
 pub fn run() {

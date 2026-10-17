@@ -56,7 +56,10 @@ pub(crate) fn read_build_info(resources: &Path, identifier: &str) -> Result<Buil
     if !development {
         let path = resources.join("来源摘要.json");
         if path.exists() {
-            let raw = std::fs::read(path).map_err(|_| "无法读取构建来源摘要。")?;
+            let raw = std::fs::read(path).map_err(|_| {
+                eprintln!("operant:build_info:manifest_unreadable");
+                "无法读取构建来源摘要。"
+            })?;
             return packaged_build_info(
                 &raw,
                 source.as_deref(),
@@ -86,8 +89,10 @@ fn packaged_build_info(
     dirty: bool,
     identifier: &str,
 ) -> Result<BuildInfo, String> {
-    let manifest: SourceManifest =
-        serde_json::from_slice(raw).map_err(|_| "构建来源摘要格式无效。")?;
+    let manifest: SourceManifest = serde_json::from_slice(raw).map_err(|_| {
+        eprintln!("operant:build_info:manifest_invalid");
+        "构建来源摘要格式无效。"
+    })?;
     if dirty
         || !valid_commit(&manifest.source_head)
         || source != Some(manifest.source_head.as_str())
@@ -95,6 +100,12 @@ fn packaged_build_info(
         || manifest.bundle_identifier != identifier
         || !candidate_matches_identifier(manifest.candidate_id.as_deref(), identifier)
     {
+        eprintln!("operant:build_info:metadata_mismatch dirty={} source={} version={} identifier={} candidate={}",
+            dirty,
+            source == Some(manifest.source_head.as_str()),
+            manifest.product_version == env!("CARGO_PKG_VERSION"),
+            manifest.bundle_identifier == identifier,
+            candidate_matches_identifier(manifest.candidate_id.as_deref(), identifier));
         return Err("构建来源摘要与当前程序不一致。".into());
     }
     Ok(BuildInfo {
