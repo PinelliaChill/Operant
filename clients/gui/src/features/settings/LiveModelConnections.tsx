@@ -12,12 +12,14 @@ import { codexLoginRequestHasEnded, decodeModelRequest, encodeModelRequest, mode
 const errorText = (value: unknown) => value instanceof Error ? value.message : '请求失败，请刷新后核对。';
 
 export const LiveModelConnections: React.FC = () => {
-  const { client, bootstrap, refreshSetup, draft } = useOnboarding();
+  const { client, bootstrap, refreshSetup, setup, setupLoading, setupError, draftReturnPath, draft } = useOnboarding();
   const navigate = useNavigate();
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [attempt, setAttempt] = useState<OAuthAttempt | null>(null);
   const [knownCodexAttemptId, setKnownCodexAttemptId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [readFailed, setReadFailed] = useState(false);
+  const readEpoch = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [errorDetail, setErrorDetail] = useState('');
@@ -33,10 +35,11 @@ export const LiveModelConnections: React.FC = () => {
   const [selectionBusy, setSelectionBusy] = useState(false);
 
   const refresh = useCallback(async () => {
+    const epoch = ++readEpoch.current;
     setLoading(true);
-    try { const page = await client.listModelConnections(); setConnections(page.items); setError(''); setErrorDetail(''); return true; }
-    catch (cause: unknown) { setError('连接列表读取失败，请检查服务并刷新。'); setErrorDetail(errorText(cause)); return false; }
-    finally { setLoading(false); }
+    try { const page = await client.listModelConnections(); if (epoch !== readEpoch.current) return false; setReadFailed(false); setConnections(page.items); setError(''); setErrorDetail(''); return true; }
+    catch (cause: unknown) { if (epoch !== readEpoch.current) return false; setReadFailed(true); setError(requestErrorCopy(cause)); setErrorDetail(errorText(cause)); return false; }
+    finally { if (epoch === readEpoch.current) setLoading(false); }
   }, [client]);
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -81,7 +84,7 @@ export const LiveModelConnections: React.FC = () => {
   }, [attempt?.provider, attempt?.status]);
 
   const write = useCallback(async <T,>(label: string, run: () => Promise<T>, tracked?: PendingModelRequest, allowDuringCodexLogin = false, restoreOnKnownFailure?: PendingModelRequest | null): Promise<T | null> => {
-    if (inFlight.current || writeUncertain) return null;
+    if (inFlight.current || writeUncertain || readFailed || loading) return null;
     if (!allowDuringCodexLogin && pendingRequest !== 'invalid' && pendingRequest?.kind === 'codex_oauth' && attempt?.status === 'pending') {
       setError('Codex 登录正在进行。请完成或取消当前登录后继续。');
       return null;
@@ -106,7 +109,7 @@ export const LiveModelConnections: React.FC = () => {
       return null;
     }
     finally { inFlight.current = false; setBusy(false); }
-  }, [attempt?.status, pendingRequest, storeRequest, writeUncertain]);
+  }, [attempt?.status, pendingRequest, storeRequest, writeUncertain, readFailed, loading]);
 
   const createKeyConnection = async (input: ConnectionCreate) => {
     const requestId = crypto.randomUUID();
@@ -163,7 +166,7 @@ export const LiveModelConnections: React.FC = () => {
         const ready = await bootstrap(result.model_profile_id);
         if (!ready) setError('模型已保存，但助手准备未完成。请刷新设置状态后重试。');
         await refresh(); await refreshSetup();
-        if (ready && draft.trim()) navigate('/chat');
+        if (ready && draft.trim()) navigate(draftReturnPath);
       } finally { finalizingSelection.current = false; setSelectionBusy(false); }
     })();
   };
@@ -209,5 +212,5 @@ export const LiveModelConnections: React.FC = () => {
     return () => { active = false; window.clearTimeout(timer); };
   }, [pendingRequest, writeUncertain, client]);
 
-  return <ModelConnectionsView connections={connections} loading={loading} busy={busy || selectionBusy || loading} error={error} errorDetail={errorDetail} writeUncertain={writeUncertain} reconcileMessage={reconcileMessage} confirmedRequestId={confirmedRequestId} pendingRequestId={pendingRequest && pendingRequest !== 'invalid' ? pendingRequest.requestId : undefined} attempt={attempt} onRefresh={() => { void refresh(); }} onCreateKeyConnection={createKeyConnection} onStartOAuth={startOAuth} onCancelOAuth={cancelOAuth} onDiscover={discover} onSelectModel={selectModel} onDisconnect={disconnect} onAcknowledge={acknowledge} />;
+  return <ModelConnectionsView connections={connections} setup={setup} setupUnavailable={setupLoading || Boolean(setupError)} readFailed={readFailed} loading={loading} busy={busy || selectionBusy || loading} error={error} errorDetail={errorDetail} writeUncertain={writeUncertain} reconcileMessage={reconcileMessage} confirmedRequestId={confirmedRequestId} pendingRequestId={pendingRequest && pendingRequest !== 'invalid' ? pendingRequest.requestId : undefined} attempt={attempt} onRefresh={() => { void refresh(); void refreshSetup(); }} onCreateKeyConnection={createKeyConnection} onStartOAuth={startOAuth} onCancelOAuth={cancelOAuth} onDiscover={discover} onSelectModel={selectModel} onDisconnect={disconnect} onAcknowledge={acknowledge} />;
 };

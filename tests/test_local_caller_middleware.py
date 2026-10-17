@@ -301,7 +301,13 @@ async def test_state_boolean_and_malformed_headers_cannot_grant_trust() -> None:
     assert status == 403 and body["error"]["code"] == "local_caller_required"
     malformed_status, malformed_body, _ = await _call(app, malformed_headers=True)
     assert malformed_status == 403 and malformed_body == {
-        "error": {"code": "local_caller_required", "message": "本机调用者验证失败"}
+        "error": {
+            "code": "local_caller_required",
+            "message": "本机调用者验证失败",
+            "retryable": False,
+            "recovery": "none",
+        },
+        "detail": None,
     }
 
 

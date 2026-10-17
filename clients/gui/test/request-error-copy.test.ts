@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requestErrorCopy } from '../src/lib/requestErrorCopy.ts';
+import { isDesktopPermissionError, requestErrorCopy } from '../src/lib/requestErrorCopy.ts';
 
 test('request errors give recovery action without raw HTTP or English codes', () => {
   assert.match(requestErrorCopy({ code: 'transport_unavailable', message: 'fetch failed' }), /恢复连接.*核对/);
@@ -92,4 +92,14 @@ test('terminal status copy cannot leak raw cancellation, timeout, or budget reas
     assert.match(copy, /^任务/);
     assert.doesNotMatch(copy, /Core|Agent|Session|raw|private|secret_ref/);
   }
+});
+
+
+test('desktop denial and directory selection give actionable Chinese without masking unknown writes', () => {
+  const denied = { code: 'local_caller_required', recovery: 'none' };
+  assert.equal(isDesktopPermissionError(denied), true);
+  assert.equal(isDesktopPermissionError({ code: 'http_403' }), false);
+  assert.match(requestErrorCopy(denied), /桌面端.*配对不授予/);
+  assert.match(requestErrorCopy({ code: 'http_422', message: 'http_422: workspace must be a directory' }), /选择文件夹.*内容会保留/);
+  assert.match(requestErrorCopy({ ...denied, recovery: 'manual_reconcile' }), /核对.*勿再次提交/);
 });

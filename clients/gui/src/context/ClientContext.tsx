@@ -7,6 +7,14 @@ import { formatTime } from '../lib/format';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
 import { nativeCoreTransport } from '../lib/nativeCoreTransport';
 
+// Preferences are optional; unavailable storage must not prevent in-memory editing.
+function readPreference(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function writePreference(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* Draft persistence reports its own warning. */ }
+}
+
 export type ClientMode = 'mock' | 'live';
 export type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected' | 'mock_active';
 export type InspectorTab = 'context' | 'diff' | 'terminal' | 'audit';
@@ -67,26 +75,26 @@ const ClientContext = createContext<ClientContextValue | null>(null);
 
 export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [clientMode, setClientModeState] = useState<ClientMode>(() => {
-    return (localStorage.getItem('operant_client_mode') as ClientMode) || 'live';
+    return (readPreference('operant_client_mode') as ClientMode) || 'live';
   });
 
   const [theme, setThemeState] = useState<'light' | 'dark'>(() => {
-    return (localStorage.getItem('operant_theme') as 'light' | 'dark') || 'light';
+    return (readPreference('operant_theme') as 'light' | 'dark') || 'light';
   });
 
   const [activeWorkspace, setActiveWorkspace] = useState<string>(() => {
-    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'live';
+    const mode = (readPreference('operant_client_mode') as ClientMode) || 'live';
     return mode === 'live' ? '' : DEFAULT_WORKSPACE;
   });
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('mock_active');
   const [pendingApprovalCount, setPendingApprovalCount] = useState<number>(0);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() => {
-    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'live';
+    const mode = (readPreference('operant_client_mode') as ClientMode) || 'live';
     return mode === 'live' ? null : 'thread_main_alpha';
   });
   const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<string | null>(() => {
-    const mode = (localStorage.getItem('operant_client_mode') as ClientMode) || 'live';
+    const mode = (readPreference('operant_client_mode') as ClientMode) || 'live';
     return mode === 'live' ? null : 'run_operant_001';
   });
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('context');
@@ -110,7 +118,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const client: OperantClient = mockClient;
 
   const setClientMode = (mode: ClientMode) => {
-    localStorage.setItem('operant_client_mode', mode);
+    writePreference('operant_client_mode', mode);
     setClientModeState(mode);
     if (mode === 'live') {
       setSelectedThreadId(null);
@@ -125,7 +133,7 @@ export const ClientProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const setTheme = (t: 'light' | 'dark') => {
-    localStorage.setItem('operant_theme', t);
+    writePreference('operant_theme', t);
     setThemeState(t);
     document.documentElement.setAttribute('data-theme', t);
   };

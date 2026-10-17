@@ -222,3 +222,39 @@ def test_legacy_memory_commands_require_formal_management(tmp_path: Path, monkey
     )
     assert deactivated.exit_code == 2
     assert "memory_deactivate" in deactivated.output
+
+
+def test_missing_records_are_user_errors_but_programming_errors_propagate(monkeypatch) -> None:
+    from operant.persistence.sqlite import NotFoundError
+
+    class MissingService:
+        def get_session(self, _identifier):
+            raise NotFoundError("session not found: missing")
+
+        def get_role(self, _identifier, _version):
+            raise NotFoundError("role not found: missing")
+
+        def get_model_profile(self, _identifier):
+            raise NotFoundError("model profile not found: missing")
+
+    monkeypatch.setattr(cli, "_service", MissingService)
+    for command, suggestion in (
+        (["session", "show", "missing"], "session --help"),
+        (["session", "trace", "missing"], "session --help"),
+        (["role", "show", "missing"], "role list"),
+        (["model", "show", "missing"], "model list"),
+    ):
+        result = runner.invoke(cli.app, command)
+        assert result.exit_code != 0
+        assert "未找到指定记录" in result.output
+        assert suggestion in result.output
+        assert "Traceback" not in result.output
+        assert "NotFoundError" not in result.output
+
+    class BrokenService:
+        def get_session(self, _identifier):
+            raise RuntimeError("programming defect")
+
+    monkeypatch.setattr(cli, "_service", BrokenService)
+    failed = runner.invoke(cli.app, ["session", "show", "missing"])
+    assert isinstance(failed.exception, RuntimeError)

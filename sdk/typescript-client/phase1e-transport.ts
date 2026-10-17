@@ -486,6 +486,14 @@ export class Phase1EError extends Error {
     }
     if (isRecord(payload) && isRecord(payload.error)) {
       const error = payload.error;
+      // Older desktop Cores emitted this one pre-dispatch denial without the
+      // shared envelope fields. Never reinterpret arbitrary malformed errors.
+      if (response.status === 403 && error.code === 'local_caller_required'
+        && typeof error.message === 'string' && error.message.length > 0
+        && Object.keys(payload).length === 1
+        && Object.keys(error).length === 2) {
+        return new Phase1EError(error.code, '本机调用者验证失败', false, 'none');
+      }
       if (
         Object.prototype.hasOwnProperty.call(payload, 'detail') &&
         typeof error.code === 'string' && error.code.length > 0 &&

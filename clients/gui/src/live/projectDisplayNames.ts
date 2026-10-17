@@ -22,3 +22,22 @@ export async function readProjectDisplayNames(adapter: {
   await adapter.connect();
   return projectDisplayNames((await adapter.getManagement()).projects);
 }
+
+/** A workspace can outlive its managed project; lifecycle labels come from Core management. */
+export function projectWorkspaceMetadata(projects: readonly NamedProject[]): { names: Record<string, string>; archivedWorkspaceIds: string[] } {
+  const names = projectDisplayNames(projects);
+  const active = new Set(projects.filter((project) => !project.archived).map((project) => project.workspace_id));
+  const archivedWorkspaceIds = [...new Set(projects.filter((project) => project.archived && !active.has(project.workspace_id)).map((project) => project.workspace_id))];
+  for (const workspace of archivedWorkspaceIds) {
+    const archived = projects.filter((project) => project.workspace_id === workspace && project.archived);
+    names[workspace] = `${archived.length === 1 && archived[0].name.trim() ? archived[0].name : '项目'}（已归档）`;
+  }
+  return { names, archivedWorkspaceIds };
+}
+export async function readProjectWorkspaceMetadata(adapter: {
+  connect: () => Promise<unknown>;
+  getManagement: () => Promise<{ projects: NamedProject[] }>;
+}): Promise<ReturnType<typeof projectWorkspaceMetadata>> {
+  await adapter.connect();
+  return projectWorkspaceMetadata((await adapter.getManagement()).projects);
+}

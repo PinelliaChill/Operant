@@ -10,6 +10,8 @@ import typer
 from pydantic import BaseModel, ValidationError
 from rich.console import Console
 from rich.table import Table
+from typer._click.core import Context as ClickContext
+from typer.core import TyperGroup
 
 from operant.application.evaluation import EvaluationRunner
 from operant.application.service import ApplicationService
@@ -38,7 +40,35 @@ from operant.remote_control.edge_cli import gateway_app
 from operant.settings import database_path, load_local_env
 from operant.tools.extensions import EXTENSION_TOOL_NAME
 
-app = typer.Typer(no_args_is_help=True, help="由角色预设驱动的多模型 Coding Agent Runtime。")
+
+class UserErrorGroup(TyperGroup):
+    """Render expected missing-record errors without hiding programming failures."""
+
+    def invoke(self, ctx: ClickContext) -> Any:
+        try:
+            return super().invoke(ctx)
+        except NotFoundError:
+            command = ctx.invoked_subcommand
+            lookup = {
+                "session": "operant session --help",
+                "workflow": "operant workflow list",
+                "model": "operant model list",
+                "role": "operant role list",
+                "evaluation": "operant evaluation --help",
+            }.get(command or "", "operant --help")
+            hint = "也可在桌面会话历史中复制 Session ID。" if command == "session" else ""
+            typer.echo(
+                f"错误：未找到指定记录。请检查 ID，可先运行 `{lookup}` 查看。{hint}",
+                err=True,
+            )
+            raise typer.Exit(1) from None
+
+
+app = typer.Typer(
+    cls=UserErrorGroup,
+    no_args_is_help=True,
+    help="由角色预设驱动的多模型 Coding Agent Runtime。",
+)
 model_app = typer.Typer(no_args_is_help=True, help="管理 Model Profile。")
 role_app = typer.Typer(no_args_is_help=True, help="管理 Role Preset。")
 session_app = typer.Typer(no_args_is_help=True, help="创建、查看和运行 Session。")

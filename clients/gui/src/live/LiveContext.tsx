@@ -11,7 +11,9 @@ import { Phase1E } from '@operant/sdk';
 import type * as B2 from '../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../context/ClientContext';
 import { B23ManagementAdapter, normalizeB23Error, type B23UiError } from './b23Adapter';
-import { readProjectDisplayNames } from './projectDisplayNames';
+import { currentBrowserOrigin } from '../lib/liveBaseUrl';
+import { projectSelectionStorageKey, readProjectSelection } from './projectSynchronization';
+import { readProjectWorkspaceMetadata } from './projectDisplayNames';
 import {
   B2LiveAdapter,
   normalizeB2Error,
@@ -75,8 +77,10 @@ export interface LiveContextValue {
   b2Adapter: B2LiveAdapter;
   projects: LiveProjectProjection[];
   projectNames: Record<string, string>;
+  archivedProjectIds: string[];
   projectNameError?: B23UiError;
   refreshProjectNames: () => Promise<void>;
+  synchronizeProjects: () => Promise<boolean>;
   threads: LiveThread[];
   /** Session details returned by the generated createSession Command. */
   sessions: LiveSession[];
@@ -228,12 +232,19 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [phase, setPhase] = useState<LiveProjectionPhase>('idle');
   const [projects, setProjects] = useState<LiveProjectProjection[]>([]);
   const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  const [archivedProjectIds, setArchivedProjectIds] = useState<string[]>([]);
   const [projectNameError, setProjectNameError] = useState<B23UiError | undefined>();
   const projectNameRequestRef = useRef(0);
   const [threads, setThreads] = useState<LiveThread[]>([]);
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   const [approvals, setApprovals] = useState<LiveApproval[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(() => {
+    try { return readProjectSelection(localStorage, currentBrowserOrigin()); } catch { return null; }
+  });
+  useEffect(() => {
+    if (phase !== 'ready' || !selectedProjectId) return;
+    try { localStorage.setItem(projectSelectionStorageKey(currentBrowserOrigin()), selectedProjectId); } catch { /* Draft storage reports persistence errors separately. */ }
+  }, [phase, selectedProjectId]);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [messages] = useState<LiveMessage[]>([]);
@@ -703,9 +714,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (clientMode !== 'live') return;
     const request = ++projectNameRequestRef.current;
     try {
-      const names = await readProjectDisplayNames(managementAdapter);
+      const metadata = await readProjectWorkspaceMetadata(managementAdapter);
       if (request !== projectNameRequestRef.current) return;
-      setProjectNames(names);
+      setProjectNames(metadata.names);
+      setArchivedProjectIds(metadata.archivedWorkspaceIds);
       setProjectNameError(undefined);
     } catch (error: unknown) {
       if (request !== projectNameRequestRef.current) return;
@@ -730,6 +742,16 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, [refreshProjectNames]);
+
+  // Management reads preserve the generation captured by an active SSE stream.
+  const synchronizeProjects = useCallback(async () => {
+    if (clientMode !== 'live' || connectionStatusRef.current !== 'connected') return false;
+    try {
+      const committed = await loadProjection(lifecycleRef.current);
+      if (committed) await refreshProjectNames();
+      return committed;
+    } catch (error: unknown) { applyError(error); return false; }
+  }, [applyError, clientMode, loadProjection, refreshProjectNames]);
 
   const refresh = useCallback(async () => {
     if (clientMode !== 'live') return false;
@@ -1012,6 +1034,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setProjects([]);
     ++projectNameRequestRef.current;
     setProjectNames({});
+    setArchivedProjectIds([]);
     setProjectNameError(undefined);
     setThreads([]);
     setSessions([]);
@@ -1233,7 +1256,8 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const streamCompleted = await consumeRunStream(run, false, lifecycleRef.current);
       if (clientMode === 'live' && streamCompleted) await refresh();
-      return streamCompleted;
+      // A failed/cancelled run keeps its original draft available for editing.
+      return streamCompleted && !terminalErrorRef.current;
     } catch (error: unknown) {
       const detail = applyError(error, false);
       terminalErrorRef.current = normalizedTerminalErrorScope(
@@ -1460,8 +1484,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     b2Adapter,
     projects,
     projectNames,
+    archivedProjectIds,
     projectNameError,
     refreshProjectNames,
+    synchronizeProjects,
     threads,
     sessions,
     sessionOptions,
@@ -1544,8 +1570,10 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     phase,
     projects,
     projectNames,
+    archivedProjectIds,
     projectNameError,
     refreshProjectNames,
+    synchronizeProjects,
     projectionStale,
     reconnect,
     refresh,
