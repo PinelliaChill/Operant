@@ -227,6 +227,11 @@ async fn local_core_request(
     headers: BTreeMap<String, String>,
     body: String,
 ) -> Result<BridgeResponse, String> {
+    let diagnose_setup_read =
+        operation_id == "getSetupState" || operation_id == "listModelConnections";
+    if diagnose_setup_read {
+        eprintln!("operant:setup_read:requested");
+    }
     let bridge = {
         let mut guard = state.0.lock().map_err(|_| "无法读取 Core 状态。")?;
         let owned = guard.as_mut().ok_or("尚未连接本机 Core。")?;
@@ -246,9 +251,20 @@ async fn local_core_request(
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        bridge
+        let result = bridge
             .request(&operation_id, &params, &raw_query, &request_headers, &body)
-            .map_err(|error| error.message().into())
+            .map_err(|error| error.message().into());
+        if diagnose_setup_read {
+            eprintln!(
+                "operant:setup_read:{}",
+                if result.is_ok() {
+                    "returned"
+                } else {
+                    "rejected"
+                }
+            );
+        }
+        result
     })
     .await
     .map_err(|_| "无法完成本机 Core 请求。".to_string())?
