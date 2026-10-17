@@ -9,6 +9,7 @@ export interface PendingConversationSend {
   references: ReferenceRequest[];
   referencesRevision: number;
   draftRevision: number;
+  draftScope?: string;
 }
 
 export function bindPendingConversationSend(input: PendingConversationSend): PendingConversationSend {

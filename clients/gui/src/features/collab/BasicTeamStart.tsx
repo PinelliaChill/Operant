@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { OnboardingError, type CollaborationStarted, type CollaborationTemplateView } from '../../../../../sdk/typescript-client/onboarding';
+import { type CollaborationStarted, type CollaborationTemplateView } from '../../../../../sdk/typescript-client/onboarding';
 import { SearchSelect } from '../../components/SearchSelect';
 import { useOperant } from '../../context/ClientContext';
 import { useOnboarding } from '../../live/OnboardingContext';
 import { useLive } from '../../live/LiveContext';
+import { requestErrorCopy } from '../../lib/requestErrorCopy';
+import { isWriteOutcomeUnknown } from '../../lib/writeOutcome';
 import { collaborationStatusLabel } from '../../lib/statusCopy';
 import { graphRunIsTerminal } from '../../live23/runtimeState';
 import { graphRunHref } from './graphRunLink';
@@ -35,13 +37,14 @@ export const BasicTeamStart: React.FC<Props> = ({ onAdvanced }) => {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [templateError, setTemplateError] = useState('');
   const [unknown, setUnknown] = useState(false);
   const dispatching = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    try { const page = await client.listTeamTemplates(); setTemplates(page.items); setTemplateId((id) => page.items.some((item) => item.template_id === id) ? id : page.items[0]?.template_id || ''); setError(''); }
-    catch (cause: unknown) { setError(cause instanceof Error ? cause.message : '团队模板读取失败。'); }
+    try { const page = await client.listTeamTemplates(); setTemplates(page.items); setTemplateId((id) => page.items.some((item) => item.template_id === id) ? id : page.items[0]?.template_id || ''); setTemplateError(''); }
+    catch (cause: unknown) { setTemplateError(requestErrorCopy(cause)); }
     finally { setLoading(false); }
   }, [client]);
   useEffect(() => { void refresh(); }, [refresh]);
@@ -82,14 +85,14 @@ export const BasicTeamStart: React.FC<Props> = ({ onAdvanced }) => {
   }, [observedStatus, phase23Client, resultRunId, teamRunId, reviewerRefresh]);
 
   const start = async () => {
-    if (dispatching.current || unknown || !task.trim() || !templateId) return;
+    if (dispatching.current || unknown || loading || templateError || !task.trim() || !templateId) return;
     dispatching.current = true; setBusy(true); setError('');
     try {
       const next = await client.startTemplateTeam({ template_id: templateId, task: task.trim(), ...(setup?.default_workspace_id ? { workspace_id: setup.default_workspace_id } : {}) }, { idempotencyKey: crypto.randomUUID() });
       setResult(next); setObservedStatus(next.status); setStatusError(''); setReviewerThreadId(''); setReviewerError(''); setReplyError(''); setReplyBusy(false);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : '团队启动失败。');
-      if (!(cause instanceof OnboardingError) || cause.code === 'transport_unavailable' || cause.recovery === 'manual_reconcile') setUnknown(true);
+      setError(requestErrorCopy(cause));
+      if (isWriteOutcomeUnknown(cause)) setUnknown(true);
     } finally { dispatching.current = false; setBusy(false); }
   };
 
@@ -111,9 +114,10 @@ export const BasicTeamStart: React.FC<Props> = ({ onAdvanced }) => {
 
   return <div className="basic-team">
     <header><h1>协作</h1><p>选择一个团队模板，描述任务，即可开始。</p></header>
+    {templateError && <div className="live-alert live-alert-error" role="alert">{templateError}<button type="button" className="btn btn-secondary btn-sm" onClick={() => void refresh()}>重新读取模板</button></div>}
     {error && <div className="live-alert live-alert-error" role="alert">{error}</div>}
     {unknown && <div className="live-alert live-alert-warn" role="alert">启动结果尚未确认。请先查看任务列表，避免重复创建。<button type="button" className="btn btn-secondary btn-sm" onClick={() => { setUnknown(false); void refresh(); }}>已核对，刷新模板</button></div>}
-    <section className="basic-team-card"><h2>开始团队任务</h2>{loading ? <p role="status">正在读取模板…</p> : templates.length ? <><SearchSelect label="团队模板" value={templateId} onChange={setTemplateId} options={templates.map((item) => ({ value: item.template_id, label: item.name, detail: `${item.member_count} 名成员 · ${item.description}` }))} /><p>{templates.find((item) => item.template_id === templateId)?.description}</p><label>任务内容<textarea className="textarea" rows={4} value={task} onChange={(event) => setTask(event.target.value)} placeholder="描述希望团队完成的工作" /></label><button type="button" className="btn btn-primary" disabled={busy || unknown || !task.trim()} onClick={() => void start()}>{busy ? '正在启动…' : '开始协作'}</button></> : <p>当前没有可用模板。请刷新或打开高级配置。</p>}</section>
+    <section className="basic-team-card"><h2>开始团队任务</h2>{loading ? <p role="status">正在读取模板…</p> : templateError ? <p>模板尚未读取成功，暂时不能开始协作。</p> : templates.length ? <><SearchSelect label="团队模板" value={templateId} onChange={setTemplateId} options={templates.map((item) => ({ value: item.template_id, label: item.name, detail: `${item.member_count} 名成员 · ${item.description}` }))} /><p>{templates.find((item) => item.template_id === templateId)?.description}</p><label>任务内容<textarea className="textarea" rows={4} value={task} onChange={(event) => setTask(event.target.value)} placeholder="描述希望团队完成的工作" /></label><button type="button" className="btn btn-primary" disabled={busy || unknown || !task.trim()} onClick={() => void start()}>{busy ? '正在启动…' : '开始协作'}</button></> : <p>当前没有可用模板。请刷新或打开高级配置。</p>}</section>
     {result && <section className="basic-team-card" role="status"><h2>{collaborationStatusLabel(observedStatus || result.status)}</h2>{statusError && <p role="alert">{statusError}</p>}{reviewerError && <p role="alert">{reviewerError}<button type="button" className="btn btn-ghost btn-sm" onClick={() => setReviewerRefresh((value) => value + 1)}>重试读取</button></p>}{replyError && <p role="alert">{replyError}<button type="button" className="btn btn-secondary btn-sm" onClick={() => void openReply()}>重试载入回复</button></p>}<div className="basic-team-actions">{observedStatus === 'completed' && reviewerThreadId && <button type="button" className="btn btn-primary" disabled={replyBusy} onClick={() => void openReply()}>{replyBusy ? '正在载入回复…' : '查看团队回复'}</button>}<Link className="btn btn-secondary" to={graphRunHref(result.graph_run_id)}>查看运行进度</Link><button type="button" className="btn btn-ghost" onClick={() => setStatusRefresh((value) => value + 1)}>刷新状态</button></div><details><summary>运行详情</summary><code>{result.graph_run_id}</code></details></section>}
     <button type="button" className="btn btn-ghost" onClick={onAdvanced}>高级：编辑团队与流程</button>
   </div>;

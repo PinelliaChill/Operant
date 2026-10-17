@@ -27,6 +27,9 @@ import { EmptyState } from '../../components/EmptyState';
 import { PathInput } from '../../components/PathInput';
 import { SearchSelect } from '../../components/SearchSelect';
 import { StatusBadge } from '../../components/StatusBadge';
+import { useLive } from '../../live/LiveContext';
+import { synchronizeProjectMutation } from '../../live/projectSynchronization';
+import { requestErrorCopy } from '../../lib/requestErrorCopy';
 import { useOperant } from '../../context/ClientContext';
 import { currentBrowserOrigin } from '../../lib/liveBaseUrl';
 import { B25Client } from '../../../../../sdk/typescript-client/b2_5.generated';
@@ -927,6 +930,8 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?
   const [auditReport, setAuditReport] = useState<ArtifactAuditReportView>();
   const [unknownWrite, setUnknownWrite] = useState(false);
   const requestEpoch = useRef(0);
+  const actionInFlight = useRef(false);
+  const { synchronizeProjects } = useLive();
 
   const setTab = useCallback((next: ManagementTab) => {
     if (focused) {
@@ -962,14 +967,14 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?
       if (epoch !== requestEpoch.current) return;
       setState(next);
       setPhase('ready');
-      setUnknownWrite(false);
+      await synchronizeProjects();
     } catch (value: unknown) {
       if (epoch !== requestEpoch.current) return;
       const detail = normalizeB23Error(value).detail;
       setError(detail);
       setPhase('error');
     }
-  }, [adapter]);
+  }, [adapter, synchronizeProjects]);
 
   useEffect(() => {
     if (clientMode === 'live') void refresh();
@@ -986,7 +991,8 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?
   }, [clientMode, refresh]);
 
   const execute = useCallback<ExecuteCommand>(async (command, label) => {
-    if (!adapter || actionLabel) return undefined;
+    if (!adapter || actionInFlight.current || unknownWrite) return undefined;
+    actionInFlight.current = true;
     const epoch = ++requestEpoch.current;
     setActionLabel(label);
     setError(undefined);
@@ -995,6 +1001,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?
     setUnknownWrite(false);
     try {
       const result = await adapter.executeManagementCommand(command);
+      const synchronized = await synchronizeProjectMutation(command.action, result.status, synchronizeProjects);
       if (epoch !== requestEpoch.current) return result;
       // Only memory_search returns a filtered records side-channel. Other
       // commands may carry records=null while their authoritative state still
@@ -1004,6 +1011,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?
         : result.state;
       setState(nextState);
       setPhase('ready');
+      if (!synchronized) addNotification('warn', '操作已返回，但项目列表暂时无法同步。请刷新核对，无需重复提交。');
       setLastResult({ status: result.status, message: result.message.replace('，状态来自 Core', '') });
       setAuditReport(command.action === 'artifact_audit' ? parseArtifactAuditExport(result.export_data) : undefined);
       addNotification(result.status === 'blocked' || result.status === 'failed' ? 'warn' : 'info', `${label}：${statusLabel(result.status)} · ${result.message.replace('，状态来自 Core', '')}`);
@@ -1016,12 +1024,13 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?
       const isUnknown = detail.outcomeUnknown || detail.code === 'transport_unavailable';
       setUnknownWrite(isUnknown);
       if (isUnknown) addNotification('warn', `${label}结果未知，请刷新页面数据后人工核对；未自动重放。`);
-      else addNotification('error', `${label}失败：${detail.message}`);
+      else addNotification('error', `${label}失败：${requestErrorCopy(detail)}`);
       return undefined;
     } finally {
+      actionInFlight.current = false;
       if (epoch === requestEpoch.current) setActionLabel(undefined);
     }
-  }, [actionLabel, adapter, addNotification]);
+  }, [adapter, addNotification, synchronizeProjects, unknownWrite]);
 
   if (clientMode !== 'live') return null;
 
@@ -1029,7 +1038,7 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?
     return (
       <div className="section-view ui-refine-management" data-client-mode="live">
         <header className="section-header b2-memory-header ui-refine-management-header"><div className="live-route-heading">{showSidebarOpenBtn && <button type="button" className="btn btn-secondary btn-icon" onClick={openSidebar} aria-label="打开侧栏"><PanelLeftOpen size={16} aria-hidden="true" /></button>}<div><h1>{TAB_LABELS[tab]}</h1></div></div><ActionButton label="刷新" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={14} aria-hidden="true" />} /></header>
-        <div className="section-scroll"><div className="section-inner"><div className="b2-memory-card b2-memory-empty" role={error ? 'alert' : 'status'}>{phase === 'loading' && <Loader2 size={22} className="animate-spin" aria-hidden="true" />}{error ? <><AlertTriangle size={22} aria-hidden="true" /><h2>{error.code}</h2><p>{error.message}</p>{error.code === 'b2_3_client_unavailable' && <p>客户端无法连接，请检查服务是否正常运行。</p>}{error.outcomeUnknown && <p>当前写操作结果未知，请刷新后核对状态。</p>}</> : <><h2>{phase === 'loading' ? '正在读取管理信息…' : '管理页面未就绪'}</h2></>}{error && <ActionButton label="重新查询" tone="primary" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={13} aria-hidden="true" />} />}</div></div></div>
+        <div className="section-scroll"><div className="section-inner"><div className="b2-memory-card b2-memory-empty" role={error ? 'alert' : 'status'}>{phase === 'loading' && <Loader2 size={22} className="animate-spin" aria-hidden="true" />}{error ? <><AlertTriangle size={22} aria-hidden="true" /><h2>管理信息暂时无法读取</h2><p>{requestErrorCopy(error)}</p>{error.code === 'b2_3_client_unavailable' && <p>客户端无法连接，请检查服务是否正常运行。</p>}{error.outcomeUnknown && <p>当前写操作结果未知，请刷新后核对状态。</p>}</> : <><h2>{phase === 'loading' ? '正在读取管理信息…' : '管理页面未就绪'}</h2></>}{error && <ActionButton label="重新查询" tone="primary" onClick={() => void refresh()} disabled={phase === 'loading'} icon={<RefreshCw size={13} aria-hidden="true" />} />}</div></div></div>
       </div>
     );
   }
@@ -1054,7 +1063,8 @@ export const LiveManagementView: React.FC<{ initialTab?: ManagementTab; focused?
       <div className="section-scroll"><div className="section-inner">
         {!focused && <nav className="b2-memory-tabs ui-refine-management-nav" aria-label="管理分区" role="tablist">{TABS.map((entry) => <button key={entry} type="button" role="tab" aria-selected={entry === tab} className={`b2-memory-tab ui-refine-management-tab${entry === tab ? ' active' : ''}`} onClick={() => setTab(entry)}>{TAB_LABELS[entry]}</button>)}</nav>}
         {connectionStatus !== 'connected' && <FormError message="连接已断开，暂时无法保存更改。" id="b2-connection-error" />}
-        {error && <FormError message={`${error.code}：${error.message}${error.outcomeUnknown ? ' 写操作结果未知，请刷新后人工核对，客户端不会自动重放。' : ''}`} id="b2-management-error" />}
+        {unknownWrite && <div className="live-alert live-alert-error" role="alert"><p>上次操作结果尚未确认。请查看项目列表和运行记录，核对后再继续。</p><button type="button" className="btn btn-secondary btn-sm" disabled={phase !== 'ready' || Boolean(actionLabel)} onClick={() => setUnknownWrite(false)}>已人工核对原请求</button></div>}
+        {error && <FormError message={`${requestErrorCopy(error)}${error.outcomeUnknown ? ' 写操作结果未知，请刷新后人工核对，客户端不会自动重放。' : ''}`} id="b2-management-error" />}
         {actionLabel && <div className="b2-memory-status" role="status" aria-live="polite"><Loader2 size={14} className="animate-spin" aria-hidden="true" />{actionLabel}处理中…</div>}
         {lastResult && <div className="b2-memory-status" data-status={lastResult.status} role={['blocked', 'failed'].includes(lastResult.status) ? 'alert' : 'status'} aria-live="polite">{statusLabel(lastResult.status)} · {lastResult.message}</div>}
         {tab === 'projects' && <ProjectsPanel {...panelProps} />}

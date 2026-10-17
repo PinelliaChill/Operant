@@ -20,9 +20,12 @@ Python 输入是 [python-build-standalone 20260728](https://github.com/astral-sh
 uv run --extra dev python scripts/macos_dmg/build.py \
   --python-archive /absolute/path/to/cpython-3.13.14+20260728-aarch64-apple-darwin-install_only_stripped.tar.gz \
   --uv-cache /absolute/path/to/uv-cache \
-  --candidate-id current-main-20261014 \
+  --candidate-id usage-polish-20261017 \
+  --release-label 0.1.0-beta.5 \
   --output /absolute/path/to/empty-output
 ```
+
+`--release-label` 显式记录发行名称，示例仅为下一版本的构建输入，不表示该版本已经发布。省略时界面显示未标记发布版本，不从附近 Git 标签推测。设置页读取包内来源摘要，核对源码提交、产品版本与实际应用身份；开发构建另行标记。
 
 省略 `--candidate-id` 会生成普通产品身份的 DMG，使用当前桌面壳正式数据路径。两种模式都由当前 Tauri `ManagedCore` 进行端口占用拒绝、匿名 stdin 密钥认证、Core 身份确认和子进程退出回收；Swift 启动器只定位内置 Core、设置 PATH，并在候选模式隔离环境和数据库。Core 凭据只保存在其私有 `.env` 或按正式入口注入，绝不放进 App。
 

@@ -12,6 +12,7 @@ import { LiveConfigSettings } from './LiveConfigSettings';
 import { LiveModelConnections } from './LiveModelConnections';
 import { SkillSourcesView } from './SkillSourcesView';
 import { SearchSelect } from '../../components/SearchSelect';
+import { BuildInfoCard } from './BuildInfoCard';
 import './settings-hub.css';
 
 type Section = 'general' | 'models' | 'roles' | 'tools' | 'memory' | 'advanced';
@@ -72,6 +73,7 @@ export const SettingsHub: React.FC = () => {
     <div className="settings-hub-content">
       {current === 'general' && <SettingPanel title="常规">
         <section className="settings-hub-card"><h2>外观</h2><p>选择适合你的界面外观。</p><SearchSelect label="主题" value={theme} onChange={(value) => setTheme(value as 'light' | 'dark')} options={[{ value: 'light', label: '浅色' }, { value: 'dark', label: '深色' }]} /></section>
+        <BuildInfoCard />
         <details className="settings-hub-card"><summary>开发与演示</summary><p>演示模式使用本地示例数据，适合体验界面。</p><SearchSelect label="数据来源" value={clientMode} onChange={(value) => setClientMode(value as 'live' | 'mock')} options={[{ value: 'live', label: '真实连接' }, { value: 'mock', label: '演示数据' }]} /></details>
       </SettingPanel>}
       {current === 'models' && (clientMode === 'live' ? <LiveModelConnections /> : <SettingPanel title="模型连接"><p>演示模式使用示例数据。切换到真实连接后可添加模型。</p></SettingPanel>)}

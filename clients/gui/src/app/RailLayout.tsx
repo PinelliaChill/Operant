@@ -45,8 +45,8 @@ const PendingSendRouteGuard: React.FC = () => {
   const lastRouteKey = React.useRef(location.key);
   const visitedTarget = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
-    if (lastRouteKey.current !== location.key) { lastRouteKey.current = location.key; noteRouteChange(); }
-  }, [location.key, noteRouteChange]);
+    if (lastRouteKey.current !== location.key) { lastRouteKey.current = location.key; noteRouteChange(location.pathname); }
+  }, [location.key, location.pathname, noteRouteChange]);
   React.useEffect(() => {
     if (!pendingSend) { visitedTarget.current = null; return; }
     const target = `/chat/${encodeURIComponent(pendingSend.threadId)}`;
@@ -315,7 +315,8 @@ export const RailLayout: React.FC = () => {
 
   // 侧栏宽度可拖拽调整（180px ~ 480px，<160px 自动折叠收起，持久化至 operant.sidebar.width）
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-    const saved = localStorage.getItem('operant.sidebar.width');
+    let saved: string | null = null;
+    try { saved = localStorage.getItem('operant.sidebar.width'); } catch { /* Optional preference. */ }
     if (saved) {
       const parsed = parseInt(saved, 10);
       if (!Number.isNaN(parsed) && parsed >= 180 && parsed <= 480) {
@@ -330,7 +331,7 @@ export const RailLayout: React.FC = () => {
   const persistSidebarWidth = React.useCallback((nextWidth: number): number => {
     const clamped = Math.min(480, Math.max(180, nextWidth));
     setSidebarWidth(clamped);
-    localStorage.setItem('operant.sidebar.width', clamped.toString());
+    try { localStorage.setItem('operant.sidebar.width', clamped.toString()); } catch { /* Keep width in memory. */ }
     return clamped;
   }, []);
 

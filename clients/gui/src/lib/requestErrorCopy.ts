@@ -1,4 +1,5 @@
 const copy: Record<string, string> = {
+  local_caller_required: '此功能需在 Operant 桌面端操作。浏览器连接或设备配对不授予此管理权限。',
   transport_unavailable: '连接已中断。恢复连接后刷新并核对原请求，勿直接重复提交。',
   network_error: '连接失败。请检查网络与本机服务，再刷新状态。',
   authentication_required: '登录或密钥已失效。请重新连接后刷新状态。',
@@ -68,15 +69,22 @@ function terminalFailureCopy(detail: unknown, code: string): string {
     : '任务运行失败。请检查模型连接或任务设置后重新开始。';
 }
 
+export function isDesktopPermissionError(error: unknown): boolean {
+  return !!error && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'local_caller_required';
+}
+
 export function requestErrorCopy(error: unknown): string {
   if (!error || typeof error !== 'object') return '请求未完成。请刷新状态后重试。';
   const source = error as { code?: unknown; message?: unknown; recovery?: unknown; detail?: unknown };
   const code = typeof source.code === 'string' ? source.code : '';
-  if (copy[code]) return copy[code];
   if (source.recovery === 'manual_reconcile' || source.recovery === 'retry_same_idempotency_key') return copy.outcome_unknown;
-  if (code === 'agent_failed' || code === 'session_run_failed') return terminalFailureCopy(source.detail, code);
   const message = typeof source.message === 'string' ? source.message.trim() : '';
   const withoutHttp = message.replace(/^http_\d{3}:\s*/, '');
+  if ((code === 'http_422' || code === 'validation_error' || code === 'request_validation_failed')
+    && withoutHttp === 'workspace must be a directory') return '项目路径需要选择文件夹，不能选择文件。请重新选择文件夹；已填写的内容会保留。';
+  if (copy[code]) return copy[code];
+  if (code === 'agent_failed' || code === 'session_run_failed') return terminalFailureCopy(source.detail, code);
   if (code === 'http_400' && source.recovery === 'none' && modelSetupCopy[withoutHttp]) return modelSetupCopy[withoutHttp];
   if (/^[\u3400-\u9fff]/u.test(withoutHttp) && withoutHttp.length <= 300) return withoutHttp;
   if (code === 'http_401' || code === 'http_403') return copy.permission_denied;

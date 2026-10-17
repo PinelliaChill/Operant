@@ -1,10 +1,11 @@
+import { isNewConversationDraft } from '../../live/conversationDrafts';
 import { B24ContextInspector } from "./B24ContextInspector";
 import { LiveWorkbenchPanel } from './LiveWorkbenchPanel';
 import { LiveFilePreview } from './LiveFilePreview';
 import { LiveTerminalPanel, TERMINAL_CLEANUP_EVENT, readTerminalCleanupUnknown } from './LiveTerminalPanel';
 import { workbenchClient } from '../../live/workbenchClient';
 import type { WorkbenchCommandRegistry, WorkbenchReference } from '../../live/workbenchClient';
-import { bindPendingConversationSend, draftAfterAccepted, pendingSendMatchesSelection, shouldQueuePendingSend } from '../../live/pendingConversationSend';
+import { bindPendingConversationSend, pendingSendMatchesSelection, shouldQueuePendingSend } from '../../live/pendingConversationSend';
 import { deepLinkLookupDecision } from '../../live/deepLinkLookup';
 import './b2-chat-layout.css';
 import './ui-refine-chat.css';
@@ -264,6 +265,7 @@ export const LiveChatView: React.FC = () => {
     phase,
     projects,
     projectNames,
+    archivedProjectIds,
     projectNameError,
     refreshProjectNames,
     threads,
@@ -297,7 +299,7 @@ export const LiveChatView: React.FC = () => {
     loadFiles,
     clearError,
   } = useLive();
-  const { setup, setupLoading, setupError, metadata, draft, setDraft, getDraftRevision, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty, dismissRecoveredCreateNotice } = useOnboarding();
+  const { setup, setupLoading, setupError, metadata, draft, setDraft, captureDraft, getDraftScope, acceptDraft, moveDraftToThread, draftWarning, getRouteRevision, pendingSend, setPendingSend, bootstrap, initializeConversation, renameConversation, refreshMetadata, createBusy, createOutcomeUnknown, renameOutcomeUnknown, createError, metadataWarning, recoveredConversationId, clearCreateUncertainty, dismissRecoveredCreateNotice } = useOnboarding();
   const onboardingError = visibleOnboardingError(createError, metadataWarning);
   useEffect(() => {
     if (recoveredCreateIsOpen(recoveredConversationId, conversationId, selectedThread?.id ?? null, createOutcomeUnknown)) {
@@ -555,7 +557,7 @@ export const LiveChatView: React.FC = () => {
       const clickedText = draft.trim();
       const clickedReferences = references.map((item) => ({ ...item.reference }));
       const clickedReferencesRevision = referencesRevision.current;
-      const clickedRevision = getDraftRevision();
+      const clickedDraft = captureDraft();
       const clickedWorkspaceId = selectedProjectId || setup?.default_workspace_id || '';
       const clickedRouteVersion = getRouteRevision();
       const clickedLocation = window.location.href;
@@ -564,14 +566,15 @@ export const LiveChatView: React.FC = () => {
         if (!await bootstrap(setup.default_model_profile_id)) return;
       }
       const result = await initializeConversation({ thread_id: selectedThread.id });
-      if (result && getRouteRevision() === clickedRouteVersion && window.location.href === clickedLocation) {
+      if (result && getRouteRevision() === clickedRouteVersion && window.location.href === clickedLocation && getDraftScope() === clickedDraft.scope) {
         if (clickedWorkspaceId && result.workspace_id !== clickedWorkspaceId) { setWorkbenchError('新对话的工作区与发送时选择的不一致。请打开对话核对后手动发送。'); return; }
-        if (shouldQueuePendingSend(true, clickedText, clickedWorkspaceId)) setPendingSend(bindPendingConversationSend({ threadId: result.thread_id, workspaceId: clickedWorkspaceId, workspaceRef: selectedThread.workspaceRef || '', sourceConversationId: conversationId ?? null, text: clickedText, references: clickedReferences, referencesRevision: clickedReferencesRevision, draftRevision: clickedRevision }));
+        if (shouldQueuePendingSend(true, clickedText, clickedWorkspaceId)) setPendingSend(bindPendingConversationSend({ threadId: result.thread_id, workspaceId: clickedWorkspaceId, workspaceRef: selectedThread.workspaceRef || '', sourceConversationId: conversationId ?? null, text: clickedText, references: clickedReferences, referencesRevision: clickedReferencesRevision, draftRevision: clickedDraft.revision, draftScope: clickedDraft.scope }));
         navigate(`/chat/${encodeURIComponent(result.thread_id)}`);
       }
       return;
     }
     if (!canSend) return;
+    const submittedDraft = captureDraft();
     const message = draft.trim();
     if (message.startsWith('/')) {
       const [extensionName] = message.split(/\s+/);
@@ -596,7 +599,7 @@ export const LiveChatView: React.FC = () => {
           setWorkbenchNotice(extension.kind === 'skill'
             ? `${extension.command} 已完成${skillFeedback}`
             : `${extension.command} 已完成，结果已写入会话记录。`);
-          setDraft(''); setExtensionArguments('{}');
+          acceptDraft(submittedDraft); setExtensionArguments('{}');
         };
         setCommandBusy(true); setWorkbenchError(''); setWorkbenchNotice('');
         try { await run(); }
@@ -632,19 +635,17 @@ export const LiveChatView: React.FC = () => {
         }, keyForWorkbenchAction(identity));
         workbenchKeys.current.delete(identity);
         setWorkbenchNotice(`${result.command}：${result.message}`);
-        setDraft('');
+        acceptDraft(submittedDraft);
         await refreshHistory();
       } catch (error) { setWorkbenchError(chatFailureCopy(error, 'command')); }
       finally { setCommandBusy(false); }
       return;
     }
-    const clickedRevision = getDraftRevision();
     const clickedReferences = references.map((item) => ({ ...item.reference }));
     const clickedReferencesRevision = referencesRevision.current;
     const completed = await sendMessage(message, clickedReferences);
     if (completed) {
-      const currentRevision = getDraftRevision();
-      setDraft((current) => draftAfterAccepted(current, currentRevision, { text: message, draftRevision: clickedRevision }));
+      acceptDraft(submittedDraft);
       if (referencesRevision.current === clickedReferencesRevision) setReferences([]);
     }
   };
@@ -674,7 +675,7 @@ export const LiveChatView: React.FC = () => {
     const clickedText = draft.trim();
     const clickedReferences = references.map((item) => ({ ...item.reference }));
     const clickedReferencesRevision = referencesRevision.current;
-    const clickedRevision = getDraftRevision();
+    const clickedDraft = captureDraft();
     const clickedWorkspaceId = selectedProjectId || setup?.default_workspace_id || '';
     const clickedWorkspaceRef = selectedProject?.workspaceRef || '';
     const clickedRouteVersion = getRouteRevision();
@@ -687,7 +688,8 @@ export const LiveChatView: React.FC = () => {
     const result = await initializeConversation(selectedProjectId ? { workspace_id: selectedProjectId } : {});
     if (result && getRouteRevision() === clickedRouteVersion && window.location.href === clickedLocation) {
       if (clickedWorkspaceId && result.workspace_id !== clickedWorkspaceId) { setWorkbenchError('新对话的工作区与选择的不一致。请刷新对话列表核对。'); return; }
-      if (shouldQueuePendingSend(sendClickedDraft, clickedText, clickedWorkspaceId)) setPendingSend(bindPendingConversationSend({ threadId: result.thread_id, workspaceId: clickedWorkspaceId, workspaceRef: clickedWorkspaceRef, sourceConversationId: conversationId ?? null, text: clickedText, references: clickedReferences, referencesRevision: clickedReferencesRevision, draftRevision: clickedRevision }));
+      const movedDraft = isNewConversationDraft(clickedDraft) ? moveDraftToThread(clickedDraft, result.thread_id) : clickedDraft;
+      if (shouldQueuePendingSend(sendClickedDraft, clickedText, clickedWorkspaceId)) setPendingSend(bindPendingConversationSend({ threadId: result.thread_id, workspaceId: clickedWorkspaceId, workspaceRef: clickedWorkspaceRef, sourceConversationId: conversationId ?? null, text: clickedText, references: clickedReferences, referencesRevision: clickedReferencesRevision, draftRevision: movedDraft.revision, draftScope: movedDraft.scope }));
       navigate(`/chat/${encodeURIComponent(result.thread_id)}`);
     }
   };
@@ -700,12 +702,11 @@ export const LiveChatView: React.FC = () => {
     setPendingSend(null);
     void sendMessage(submitted.text, submitted.references).then((accepted) => {
       if (accepted) {
-        const currentRevision = getDraftRevision();
-        setDraft((current) => draftAfterAccepted(current, currentRevision, submitted));
+        if (submitted.draftScope) acceptDraft({ scope: submitted.draftScope, revision: submitted.draftRevision, text: submitted.text });
         if (referencesRevision.current === submitted.referencesRevision) setReferences([]);
       }
     }).finally(() => { pendingSendInFlight.current = false; });
-  }, [pendingSend, conversationId, selectedThread?.id, selectedThread?.sessionId, selectedThread?.workspaceRef, selectedProjectId, busy, phase, extensionApproval, extensionOutcomeUnknown, getDraftRevision, sendMessage, setDraft, setPendingSend]);
+  }, [pendingSend, conversationId, selectedThread?.id, selectedThread?.sessionId, selectedThread?.workspaceRef, selectedProjectId, busy, phase, extensionApproval, extensionOutcomeUnknown, acceptDraft, sendMessage, setPendingSend]);
 
   const saveTitle = async () => {
     if (!selectedThread || !titleDraft.trim() || renameBusy) return;
@@ -795,9 +796,9 @@ export const LiveChatView: React.FC = () => {
       )}
 
       <div className="live-chat-toolbar ui-chat-project-bar">
-        <SearchSelect label="工作项目" buttonRef={projectSelectRef} value={selectedProjectId ?? ''} onChange={(value) => selectProject(value || null)} placeholder="选择项目" options={projects.filter((project) => project.readable).map((project) => ({ value: project.id, label: projectNames[project.id] || project.name, detail: project.workspaceRef }))} />
+        <SearchSelect label="工作项目" buttonRef={projectSelectRef} value={selectedProjectId ?? ''} onChange={(value) => { if (selectProject(value || null)) navigate('/chat'); }} placeholder="选择项目" options={projects.filter((project) => project.readable).map((project) => ({ value: project.id, label: projectNames[project.id] || project.name, detail: project.workspaceRef, disabled: archivedProjectIds.includes(project.id) }))} />
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void beginConversation()}
-          disabled={createBusy || createOutcomeUnknown || phase !== 'ready'}>
+          disabled={createBusy || createOutcomeUnknown || phase !== 'ready' || archivedProjectIds.includes(selectedProjectId || setup?.default_workspace_id || '')}>
           <PlusIcon />{createBusy ? '创建中…' : '新建对话'}
         </button>
       </div>
@@ -819,7 +820,9 @@ export const LiveChatView: React.FC = () => {
           {onboardingError && <div className="live-alert live-alert-error" role="alert">{onboardingError}</div>}
           {(createOutcomeUnknown || renameOutcomeUnknown) && <button type="button" className="btn btn-secondary" onClick={() => void clearCreateUncertainty()}>刷新并核对原请求</button>}
           {recoveredConversationId && <button type="button" className="btn btn-primary" onClick={() => navigate(`/chat/${encodeURIComponent(recoveredConversationId)}`)}>打开已创建对话</button>}
-          {!conversationId && <><textarea className="textarea" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="描述你想完成的工作…" aria-label="对话草稿" rows={3} /><button type="button" className="btn btn-primary" onClick={() => void beginConversation(true)} disabled={createBusy || createOutcomeUnknown || phase !== 'ready' || setupLoading}>{setup?.ready ? (createBusy ? '正在准备…' : '开始对话') : '连接模型'}</button></>}
+          {draftWarning && <p className="live-alert live-alert-error" role="alert">{draftWarning}</p>}
+          {!conversationId && archivedProjectIds.includes(selectedProjectId || setup?.default_workspace_id || '') && <p role="status">当前项目已归档，请选择活跃项目后新建对话。</p>}
+          {!conversationId && <><textarea className="textarea" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="描述你想完成的工作…" aria-label="对话草稿" disabled={phase !== 'ready' || setupLoading} rows={3} /><button type="button" className="btn btn-primary" onClick={() => void beginConversation(true)} disabled={createBusy || createOutcomeUnknown || phase !== 'ready' || setupLoading || archivedProjectIds.includes(selectedProjectId || setup?.default_workspace_id || '')}>{setup?.ready ? (createBusy ? '正在准备…' : '开始对话') : '连接模型'}</button></>}
         </div>
       ) : (
         <>
@@ -907,6 +910,7 @@ export const LiveChatView: React.FC = () => {
                   {extensionOutcomeUnknown && <div className="live-alert live-alert-error" role="alert">命令仍在进行或结果未知，请先查看会话记录和审计；不要重复提交。<button type="button" className="btn btn-secondary btn-sm" onClick={() => setExtensionOutcomeUnknown(false)}>已人工核对</button></div>}
                   {reviewCommand && <div className="live-reviewer-role"><SearchSelect label="审查角色" value={effectiveReviewerRoleId} onChange={setReviewerRoleId} placeholder="选择只读角色" disabled={commandBusy || reviewerRoles.length === 0} options={reviewerRoles.map((role) => ({ value: role.id!, label: role.name, detail: role.id }))} />{reviewerRoles.length === 0 && <span>需要先配置只读角色。</span>}</div>}
                 </div>
+                {draftWarning && <p className="live-alert live-alert-error" role="alert">{draftWarning}</p>}
                 <textarea
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
@@ -918,7 +922,7 @@ export const LiveChatView: React.FC = () => {
                   }}
                   placeholder={manualReconcileRequired ? '需要人工核对，确认状态后才能发送' : '描述你想完成的工作，Enter 发送，Shift+Enter 换行'}
                   aria-label="向会话发送消息"
-                  disabled={!selectedThread.workspaceRef || (selectedThread.sessionId ? busy : connectionStatus !== 'connected') || commandBusy || phase !== 'ready' || createBusy || createOutcomeUnknown}
+                  disabled={!selectedThread.workspaceRef || phase !== 'ready' || connectionStatus !== 'connected'}
                   rows={2}
                 />
                 <button type="button" className="btn btn-primary btn-icon" onClick={() => void handleSubmit()} disabled={!(selectedThread.sessionId ? canSend : Boolean(draft.trim()) && !createBusy && !createOutcomeUnknown && phase === 'ready' && connectionStatus === 'connected') || commandBusy} aria-label={draft.startsWith('/') ? '执行命令' : '发送消息'} title={draft.startsWith('/') ? '执行命令' : '发送消息'}>

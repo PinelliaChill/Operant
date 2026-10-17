@@ -128,9 +128,25 @@ def project_version() -> str:
     version = project["project"]["version"]
     if not isinstance(version, str):
         raise ValueError("invalid Core product version")
-    if desktop["version"] != version:
+    rust = tomllib.loads((ROOT / "clients/desktop/src-tauri/Cargo.toml").read_text())
+    if desktop["version"] != version or rust["package"]["version"] != version:
         raise ValueError("Core and desktop product versions disagree")
     return version
+
+
+def release_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._+-]{0,79}", value):
+        raise ValueError("release label must be 1-80 ASCII letters, digits, spaces or ._+-")
+    return value
+
+
+def verify_tauri_product(product: dict[str, object], version: str, identifier: str) -> None:
+    if product["CFBundleShortVersionString"] != version:
+        raise ValueError("Tauri App version differs from product version")
+    if product["CFBundleIdentifier"] != identifier:
+        raise ValueError("Tauri App identifier differs from product configuration")
 
 
 def product_identifier() -> str:
@@ -190,7 +206,9 @@ def main() -> None:
         "--candidate-id",
         help="explicit isolated candidate namespace; omit for normal product identity",
     )
+    parser.add_argument("--release-label", help="explicit release identity, e.g. 2.0.0-beta.5")
     args = parser.parse_args()
+    label = release_label(args.release_label)
     python_archive = args.python_archive.resolve(strict=True)
     runtime_licenses = SCRIPT_DIR / "runtime-licenses"
     output = args.output.resolve()
@@ -208,16 +226,24 @@ def main() -> None:
     run("uv", "build", "--wheel", "--offline", "--out-dir", output / "wheels", env=env)
     wheel = output / "wheels" / f"operant_agent-{version}-py3-none-any.whl"
     verify_wheel(wheel, version)
-    run("npm", "run", "tauri", "--prefix", "clients/desktop", "--", "build", env=env)
+    run(
+        "npm",
+        "run",
+        "tauri",
+        "--prefix",
+        "clients/desktop",
+        "--",
+        "build",
+        "--config",
+        json.dumps({"identifier": target_identifier}),
+        env=env,
+    )
     app_source = ROOT / "clients/desktop/src-tauri/target/release/bundle/macos/Operant.app"
     executable = app_source / "Contents/MacOS/operant-desktop"
     require_arm64(executable)
     with (app_source / "Contents/Info.plist").open("rb") as source:
         product = plistlib.load(source)
-    if product["CFBundleShortVersionString"] != version:
-        raise ValueError("Tauri App version differs from product version")
-    if product["CFBundleIdentifier"] != product_identifier():
-        raise ValueError("Tauri App identifier differs from product configuration")
+    verify_tauri_product(product, version, target_identifier)
     if source_identity() != (source_head, source_tree):
         raise ValueError("source checkout changed during build")
     volume = output / "volume"
@@ -364,13 +390,14 @@ def main() -> None:
         "name": f"Operant-v{version}-macos-arm64"
         + (f"-candidate-{args.candidate_id}" if args.candidate_id else ""),
         "product_version": version,
+        "release_label": label,
         "candidate_id": args.candidate_id,
         "bundle_identifier": plist["CFBundleIdentifier"],
         "source_head": source_head,
         "source_tree": source_tree,
         "build_commands": [
             "uv build --wheel --offline --out-dir <output>/wheels",
-            "npm run tauri --prefix clients/desktop -- build",
+            "npm run tauri --prefix clients/desktop -- build --config <bundle-identity>",
         ],
         "core_wheel_sha256": digest(wheel),
         "tauri_binary_sha256": digest(executable),
