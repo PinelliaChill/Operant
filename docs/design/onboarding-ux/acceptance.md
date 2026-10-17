@@ -1037,3 +1037,21 @@ User 已授权通过检查后将PR45合入main；合并不代表ChatGPT和最后
 6. 更新本表和实现说明，检查目标客户端契约；形成可审阅PR。合入主线后按既有规则发布对应DMG、说明和SHA-256，验证来源、包完整性及下载摘要。未通过或受阻项保留，不称整组交付完成。
 
 沟通格式：`U-ID / 已完成 / 测试结果 / 阻塞或下一动作`。不转发密钥、原始冗长日志或重复背景。测试详细输出保存在本轮 `.operant/usage-polish/`，本文件只记录结论与证据路径，不新建并列验收台账。
+
+### 固定 c22ebbd 构建的实际使用验收
+
+主线程在原生 `dev.operant.verification.usage-polish.c22ebbd`、固定 GUI 快照3038、Core18817和独立SQLite中操作；没有替换安装版或真实库。原生签名后二进制摘要为 `b1a3c1bfb831f4377e9505187b938d07ea663f9430d472224a3ba1e3c6c7bcc9`。GUI快照与构建收据位于 `.operant/usage-polish/`，下表界面证据统一位于其 `mounted-evidence/`。
+
+| ID | 输入、操作与预期 | 实际结果及证据 |
+| --- | --- | --- |
+| U1 | 创建A、重命名，再直接进入文件页 | 无整页刷新即出现项目与README；`native-project-created-files.txt`、`native-project-renamed-files.txt` |
+| U1 | A解除知识关联；含两个会话的B归档 | A文件保留，B管理/对话/文件均显示归档，新建禁用，历史和草稿保留；`native-detached-files-keyboard.txt`、`native-archived-history.txt`、`native-archived-files.txt`。另发现文件选A而底栏仍B，已交coder补修，不能据此标U1整体通过 |
+| U2 | 普通浏览器访问模型和协作管理 | 明确桌面入口说明，模型写按钮禁用，连接/模板读取失败不再误为空；项目与文件普通读取仍可用。`web-model-permission-before-fix.txt`、`web-collab-permission.txt`、`web-files-readable.txt` |
+| U3 | A/B新建草稿分别输入、切换、原生退出重开 | 各自恢复，无串内容；`native-draft-a-restored.txt`、`native-draft-reopened.txt` |
+| U3 | 两个Thread分别输入，再切换；Web完整reload | Thread草稿各自恢复；Web草稿完整刷新保留。`native-thread-draft-restored.txt`、`web-draft-reload.txt` |
+| U3 | 正式发现gpt-6-luna、Profile和bootstrap后，从原生新建并发送限定回复；第二次发送后立即继续编辑 | 收到`OPERANT_USAGE_OK`及`SECOND_OK`；第一条发送清空匹配版本，第二条新编辑保留。`native-real-send.txt`、`native-send-edit-retained.txt`。两次均禁止工具，无文件或外部副作用任务；bootstrap本身未推理 |
+| U3 | 390×844与1280×900、输入框Tab到发送 | 布局可用，窄屏草稿、按钮及焦点清楚；`web-chat-narrow.png`、`web-chat-narrow-focus.png`。未知写入、迟到回执和坏存储由独立确定性仿真覆盖，不冒称真实网络故障 |
+| U4 | 以普通文件路径创建项目 | 中文说明需选文件夹，名称和路径均保留；`native-invalid-path.txt`及PNG。CLI缺记录退出1且短中文提示、未知异常保留诊断，由独立正式CLI及测试覆盖 |
+| U5 | 未选模型、正式bootstrap选gpt-6-luna后进入模型页；查看关于 | 未选状态准确，选后显示精确模型和三步就绪；关于显示组件0.1.0、开发身份和c22ebbd提交。`native-default-ready.txt`、`native-build-info.txt`。Web403时状态卡误报未配置已补修并独立20项通过，尚需新构建挂载复验；发行包身份待打包验证 |
+
+c600650的完整CI39015523692：Python3.10和3.12各1750通过、16跳过、1警告，GUI及CodeQL通过；c22ebbd的CI39021037411仍在运行，不能提前复用。c22本机GUI263项通过，后续U5增量GUI265项通过并完成类型/构建；定向Python31项、ruff/mypy/锁/diff检查通过。独立reviewer结论及场景见 `.operant/usage-polish/reviewer-results.json`。这些结果不覆盖尚未冻结的U1补修，最终状态随后回填。

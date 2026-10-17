@@ -12,7 +12,7 @@ import type * as B2 from '../../../../sdk/typescript-client/b2.generated';
 import { useOperant } from '../context/ClientContext';
 import { B23ManagementAdapter, normalizeB23Error, type B23UiError } from './b23Adapter';
 import { currentBrowserOrigin } from '../lib/liveBaseUrl';
-import { projectSelectionStorageKey, readProjectSelection } from './projectSynchronization';
+import { projectSelectionStorageKey, readProjectSelection, selectionWorkspace } from './projectSynchronization';
 import { readProjectWorkspaceMetadata } from './projectDisplayNames';
 import {
   B2LiveAdapter,
@@ -428,16 +428,18 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
     threadId: string | null,
     sessionId: string | null,
   ) => {
+    setActiveWorkspace(selectionWorkspace(projects, threads, projectId, threadId));
     selectedProjectIdRef.current = projectId;
     selectedThreadIdRef.current = threadId;
     selectedSessionIdRef.current = sessionId;
     setSelectedProjectId(projectId);
     setSelectedThreadId(threadId);
     setSelectedSessionId(sessionId);
-  }, []);
+  }, [projects, threads, setActiveWorkspace]);
 
   const selectProject = useCallback((projectId: string | null): boolean => {
     const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
+    if (projectId && !project?.readable) return false;
     const thread = project ? threads.find((item) => projectHasThread(project, item.id)) : undefined;
     const nextThreadId = thread?.id ?? null;
     if (rejectThreadSelection(nextThreadId)) return false;
@@ -678,6 +680,7 @@ export const LiveProvider: React.FC<{ children: React.ReactNode }> = ({ children
       selectedThreadIdRef.current = pendingSessionThread.id;
       selectedSessionIdRef.current = pendingSessionThread.sessionId;
       selectedProjectIdRef.current = nextProjects.find((project) => project.threadIds.includes(pendingSessionThread.id))?.id ?? null;
+      setActiveWorkspace(selectionWorkspace(nextProjects, nextThreads, selectedProjectIdRef.current, pendingSessionThread.id));
       setCommand({ status: 'idle' });
       setSelectedThreadId(pendingSessionThread.id);
       setSelectedSessionId(pendingSessionThread.sessionId);

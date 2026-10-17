@@ -6,7 +6,8 @@ import { isWriteOutcomeUnknown } from '../src/lib/writeOutcome.ts';
 import { ConversationDrafts, draftScope, restoreConfirmedConversationDraft } from '../src/live/conversationDrafts.ts';
 import { decodeCreateRequest, encodeCreateRequest, confirmedCreateMetadata } from '../src/live/createRequestRecovery.ts';
 import { modelReadiness } from '../src/features/settings/modelReadiness.ts';
-import { synchronizeProjectMutation } from '../src/live/projectSynchronization.ts';
+import { synchronizeProjectMutation, selectionWorkspace } from '../src/live/projectSynchronization.ts';
+import { isThreadSelectionLocked } from '../src/live/liveState.ts';
 
 function storage() {
   const values = new Map<string, string>();
@@ -211,4 +212,55 @@ test('unknown-create recovery survives reopen and exposes conflicts without redi
   assert.equal(afterAnotherReopen.read(target).text, 'clicked then edited');
   assert.equal(afterAnotherReopen.read(a).text, '');
   assert.equal(afterAnotherReopen.read(b).text, 'other project text');
+});
+
+test('model readiness distinguishes unknown reads, confirmed missing configuration, and confirmed ready state', () => {
+  const configured = { ready: true, default_model_profile_id: 'saved', models: [{ id: 'saved', name: 'Saved profile', model_id: 'exact-discovered-id' }] };
+  const missing = { ready: false, models: [], missing_steps: ['model', 'workspace'] };
+  const connection = { connection_id: 'service', profile_ids: ['saved'], status: 'ready' };
+  const labels = (state: ReturnType<typeof modelReadiness>) => [state.serviceLabel, state.selectionLabel, state.conversationLabel];
+  for (const previous of [configured, missing, null]) {
+    const unreadable = modelReadiness(previous, [connection], true);
+    assert.equal(unreadable.unconfirmed, true);
+    assert.deepEqual(labels(unreadable), ['待确认', '待确认', '待确认']);
+    assert.equal(unreadable.ready, false);
+    assert.equal(unreadable.modelSelected, false);
+  }
+  assert.equal(modelReadiness(undefined, [], false).unconfirmed, true);
+  const empty = modelReadiness(missing, [], false);
+  assert.equal(empty.unconfirmed, false);
+  assert.deepEqual(labels(empty), ['待连接', '待选择', '尚未就绪']);
+  const recovered = modelReadiness(configured, [connection], false);
+  assert.equal(recovered.unconfirmed, false);
+  assert.equal(recovered.ready, true);
+  assert.deepEqual(labels(recovered), ['已连接', '已选择', '可开始对话']);
+  assert.equal(recovered.profile?.model_id, 'exact-discovered-id');
+  const knownConnectionFailure = modelReadiness(configured, [{ ...connection, status: 'error' }], false);
+  assert.equal(knownConnectionFailure.unconfirmed, false);
+  assert.deepEqual(labels(knownConnectionFailure), ['待连接', '已选择', '尚未就绪']);
+  assert.equal(modelReadiness(configured, [], false).ready, true);
+});
+
+test('canonical workspace switching honors active operations and never falls back to the previous project', () => {
+  const projects = [{ id: 'a', workspaceRef: '/a' }, { id: 'b', workspaceRef: '/b' }];
+  const threads = [{ id: 'ta', workspaceRef: '/a' }, { id: 'tb', workspaceRef: '/b' }, { id: 'detached', workspaceRef: '/detached' }];
+  assert.equal(selectionWorkspace(projects, threads, 'a', 'tb'), '/a');
+  assert.equal(selectionWorkspace(projects, threads, 'missing', 'tb'), '');
+  assert.equal(selectionWorkspace(projects, threads, null, 'detached'), '/detached');
+  assert.equal(selectionWorkspace(projects, threads, null, 'missing'), '');
+  assert.equal(selectionWorkspace(projects, threads, null, null), '');
+  const disk = storage();
+  const drafts = new ConversationDrafts(() => disk);
+  const a = draftScope('https://core.test', 'a', 'ta');
+  const b = draftScope('https://core.test', 'b', 'tb');
+  drafts.write(a, 'A saved work'); drafts.write(b, 'B saved work');
+  for (const locked of [
+    isThreadSelectionLocked('tb', 'ta', true, false, 'sending'),
+    isThreadSelectionLocked('tb', 'ta', false, true, 'idle'),
+    isThreadSelectionLocked('tb', 'ta', false, false, 'idle', true, 'sending'),
+  ]) assert.equal(locked, true);
+  assert.equal(isThreadSelectionLocked('tb', 'ta', false, false, 'idle'), false);
+  assert.equal(selectionWorkspace(projects, threads, 'a', 'ta'), '/a');
+  assert.equal(drafts.read(a).text, 'A saved work');
+  assert.equal(drafts.read(b).text, 'B saved work');
 });

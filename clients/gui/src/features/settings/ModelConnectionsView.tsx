@@ -140,9 +140,9 @@ export const ModelConnectionsView: React.FC<ModelConnectionsProps> = ({ connecti
     <div className="model-connections-heading"><div><h1>模型连接</h1><p>连接模型后，就可以开始对话。</p></div><button type="button" className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={operationBusy || loading}><RefreshCw size={14} aria-hidden="true" />刷新</button></div>
     <section className="model-connections-card" aria-label="当前模型与准备状态" aria-live="polite">
       <h2>当前默认模型</h2>
-      <p>{readiness.profile ? `${modelDisplayName(readiness.profile.model_id)} · ${readiness.profile.name}` : setup?.default_model_profile_id ? '默认模型信息暂时无法确认，请刷新核对。' : '尚未选择默认模型'}</p>
-      <ol><li>模型服务：{readiness.serviceConnected ? '已连接' : readFailed || loading ? '待确认' : '待连接'}</li><li>默认模型：{readiness.modelSelected ? '已选择' : '待确认或选择'}</li><li>对话准备：{readiness.ready ? '可开始对话' : '尚未就绪'}</li></ol>
-      {!readiness.ready && setup?.missing_steps?.length ? <p>还需完成：{setup.missing_steps.map((step) => ({ workspace: '选择工作项目', model: '选择默认模型', role: '准备助手角色', assistant: '准备助手角色', skills: '准备技能' })[step] || '刷新核对设置').join('、')}</p> : null}
+      <p>{readiness.unconfirmed ? '默认模型信息暂时无法读取，请刷新核对。' : readiness.profile ? `${modelDisplayName(readiness.profile.model_id)} · ${readiness.profile.name}` : setup?.default_model_profile_id ? '默认模型信息暂时无法确认，请刷新核对。' : '尚未选择默认模型'}</p>
+      <ol><li>模型服务：{readiness.serviceLabel}</li><li>默认模型：{readiness.selectionLabel}</li><li>对话准备：{readiness.conversationLabel}</li></ol>
+      {!readiness.unconfirmed && !readiness.ready && setup?.missing_steps?.length ? <p>还需完成：{setup.missing_steps.map((step) => ({ workspace: '选择工作项目', model: '选择默认模型', role: '准备助手角色', assistant: '准备助手角色', skills: '准备技能' })[step] || '刷新核对设置').join('、')}</p> : null}
     </section>
     {error && <div className="live-alert live-alert-error" role="alert">{(errorDetail && knownModelConnectionErrorLabel(errorDetail)) || error}<details><summary>查看原因</summary>{errorDetail || error}</details></div>}
     {writeUncertain && <div className="live-alert live-alert-error model-request-recovery" role="alert"><p>{reconcileMessage || '连接操作的结果尚未确认，请先核对，暂时不要重复提交。'}</p><div className="model-request-recovery-actions"><button type="button" className="btn btn-secondary btn-sm" onClick={onAcknowledge} disabled={busy || loading}>{pendingRequestId ? '核对原请求' : '刷新核对'}</button>{pendingRequestId && <details><summary>核对详情</summary><p>请求编号：<code>{pendingRequestId}</code></p></details>}</div></div>}

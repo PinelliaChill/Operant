@@ -1,10 +1,11 @@
+import { isThreadSelectionLocked } from '../src/live/liveState.ts';
 import { encodeCreateRequest, decodeCreateRequest } from '../src/live/createRequestRecovery.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { projectWorkspaceMetadata } from '../src/live/projectDisplayNames.ts';
 import { modelReadiness } from '../src/features/settings/modelReadiness.ts';
 import { ConversationDrafts, draftScope, draftThreadFromPath, draftThreadForSelection, isNewConversationDraft, restoreConfirmedConversationDraft } from '../src/live/conversationDrafts.ts';
-import { synchronizeProjectMutation, projectSelectionStorageKey, readProjectSelection } from '../src/live/projectSynchronization.ts';
+import { synchronizeProjectMutation, projectSelectionStorageKey, readProjectSelection, selectionWorkspace } from '../src/live/projectSynchronization.ts';
 
 const setup = { ready: true, default_model_profile_id: 'profile-a', models: [{ id: 'profile-a', name: 'Current model', model_id: 'actual-model' }] };
 const connection = { connection_id: 'service-a', status: 'ready', profile_ids: ['profile-a'] };
@@ -114,4 +115,43 @@ test('confirmed create recovery exposes a conflicting source without overwriting
   store.write(target, '');
   assert.equal(restoreConfirmedConversationDraft(store, source, target), '');
   assert.equal(store.read(target).text, 'source retained');
+});
+
+test('unreadable model settings remain unconfirmed rather than claiming the default is missing', () => {
+  for (const staleSetup of [null, setup, { ready: false, models: [] }]) {
+    const state = modelReadiness(staleSetup, [connection], true);
+    assert.equal(state.unconfirmed, true);
+    assert.equal(state.serviceLabel, '待确认');
+    assert.equal(state.selectionLabel, '待确认');
+    assert.equal(state.conversationLabel, '待确认');
+    assert.equal(state.ready, false);
+  }
+  assert.equal(modelReadiness(null, [], false).unconfirmed, true);
+  const genuinelyMissing = modelReadiness({ ready: false, models: [] }, [], false);
+  assert.equal(genuinelyMissing.unconfirmed, false);
+  assert.equal(genuinelyMissing.selectionLabel, '待选择');
+  assert.equal(genuinelyMissing.conversationLabel, '尚未就绪');
+  assert.equal(modelReadiness(setup, [], false).conversationLabel, '可开始对话');
+});
+
+test('canonical project and thread selection immediately resolve the exact workspace without carrying drafts', () => {
+  const projects = [{ id: 'a', workspaceRef: '/workspace/A' }, { id: 'b', workspaceRef: '/workspace/B' }];
+  const threads = [{ id: 'ta', workspaceRef: '/workspace/A' }, { id: 'tb', workspaceRef: '/workspace/B' }, { id: 'unbound', workspaceRef: '/workspace/unbound' }];
+  assert.equal(selectionWorkspace(projects, threads, 'b', 'tb'), '/workspace/B');
+  assert.equal(selectionWorkspace(projects, threads, 'a', 'ta'), '/workspace/A');
+  assert.equal(selectionWorkspace(projects, threads, null, 'unbound'), '/workspace/unbound');
+  assert.equal(selectionWorkspace(projects, threads, null, null), '');
+  assert.equal(selectionWorkspace(projects, threads, 'missing', 'tb'), '');
+  const memory = new Map<string, string>();
+  const store = new ConversationDrafts(() => ({ getItem: (key) => memory.get(key) ?? null, setItem: (key, value) => { memory.set(key, value); } }));
+  const origin = 'https://core.test';
+  store.write(draftScope(origin, 'b', 'tb'), 'B work');
+  store.write(draftScope(origin, 'a', 'ta'), 'A work');
+  let activeWorkspace = '/workspace/B';
+  if (!isThreadSelectionLocked('tb', 'ta', true, false, 'sending')) activeWorkspace = selectionWorkspace(projects, threads, 'a', 'ta');
+  assert.equal(activeWorkspace, '/workspace/B');
+  if (!isThreadSelectionLocked('tb', 'ta', false, false, 'idle')) activeWorkspace = selectionWorkspace(projects, threads, 'a', 'ta');
+  assert.equal(activeWorkspace, '/workspace/A');
+  assert.equal(store.read(draftScope(origin, 'b', 'tb')).text, 'B work');
+  assert.equal(store.read(draftScope(origin, 'a', 'ta')).text, 'A work');
 });
