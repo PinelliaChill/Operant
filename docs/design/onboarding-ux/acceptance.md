@@ -1077,3 +1077,7 @@ c22ebbd完整CI39021037411现已全部成功：Python3.10/3.12各1750通过、16
 独立reviewer以release模式复验规范路径、空格、符号链接祖先和同App资源；错误目录、资源外链、提交/版本/候选/应用标识不匹配均拒绝。Rust32项通过、1条既有忽略，格式通过。U1–U5逐项实现和验收均通过；完整发布交付仍需最终CI、合并及普通产品身份DMG的来源与公开下载摘要核对，不能把候选通过写成已发布。
 
 普通产品包同源d2817b4已完成，SHA-256为`1cd48b760ac311dc7c6f46167b7b26515b4f39f514c74e835869bef9e30dd2cc`，candidate为空、正式bundle为`dev.operant.desktop`。使用正式支持的绝对`OPERANT_DB_PATH`指向新临时库，实际页面显示Beta5、完整提交及“产品安装包”；退出0、8000释放后恢复原安装版。签名、4610文件摘要、内外manifest与hdiutil通过，尚未上传，证据`beta5-product-package-result.json`、`beta5-product-native-result.json`和`mounted-evidence/product-package-build-info.*`。
+
+### 最终CI、合并与发行
+
+最终d2817b4的CI39094879247和CodeQL全部成功：Python3.10/3.12各1750通过、16跳过、1条既有警告；GUI267项、类型与构建、完整格式/lint/mypy/离线锁检查通过。PR #50于2026-10-18通过受保护合并，main合并提交d4e8384；发行标签`v0.1.0-beta.5`精确指向实际打包d2817b4，该提交已在main历史中，合并树与产品冻结树一致。Beta 5于2026-10-18正式作为prerelease公开，三个附件为普通产品DMG、同名SHA-256及`source-manifest.json`，远端附件digest与本地一致。公开下载DMG已按同名校验文件验证OK，下载来源摘要的SHA-256也与本地一致；回验结果保存在本轮运行证据中；不把GitHub Source code当作安装包。
