@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 
+mod build_info;
 mod local_caller;
 mod local_core_bridge;
 mod managed_core;
@@ -372,6 +373,25 @@ fn persist_secret_reference(app: AppHandle, secret_ref: String) -> Result<(), St
     Ok(())
 }
 
+#[tauri::command]
+fn desktop_build_info(app: AppHandle) -> Result<build_info::BuildInfo, String> {
+    #[cfg(target_os = "macos")]
+    let resources = if cfg!(debug_assertions) {
+        app.path()
+            .resource_dir()
+            .map_err(|_| "无法定位构建来源摘要。")?
+    } else {
+        let executable = std::env::current_exe().map_err(|_| "无法定位当前应用程序。")?;
+        build_info::macos_bundle_resources(&executable)?
+    };
+    #[cfg(not(target_os = "macos"))]
+    let resources = app
+        .path()
+        .resource_dir()
+        .map_err(|_| "无法定位构建来源摘要。")?;
+    build_info::read_build_info(&resources, &app.config().identifier)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -382,6 +402,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             core_status,
+            desktop_build_info,
             start_local_core,
             stop_managed_core,
             local_core_request,

@@ -1007,3 +1007,65 @@ clients/tui/test/test_caller_pairing.py，改为该项目现有 unittest 异步�
 没有靠新增 skip 或删减场景消除失败；TUI 正式锁定环境实际39项通过，Core独立收集通过，
 格式616、lint与锁检查通过。Python3.12完整结果与修复后CI须分别回读，早期失败保留。
 User 已授权通过检查后将PR45合入main；合并不代表ChatGPT和最后TUI视觉缺口已完成。
+
+
+## 2026-10-17 实际使用问题修复计划（进行中）
+
+记录身份：Codex 主线程；适用对象：本轮 coder、reviewer 与集成者。用户要求主线程计划协调，所有子 Agent 使用 `gpt-6.1-sol / high`；coder 实现并做基础测试，将结果直接交 reviewer；reviewer 独立仿真、报告缺陷并定向复验。历史 UX-01～UX-18 验收不覆盖本轮新增代码。
+
+基线为 `main@33d8fa44`，隔离分支 `codex/usage-polish`。2026-10-17 使用报告对应安装包 `aa284352`，新基线与该包产品代码相同，后续只有文档差异。原始本机证据位于原工作区 `.operant/usage-eval-20261017/results.json`，含创建项目后文件页无项目、刷新恢复、草稿刷新丢失、Web 权限误报和路径校验截图。根工作区旧分支及未提交改动不属于本轮修改范围。
+
+### 范围与验收清单
+
+| ID | 需求与边界 | 实现状态 | 验收状态 | 责任与证据要求 |
+| --- | --- | --- | --- | --- |
+| U1 | 项目创建、重命名、归档、解除关联后，管理、文件、对话页同步；处理当前选择和迟到响应；不重发未知写入 | 已实现 | 通过 | coder_ui；正常创建无需整页刷新即可读文件，其他变更及失败/竞态由 reviewer 仿真，主线程正式接口/界面补验 |
+| U2 | Web 本机权限拒绝准确说明桌面入口；读取失败不显示没有连接/模板；相关写操作禁用且有原因；保持鉴权、严格错误校验和未知结果保护 | 已实现 | 通过 | coder_platform 提供信封/共用错误接口，coder_ui 接自己页面；真实403、异常信封、普通可用Web项目路径和原生管理回归 |
+| U3 | 按 origin、项目、对话/新建上下文保存草稿，刷新和重开恢复；成功发送只清对应版本；失败/未知/发送中编辑/切换不丢不串；新建迁移与存储损坏/不可用/容量错误有处理 | 已实现 | 通过 | coder_ui；reviewer 独立状态与竞态仿真，主线程宽窄屏/键盘/刷新与原生重开、正式受控模型发送 |
+| U4 | 项目路径错误给中文修正动作并保留输入；CLI 不存在对象等预期错误简洁、非零退出；未知程序错误保持可诊断 | 已实现 | 通过 | coder_platform 映射，coder_ui 接管理页；文件路径非法、会话不存在及正常流程回归 |
+| U5 | 当前默认模型与就绪步骤可见且来自真实状态；设置显示实际产品版本、发行标识、构建commit和候选身份；开发态不冒充发行 | 已实现 | 部分通过，打包显示失败 | coder_ui 模型状态，coder_platform 构建信息；无模型、选模型后返回、读失败、旧包元数据缺失、开发/产品/候选包分别验证 |
+
+历史 App 副本仅诊断，不批量删除；不改用户真实凭据、权限或现有模型默认值。测试使用隔离绝对工作区及数据库；凭据如需真实调用，仅向目标进程注入，不复制到工作树。原生无法观测、Provider不可用等必需场景明确记为受阻，不能以Mock或历史版本证据标通过。
+
+### 执行顺序与分工
+
+1. 主线程冻结范围、最新基线与文件所有权；两 coder 先沟通共用错误接口。coder_ui 负责项目、草稿、模型页面；coder_platform 负责信封/SDK、CLI、协作错误及版本信息。reviewer 先准备边界场景。
+2. coder 按 U-ID 完成实现和定向基础测试，将路径、测试命令/结果、未覆盖项直接发 reviewer；生产代码问题由原 coder 修复。所有权之外先协调，不覆盖他人改动。
+3. reviewer 做行为仿真，重点验证迟到查询、跨项目状态、发送期间编辑与未知结果、认证拒绝和坏存储；修复后只复验受影响部分。
+4. 主线程统一集成一次 GUI 测试/类型/构建、必要 SDK/桌面/打包测试和完整基础门禁；同一冻结提交的适用跨Python CI可复用，本机补差异项。收齐一轮全部CI终态再统一推修复，不逐个作业触发新轮。
+5. 主线程在固定构建、Core、临时数据库和窗口验证正式入口；先模型发现，再使用精确ID和正式Profile作受控真实调用。真实验收期间冻结产品源码，停止热更新。宽窄屏、键盘、错误、刷新/重开和发送确认至少覆盖受影响入口。
+6. 更新本表和实现说明，检查目标客户端契约；形成可审阅PR。合入主线后按既有规则发布对应DMG、说明和SHA-256，验证来源、包完整性及下载摘要。未通过或受阻项保留，不称整组交付完成。
+
+沟通格式：`U-ID / 已完成 / 测试结果 / 阻塞或下一动作`。不转发密钥、原始冗长日志或重复背景。测试详细输出保存在本轮 `.operant/usage-polish/`，本文件只记录结论与证据路径，不新建并列验收台账。
+
+### 固定 c22ebbd 构建的实际使用验收
+
+主线程在原生 `dev.operant.verification.usage-polish.c22ebbd`、固定 GUI 快照3038、Core18817和独立SQLite中操作；没有替换安装版或真实库。原生签名后二进制摘要为 `b1a3c1bfb831f4377e9505187b938d07ea663f9430d472224a3ba1e3c6c7bcc9`。GUI快照与构建收据位于 `.operant/usage-polish/`，下表界面证据统一位于其 `mounted-evidence/`。
+
+| ID | 输入、操作与预期 | 实际结果及证据 |
+| --- | --- | --- |
+| U1 | 创建A、重命名，再直接进入文件页 | 无整页刷新即出现项目与README；`native-project-created-files.txt`、`native-project-renamed-files.txt` |
+| U1 | A解除知识关联；含两个会话的B归档 | A文件保留，B管理/对话/文件均显示归档，新建禁用，历史和草稿保留；`native-detached-files-keyboard.txt`、`native-archived-history.txt`、`native-archived-files.txt`。另发现文件选A而底栏仍B，已交coder补修，不能据此标U1整体通过 |
+| U2 | 普通浏览器访问模型和协作管理 | 明确桌面入口说明，模型写按钮禁用，连接/模板读取失败不再误为空；项目与文件普通读取仍可用。`web-model-permission-before-fix.txt`、`web-collab-permission.txt`、`web-files-readable.txt` |
+| U3 | A/B新建草稿分别输入、切换、原生退出重开 | 各自恢复，无串内容；`native-draft-a-restored.txt`、`native-draft-reopened.txt` |
+| U3 | 两个Thread分别输入，再切换；Web完整reload | Thread草稿各自恢复；Web草稿完整刷新保留。`native-thread-draft-restored.txt`、`web-draft-reload.txt` |
+| U3 | 正式发现gpt-6-luna、Profile和bootstrap后，从原生新建并发送限定回复；第二次发送后立即继续编辑 | 收到`OPERANT_USAGE_OK`及`SECOND_OK`；第一条发送清空匹配版本，第二条新编辑保留。`native-real-send.txt`、`native-send-edit-retained.txt`。两次均禁止工具，无文件或外部副作用任务；bootstrap本身未推理 |
+| U3 | 390×844与1280×900、输入框Tab到发送 | 布局可用，窄屏草稿、按钮及焦点清楚；`web-chat-narrow.png`、`web-chat-narrow-focus.png`。未知写入、迟到回执和坏存储由独立确定性仿真覆盖，不冒称真实网络故障 |
+| U4 | 以普通文件路径创建项目 | 中文说明需选文件夹，名称和路径均保留；`native-invalid-path.txt`及PNG。CLI缺记录退出1且短中文提示、未知异常保留诊断，由独立正式CLI及测试覆盖 |
+| U5 | 未选模型、正式bootstrap选gpt-6-luna后进入模型页；查看关于 | 未选状态准确，选后显示精确模型和三步就绪；关于显示组件0.1.0、开发身份和c22ebbd提交。`native-default-ready.txt`、`native-build-info.txt`。Web403时状态卡误报未配置已补修并独立20项通过，尚需新构建挂载复验；发行包身份待打包验证 |
+
+c600650的完整CI39015523692：Python3.10和3.12各1750通过、16跳过、1警告，GUI及CodeQL通过；c22ebbd的CI39021037411仍在运行，不能提前复用。c22本机GUI263项通过，后续U5增量GUI265项通过并完成类型/构建；定向Python31项、ruff/mypy/锁/diff检查通过。独立reviewer结论及场景见 `.operant/usage-polish/reviewer-results.json`。这些结果不覆盖尚未冻结的U1补修，最终状态随后回填。
+
+### 3e303ef 定向复验与候选包发现
+
+U1补修在原生通过：文件页从B切A时底栏立即变为A，进入协作和对话页仍使用A；运行锁、迟到响应和草稿隔离由reviewer独立48项定向测试覆盖。U5读取未知修复在真实Web403下显示三步“待确认”且按钮禁用，原生仍显示gpt-6-luna与三步就绪；390宽度可用。GUI完整267项、类型与构建通过。证据 `native-final-increment.json`、`mounted-evidence/*3e303ef*`。reviewer已逐项审计U1–U5，U1–U4无必需缺项，U5还需发行包身份与生命周期。
+
+同源候选DMG已构建，SHA-256为 `2581509cad6d7143dd43976b8e6f439506bb8d657f931da3464a9d58021e3883`。签名、4610项App文件摘要、来源提交/候选ID/发行标签和hdiutil校验通过。实际挂载根目录只有Operant.app和Applications；复制到含空格路径并用干净PATH启动。8000已有安装版Core时以非零退出并明确拒绝接管；正常退出空闲安装版后候选首次启动连接成功。
+
+但候选“设置→常规”实际显示“无法读取构建信息，请查看安装包内的来源摘要。”，U5打包显示验收失败，已交平台coder修复；不得仅凭静态manifest标通过。旧包保留且不发布。候选进程已停止、安装版恢复；退出重开与独立库持久性留待修复包合并验证。
+
+### 打包失败根因对照（2026-10-18）
+
+保留3e303ef失败记录。312d2d8仅增加固定诊断日志，未修改构建身份校验；工作树路径运行时原生实际显示Beta5、完整提交和候选ID。该包正式项目创建成功，Cmd-Q退出0且8000释放，重开保留项目记录。随后把同一已签名App复制到 `/private/tmp/Operant Beta5 Diagnostic Spaces/`，稳定复现构建信息失败：只读setup调用returned，而build_info为requested→resource_directory_unavailable。系统实际返回的可执行路径是 `/tmp/...`，Tauri资源定位拒绝符号链接祖先；元数据本身并未不一致。平台coder已接手从规范化可执行路径定位同App资源，reviewer负责边界仿真，仍待修复包在原失败条件补验。证据 `beta5-provenance-root-cause.json`、`beta5-diagnostic-spaces.log`、`mounted-evidence/diag-*.txt`。
+
+c22ebbd完整CI39021037411现已全部成功：Python3.10/3.12各1750通过、16跳过、1条既有警告，格式、Ruff、mypy217项、离线锁、GUI与CodeQL成功，日志 `ci-c22ebbd.log`。后续仅GUI与Rust资源定位变化，未影响Python运行时和依赖；最终GUI/Rust和打包链路需各自新证据。

@@ -88,3 +88,27 @@ def test_vendored_runtime_licenses_match_verified_source() -> None:
     files = build.verified_runtime_licenses(build.SCRIPT_DIR / "runtime-licenses")
     assert any(path.name == "PYTHON.json" for path in files)
     assert any(path.name == "LICENSE.cpython.txt" for path in files)
+
+
+def test_release_identity_is_explicit_and_bounded() -> None:
+    assert build.release_label(None) is None
+    assert build.release_label("2.0.0-beta.5") == "2.0.0-beta.5"
+    for invalid in ("", "a" * 81, "../beta5", "beta\nsecret", " beta"):
+        with pytest.raises(ValueError, match="release label"):
+            build.release_label(invalid)
+
+
+def test_built_product_must_match_requested_normal_or_candidate_identity() -> None:
+    normal = build.product_identifier()
+    candidate = build.bundle_identifier(normal, "usage-polish")
+    for identifier in (normal, candidate):
+        product = {
+            "CFBundleShortVersionString": build.project_version(),
+            "CFBundleIdentifier": identifier,
+        }
+        build.verify_tauri_product(product, build.project_version(), identifier)
+        other = candidate if identifier == normal else normal
+        with pytest.raises(ValueError, match="identifier"):
+            build.verify_tauri_product(product, build.project_version(), other)
+        with pytest.raises(ValueError, match="version"):
+            build.verify_tauri_product(product, "9.9.9", identifier)

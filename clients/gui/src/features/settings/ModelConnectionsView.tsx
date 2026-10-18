@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ExternalLink, KeyRound, RefreshCw, Trash2 } from 'lucide-react';
 import { SearchSelect } from '../../components/SearchSelect';
+import { modelReadiness } from './modelReadiness';
+import type { SetupState } from '../../../../../sdk/typescript-client/onboarding';
 import type { ConnectionCreate } from '../../../../../sdk/typescript-client/onboarding';
 import { canContinueOAuthRegistration, canDiscoverConnectionModels, canReauthorizeModelConnection, knownModelConnectionErrorLabel, modelConnectionErrorLabel, modelConnectionStatusLabel, oauthStatusLabel, offersApiKeyAlternative } from '../../lib/statusCopy';
 import { modelDisplayName } from './modelName';
@@ -32,6 +34,9 @@ export interface OAuthAttemptView {
 
 interface ModelConnectionsProps {
   connections: ConnectionItem[];
+  setup?: SetupState | null;
+  setupUnavailable?: boolean;
+  readFailed?: boolean;
   loading: boolean;
   busy: boolean;
   error: string;
@@ -51,7 +56,9 @@ interface ModelConnectionsProps {
   onAcknowledge: () => void;
 }
 
-export const ModelConnectionsView: React.FC<ModelConnectionsProps> = ({ connections, loading, busy, error, errorDetail, writeUncertain, reconcileMessage, pendingRequestId, confirmedRequestId, attempt, onRefresh, onCreateKeyConnection, onStartOAuth, onCancelOAuth, onDiscover, onSelectModel, onDisconnect, onAcknowledge }) => {
+export const ModelConnectionsView: React.FC<ModelConnectionsProps> = ({ connections, setup, setupUnavailable, readFailed, loading, busy: operationBusy, error, errorDetail, writeUncertain, reconcileMessage, pendingRequestId, confirmedRequestId, attempt, onRefresh, onCreateKeyConnection, onStartOAuth, onCancelOAuth, onDiscover, onSelectModel, onDisconnect, onAcknowledge }) => {
+  const busy = operationBusy || Boolean(readFailed);
+  const readiness = modelReadiness(setup, connections, Boolean(setupUnavailable || readFailed || loading || writeUncertain));
   const [service, setService] = useState<'openai' | 'gemini' | 'custom'>('openai');
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -130,7 +137,13 @@ export const ModelConnectionsView: React.FC<ModelConnectionsProps> = ({ connecti
   </section>;
 
   return <div className="model-connections">
-    <div className="model-connections-heading"><div><h1>模型连接</h1><p>连接模型后，就可以开始对话。</p></div><button type="button" className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy || loading}><RefreshCw size={14} aria-hidden="true" />刷新</button></div>
+    <div className="model-connections-heading"><div><h1>模型连接</h1><p>连接模型后，就可以开始对话。</p></div><button type="button" className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={operationBusy || loading}><RefreshCw size={14} aria-hidden="true" />刷新</button></div>
+    <section className="model-connections-card" aria-label="当前模型与准备状态" aria-live="polite">
+      <h2>当前默认模型</h2>
+      <p>{readiness.unconfirmed ? '默认模型信息暂时无法读取，请刷新核对。' : readiness.profile ? `${modelDisplayName(readiness.profile.model_id)} · ${readiness.profile.name}` : setup?.default_model_profile_id ? '默认模型信息暂时无法确认，请刷新核对。' : '尚未选择默认模型'}</p>
+      <ol><li>模型服务：{readiness.serviceLabel}</li><li>默认模型：{readiness.selectionLabel}</li><li>对话准备：{readiness.conversationLabel}</li></ol>
+      {!readiness.unconfirmed && !readiness.ready && setup?.missing_steps?.length ? <p>还需完成：{setup.missing_steps.map((step) => ({ workspace: '选择工作项目', model: '选择默认模型', role: '准备助手角色', assistant: '准备助手角色', skills: '准备技能' })[step] || '刷新核对设置').join('、')}</p> : null}
+    </section>
     {error && <div className="live-alert live-alert-error" role="alert">{(errorDetail && knownModelConnectionErrorLabel(errorDetail)) || error}<details><summary>查看原因</summary>{errorDetail || error}</details></div>}
     {writeUncertain && <div className="live-alert live-alert-error model-request-recovery" role="alert"><p>{reconcileMessage || '连接操作的结果尚未确认，请先核对，暂时不要重复提交。'}</p><div className="model-request-recovery-actions"><button type="button" className="btn btn-secondary btn-sm" onClick={onAcknowledge} disabled={busy || loading}>{pendingRequestId ? '核对原请求' : '刷新核对'}</button>{pendingRequestId && <details><summary>核对详情</summary><p>请求编号：<code>{pendingRequestId}</code></p></details>}</div></div>}
     {!writeUncertain && reconcileMessage && <p role="status">{reconcileMessage}</p>}
@@ -146,12 +159,12 @@ export const ModelConnectionsView: React.FC<ModelConnectionsProps> = ({ connecti
       <section className="model-connections-card"><h2><KeyRound size={17} aria-hidden="true" />API 密钥</h2><p>选择服务商并填写密钥。模型会从服务端发现。</p><form onSubmit={(event) => void submitKey(event)}><SearchSelect label="服务商" value={service} onChange={(value) => setService(value as 'openai' | 'gemini' | 'custom')} options={[{ value: 'openai', label: 'OpenAI' }, { value: 'gemini', label: 'Gemini API' }, { value: 'custom', label: '兼容接口 / 自定义' }]} />{service === 'custom' && <label>服务地址<input className="input" type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://…/v1" autoComplete="url" /></label>}<label>API 密钥<input ref={apiKeyRef} className="input" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" /></label><details><summary>高级选项</summary><label>连接名称（可选）<input className="input" value={name} onChange={(event) => setName(event.target.value)} /></label></details>{formError && <p className="live-alert live-alert-error" role="alert">{formError}</p>}<button type="submit" className="btn btn-primary" disabled={busy || writeUncertain}>保存连接</button></form></section>
     </div>
     {attempt?.provider !== 'chatgpt' && authorizationAttempt}
-    <section className="model-connections-list" aria-label="已连接的模型服务"><h2>已连接的服务</h2>{loading ? <p role="status">正在读取连接…</p> : connections.length === 0 ? <p>还没有连接模型。</p> : visibleConnections.length === 0 ? <p>其他连接显示在下方高级设置中。</p> : visibleConnections.map(connectionCard)}</section>
+    <section className="model-connections-list" aria-label="已连接的模型服务"><h2>已连接的服务</h2>{loading ? <p role="status">正在读取连接…</p> : readFailed ? <p role="status">连接信息暂时无法读取，恢复后请刷新核对。</p> : connections.length === 0 ? <p>还没有连接模型。</p> : visibleConnections.length === 0 ? <p>其他连接显示在下方高级设置中。</p> : visibleConnections.map(connectionCard)}</section>
     <details className="model-connections-advanced">
       <summary>高级设置：旧版 ChatGPT 连接{legacyConnections.length > 0 ? `（${legacyConnections.length}）` : ''}</summary>
       <div className="model-connections-card"><h2>旧版 ChatGPT 连接</h2><p>保留原有第三方账号授权方式。已有连接不会自动转为 Codex。</p>{(!chatgptConnection || canReauthorizeModelConnection(chatgptConnection.status, chatgptConnection.error)) ? <button type="button" className="btn btn-secondary" onClick={() => onStartOAuth('chatgpt', chatgptConnection?.connection_id)} disabled={busy || writeUncertain}>{chatgptConnection ? '重新授权旧版 ChatGPT' : '连接旧版 ChatGPT'}</button> : <p>账号已添加，请查看下方连接状态。</p>}</div>
       {attempt?.provider === 'chatgpt' && authorizationAttempt}
-      {legacyConnections.map(connectionCard)}
+      {!readFailed && legacyConnections.map(connectionCard)}
     </details>
   </div>;
 };

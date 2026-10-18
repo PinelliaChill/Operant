@@ -28,7 +28,15 @@ _PROOF_HEADERS = frozenset(
     name.encode("ascii")
     for name in (PROTOCOL_HEADER, TIMESTAMP_HEADER, NONCE_HEADER, SIGNATURE_HEADER)
 )
-_DENIED = {"error": {"code": "local_caller_required", "message": "本机调用者验证失败"}}
+_DENIED = {
+    "error": {
+        "code": "local_caller_required",
+        "message": "本机调用者验证失败",
+        "retryable": False,
+        "recovery": "none",
+    },
+    "detail": None,
+}
 _MAX_BODY_MESSAGES = 4096
 
 

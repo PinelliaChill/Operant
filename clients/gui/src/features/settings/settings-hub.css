@@ -18,3 +18,8 @@
 .settings-hub-card summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
 .settings-hub-card[open] summary { margin-bottom: 18px; }
 @media (max-width: 680px) { .settings-hub { flex-direction: column; } .settings-hub-nav { width: auto; min-width: 0; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border-subtle); display: flex; overflow-x: auto; } .settings-hub-nav h1 { display: none; } .settings-hub-nav-item { width: auto; white-space: nowrap; flex: none; padding: 8px 10px; } .settings-hub-panel { padding: 20px 16px 100px; } }
+
+.build-info-list { display: grid; gap: 10px; margin-bottom: 0; }
+.build-info-list > div { display: grid; grid-template-columns: 6em minmax(0, 1fr); gap: 8px; }
+.build-info-list dt { color: var(--text-secondary); }
+.build-info-list dd { margin: 0; overflow-wrap: anywhere; }

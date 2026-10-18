@@ -35,6 +35,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
     phase,
     projects,
     projectNames,
+    archivedProjectIds,
     threads,
     selectedProjectId,
     selectedThreadId,
@@ -83,6 +84,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
   };
 
   const handleCreateConversation = async () => {
+    if (archivedProjectIds.includes(selectedProjectId || setup?.default_workspace_id || '')) return;
     const routeRevision = getRouteRevision();
     const locationHref = window.location.href;
     const stillHere = () => getRouteRevision() === routeRevision && window.location.href === locationHref;
@@ -124,7 +126,7 @@ export const LiveSidebar: React.FC<LiveSidebarProps> = ({ onNavigate, onCollapse
           onClick={() => void handleCreateConversation()}
           aria-label="新建对话"
           title={setup?.ready ? '新建对话' : '先连接模型'}
-          disabled={createBusy || createOutcomeUnknown || phase !== 'ready'}
+          disabled={archivedProjectIds.includes(selectedProjectId || setup?.default_workspace_id || '') || createBusy || createOutcomeUnknown || phase !== 'ready'}
         >
           <Plus size={16} aria-hidden="true" />
         </button>

@@ -22,10 +22,9 @@ const emptyDirectory = (scope: string, path: string): DirectoryState => ({
 /** Browse the project's registered workspace through the existing formal client. */
 export const ProjectFilesPanel: React.FC = () => {
   const { connectionStatus } = useOperant();
-  const { adapter, phase, projects, projectNames, selectedProjectId } = useLive();
-  const [choice, setChoice] = useState(selectedProjectId || '');
+  const { adapter, phase, projects, projectNames, selectedProjectId, selectProject } = useLive();
   const readable = projects.filter((project) => project.readable);
-  const project = choice ? readable.find((item) => item.id === choice) : readable[0];
+  const project = readable.find((item) => item.id === selectedProjectId);
   const scope = project ? JSON.stringify([project.id, project.workspaceRef]) : '';
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -86,14 +85,17 @@ export const ProjectFilesPanel: React.FC = () => {
   }, [load]);
   return <section className="b2-memory" aria-label="项目文件">
     <div className="b2-memory-card">
-      <SearchSelect label="项目" value={project?.id || ''} onChange={setChoice}
+      <SearchSelect label="项目" value={project?.id || ''} onChange={(id) => {
+        if (selectProject(id || null)) setError('');
+        else setError('当前项目无法切换。请等待正在进行的操作结束，或刷新核对项目状态。');
+      }}
         options={readable.map((item) => ({ value: item.id, label: projectNames[item.id] || item.name }))}
         disabled={!connected} />
       <button type="button" className="btn btn-secondary btn-sm" disabled={!connected || !project || busy !== null}
         onClick={() => void load(directory.scope === scope ? directory.path : '')}>刷新文件</button>
     </div>
     {!connected && <p role="status">连接恢复后可查看项目文件。</p>}
-    {connected && !project && <p>{choice ? '项目不可用。请选择其他项目。' : '先添加一个项目，再查看文件。'}</p>}
+    {connected && !project && <p>{selectedProjectId ? '项目不可用。请选择其他项目。' : '先添加一个项目，再查看文件。'}</p>}
     {error && <p className="live-alert live-alert-error" role="alert">{error}</p>}
     {connected && project && <LiveFilePreview key={scope} workspaceId={workspaceId}
       files={directory.scope === scope ? directory.files : []}
