@@ -1023,7 +1023,7 @@ User 已授权通过检查后将PR45合入main；合并不代表ChatGPT和最后
 | U2 | Web 本机权限拒绝准确说明桌面入口；读取失败不显示没有连接/模板；相关写操作禁用且有原因；保持鉴权、严格错误校验和未知结果保护 | 已实现 | 通过 | coder_platform 提供信封/共用错误接口，coder_ui 接自己页面；真实403、异常信封、普通可用Web项目路径和原生管理回归 |
 | U3 | 按 origin、项目、对话/新建上下文保存草稿，刷新和重开恢复；成功发送只清对应版本；失败/未知/发送中编辑/切换不丢不串；新建迁移与存储损坏/不可用/容量错误有处理 | 已实现 | 通过 | coder_ui；reviewer 独立状态与竞态仿真，主线程宽窄屏/键盘/刷新与原生重开、正式受控模型发送 |
 | U4 | 项目路径错误给中文修正动作并保留输入；CLI 不存在对象等预期错误简洁、非零退出；未知程序错误保持可诊断 | 已实现 | 通过 | coder_platform 映射，coder_ui 接管理页；文件路径非法、会话不存在及正常流程回归 |
-| U5 | 当前默认模型与就绪步骤可见且来自真实状态；设置显示实际产品版本、发行标识、构建commit和候选身份；开发态不冒充发行 | 已实现 | 部分通过，打包显示失败 | coder_ui 模型状态，coder_platform 构建信息；无模型、选模型后返回、读失败、旧包元数据缺失、开发/产品/候选包分别验证 |
+| U5 | 当前默认模型与就绪步骤可见且来自真实状态；设置显示实际产品版本、发行标识、构建commit和候选身份；开发态不冒充发行 | 已实现 | 通过 | coder_ui 模型状态，coder_platform 构建信息；无模型、选模型后返回、读失败、旧包元数据缺失、开发/产品/候选包分别验证 |
 
 历史 App 副本仅诊断，不批量删除；不改用户真实凭据、权限或现有模型默认值。测试使用隔离绝对工作区及数据库；凭据如需真实调用，仅向目标进程注入，不复制到工作树。原生无法观测、Provider不可用等必需场景明确记为受阻，不能以Mock或历史版本证据标通过。
 
@@ -1069,3 +1069,15 @@ U1补修在原生通过：文件页从B切A时底栏立即变为A，进入协作
 保留3e303ef失败记录。312d2d8仅增加固定诊断日志，未修改构建身份校验；工作树路径运行时原生实际显示Beta5、完整提交和候选ID。该包正式项目创建成功，Cmd-Q退出0且8000释放，重开保留项目记录。随后把同一已签名App复制到 `/private/tmp/Operant Beta5 Diagnostic Spaces/`，稳定复现构建信息失败：只读setup调用returned，而build_info为requested→resource_directory_unavailable。系统实际返回的可执行路径是 `/tmp/...`，Tauri资源定位拒绝符号链接祖先；元数据本身并未不一致。平台coder已接手从规范化可执行路径定位同App资源，reviewer负责边界仿真，仍待修复包在原失败条件补验。证据 `beta5-provenance-root-cause.json`、`beta5-diagnostic-spaces.log`、`mounted-evidence/diag-*.txt`。
 
 c22ebbd完整CI39021037411现已全部成功：Python3.10/3.12各1750通过、16跳过、1条既有警告，格式、Ruff、mypy217项、离线锁、GUI与CodeQL成功，日志 `ci-c22ebbd.log`。后续仅GUI与Rust资源定位变化，未影响Python运行时和依赖；最终GUI/Rust和打包链路需各自新证据。
+
+### 最终修复候选验收（d2817b4，通过）
+
+修复候选DMG `83baa2afbe68ea130550b90ad6bb34ad5e4392d2fa00e18c11672bef1a1384e2` 从正式DMG挂载并复制到 `/private/tmp/Operant Beta5 Fixed Acceptance/Operant.app`，用干净PATH启动。原失败条件下实际显示`0.1.0-beta.5`、完整d2817b4提交、`usage-polish-beta5-fixed-20261018`候选身份及匹配bundle ID。正式项目写入成功；Cmd-Q退出0、8000释放；明确通过`/tmp/`别名重开后项目保留，构建身份仍可读。最终退出0，原安装版恢复。证据 `beta5-fixed-native-result.json`、`mounted-evidence/fixed-package-*`；旧失败及诊断包不作为发行附件。
+
+独立reviewer以release模式复验规范路径、空格、符号链接祖先和同App资源；错误目录、资源外链、提交/版本/候选/应用标识不匹配均拒绝。Rust32项通过、1条既有忽略，格式通过。U1–U5逐项实现和验收均通过；完整发布交付仍需最终CI、合并及普通产品身份DMG的来源与公开下载摘要核对，不能把候选通过写成已发布。
+
+普通产品包同源d2817b4已完成，SHA-256为`1cd48b760ac311dc7c6f46167b7b26515b4f39f514c74e835869bef9e30dd2cc`，candidate为空、正式bundle为`dev.operant.desktop`。使用正式支持的绝对`OPERANT_DB_PATH`指向新临时库，实际页面显示Beta5、完整提交及“产品安装包”；退出0、8000释放后恢复原安装版。签名、4610文件摘要、内外manifest与hdiutil通过，尚未上传，证据`beta5-product-package-result.json`、`beta5-product-native-result.json`和`mounted-evidence/product-package-build-info.*`。
+
+### 最终CI、合并与发行
+
+最终d2817b4的CI39094879247和CodeQL全部成功：Python3.10/3.12各1750通过、16跳过、1条既有警告；GUI267项、类型与构建、完整格式/lint/mypy/离线锁检查通过。PR #50于2026-10-18通过受保护合并，main合并提交d4e8384；发行标签`v0.1.0-beta.5`精确指向实际打包d2817b4，该提交已在main历史中，合并树与产品冻结树一致。Beta 5于2026-10-18正式作为prerelease公开，三个附件为普通产品DMG、同名SHA-256及`source-manifest.json`，远端附件digest与本地一致。公开下载DMG已按同名校验文件验证OK，下载来源摘要的SHA-256也与本地一致；回验结果保存在本轮运行证据中；不把GitHub Source code当作安装包。

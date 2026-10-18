@@ -5,12 +5,12 @@
 当前处于 **Beta 阶段**，采用**非商业使用许可，商用须另行协商授权**。
 | 版本入口 | 包含什么 |
 | --- | --- |
-| [`v0.1.0-beta.4`](docs/releases/v0.1.0-beta.4.md) | 当前 Beta：自包含 macOS arm64 DMG；首次连接、默认助手、对话名称、技能发现，以及 ChatGPT（Codex）和 Gemini 连接 |
+| [`v0.1.0-beta.5`](docs/releases/v0.1.0-beta.5.md) | 当前 Beta：自包含 macOS arm64 DMG；项目状态同步、持久草稿、权限提示，以及可核对的默认模型和构建来源 |
 | [Beta 3](https://github.com/PinelliaChill/Operant/releases/tag/v0.1.0-beta.3) | 2026-10-06 的安装包；不包含 Beta 4 的首次使用流程和 Codex 接入 |
 | [`v0.1.0-beta.2`](docs/releases/v0.1.0-beta.2.md) | 历史源码、Core/TUI 与桌面包；会话协作、编排、审批、记忆与扩展能力 |
 | 当前 `main` | 持续开发分支；日常使用建议选择固定标签 |
 
-[下载 macOS DMG](https://github.com/PinelliaChill/Operant/releases/tag/v0.1.0-beta.4) · [本次发行说明](docs/releases/v0.1.0-beta.4.md) · [更新记录](CHANGELOG.md) · [安装、升级与回退](docs/guide/candidate-installation.md)
+[下载 macOS DMG](https://github.com/PinelliaChill/Operant/releases/tag/v0.1.0-beta.5) · [本次发行说明](docs/releases/v0.1.0-beta.5.md) · [更新记录](CHANGELOG.md) · [安装、升级与回退](docs/guide/candidate-installation.md)
 
 Apple Silicon Mac 下载 DMG 后，将 Operant 拖入 Applications。App 已内置 Core、Python 和运行依赖，
 首次打开后连接模型即可创建对话；ChatGPT（Codex）连接还需要本机安装官方 Codex CLI。
