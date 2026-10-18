@@ -1063,3 +1063,9 @@ U1补修在原生通过：文件页从B切A时底栏立即变为A，进入协作
 同源候选DMG已构建，SHA-256为 `2581509cad6d7143dd43976b8e6f439506bb8d657f931da3464a9d58021e3883`。签名、4610项App文件摘要、来源提交/候选ID/发行标签和hdiutil校验通过。实际挂载根目录只有Operant.app和Applications；复制到含空格路径并用干净PATH启动。8000已有安装版Core时以非零退出并明确拒绝接管；正常退出空闲安装版后候选首次启动连接成功。
 
 但候选“设置→常规”实际显示“无法读取构建信息，请查看安装包内的来源摘要。”，U5打包显示验收失败，已交平台coder修复；不得仅凭静态manifest标通过。旧包保留且不发布。候选进程已停止、安装版恢复；退出重开与独立库持久性留待修复包合并验证。
+
+### 打包失败根因对照（2026-10-18）
+
+保留3e303ef失败记录。312d2d8仅增加固定诊断日志，未修改构建身份校验；工作树路径运行时原生实际显示Beta5、完整提交和候选ID。该包正式项目创建成功，Cmd-Q退出0且8000释放，重开保留项目记录。随后把同一已签名App复制到 `/private/tmp/Operant Beta5 Diagnostic Spaces/`，稳定复现构建信息失败：只读setup调用returned，而build_info为requested→resource_directory_unavailable。系统实际返回的可执行路径是 `/tmp/...`，Tauri资源定位拒绝符号链接祖先；元数据本身并未不一致。平台coder已接手从规范化可执行路径定位同App资源，reviewer负责边界仿真，仍待修复包在原失败条件补验。证据 `beta5-provenance-root-cause.json`、`beta5-diagnostic-spaces.log`、`mounted-evidence/diag-*.txt`。
+
+c22ebbd完整CI39021037411现已全部成功：Python3.10/3.12各1750通过、16跳过、1条既有警告，格式、Ruff、mypy217项、离线锁、GUI与CodeQL成功，日志 `ci-c22ebbd.log`。后续仅GUI与Rust资源定位变化，未影响Python运行时和依赖；最终GUI/Rust和打包链路需各自新证据。

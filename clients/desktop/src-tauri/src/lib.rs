@@ -227,11 +227,6 @@ async fn local_core_request(
     headers: BTreeMap<String, String>,
     body: String,
 ) -> Result<BridgeResponse, String> {
-    let diagnose_setup_read =
-        operation_id == "getSetupState" || operation_id == "listModelConnections";
-    if diagnose_setup_read {
-        eprintln!("operant:setup_read:requested");
-    }
     let bridge = {
         let mut guard = state.0.lock().map_err(|_| "无法读取 Core 状态。")?;
         let owned = guard.as_mut().ok_or("尚未连接本机 Core。")?;
@@ -251,20 +246,9 @@ async fn local_core_request(
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        let result = bridge
+        bridge
             .request(&operation_id, &params, &raw_query, &request_headers, &body)
-            .map_err(|error| error.message().into());
-        if diagnose_setup_read {
-            eprintln!(
-                "operant:setup_read:{}",
-                if result.is_ok() {
-                    "returned"
-                } else {
-                    "rejected"
-                }
-            );
-        }
-        result
+            .map_err(|error| error.message().into())
     })
     .await
     .map_err(|_| "无法完成本机 Core 请求。".to_string())?
@@ -391,17 +375,21 @@ fn persist_secret_reference(app: AppHandle, secret_ref: String) -> Result<(), St
 
 #[tauri::command]
 fn desktop_build_info(app: AppHandle) -> Result<build_info::BuildInfo, String> {
-    eprintln!("operant:build_info:requested");
-    let resources = app.path().resource_dir().map_err(|_| {
-        eprintln!("operant:build_info:resource_directory_unavailable");
-        "无法定位构建来源摘要。"
-    })?;
-    let result = build_info::read_build_info(&resources, &app.config().identifier);
-    eprintln!(
-        "operant:build_info:{}",
-        if result.is_ok() { "loaded" } else { "rejected" }
-    );
-    result
+    #[cfg(target_os = "macos")]
+    let resources = if cfg!(debug_assertions) {
+        app.path()
+            .resource_dir()
+            .map_err(|_| "无法定位构建来源摘要。")?
+    } else {
+        let executable = std::env::current_exe().map_err(|_| "无法定位当前应用程序。")?;
+        build_info::macos_bundle_resources(&executable)?
+    };
+    #[cfg(not(target_os = "macos"))]
+    let resources = app
+        .path()
+        .resource_dir()
+        .map_err(|_| "无法定位构建来源摘要。")?;
+    build_info::read_build_info(&resources, &app.config().identifier)
 }
 
 pub fn run() {

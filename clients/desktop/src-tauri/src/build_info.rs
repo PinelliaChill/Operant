@@ -1,6 +1,8 @@
 //! Public build provenance only; never expose environment or arbitrary files.
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[cfg(any(target_os = "macos", test))]
+use std::path::PathBuf;
 
 #[derive(Deserialize)]
 struct SourceManifest {
@@ -48,6 +50,36 @@ fn candidate_matches_identifier(candidate: Option<&str>, identifier: &str) -> bo
         }
         None => !identifier.contains(".candidate."),
     }
+}
+
+/// Resolve only Resources beside the real executable in this macOS App.
+/// macOS may report an executable through a symlinked ancestor (for example
+/// its temporary directory alias). Canonicalize before validating the layout;
+/// never use the working directory, an environment override, or a source path.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn macos_bundle_resources(executable: &Path) -> Result<PathBuf, String> {
+    let executable = executable
+        .canonicalize()
+        .map_err(|_| "无法定位当前应用程序。")?;
+    let macos = executable.parent().ok_or("应用包目录结构无效。")?;
+    let contents = macos.parent().ok_or("应用包目录结构无效。")?;
+    let bundle = contents.parent().ok_or("应用包目录结构无效。")?;
+    if !executable.is_file()
+        || executable.file_name() != Some(std::ffi::OsStr::new("operant-desktop"))
+        || macos.file_name() != Some(std::ffi::OsStr::new("MacOS"))
+        || contents.file_name() != Some(std::ffi::OsStr::new("Contents"))
+        || bundle.extension() != Some(std::ffi::OsStr::new("app"))
+    {
+        return Err("应用包目录结构无效。".into());
+    }
+    let expected = contents.join("Resources");
+    let resources = expected
+        .canonicalize()
+        .map_err(|_| "无法定位构建来源摘要。")?;
+    if resources != expected || !resources.is_dir() {
+        return Err("应用资源目录不属于当前应用包。".into());
+    }
+    Ok(resources)
 }
 
 pub(crate) fn read_build_info(resources: &Path, identifier: &str) -> Result<BuildInfo, String> {
@@ -100,12 +132,7 @@ fn packaged_build_info(
         || manifest.bundle_identifier != identifier
         || !candidate_matches_identifier(manifest.candidate_id.as_deref(), identifier)
     {
-        eprintln!("operant:build_info:metadata_mismatch dirty={} source={} version={} identifier={} candidate={}",
-            dirty,
-            source == Some(manifest.source_head.as_str()),
-            manifest.product_version == env!("CARGO_PKG_VERSION"),
-            manifest.bundle_identifier == identifier,
-            candidate_matches_identifier(manifest.candidate_id.as_deref(), identifier));
+        eprintln!("operant:build_info:metadata_mismatch");
         return Err("构建来源摘要与当前程序不一致。".into());
     }
     Ok(BuildInfo {
@@ -135,7 +162,7 @@ mod tests {
         let head = "a".repeat(40);
         let raw = serde_json::to_vec(&serde_json::json!({
             "product_version": env!("CARGO_PKG_VERSION"),
-            "release_label": "2.0.0-beta.5",
+            "release_label": "0.1.0-beta.5",
             "source_head": head,
             "candidate_id": "usage-polish",
             "bundle_identifier": "dev.operant.desktop.candidate.usage-polish"
@@ -148,7 +175,7 @@ mod tests {
             "dev.operant.desktop.candidate.usage-polish",
         )
         .unwrap();
-        assert_eq!(info.release_label.as_deref(), Some("2.0.0-beta.5"));
+        assert_eq!(info.release_label.as_deref(), Some("0.1.0-beta.5"));
         assert_eq!(info.candidate_id.as_deref(), Some("usage-polish"));
         assert_eq!(info.source_commit.as_deref(), Some(head.as_str()));
         assert!(packaged_build_info(
@@ -225,5 +252,71 @@ mod tests {
         assert_eq!(info.build_kind, "development");
         assert!(info.release_label.is_none());
         assert!(info.candidate_id.is_none());
+    }
+    struct TestBundle {
+        root: PathBuf,
+        executable: PathBuf,
+        resources: PathBuf,
+    }
+
+    impl TestBundle {
+        fn new() -> Self {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "operant-build-info-{}-{unique}",
+                std::process::id()
+            ));
+            let contents = root.join("App With Spaces.app/Contents");
+            std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+            std::fs::create_dir_all(contents.join("Resources")).unwrap();
+            let executable = contents.join("MacOS/operant-desktop");
+            std::fs::write(&executable, "test executable path").unwrap();
+            Self {
+                root,
+                executable,
+                resources: contents.join("Resources"),
+            }
+        }
+    }
+
+    impl Drop for TestBundle {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn bundle_resources_use_the_canonical_same_app_with_spaces() {
+        let bundle = TestBundle::new();
+        let canonical = bundle.executable.canonicalize().unwrap();
+        assert_eq!(
+            macos_bundle_resources(&canonical).unwrap(),
+            bundle.resources.canonicalize().unwrap()
+        );
+        assert!(macos_bundle_resources(&bundle.root.join("missing")).is_err());
+        let wrong = bundle.executable.with_file_name("another-program");
+        std::fs::write(&wrong, "not the desktop").unwrap();
+        assert!(macos_bundle_resources(&wrong).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_ancestor_resolves_but_resources_cannot_escape_the_app() {
+        let bundle = TestBundle::new();
+        let alias = bundle.root.join("Alias With Spaces");
+        std::os::unix::fs::symlink(bundle.root.join("App With Spaces.app"), &alias).unwrap();
+        let via_alias = alias.join("Contents/MacOS/operant-desktop");
+        assert_eq!(
+            macos_bundle_resources(&via_alias).unwrap(),
+            bundle.resources.canonicalize().unwrap()
+        );
+        std::fs::remove_dir(&bundle.resources).unwrap();
+        let outside = bundle.root.join("unrelated-resources");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &bundle.resources).unwrap();
+        assert!(macos_bundle_resources(&via_alias).is_err());
     }
 }
