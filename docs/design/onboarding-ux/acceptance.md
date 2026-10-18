@@ -1075,3 +1075,5 @@ c22ebbd完整CI39021037411现已全部成功：Python3.10/3.12各1750通过、16
 修复候选DMG `83baa2afbe68ea130550b90ad6bb34ad5e4392d2fa00e18c11672bef1a1384e2` 从正式DMG挂载并复制到 `/private/tmp/Operant Beta5 Fixed Acceptance/Operant.app`，用干净PATH启动。原失败条件下实际显示`0.1.0-beta.5`、完整d2817b4提交、`usage-polish-beta5-fixed-20261018`候选身份及匹配bundle ID。正式项目写入成功；Cmd-Q退出0、8000释放；明确通过`/tmp/`别名重开后项目保留，构建身份仍可读。最终退出0，原安装版恢复。证据 `beta5-fixed-native-result.json`、`mounted-evidence/fixed-package-*`；旧失败及诊断包不作为发行附件。
 
 独立reviewer以release模式复验规范路径、空格、符号链接祖先和同App资源；错误目录、资源外链、提交/版本/候选/应用标识不匹配均拒绝。Rust32项通过、1条既有忽略，格式通过。U1–U5逐项实现和验收均通过；完整发布交付仍需最终CI、合并及普通产品身份DMG的来源与公开下载摘要核对，不能把候选通过写成已发布。
+
+普通产品包同源d2817b4已完成，SHA-256为`1cd48b760ac311dc7c6f46167b7b26515b4f39f514c74e835869bef9e30dd2cc`，candidate为空、正式bundle为`dev.operant.desktop`。使用正式支持的绝对`OPERANT_DB_PATH`指向新临时库，实际页面显示Beta5、完整提交及“产品安装包”；退出0、8000释放后恢复原安装版。签名、4610文件摘要、内外manifest与hdiutil通过，尚未上传，证据`beta5-product-package-result.json`、`beta5-product-native-result.json`和`mounted-evidence/product-package-build-info.*`。
